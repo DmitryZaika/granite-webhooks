@@ -11,7 +11,9 @@
 //! amount or leave out a priced line. The product is learned from the
 //! invoices' words ([`super::products`]).
 
+use super::instructions;
 use super::invoice::{EditableInvoice, Line, text};
+use super::products::Model;
 use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -158,22 +160,122 @@ pub enum LineRule {
     Removed,
 }
 
+/// The quotes a line rule holds on: those with a word, or those without it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct When {
+    pub word: String,
+    /// On quotes with the word (else: without it).
+    pub has: bool,
+}
+
+/// A line rule and the quotes it holds on (all when `when` is `None`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShapeRule {
+    pub rule: LineRule,
+    pub when: Option<When>,
+}
+
+/// One outcome of a line, with the words of the quote it was on (unknown for
+/// invoices created before those were kept).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinePast {
+    pub outcome: Outcome,
+    /// Sorted and distinct.
+    pub words: Option<Vec<String>>,
+}
+
+/// Outcomes a rule that holds on some quotes only is looked for in.
+pub const WHEN_WINDOW: usize = 40;
+/// Fewest outcomes behind such a rule.
+pub const WHEN_MIN_SEEN: usize = 4;
+
+fn rule_of(outcome: &Outcome) -> Option<LineRule> {
+    match outcome.outcome.as_str() {
+        "changed" => Some(LineRule::Changed(outcome.value.clone()?)),
+        "removed" => Some(LineRule::Removed),
+        _ => None,
+    }
+}
+
 /// The line rules recent outcomes make, from each shape's outcomes newest
-/// first.
+/// first: what the latest keep doing (see [`decide`]), or else what they
+/// keep doing on the quotes with (or without) one word while the line stays
+/// as it is on the others: "Fabrication is left out on quotes with cabinets".
+/// `common` counts the company's quotes with each word.
 #[allow(clippy::implicit_hasher)]
-pub fn line_rules(history: &HashMap<String, Vec<Outcome>>) -> HashMap<String, LineRule> {
+pub fn line_rules(
+    history: &HashMap<String, Vec<LinePast>>,
+    common: &HashMap<String, usize>,
+) -> HashMap<String, ShapeRule> {
     history
         .iter()
-        .filter_map(|(shape, outcomes)| {
-            let (winner, _) = decide(outcomes)?;
-            let rule = match winner.outcome.as_str() {
-                "changed" => LineRule::Changed(winner.value?),
-                "removed" => LineRule::Removed,
-                _ => return None,
+        .filter_map(|(shape, past)| {
+            let latest: Vec<Outcome> = past.iter().take(WINDOW).map(|p| p.outcome.clone()).collect();
+            let always = decide(&latest).and_then(|(winner, _)| rule_of(&winner));
+            let rule = match always {
+                Some(rule) => ShapeRule { rule, when: None },
+                None => when_rule(past, common)?,
             };
             Some((shape.clone(), rule))
         })
         .collect()
+}
+
+/// A rule the outcomes on the quotes with (or without) one word make, while
+/// the others hardly ever did it: at least [`WHEN_MIN_SEEN`] times and the
+/// 2 newest of them (see [`decide`]), on 2 or more other quotes. Of such
+/// words, the one with the most outcomes behind it, then rules for quotes
+/// with a word before ones for quotes without it, then the word on the most
+/// of the company's quotes ("cabinets" rather than "shaker").
+fn when_rule(past: &[LinePast], common: &HashMap<String, usize>) -> Option<ShapeRule> {
+    let known: Vec<(&Outcome, &[String])> = past
+        .iter()
+        .filter_map(|p| Some((&p.outcome, p.words.as_deref()?)))
+        .take(WHEN_WINDOW)
+        .collect();
+    if known.len() < WHEN_MIN_SEEN + 2 {
+        return None;
+    }
+    let mut candidates: Vec<&str> = known
+        .iter()
+        .flat_map(|(_, words)| words.iter().map(String::as_str))
+        .collect();
+    candidates.sort_unstable();
+    candidates.dedup();
+    let mut best: Option<((usize, bool, usize), When, LineRule)> = None;
+    for word in candidates {
+        for has in [true, false] {
+            let (group, rest): (Vec<_>, Vec<_>) = known
+                .iter()
+                .partition(|(_, words)| has_word(words, word) == has);
+            if group.len() < WHEN_MIN_SEEN || rest.len() < 2 {
+                continue;
+            }
+            let group: Vec<Outcome> = group.iter().map(|(o, _)| (*o).clone()).collect();
+            let Some((winner, seen)) = decide(&group) else {
+                continue;
+            };
+            let Some(rule) = rule_of(&winner) else {
+                continue;
+            };
+            let elsewhere = rest.iter().filter(|(o, _)| **o == winner).count();
+            if seen < WHEN_MIN_SEEN || elsewhere * 5 > rest.len() {
+                continue;
+            }
+            let key = (seen, has, common.get(word).copied().unwrap_or(0));
+            if best.as_ref().is_none_or(|(held, _, _)| key > *held) {
+                let when = When {
+                    word: word.to_string(),
+                    has,
+                };
+                best = Some((key, when, rule));
+            }
+        }
+    }
+    best.map(|(_, when, rule)| ShapeRule {
+        rule,
+        when: Some(when),
+    })
 }
 
 fn is_text(line: &Line) -> bool {
@@ -184,11 +286,15 @@ fn is_editable(line: &Line) -> bool {
     line.detail_type == "SalesItemLineDetail" || is_text(line)
 }
 
-/// The draft with the rules applied: lines reworded in place, text lines
-/// left out returned apart (so the editor can bring them back). Priced lines
-/// are only ever reworded.
+/// The draft with the rules that hold on it (its quote has these `words`)
+/// applied: lines reworded in place, text lines left out returned apart (so
+/// the editor can bring them back). Priced lines are only ever reworded.
 #[allow(clippy::implicit_hasher)]
-pub fn apply(lines: Vec<Line>, rules: &HashMap<String, LineRule>) -> (Vec<Line>, Vec<Line>) {
+pub fn apply(
+    lines: Vec<Line>,
+    rules: &HashMap<String, ShapeRule>,
+    words: &[String],
+) -> (Vec<Line>, Vec<Line>) {
     let mut kept = Vec::with_capacity(lines.len());
     let mut removed = Vec::new();
     for mut line in lines {
@@ -196,7 +302,13 @@ pub fn apply(lines: Vec<Line>, rules: &HashMap<String, LineRule>) -> (Vec<Line>,
             .description
             .as_deref()
             .filter(|_| is_editable(&line))
-            .and_then(|text| rules.get(&shape(text)));
+            .and_then(|text| rules.get(&shape(text)))
+            .filter(|rule| {
+                rule.when
+                    .as_ref()
+                    .is_none_or(|when| has_word(words, &when.word) == when.has)
+            })
+            .map(|rule| &rule.rule);
         match rule {
             Some(LineRule::Removed) if is_text(&line) => removed.push(line),
             Some(LineRule::Changed(to)) => {
@@ -279,6 +391,10 @@ pub fn header_value(rule: Option<&Outcome>, rep: Option<&str>) -> Option<String>
 
 /// Line outcomes read for rules.
 const LINE_HISTORY: u32 = 5000;
+/// Newest quotes whose words are read for line rules.
+const QUOTE_WORDS: u32 = 1000;
+/// Reps' newest product choices read.
+const ITEM_HISTORY: u32 = 200;
 /// Newest invoices a scan reads.
 const SCANNED: u32 = 200;
 
@@ -312,6 +428,10 @@ pub(super) struct Seen {
     /// with which product.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) words: Vec<String>,
+    /// A rep's choice for an invoice created here from a quote (the words
+    /// are the quote's), not a scanned invoice.
+    #[serde(skip)]
+    pub(super) pair: bool,
 }
 
 impl Seen {
@@ -326,10 +446,10 @@ impl Seen {
 /// How the company's newest `QuickBooks` invoices set class, CC and product
 /// (newest first), and its classes.
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub(super) struct Scan {
+struct Scan {
     class: Vec<Seen>,
     cc: Vec<Seen>,
-    pub(super) item: Vec<Seen>,
+    item: Vec<Seen>,
     classes: Vec<String>,
 }
 
@@ -339,6 +459,7 @@ fn seen(outcome: Outcome) -> Seen {
         value: outcome.value,
         name: None,
         words: Vec::new(),
+        pair: false,
     }
 }
 
@@ -367,7 +488,20 @@ fn first_item(invoice: &Value) -> Option<Seen> {
         value: Some(text(&item["value"])?),
         name: text(&item["name"]),
         words: words(lines.iter().filter_map(|line| line["Description"].as_str())),
+        pair: false,
     })
+}
+
+/// Words kept as one text, back as a sorted list.
+fn split_words(text: &str) -> Vec<String> {
+    let mut words: Vec<String> = text.split_whitespace().map(str::to_string).collect();
+    words.sort_unstable();
+    words.dedup();
+    words
+}
+
+fn has_word(words: &[String], word: &str) -> bool {
+    words.binary_search_by(|w| w.as_str().cmp(word)).is_ok()
 }
 
 /// Reads the newest invoices and classes again and keeps what they show.
@@ -453,7 +587,7 @@ async fn fresh_scan(state: &AppState, company_id: i32) -> Option<Scan> {
 
 /// The company's scan, read again when over a day old; none without
 /// `QuickBooks`.
-pub(super) async fn scan(state: &AppState, company_id: i32) -> sqlx::Result<Option<Scan>> {
+async fn scan(state: &AppState, company_id: i32) -> sqlx::Result<Option<Scan>> {
     let kept: Option<String> = sqlx::query_scalar(
         "SELECT CAST(stats_json AS CHAR) FROM qbo_invoice_scans
           WHERE company_id = ? AND scanned_at > DATE_SUB(NOW(), INTERVAL 1 DAY)",
@@ -472,12 +606,34 @@ pub(super) async fn scan(state: &AppState, company_id: i32) -> sqlx::Result<Opti
 }
 
 /// Each line shape's outcomes, newest first (up to [`WINDOW`]).
+/// The quote words of the company's newest invoices created here, by invoice.
+async fn quote_words(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> sqlx::Result<HashMap<String, Vec<String>>> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT qbo_invoice_id, words FROM qbo_invoice_draft_words
+          WHERE company_id = ? ORDER BY created_at DESC LIMIT ?",
+    )
+    .bind(company_id)
+    .bind(QUOTE_WORDS)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, words)| (id, split_words(&words)))
+        .collect())
+}
+
+/// Each line shape's outcomes, newest first (up to [`WHEN_WINDOW`]), with
+/// their quotes' words; and on how many of the company's quotes each word is.
 async fn line_history(
     pool: &MySqlPool,
     company_id: i32,
-) -> sqlx::Result<HashMap<String, Vec<Outcome>>> {
-    let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT draft_shape, outcome, saved_value FROM qbo_invoice_draft_outcomes
+) -> sqlx::Result<(HashMap<String, Vec<LinePast>>, HashMap<String, usize>)> {
+    let quotes = quote_words(pool, company_id).await?;
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT draft_shape, outcome, saved_value, qbo_invoice_id FROM qbo_invoice_draft_outcomes
           WHERE company_id = ? AND field = 'line' AND draft_shape IS NOT NULL
           ORDER BY id DESC LIMIT ?",
     )
@@ -485,19 +641,57 @@ async fn line_history(
     .bind(LINE_HISTORY)
     .fetch_all(pool)
     .await?;
-    let mut history: HashMap<String, Vec<Outcome>> = HashMap::new();
-    for (shape, outcome, value) in rows {
-        let outcomes = history.entry(shape).or_default();
-        if outcomes.len() < WINDOW {
-            outcomes.push(Outcome { outcome, value });
+    let mut history: HashMap<String, Vec<LinePast>> = HashMap::new();
+    for (shape, outcome, value, invoice) in rows {
+        let past = history.entry(shape).or_default();
+        if past.len() < WHEN_WINDOW {
+            past.push(LinePast {
+                outcome: Outcome { outcome, value },
+                words: invoice.and_then(|id| quotes.get(&id)).cloned(),
+            });
         }
     }
-    Ok(history)
+    let mut common: HashMap<String, usize> = HashMap::new();
+    for word in quotes.values().flatten() {
+        *common.entry(word.clone()).or_default() += 1;
+    }
+    Ok((history, common))
+}
+
+/// The products reps saved on invoices created here (with the quote's
+/// words, when kept), newest first, then the scanned invoices'.
+async fn item_history(
+    pool: &MySqlPool,
+    company_id: i32,
+    scanned: &[Seen],
+) -> sqlx::Result<Vec<Seen>> {
+    let rows: Vec<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT o.saved_value, o.draft_text, w.words FROM qbo_invoice_draft_outcomes o
+           LEFT JOIN qbo_invoice_draft_words w
+             ON w.company_id = o.company_id AND w.qbo_invoice_id = o.qbo_invoice_id
+          WHERE o.company_id = ? AND o.field = 'item' AND o.outcome = 'value'
+          ORDER BY o.id DESC LIMIT ?",
+    )
+    .bind(company_id)
+    .bind(ITEM_HISTORY)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(value, name, words)| Seen {
+            outcome: "value".into(),
+            value,
+            name,
+            words: words.as_deref().map(split_words).unwrap_or_default(),
+            pair: true,
+        })
+        .chain(scanned.iter().cloned())
+        .collect())
 }
 
 /// A header field's outcomes on invoices made here, newest first, then the
 /// scanned ones.
-pub(super) async fn header_history(
+async fn header_history(
     pool: &MySqlPool,
     company_id: i32,
     field: &str,
@@ -519,6 +713,7 @@ pub(super) async fn header_history(
             value,
             name,
             words: Vec::new(),
+            pair: false,
         })
         .chain(scanned.iter().cloned())
         .collect())
@@ -586,9 +781,17 @@ pub async fn invoice_draft(
     let rep = quote_rep(&state.pool, company_id, quote_id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let rules = line_rules(&line_history(&state.pool, company_id).await?);
+    let (history, common) = line_history(&state.pool, company_id).await?;
+    let rules = line_rules(&history, &common);
     let draft_words = words(input.lines.iter().filter_map(|line| line.description.as_deref()));
-    let (mut lines, removed) = apply(input.lines, &rules);
+    let texts: Vec<String> = input
+        .lines
+        .iter()
+        .filter_map(|line| line.description.clone())
+        .collect();
+    let (mut lines, mut removed) = apply(input.lines, &rules, &draft_words);
+    let told = instructions::load(&state.pool, company_id).await;
+    let told = instructions::holding(&told, &texts);
     let scan = scan(&state, company_id).await?.unwrap_or_default();
     let class_name = header_value(
         decided(&header_history(&state.pool, company_id, "class", &scan.class).await?).as_ref(),
@@ -599,11 +802,16 @@ pub async fn invoice_draft(
         decided(&header_history(&state.pool, company_id, "cc", &scan.cc).await?).as_ref(),
         rep.email.as_deref(),
     );
-    let items = header_history(&state.pool, company_id, "item", &scan.item).await?;
-    let off = super::products::turned_off(&state.pool, company_id).await;
-    let (item_id, item_name) = super::products::Model::learn(&items)
-        .pick(&draft_words, &off)
-        .unzip();
+    let class_name = instructions::class(&told).or(class_name);
+    let bill_email_cc = instructions::cc(&told).or(bill_email_cc);
+    let (item_id, item_name) = match instructions::product(&told) {
+        Some(told) => Some(told),
+        None => {
+            let items = item_history(&state.pool, company_id, &scan.item).await?;
+            Model::learn(&items).pick(&draft_words, &instructions::avoided(&told))
+        }
+    }
+    .unzip();
     let item_name = item_name.flatten();
     if let Some(id) = &item_id {
         for line in lines
@@ -614,6 +822,7 @@ pub async fn invoice_draft(
             line.item_ref_name.clone_from(&item_name);
         }
     }
+    instructions::apply_lines(&told, &mut lines, &mut removed);
     Ok(Json(DraftRules {
         lines,
         removed,
@@ -670,6 +879,18 @@ pub async fn record(
             .unwrap_or_default(),
         None => Rep::default(),
     };
+    let draft_words = words(draft.iter().filter_map(|line| line.description.as_deref()));
+    if !draft_words.is_empty() {
+        sqlx::query(
+            "INSERT INTO qbo_invoice_draft_words (company_id, qbo_invoice_id, words) VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE words = VALUES(words)",
+        )
+        .bind(user.company_id)
+        .bind(invoice_id)
+        .bind(draft_words.join(" "))
+        .execute(pool)
+        .await?;
+    }
     for line in line_outcomes(draft, &saved.lines) {
         insert(
             pool,
@@ -843,13 +1064,14 @@ mod tests {
 
     #[test]
     fn rules_reword_and_leave_out_text_but_never_a_priced_line() {
+        let always = |rule| ShapeRule { rule, when: None };
         let rules = HashMap::from([
             (
                 shape("33.5 lin ft Finished Edge - Flat"),
-                LineRule::Changed("Flat Edge".into()),
+                always(LineRule::Changed("Flat Edge".into())),
             ),
-            (shape("Laser Template"), LineRule::Removed),
-            (shape("Kitchen based @ 30 sqft"), LineRule::Removed),
+            (shape("Laser Template"), always(LineRule::Removed)),
+            (shape("Kitchen based @ 30 sqft"), always(LineRule::Removed)),
         ]);
         let (kept, removed) = apply(
             vec![
@@ -859,6 +1081,7 @@ mod tests {
                 text("d", "Laser Template"),
             ],
             &rules,
+            &[],
         );
         let texts: Vec<_> = kept
             .iter()
@@ -875,6 +1098,97 @@ mod tests {
         assert_eq!(kept[0].amount, Some(2090.0));
         assert_eq!(removed.len(), 1);
         assert_eq!(removed[0].id.as_deref(), Some("d"));
+    }
+
+    fn past(outcome: &Outcome, lines: &[&str]) -> LinePast {
+        LinePast {
+            outcome: outcome.clone(),
+            words: Some(words(lines.iter().copied())),
+        }
+    }
+
+    const CABINETS: [&str; 2] = ["12 Shaker Cabinets - White", "73.3 sq ft Fabrication"];
+    const COUNTERS: [&str; 2] = ["Granite Luna Pearl", "73.3 sq ft Fabrication"];
+
+    #[test]
+    fn a_line_left_out_on_quotes_with_a_word_is_left_out_on_such_quotes() {
+        let (removed, kept) = (o("removed", None), o("kept", None));
+        let fabrication = shape("73.3 sq ft Fabrication");
+        // Newest first: left out with cabinets, kept on countertop-only quotes.
+        let history = HashMap::from([(
+            fabrication.clone(),
+            vec![
+                past(&removed, &CABINETS),
+                past(&kept, &COUNTERS),
+                past(&removed, &CABINETS),
+                past(&removed, &CABINETS),
+                past(&kept, &COUNTERS),
+                past(&removed, &CABINETS),
+                past(&kept, &COUNTERS),
+            ],
+        )]);
+        let common = HashMap::from([
+            ("cabinets".to_string(), 10),
+            ("shaker".to_string(), 3),
+            ("white".to_string(), 5),
+            ("granite".to_string(), 40),
+        ]);
+        let rules = line_rules(&history, &common);
+        assert_eq!(
+            rules[&fabrication],
+            ShapeRule {
+                rule: LineRule::Removed,
+                when: Some(When {
+                    word: "cabinets".into(),
+                    has: true
+                }),
+            }
+        );
+        let draft = |extra: &str| {
+            vec![
+                text("a", "40 sq ft Fabrication"),
+                text("b", extra),
+            ]
+        };
+        let with = draft("10 Cabinets");
+        let with_words = words(with.iter().filter_map(|l| l.description.as_deref()));
+        let (kept_lines, removed_lines) = apply(with, &rules, &with_words);
+        assert_eq!(kept_lines.len(), 1);
+        assert_eq!(removed_lines[0].id.as_deref(), Some("a"));
+        let without = draft("Granite Zurich");
+        let without_words = words(without.iter().filter_map(|l| l.description.as_deref()));
+        let (kept_lines, removed_lines) = apply(without, &rules, &without_words);
+        assert_eq!(kept_lines.len(), 2);
+        assert!(removed_lines.is_empty());
+
+        // Reps keep it again on cabinet quotes, twice: the rule is off.
+        let mut again = vec![past(&kept, &CABINETS), past(&kept, &CABINETS)];
+        again.extend(history[&fabrication].iter().cloned());
+        let rules = line_rules(&HashMap::from([(fabrication.clone(), again)]), &common);
+        assert_eq!(rules.get(&fabrication), None);
+    }
+
+    #[test]
+    fn a_line_reps_keep_leaving_out_is_left_out_until_they_keep_it_twice() {
+        let (removed, kept) = (o("removed", None), o("kept", None));
+        let installation = shape("73.3 sq ft Installation");
+        let mut past_outcomes = vec![past(&removed, &COUNTERS); 3];
+        let common = HashMap::new();
+        let rules = line_rules(
+            &HashMap::from([(installation.clone(), past_outcomes.clone())]),
+            &common,
+        );
+        assert_eq!(
+            rules[&installation],
+            ShapeRule {
+                rule: LineRule::Removed,
+                when: None
+            }
+        );
+        past_outcomes.insert(0, past(&kept, &COUNTERS));
+        past_outcomes.insert(0, past(&kept, &COUNTERS));
+        let rules = line_rules(&HashMap::from([(installation.clone(), past_outcomes)]), &common);
+        assert_eq!(rules.get(&installation), None);
     }
 
     #[test]

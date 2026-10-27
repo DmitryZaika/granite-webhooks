@@ -18,6 +18,7 @@
 //! Replaces the Remix `api.quickbooks.*` and `api.employee.qbo-*` routes.
 
 pub mod class_sales;
+pub mod instructions;
 pub mod invoice;
 pub mod products;
 pub mod rules;
@@ -52,8 +53,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(items))
         .routes(routes!(recent_invoices))
         .routes(routes!(rules::invoice_draft))
-        .routes(routes!(products::product_rules))
-        .routes(routes!(products::turn_product))
+        .routes(routes!(
+            instructions::get_instructions,
+            instructions::save_instructions
+        ))
         .routes(routes!(sales::my_sales))
         .routes(routes!(sales::my_customers))
         .routes(routes!(class_sales::class_sales))
@@ -966,9 +969,14 @@ pub async fn items(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<QboItems>> {
+    company_items(&state, user.company_id).await.map(Json)
+}
+
+/// The company's active products and services and classes, by name.
+async fn company_items(state: &AppState, company_id: i32) -> ApiResult<QboItems> {
     let access = state
         .qbo
-        .access(&state.pool, user.company_id)
+        .access(&state.pool, company_id)
         .await
         .map_err(qbo_error)?;
     let rows = state
@@ -1009,7 +1017,7 @@ pub async fn items(
         .filter_map(|row| text(&row["FullyQualifiedName"]).or_else(|| text(&row["Name"])))
         .collect();
     classes.sort_by_key(|name| name.to_lowercase());
-    Ok(Json(QboItems { items, classes }))
+    Ok(QboItems { items, classes })
 }
 
 /// Query of `GET /v1/qbo/invoices/recent`.

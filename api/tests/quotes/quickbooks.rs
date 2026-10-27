@@ -1,6 +1,7 @@
 use crate::common;
 
 use ::common::telephony::ringcentral_auth::encrypt;
+use api::ai::Ai;
 use api::app;
 use api::qbo::Qbo;
 use api::state::AppState;
@@ -144,6 +145,23 @@ async fn server(pool: &MySqlPool, access_expires_in: i64) -> (TestServer, Arc<Mu
             }),
         )
         .route("/v3/company/555/invoice/{id}/pdf", get(|| async { ([("content-type", "application/pdf")], b"%PDF-qbo".to_vec()) }))
+        // The AI making rules of invoice instructions: "Stone only with
+        // cabinets, otherwise tile; no fabrication line with cabinets".
+        .route(
+            "/chat",
+            post(|Json(body): Json<Value>| async move {
+                let prompt = body["messages"][1]["content"].as_str().unwrap_or_default();
+                assert!(prompt.contains("\"Stone\"") && !prompt.contains("\"Parts\""));
+                let rules = json!({ "rules": [
+                    { "when_has": ["cabinet"], "action": { "type": "product", "product": "Stone" } },
+                    { "when_lacks": ["cabinet"], "action": { "type": "avoid_product", "product": "Stone" } },
+                    { "when_lacks": ["cabinet"], "action": { "type": "product", "product": "tile" } },
+                    { "when_has": ["cabinet"], "action": { "type": "hide", "line": "fabrication" } },
+                    { "action": { "type": "product", "product": "Granite Package" } },
+                ], "not_understood": [] });
+                Json(json!({ "choices": [{ "message": { "content": rules.to_string() } }] }))
+            }),
+        )
         .route(
             "/v3/company/555/invoice",
             post(move |Json(body): Json<Value>| {
@@ -161,7 +179,9 @@ async fn server(pool: &MySqlPool, access_expires_in: i64) -> (TestServer, Arc<Mu
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let qbo = Qbo::new(Some(KEY), None, &base, &format!("{base}/token"), false);
-    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN).with_qbo(qbo);
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+        .with_qbo(qbo)
+        .with_ai(Ai::new(Some("key"), &format!("{base}/chat")));
     (TestServer::new(app(state)), posted)
 }
 
@@ -411,6 +431,87 @@ async fn a_draft_follows_what_recent_invoices_keep_doing(pool: MySqlPool) {
         .json(&json!({ "lines": [] }))
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[test_db::test(seed)]
+async fn instructions_become_rules_every_draft_follows(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO quotes (id, customer_id, quote_name, quote_type, created_date, sales_rep,
+                             company_id, salesperson_id, created_by, status)
+         VALUES (9803, 1000, 'Kitchen', 'countertops', NOW(), 'Rep', 100, 100, 100, 'converted')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (server, _) = server(&pool, 10).await;
+    let told = json!({ "instructions": "Stone only with cabinets, otherwise tile. No fabrication line with cabinets." });
+    server
+        .put("/v1/qbo/invoice-instructions")
+        .with_session(sessions::REP)
+        .json(&told)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let saved: Value = server
+        .put("/v1/qbo/invoice-instructions")
+        .with_session(sessions::ADMIN)
+        .json(&told)
+        .await
+        .json();
+    assert_eq!(saved["rules"].as_array().unwrap().len(), 4);
+    assert_eq!(saved["rules"][0]["action"], json!({ "type": "product", "item_id": "3", "item_name": "Stone" }));
+    assert_eq!(saved["not_understood"], json!(["QuickBooks has no product named “Granite Package”."]));
+    let read: Value = server
+        .get("/v1/qbo/invoice-instructions")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(read, saved);
+
+    let line = |id: &str, detail: &str, text: &str, amount: Value| {
+        json!({ "id": id, "line_num": null, "detail_type": detail, "description": text,
+                "amount": amount, "qty": null, "unit_price": amount, "item_ref_value": null,
+                "item_ref_name": null, "editable": true })
+    };
+    let draft = |extra: &str| {
+        json!({ "lines": [
+            line("new:0", "SalesItemLineDetail", "Kitchen based @ 30 sqft", json!(900)),
+            line("new:1", "DescriptionOnly", "30 sq ft Fabrication", Value::Null),
+            line("new:2", "DescriptionOnly", extra, Value::Null),
+        ] })
+    };
+    let cabinets: Value = server
+        .post("/v1/quotes/9803/invoice-draft")
+        .with_session(sessions::REP)
+        .json(&draft("10 Shaker Cabinets - White"))
+        .await
+        .json();
+    assert_eq!(cabinets["item_id"], "3");
+    assert_eq!(cabinets["lines"][0]["item_ref_name"], "Stone");
+    assert_eq!(cabinets["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(cabinets["removed"][0]["description"], "30 sq ft Fabrication");
+    let counters: Value = server
+        .post("/v1/quotes/9803/invoice-draft")
+        .with_session(sessions::REP)
+        .json(&draft("1 Sink - 60/40"))
+        .await
+        .json();
+    assert_eq!(counters["item_id"], "5");
+    assert_eq!(counters["lines"].as_array().unwrap().len(), 3);
+
+    let cleared: Value = server
+        .put("/v1/qbo/invoice-instructions")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "instructions": "  " }))
+        .await
+        .json();
+    assert_eq!(cleared["rules"], json!([]));
+    let learned: Value = server
+        .post("/v1/quotes/9803/invoice-draft")
+        .with_session(sessions::REP)
+        .json(&draft("10 Shaker Cabinets - White"))
+        .await
+        .json();
+    assert!(learned["removed"].as_array().unwrap().is_empty());
 }
 
 #[test_db::test(seed)]
