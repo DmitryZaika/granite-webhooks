@@ -497,11 +497,13 @@ pub async fn create_invoice(
         Some(name) => Some(class_id(&state, &access, name).await?),
         None => None,
     };
+    let class_per_line = class.is_some() && class_per_line(&state, &access).await;
     let payload = create_payload(
         &qbo_id,
         &input.invoice,
         row.email.as_deref(),
         class.as_deref(),
+        class_per_line,
     )
     .map_err(ApiError::BadRequest)?;
     let created = state
@@ -541,6 +543,17 @@ pub async fn create_invoice(
         tracing::error!(error = %err, "invoice draft outcomes not kept");
     }
     Ok(Json(invoice))
+}
+
+/// Whether the company sets classes on each line rather than on the invoice.
+async fn class_per_line(state: &AppState, access: &Access) -> bool {
+    state
+        .qbo
+        .get(access, "preferences")
+        .await
+        .ok()
+        .and_then(|prefs| prefs["Preferences"]["AccountingInfoPrefs"]["ClassTrackingPerTxnLine"].as_bool())
+        .unwrap_or(false)
 }
 
 /// A `QuickBooks` class's id by its full name.

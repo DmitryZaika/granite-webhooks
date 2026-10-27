@@ -369,11 +369,19 @@ fn same(a: &str, b: &str) -> bool {
 /// How a class or CC was set: not at all, to the sales rep (any of `reps`:
 /// the quote's rep, or any employee for an invoice `QuickBooks` already had),
 /// or to a value.
+///
+/// A subclass named after the rep ("Countertops:Tania") is the rep's under
+/// that parent.
 pub fn header_outcome(saved: Option<&str>, reps: &[&str]) -> Outcome {
     match saved.map(str::trim).filter(|s| !s.is_empty()) {
         None => Outcome::new("none", None),
         Some(value) if reps.iter().any(|rep| same(rep, value)) => Outcome::new("sales_rep", None),
-        Some(value) => Outcome::new("value", Some(value)),
+        Some(value) => match value.rsplit_once(':') {
+            Some((parent, leaf)) if reps.iter().any(|rep| same(rep, leaf)) => {
+                Outcome::new("sales_rep", Some(parent.trim()))
+            }
+            _ => Outcome::new("value", Some(value)),
+        },
     }
 }
 
@@ -382,7 +390,11 @@ pub fn header_outcome(saved: Option<&str>, reps: &[&str]) -> Outcome {
 pub fn header_value(rule: Option<&Outcome>, rep: Option<&str>) -> Option<String> {
     let rule = rule?;
     match rule.outcome.as_str() {
-        "sales_rep" => rep.map(str::to_string),
+        "sales_rep" => rep.map(|rep| {
+            rule.value
+                .as_ref()
+                .map_or_else(|| rep.to_string(), |parent| format!("{parent}:{}", rep.trim()))
+        }),
         "value" => rule.value.clone(),
         _ => None,
     }
@@ -455,6 +467,9 @@ struct Scan {
     /// before fields were read.
     #[serde(default)]
     fields: Option<Vec<Filled>>,
+    /// Classes were read from lines too.
+    #[serde(default)]
+    line_classes: bool,
 }
 
 /// What an invoice filled in besides its customer, lines, dates and amounts:
@@ -563,6 +578,17 @@ fn first_item(invoice: &Value) -> Option<Seen> {
     })
 }
 
+/// An invoice's class: its own, or its first priced line's for a company
+/// that sets classes per line.
+fn invoice_class(invoice: &Value) -> Option<String> {
+    text(&invoice["ClassRef"]["name"]).or_else(|| {
+        rows(&invoice["Line"])
+            .iter()
+            .find(|line| line["DetailType"] == "SalesItemLineDetail")
+            .and_then(|line| text(&line["SalesItemLineDetail"]["ClassRef"]["name"]))
+    })
+}
+
 /// Words kept as one text, back as a sorted list.
 fn split_words(text: &str) -> Vec<String> {
     let mut words: Vec<String> = text.split_whitespace().map(str::to_string).collect();
@@ -619,12 +645,7 @@ async fn fresh_scan(state: &AppState, company_id: i32) -> Option<Scan> {
     let scan = Scan {
         class: invoices
             .iter()
-            .map(|i| {
-                seen(header_outcome(
-                    text(&i["ClassRef"]["name"]).as_deref(),
-                    &names,
-                ))
-            })
+            .map(|i| seen(header_outcome(invoice_class(i).as_deref(), &names)))
             .collect(),
         cc: invoices
             .iter()
@@ -637,6 +658,7 @@ async fn fresh_scan(state: &AppState, company_id: i32) -> Option<Scan> {
             .collect(),
         item: invoices.iter().filter_map(first_item).collect(),
         fields: Some(invoices.iter().map(filled).collect()),
+        line_classes: true,
         classes: classes
             .iter()
             .filter_map(|c| text(&c["FullyQualifiedName"]).or_else(|| text(&c["Name"])))
@@ -667,11 +689,12 @@ async fn scan(state: &AppState, company_id: i32) -> sqlx::Result<Option<Scan>> {
     .bind(company_id)
     .fetch_optional(&state.pool)
     .await?;
-    // A scan kept before invoices' words or fields were read is read again.
+    // A scan kept before invoices' words, fields or line classes were read
+    // is read again.
     if let Some(scan) = kept
         .and_then(|json| serde_json::from_str::<Scan>(&json).ok())
         .filter(|scan| scan.item.is_empty() || scan.item.iter().any(|seen| !seen.words.is_empty()))
-        .filter(|scan| scan.fields.is_some())
+        .filter(|scan| scan.fields.is_some() && scan.line_classes)
     {
         return Ok(Some(scan));
     }
@@ -768,7 +791,6 @@ async fn header_history(
     pool: &MySqlPool,
     company_id: i32,
     field: &str,
-    scanned: &[Seen],
 ) -> sqlx::Result<Vec<Seen>> {
     let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT outcome, saved_value, draft_text FROM qbo_invoice_draft_outcomes
@@ -788,13 +810,43 @@ async fn header_history(
             words: Vec::new(),
             pair: false,
         })
-        .chain(scanned.iter().cloned())
         .collect())
 }
 
 fn decided(history: &[Seen]) -> Option<Outcome> {
     let outcomes: Vec<Outcome> = history.iter().map(Seen::outcome).collect();
     decide(&outcomes).map(|(winner, _)| winner)
+}
+
+/// A class or CC from the invoices made here (newest first) followed by the
+/// scanned ones; failing a rule, what at least 2 of 3 scanned invoices did,
+/// unless the newest made here did otherwise (one odd invoice doesn't undo
+/// what the company always does).
+fn decided_header(made: &[Seen], scanned: &[Seen]) -> Option<Outcome> {
+    let history: Vec<Seen> = made.iter().chain(scanned).cloned().collect();
+    decided(&history).or_else(|| {
+        let usual = usual(scanned)?;
+        made.iter()
+            .take(2)
+            .all(|seen| seen.outcome() == usual)
+            .then_some(usual)
+    })
+}
+
+/// What at least 2 of 3 of the outcomes did (at least [`MIN_SEEN`] of them).
+fn usual(seen: &[Seen]) -> Option<Outcome> {
+    let mut counts: Vec<(Outcome, usize)> = Vec::new();
+    for outcome in seen.iter().map(Seen::outcome) {
+        match counts.iter_mut().find(|(known, _)| *known == outcome) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((outcome, 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .filter(|(_, count)| *count >= MIN_SEEN && count * 3 >= seen.len() * 2)
+        .map(|(outcome, _)| outcome)
 }
 
 /// Body of `POST /v1/quotes/{id}/invoice-draft`.
@@ -867,12 +919,12 @@ pub async fn invoice_draft(
     let told = instructions::holding(&told, &texts);
     let scan = scan(&state, company_id).await?.unwrap_or_default();
     let class_name = header_value(
-        decided(&header_history(&state.pool, company_id, "class", &scan.class).await?).as_ref(),
+        decided_header(&header_history(&state.pool, company_id, "class").await?, &scan.class).as_ref(),
         rep.name.as_deref(),
     )
     .filter(|name| scan.classes.is_empty() || scan.classes.iter().any(|c| same(c, name)));
     let bill_email_cc = header_value(
-        decided(&header_history(&state.pool, company_id, "cc", &scan.cc).await?).as_ref(),
+        decided_header(&header_history(&state.pool, company_id, "cc").await?, &scan.cc).as_ref(),
         rep.email.as_deref(),
     );
     let class_name = instructions::class(&told).or(class_name);
@@ -1355,5 +1407,42 @@ mod tests {
         );
         assert_eq!(header_value(Some(&o("none", None)), Some("Dema")), None);
         assert_eq!(header_value(None, Some("Dema")), None);
+        assert_eq!(
+            header_outcome(Some("Countertops:Tania"), &["Dema", "Tania"]),
+            o("sales_rep", Some("Countertops"))
+        );
+        assert_eq!(
+            header_outcome(Some("Cabinets:Tania/Cabinets"), &["Tania"]),
+            o("value", Some("Cabinets:Tania/Cabinets"))
+        );
+        assert_eq!(
+            header_value(Some(&o("sales_rep", Some("Countertops"))), Some("Kyle")).as_deref(),
+            Some("Countertops:Kyle")
+        );
+    }
+
+    #[test]
+    fn a_class_set_per_line_is_the_invoices() {
+        let invoice = serde_json::json!({ "Line": [
+            { "DetailType": "DescriptionOnly", "Description": "Template" },
+            { "DetailType": "SalesItemLineDetail", "SalesItemLineDetail": { "ClassRef": { "value": "5", "name": "Countertops:Tania" } } },
+        ] });
+        assert_eq!(invoice_class(&invoice).as_deref(), Some("Countertops:Tania"));
+        assert_eq!(invoice_class(&serde_json::json!({ "Line": [] })), None);
+    }
+
+    #[test]
+    fn what_scanned_invoices_usually_do_holds_until_invoices_made_here_differ() {
+        let rep = || seen(o("sales_rep", None));
+        let gmail = || seen(o("value", Some("masha@gmail.test")));
+        let mut scanned = vec![gmail()];
+        scanned.extend((0..7).map(|_| rep()));
+        scanned.extend([gmail(), seen(o("none", None))]);
+        assert_eq!(decided(&scanned), None);
+        assert_eq!(decided_header(&[], &scanned), Some(o("sales_rep", None)));
+        assert_eq!(decided_header(&[rep()], &scanned), Some(o("sales_rep", None)));
+        assert_eq!(decided_header(&[seen(o("none", None))], &scanned), None);
+        let mixed = [rep(), rep(), gmail(), gmail(), seen(o("none", None))];
+        assert_eq!(decided_header(&[], &mixed), None);
     }
 }
