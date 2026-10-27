@@ -1,7 +1,8 @@
-//! Invoices the CRM keeps itself, for companies that do not invoice through
-//! QuickBooks (`routes/quickbooks` has those). Numbered per company, made
-//! from a quote or by hand; the browser prints the PDF and emails it with
-//! `POST /v1/emails`.
+//! Invoices the CRM keeps itself, for companies without QuickBooks.
+//!
+//! QuickBooks invoices are in `routes/quickbooks`. These are numbered per
+//! company, made from a quote or by hand; the browser prints the PDF and
+//! emails it with `POST /v1/emails`.
 //!
 //! - `GET /v1/invoices` → the company's invoices and the next number
 //! - `POST /v1/invoices` → a new draft invoice
