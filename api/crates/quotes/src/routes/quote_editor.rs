@@ -29,7 +29,7 @@ use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
-    self, load_company_quote, mark_quote_sold, pricing_for_quote, quote_for_contract_file,
+    self, SaleDeal, load_company_quote, mark_quote_sold, pricing_for_quote, quote_for_contract_file,
     with_current_sink_models,
 };
 use crate::routes::created::CreatedId;
@@ -1862,6 +1862,13 @@ pub async fn update_prices(
 pub struct Sale {
     /// Index of the color option sold.
     pub option: i32,
+    /// The customer's deal to mark won (none: the quote's own deal, else the
+    /// customer's latest open or won one).
+    #[serde(default)]
+    pub deal_id: Option<i64>,
+    /// Make a new won deal instead of using an existing one.
+    #[serde(default)]
+    pub new_deal: bool,
 }
 
 /// What selling did.
@@ -1909,6 +1916,11 @@ pub async fn mark_sold(
         user.company_id,
         Some(input.option),
         Some(user.id),
+        match (input.new_deal, input.deal_id) {
+            (true, _) => SaleDeal::New,
+            (false, Some(deal)) => SaleDeal::Existing(deal),
+            (false, None) => SaleDeal::Auto,
+        },
     )
     .await?
     .ok_or(ApiError::NotFound)?;

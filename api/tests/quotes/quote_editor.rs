@@ -348,6 +348,52 @@ async fn the_page_changes_info_settings_and_prices(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_sale_marks_the_deal_the_user_picked(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    let sell = |id: i64, body: Value| {
+        let server = &server;
+        async move {
+            let path = format!("/v1/quotes/{id}");
+            server
+                .put(&format!("{path}/drawing"))
+                .with_session(sessions::REP)
+                .json(&json!({ "doc": doc("Ubatuba") }))
+                .await
+                .assert_status_ok();
+            server
+                .post(&format!("{path}/sale"))
+                .with_session(sessions::REP)
+                .json(&body)
+                .await
+        }
+    };
+    let first = create(&server, json!({ "customer_id": 1004 })).await;
+    let res = sell(first, json!({ "option": 0 })).await;
+    res.assert_status_ok();
+    let first_deal = res.json::<Value>()["deal_id"].as_i64().unwrap();
+
+    // A new deal although the customer already has a won one.
+    let second = create(&server, json!({ "customer_id": 1004 })).await;
+    let res = sell(second, json!({ "option": 0, "new_deal": true })).await;
+    res.assert_status_ok();
+    let second_deal = res.json::<Value>()["deal_id"].as_i64().unwrap();
+    assert_ne!(second_deal, first_deal);
+
+    // The older deal, picked by hand.
+    let third = create(&server, json!({ "customer_id": 1004 })).await;
+    let res = sell(third, json!({ "option": 0, "deal_id": first_deal })).await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>()["deal_id"].as_i64(), Some(first_deal));
+
+    // A deal that is not the customer's is refused.
+    let fourth = create(&server, json!({ "customer_id": 1004 })).await;
+    sell(fourth, json!({ "option": 0, "deal_id": 999_999 }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[test_db::test(seed)]
 async fn quotes_are_sold_copied_and_printed(pool: MySqlPool) {
     let (server, _) = server(&pool).await;
     price_list(&server, &pool).await;
