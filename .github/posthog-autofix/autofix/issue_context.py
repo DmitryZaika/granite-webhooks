@@ -195,10 +195,10 @@ def sample_query(issue_id: str, event_id: str) -> str:
     )
 
 
-def _same_bug_filter(issue_id: str, bug: Mapping[str, object]) -> str:
+def _same_bug_filter(bug: Mapping[str, object]) -> str:
+    # Not limited to the issue: PostHog splits one bug over several issues.
     clauses = [
         "event = '$exception'",
-        f"issue_id = {quote(checked_id(issue_id))}",
         "timestamp >= now() - INTERVAL 14 DAY",
     ]
     if bug.get("type"):
@@ -221,15 +221,15 @@ def _same_bug_filter(issue_id: str, bug: Mapping[str, object]) -> str:
     return " AND ".join(clauses)
 
 
-def same_bug_query(issue_id: str, bug: Mapping[str, object]) -> str:
-    """Recent events of the same bug; the window columns cover all of its events."""
+def same_bug_query(bug: Mapping[str, object]) -> str:
+    """Recent events of the same bug in any issue; the window columns cover all of its events."""
     return (
         "SELECT timestamp, properties.release, properties.$current_url, "
         "properties.route_pattern, properties.api_method, properties.api_path, "
         "properties.api_status, count() OVER (), uniq(distinct_id) OVER (), "
         "min(timestamp) OVER (), max(timestamp) OVER (), "
         "count() OVER (PARTITION BY properties.release) "
-        f"FROM events WHERE {_same_bug_filter(issue_id, bug)} "
+        f"FROM events WHERE {_same_bug_filter(bug)} "
         f"ORDER BY timestamp DESC LIMIT {MAX_SAME_BUG}"
     )
 
@@ -656,7 +656,7 @@ def fetch_summary(
         key = bug_key(found)
         if not key["type"] and not key["message"]:
             return []
-        lines, stamps = same_bug_section(ask(same_bug_query(issue_id, key)))
+        lines, stamps = same_bug_section(ask(same_bug_query(key)))
         shared["stamps"] = stamps or [parse_timestamp(found["timestamp"])]
         return lines
 

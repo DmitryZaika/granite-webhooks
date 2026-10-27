@@ -195,10 +195,17 @@ class QueryTest(unittest.TestCase):
 
     def test_same_bug_query_matches_api_paths_with_a_query_string(self) -> None:
         bug = {"type": "GraniteApiError", "api_path": "/v1/deals", "api_status": 500}
-        query = issue_context.same_bug_query(ISSUE_ID, bug)
+        query = issue_context.same_bug_query(bug)
         self.assertIn("properties.api_path = '/v1/deals'", query)
         self.assertIn("startsWith(properties.api_path, '/v1/deals?')", query)
         self.assertIn("properties.api_status = 500", query)
+
+    def test_same_bug_query_spans_every_issue_the_bug_landed_in(self) -> None:
+        bug = {"type": "TypeError", "api_path": "", "api_status": None, "message": "x is undefined"}
+        query = issue_context.same_bug_query(bug)
+        self.assertNotIn("issue_id", query)
+        self.assertIn("JSONExtractString(properties.$exception_types, 1) = 'TypeError'", query)
+        self.assertIn("= 'x is undefined'", query)
 
     def test_breadcrumbs_query_never_selects_element_text(self) -> None:
         query = issue_context.breadcrumbs_query(SESSION, SAMPLE_TS)
