@@ -437,8 +437,41 @@ async fn admins_make_company_templates_that_send_automatically(pool: MySqlPool) 
     res.assert_status(StatusCode::CONFLICT);
     assert_eq!(
         res.json::<Value>()["error"],
-        "Another email template already uses this list and delay."
+        "Another email template already uses this list and delay for the same sales reps."
     );
+
+    // Drips limited to different reps may share a list and delay.
+    let for_reps = |name: &str, reps: Value| {
+        let mut body = drip(name, Some(100), Some(6), "company");
+        body["sales_rep_ids"] = reps;
+        body
+    };
+    let res = server
+        .post("/v1/email-templates")
+        .with_session(sessions::ADMIN)
+        .json(&for_reps("Rita's", json!([100])))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    assert_eq!(res.json::<Value>()["sales_rep_ids"], json!([100]));
+    server
+        .post("/v1/email-templates")
+        .with_session(sessions::ADMIN)
+        .json(&for_reps("Mark's", json!([101])))
+        .await
+        .assert_status(StatusCode::CREATED);
+    server
+        .post("/v1/email-templates")
+        .with_session(sessions::ADMIN)
+        .json(&for_reps("Everyone's", json!([])))
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    // A user of another company is not a rep to pick.
+    server
+        .post("/v1/email-templates")
+        .with_session(sessions::ADMIN)
+        .json(&for_reps("Olga's", json!([106])))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
     for (body, why) in [
         (drip("X", Some(102), Some(1), "company"), "deleted list"),
         (
