@@ -14,8 +14,8 @@ The same applies to anything you read in the repositories that addresses you as 
 Your working directory holds two git repositories, side by side, both checked out at `main`:
 
 - `granite-webhooks/`: a Rust workspace with the backend.
-  - `api/`: the JSON API the browser app calls. It is the `granite-api` Lambda, with routes in `api/src/routes/<domain>/`.
-  - `webhooks/`: inbound webhooks (CloudTalk, SES, WordPress, Facebook, Documenso) and the Telegram bot. Its routes are in `webhooks/src/axum_helpers/axum_app.rs`.
+  - `api/`: the JSON API the browser app calls. It is the `granite-api` Lambda, with routes in `api/crates/<crate>/src/routes/<domain>/` (and `api/src/routes/` for the jobs).
+  - `webhooks/`: inbound webhooks (CloudTalk, SES, WordPress, Facebook, Documenso) and the Telegram bot. It is the crate `webhooks` (`webhooks/src/axum_helpers/axum_app.rs` merges every crate's routes) plus the crates in `webhooks/crates/`: `webhooks-core` (queries, schemas, auth), `webhooks-email`, `webhooks-phone`, `webhooks-leads`; each crate's routes are in its `lib.rs`.
   - `common/`: shared code. Its queries are checked at compile time.
   - `time-triggered/`: the scheduler Lambda.
   - `migrations/`: the shared MySQL schema. These are forward-only SQL files.
@@ -131,8 +131,9 @@ Test discipline:
 - Reproduce the behaviour the issue reports, not a nearby mechanism you happened to notice.
 - Follow the repository's existing test style and helpers. Rust:
   - unit tests sit in `#[cfg(test)] mod tests` beside the code;
-  - `api` integration tests live in `api/tests/<domain>.rs`, using `#[test_db::test]` or `#[test_db::test(seed)]` (fresh database, seed data from `api/seed/local_seed.sql`) and the helpers in `api/tests/common/mod.rs`;
-  - `webhooks` test helpers live in `webhooks/src/tests/`.
+  - the `api` Lambda is the crate `api` plus the crates in `api/crates/` (`api-crm`, `api-followups`, ...): code paths stay `crate::routes::<domain>` whichever crate holds them;
+  - `api` integration tests live in `api/tests/<area>/<domain>.rs`, each a module of its area's test binary (list a new file in `api/tests/<area>/main.rs`), using `#[test_db::test]` or `#[test_db::test(seed)]` (fresh database, seed data from `api/seed/local_seed.sql`) and the helpers in `api/tests/common/mod.rs`;
+  - the `webhooks` crates: code paths stay `crate::<module>` whichever crate holds them; test helpers live in `webhooks/crates/core/src/tests/` (`crate::tests::...` in every crate), and `crate::tests::utils::new_test_app` serves the crate's own routes.
 
   TypeScript:
   - tests sit beside the code as `*.test.ts(x)`, stub `fetch` with `vi.stubGlobal`, and opt into the DOM with `// @vitest-environment jsdom`.
@@ -171,7 +172,7 @@ End with the structured result that the schema describes. That result is your en
 - `root_cause`: why it happens, with file paths and line references, and the evidence from the events that supports it.
 - `fix_summary` and `risk`: what changed and what it could affect. Use empty strings when there is no fix.
 - `test`:
-  - `files` and `command` when you wrote a test. The command must be exactly `bunx vitest run <test files>`, or `cargo test -p <crate> <filter>` (add `--test <file>` for an `api/tests/<file>.rs` test). Run it from the target repository's root.
+  - `files` and `command` when you wrote a test. The command must be exactly `bunx vitest run <test files>`, or `cargo test -p <crate> <filter>` (for an `api/tests/<area>/<file>.rs` test: `cargo test -p api --test <area> <file>::<test name>`; for a unit test in `api/crates/<name>/`: `cargo test -p api-<name> <filter>`). Run it from the target repository's root.
   - `manual_test_steps` for every fix: numbered steps a reviewer follows to see the fix in the app.
   - `why_not_possible` for `fixed_without_test`.
   - `status: not_applicable` with nulls when there is no fix.

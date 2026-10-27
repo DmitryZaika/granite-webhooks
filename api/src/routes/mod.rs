@@ -2,103 +2,21 @@
 //!
 //! Each module exposes `router()`, registering every handler with `routes!`
 //! so it lands in the OpenAPI spec too. The full path
-//! (`/v1/<domain>/...`) lives in the handler's `#[utoipa::path]`, so every
+//! (`/v1/<domain>/...`) lives in the handler's `#[crate::openapi::path]`, so every
 //! route is still greppable from its URL.
 
-pub mod ai;
-pub mod ai_usage;
-pub mod app_shell;
-pub mod attachable;
-pub mod auth;
-pub mod billing;
-pub mod billing_account;
-pub mod billing_addons;
-pub mod billing_cancellation;
-pub mod billing_setup;
-pub mod bug_reports;
-pub mod calendars;
-pub mod call_coaching;
-pub mod calls;
-pub mod catalog;
-pub mod checklists;
-pub mod commissions;
-pub mod company;
-pub mod company_frame;
-pub mod created;
-pub mod customer_sources;
-pub mod customer_view;
-pub mod customers;
-pub mod dashboard;
-pub mod deals;
-pub mod delayed;
-pub mod device_sessions;
-pub mod documents;
-pub mod emails;
-pub mod events;
-pub mod faucets;
-pub mod fixtures;
-pub mod followups;
-pub mod image_library;
-pub mod instructions;
-pub mod integrations;
-pub mod invoice_queue;
-pub mod jobs;
-pub mod leaderboard;
-pub mod maintenance;
-pub mod manual_feedback_reviews;
-pub mod marketing;
-pub mod me;
-pub mod notifications;
-pub mod onboarding;
-pub mod onboarding_call;
-pub mod online_quotes;
-pub mod phone;
-pub mod places;
-pub mod plan_invites;
-pub mod posthog_autofix;
-pub mod public;
-pub mod questionnaires;
-pub mod quickbooks;
-pub mod quote_editor;
-pub mod quote_extras;
-pub mod quote_forms;
-pub mod quote_lookups;
-pub mod quote_portal;
-pub mod quote_presets;
-pub mod quote_price_lists;
-pub mod quotes;
-pub mod reports;
-pub mod sales;
-pub mod schedule;
-pub mod shop;
-pub mod signature_requests;
-pub mod signatures;
-pub mod signing;
-pub mod signup;
-pub mod signwell_webhook;
-pub mod sinks;
-pub mod slabs;
-pub mod sms;
-pub mod stats;
-pub mod stones;
-pub mod superuser;
-pub mod superuser_companies;
-pub mod superuser_plan_invites;
-pub mod supplier_files;
-pub mod suppliers;
-pub mod supports;
-pub mod survey_results;
-pub mod teach_mode;
-pub mod teach_progress;
-pub mod telnyx_webhooks;
-pub mod templates;
-pub mod transaction_slabs;
-pub mod transactions;
-pub mod uploads;
-pub mod users;
+// The route modules of every crate below (each crate's `routes` re-exports
+// the ones below it).
+pub use api_admin::routes::*;
+pub use api_ai::routes::*;
+pub use api_phone::routes::*;
 
+pub mod jobs;
+pub mod notifications;
+pub mod public;
+
+use crate::openapi::OpenApiRouter;
 use crate::state::AppState;
-use utoipa_axum::router::OpenApiRouter;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

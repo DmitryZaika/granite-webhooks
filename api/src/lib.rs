@@ -11,63 +11,21 @@
     clippy::struct_excessive_bools,
     // Doc comments double as OpenAPI descriptions; product names like
     // CloudTalk are prose there, not code.
-    clippy::doc_markdown
+    clippy::doc_markdown,
+    // Checking that every async fn's future is Send took a third of
+    // clippy's time; axum and tokio::spawn require it where it matters.
+    clippy::future_not_send
 )]
 
-pub mod ai;
+// Every crate of the API, at the paths their modules had when this was one
+// crate (`api::state::AppState`, `api::routes::sms`): each crate re-exports
+// the ones below it, so these two hold them all.
+pub use api_admin::*;
+pub use api_ai::*;
+
 pub mod analytics_proxy;
-pub mod auth;
-pub mod automation_notice;
-pub mod billing;
-pub mod call_notes;
-pub mod chat;
-pub mod commissions;
-pub mod company_create;
-pub mod db;
-pub mod deliverability;
-pub mod email_signature;
-pub mod entitlements;
-pub mod error;
-pub mod extract;
-pub mod followups;
-pub mod images;
-pub mod job_runs;
-pub mod kitchen_design;
-pub mod maps;
-pub mod native_delivery;
-pub mod native_signing;
-pub mod oauth_state;
-pub mod onboarding_call;
 pub mod openapi;
-pub mod pdf;
-pub mod pdf_fonts;
-pub mod pdf_preview;
-pub mod period;
-pub mod phone;
-pub mod posthog;
-pub mod posthog_autofix;
-pub mod price_list_chunking;
-pub mod price_lists;
-pub mod push;
-pub mod qbo;
-pub mod quote_pricing;
-pub mod ringcentral_connect;
 pub mod routes;
-pub mod serde_helpers;
-pub mod setup_checklist;
-pub mod signing_pdf;
-pub mod signup;
-pub mod signwell;
-pub mod sql;
-pub mod state;
-pub mod storage;
-pub mod supplier_file_processor;
-pub mod telegram;
-pub mod telnyx;
-pub mod thumbnails;
-pub mod transcribe;
-pub mod voicemail;
-pub mod webhooks_client;
 
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::HeaderValue;
@@ -77,7 +35,6 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::get};
 use state::AppState;
-use std::sync::Arc;
 
 async fn health_check() -> &'static str {
     "ok"
@@ -204,8 +161,7 @@ fn panic_response(panic: Box<dyn std::any::Any + Send + 'static>) -> Response {
 
 pub fn app(state: AppState) -> Router {
     let cors = state.cors_layer();
-    let (routes, spec) = openapi::router_with_spec();
-    let spec: Arc<str> = spec.to_json().expect("OpenAPI spec serializes").into();
+    let (routes, spec) = openapi::router_and_spec_json();
     let all_routes = Router::new()
         .route("/", get(health_check))
         .route(

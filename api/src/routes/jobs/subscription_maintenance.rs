@@ -1,7 +1,7 @@
 //! `POST /v1/jobs/subscription-maintenance`: self-serve signups, plan invite
 //! acceptances and subscription seats. See `crate::signup::maintenance`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::signup::maintenance::{self, MaintenanceRun};
 use crate::state::AppState;
@@ -23,7 +23,7 @@ use axum::extract::State;
 ///
 /// Returns the counts; `processed` is `resumed` + `invites_resumed` +
 /// `expired`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/subscription-maintenance",
     operation_id = "run_subscription_maintenance",

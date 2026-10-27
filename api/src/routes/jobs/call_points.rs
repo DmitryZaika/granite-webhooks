@@ -9,12 +9,13 @@
 //! up to [`CLASSIFY_PER_RUN`] calls before it answers, and the next run
 //! takes the rest.
 
-use super::JobCaller;
 use crate::ai::Caller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::routes::calls::recording::{CallTranscriptError, transcribe_call};
 use crate::state::AppState;
-use crate::voicemail::classify;
+use crate::voicemail::{ATTEMPT_MAX_TALK_SECONDS, SHORT_CALL_MAX_TALK_SECONDS, classify_call};
 use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
@@ -24,15 +25,12 @@ use reqwest::Method;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use utoipa::ToSchema;
 
 const CLOUDTALK_PAGE: usize = 1000;
 const MAX_PAGES: usize = 10;
 /// Re-read a day (and slack) before the newest stored call, so a call still
 /// ringing last run is picked up once it ends.
 const LOOKBACK_HOURS: i64 = 26;
-/// The CRM's `CALL_ATTEMPT_MAX_TALK_SECONDS`.
-const ATTEMPT_MAX_TALK_SECONDS: i64 = 30;
 const CLASSIFY_MIN_AGE_MINUTES: i64 = 10;
 const CLAIM_TTL_MINUTES: i64 = 15;
 const MAX_TRANSCRIBE_ATTEMPTS: u8 = 5;
@@ -358,6 +356,7 @@ struct Pending {
     provider_call_id: String,
     recording_link: Option<String>,
     provider_voicemail: bool,
+    talk_seconds: i32,
     transcribe_attempts: u8,
 }
 
@@ -402,12 +401,23 @@ async fn classify_one(state: &AppState, row: Pending) -> Result<bool, sqlx::Erro
         user_id: None,
         company_id: Some(row.company_id),
     };
-    match transcribe_call(state, caller, &row.provider_call_id, Some(link), false).await {
+    // A short call's speaker turns show whether both sides talked.
+    let talk_seconds = i64::from(row.talk_seconds);
+    let speaker_labels = talk_seconds <= SHORT_CALL_MAX_TALK_SECONDS;
+    match transcribe_call(
+        state,
+        caller,
+        &row.provider_call_id,
+        Some(link),
+        speaker_labels,
+    )
+    .await
+    {
         Ok(transcript) => {
             finalize(
                 state,
                 row.id,
-                classify(row.provider_voicemail, &transcript.text),
+                classify_call(talk_seconds, row.provider_voicemail, &transcript),
             )
             .await?;
             Ok(true)
@@ -432,7 +442,7 @@ async fn classify_one(state: &AppState, row: Pending) -> Result<bool, sqlx::Erro
 pub async fn classify_pending(state: &AppState, limit: i64) -> Result<usize, sqlx::Error> {
     let rows: Vec<Pending> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT id, company_id, provider_call_id, recording_link, provider_voicemail <> 0 AS provider_voicemail,
-                transcribe_attempts
+                talk_seconds, transcribe_attempts
            FROM phone_call_points
           WHERE outcome = 'pending' AND {PROVIDERS} AND user_id IS NOT NULL AND started_at IS NOT NULL
             AND started_at <= UTC_TIMESTAMP() - INTERVAL {CLASSIFY_MIN_AGE_MINUTES} MINUTE
@@ -471,7 +481,7 @@ pub async fn classify_pending(state: &AppState, limit: i64) -> Result<usize, sql
 ///
 /// Pulls reps' outbound calls into the call points table, then transcribes
 /// and classifies a few of the calls long enough to need it.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/call-points",
     operation_id = "run_call_points",

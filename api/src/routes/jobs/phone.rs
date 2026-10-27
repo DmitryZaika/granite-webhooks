@@ -31,12 +31,13 @@
 //!    transcript (a conversation stops their flows and moves the deal on);
 //!    a voicemail left for us is noted with the inbound voicemail prompt.
 //!    An answered outgoing call of a user with AI notes off is transcribed
-//!    for its call points and call check only (over 30 seconds of talk; no
+//!    for its call points and call check only (over 7 seconds of talk; no
 //!    note, `transcriptStatus` back to `none`);
 //! 7. call points for answered outbound calls that ended in the last 3 days
 //!    (`phone_call_points`, provider `telnyx`; emergency calls left out):
-//!    30 seconds of talk or less is an attempt, else the transcript tells a
-//!    voicemail from a conversation; a call whose transcript is still coming
+//!    7 seconds of talk or less is an attempt, else the transcript tells a
+//!    voicemail from a conversation (up to 30 seconds, a conversation needs
+//!    both sides talking); a call whose transcript is still coming
 //!    waits as `pending`, and is looked at again each run;
 //! 8. deletes Telnyx's copies of recordings we copied whose delete failed
 //!    (backing off like the credentials);
@@ -50,10 +51,11 @@
 //!    registered gets its campaign) and the number assignments still pending
 //!    (a few a run; Telnyx's 10DLC webhooks are the fast path).
 
-use super::JobCaller;
 use crate::ai::{AiError, Caller, Chat, MINI_MODEL};
+use crate::auth::job::JobCaller;
 use crate::call_notes;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::phone::calls::{CallDirection, CallStatus, NOT_TEST_CALL, TranscriptStatus};
 use crate::phone::customer_index;
 use crate::phone::outcomes::{CONVERSATION_SECS, move_out_of_first_stage};
@@ -63,7 +65,7 @@ use crate::routes::ai::call_note::{CALL_PROMPT, INBOUND_VOICEMAIL_PROMPT, VOICEM
 use crate::routes::deals::service::{Notification, notify_assignees};
 use crate::routes::followups::call_check::{CallCheck, CallId, PhoneDigits, check_call};
 use crate::state::AppState;
-use crate::transcribe::TranscribeError;
+use crate::transcribe::{TranscribeError, Transcript};
 use crate::voicemail;
 use axum::Json;
 use axum::extract::State;
@@ -72,7 +74,6 @@ use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
 use std::time::{Duration, Instant};
-use utoipa::ToSchema;
 
 /// A run starts no new work after this long.
 const RUN_BUDGET: Duration = Duration::from_secs(20);
@@ -108,8 +109,6 @@ const NOTES_PER_RUN: i64 = 3;
 const CLAIM_TTL_MINUTES: i64 = 15;
 /// AI notes tried in all.
 const MAX_NOTE_ATTEMPTS: i64 = 5;
-/// The CRM's `CALL_ATTEMPT_MAX_TALK_SECONDS`.
-const ATTEMPT_MAX_TALK_SECONDS: i32 = 30;
 /// Answered outbound calls given call points per run.
 const POINTS_PER_RUN: i64 = 200;
 /// Who the AI notes are by (`deal_notes.created_by`, the notifications'
@@ -195,7 +194,7 @@ pub struct PhoneJobRun {
 /// texting registrations and pending number assignments again. Bounded work per run, and
 /// no new work after 20 seconds; the next run takes the rest. Returns what
 /// was done.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/phone",
     operation_id = "run_phone_job",
@@ -659,12 +658,12 @@ async fn note_one(state: &AppState, call: &NoteCall) -> sqlx::Result<NoteOutcome
         return Ok(NoteOutcome::Later);
     }
     // With AI notes off only the call points and the call check want the
-    // transcript: of an answered outgoing call over 30 seconds (shorter ones
+    // transcript: of an answered outgoing call over 7 seconds (shorter ones
     // are attempts).
     let note_wanted = call.ai_notes || call.status == CallStatus::Voicemail;
     let scored = call.direction == CallDirection::Outbound
         && call.status == CallStatus::Answered
-        && call.duration_secs.unwrap_or(0) > ATTEMPT_MAX_TALK_SECONDS;
+        && i64::from(call.duration_secs.unwrap_or(0)) > voicemail::ATTEMPT_MAX_TALK_SECONDS;
     if !note_wanted && !scored {
         return finish(state, call, TranscriptStatus::None, None).await;
     }
@@ -949,11 +948,12 @@ struct PointsCall {
     transcript: Option<String>,
 }
 
-/// How an answered outbound call scores: an `attempt` (30 seconds of talk
+/// How an answered outbound call scores: an `attempt` (7 seconds of talk
 /// or less, or nothing shows more), `voicemail` or `conversation` (by the
 /// transcript), or `pending` while its recording or transcript is coming.
 fn points_outcome(call: &PointsCall) -> &'static str {
-    if call.duration_secs.unwrap_or(0) <= ATTEMPT_MAX_TALK_SECONDS {
+    let talk_seconds = i64::from(call.duration_secs.unwrap_or(0));
+    if talk_seconds <= voicemail::ATTEMPT_MAX_TALK_SECONDS {
         return "attempt";
     }
     if let Some(text) = call
@@ -961,7 +961,8 @@ fn points_outcome(call: &PointsCall) -> &'static str {
         .as_deref()
         .filter(|text| !text.trim().is_empty())
     {
-        return voicemail::classify(false, text);
+        // Kept as `Speaker A: ...` lines: the turns come back from them.
+        return voicemail::classify_call(talk_seconds, false, &Transcript::from_labeled_text(text));
     }
     let coming = call.recording_status == "pending"
         || matches!(

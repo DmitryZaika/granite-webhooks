@@ -1,7 +1,7 @@
 //! `POST /v1/jobs/onboarding-commitments`: the daily onboarding call run.
 //! See `crate::onboarding_call::job`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::onboarding_call::job::{self, OnboardingRun};
 use crate::state::AppState;
@@ -26,7 +26,7 @@ use axum::extract::State;
 /// skipped for good). Emails are skipped while the mail service is not
 /// configured. Returns the counts; `processed` is `reminders` + `notices` +
 /// `invoices` + `tolled` + `completed`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/onboarding-commitments",
     operation_id = "run_onboarding_commitments",

@@ -5,12 +5,38 @@ edition = "2024"
 
 [lib]
 path = "src/lib.rs"
+# No doc tests; rustdoc would still compile the whole crate looking for them.
+doctest = false
 
 [[bin]]
 name = "api"
 path = "src/main.rs"
+test = false
+
+[[example]]
+name = "sign_session"
+path = "examples/sign_session.rs"
+test = false
+
+[features]
+# Generates the OpenAPI document from the route annotations with utoipa, for
+# `make api-openapi` and the spec tests (`--features openapi`). utoipa is a
+# large share of the crate's compile time, so builds without it register the
+# routes straight with axum and serve the checked-in api/openapi.json.
+openapi = [
+    "dep:utoipa",
+    "dep:utoipa-axum",
+    "api-core/openapi",
+    "api-phone/openapi",
+    "api-admin/openapi",
+    "api-ai/openapi",
+]
 
 [dependencies]
+api-core = { path = "crates/core" }
+api-phone = { path = "crates/phone" }
+api-admin = { path = "crates/admin" }
+api-ai = { path = "crates/ai" }
 ammonia = "4.1"
 bcrypt = "0.17"
 getrandom = "0.3"
@@ -38,12 +64,11 @@ thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["catch-panic", "cors"] }
-utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"] }
-utoipa-axum = "0.3.0"
+utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"], optional = true }
+utoipa-axum = { version = "0.3.0", optional = true }
+tower-layer = "0.3"
+tower-service = "0.3"
 serde_html_form = "0.4.1"
-aws-sdk-s3 = { version = "1.127", features = ["behavior-version-latest"] }
-aws-config = { version = "1.8", features = ["behavior-version-latest"] }
-aws-sdk-ssm = { version = "1", features = ["behavior-version-latest"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 # JPEG with 4:2:0 chroma and fitted Huffman tables (`image` writes 4:4:4 with stock tables).
 jpeg-encoder = "0.7"
@@ -52,7 +77,8 @@ zune-heic = "0.5"
 hayro = "0.8"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# `rustls` would bring aws-lc-rs; `common::http` clients run on ring.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 # Ed25519 (Telnyx webhook signatures) and RS256 (the FCM service-account JWT).
 ring = "0.17"
 hickory-resolver = "0.25"

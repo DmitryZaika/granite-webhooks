@@ -1,7 +1,7 @@
 """Reporting to the api: `POST /v1/posthog-autofix/runs/{id}/started|result`.
 
 The bodies must deserialize into `StartedReport` and `RunReport`
-(api/src/posthog_autofix/model.rs), both `deny_unknown_fields`: the key sets
+(api/crates/admin/src/posthog_autofix/model.rs), both `deny_unknown_fields`: the key sets
 here are pinned by tests against those structs.
 """
 

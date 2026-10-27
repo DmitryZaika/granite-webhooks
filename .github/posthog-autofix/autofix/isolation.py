@@ -198,7 +198,19 @@ def network_probes(blocked_ip: str) -> list[tuple[bool, list[str]]]:
     ]
 
 
+# What the CLI runs each agent command in under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB
+# (its flags, from 2.1.302): without it the CLI exits before the first turn.
+SANDBOX_PROBE = [
+    "bwrap",
+    *("--new-session", "--die-with-parent"),
+    *("--bind", "/", "/", "--dev", "/dev"),
+    *("--unshare-pid", "--unshare-user", "--cap-drop", "ALL"),
+    *("--proc", "/proc"),
+    "true",
+]
+
 TOOL_PROBES: list[tuple[bool, list[str]]] = [
+    (True, SANDBOX_PROBE),
     (True, ["claude", "--version"]),
     (True, ["cargo", "--version"]),
     (True, ["cargo", "clippy", "--version"]),

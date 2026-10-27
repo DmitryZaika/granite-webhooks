@@ -7,12 +7,13 @@
 //! never send it twice; a send whose outcome is unknown is never retried.
 //! Port of the CRM's `nativeSignatureReminders.server.ts`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::native_signing::{
     CompletedFile, FrozenSettings, LifecycleEvent, NativeSigning, Recipient, reminder_schedule,
     sha256_hex,
 };
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingAttachment, OutgoingEmail, SendFailure};
 use axum::Json;
@@ -21,7 +22,6 @@ use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::{MySql, MySqlPool, Transaction};
-use utoipa::ToSchema;
 
 /// Most sends per run.
 const MAX_SENDS: usize = 100;
@@ -588,7 +588,7 @@ pub async fn process_expired(pool: &MySqlPool, now: DateTime<Utc>) -> Result<usi
 /// the senders' notifications. Called by the `time-triggered` Lambda with
 /// `Authorization: <LAMBDA_KEY>`. While native signatures are not enabled
 /// it does nothing.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/signature-reminders",
     operation_id = "run_signature_reminders",

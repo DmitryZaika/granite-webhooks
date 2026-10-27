@@ -2,7 +2,7 @@
 name = "test-db"
 version = "0.1.0"
 edition = "2024"
-description = "Fast per-test MySQL databases: migrations and seed run once into a template, each test copies it."
+description = "Fast per-test MySQL databases: migrations and seed run once into a template; tests take copies of it, kept between runs."
 
 [dependencies]
 test-db-macros = { path = "macros" }

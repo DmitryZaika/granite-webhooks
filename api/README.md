@@ -7,40 +7,82 @@ React app. The twin of this document in the frontend repo is
 
 ## Layout
 
+The Lambda is one binary built from the `api` crate and the crates in
+`crates/`. A change recompiles only its crate and the crates above it, and
+the crates compile in parallel, so builds and checks no longer wait on one
+206K-line crate. Each crate re-exports the crates below it, so a module
+keeps the path it had in the single crate (`crate::state::AppState`,
+`crate::routes::sms::send`) in whichever crate the code is, and the tests
+and other code outside use `api::...` as before.
+
 ```
 api/
-  src/
+  src/                   the `api` crate, on top of every other one
     main.rs              Lambda entry (lambda_http + axum)
-    lib.rs               app(state) -> Router; used by main and by tests
-    openapi.rs           OpenAPI document info, security scheme, tags
-    state.rs             AppState (pool, SESSION_SECRET, CORS origins)
-    error.rs             ApiError -> JSON {"error": "..."} with 400/401/403/500
-    extract.rs           MultiQuery: query strings with repeated keys (list filters)
-    sql.rs               QueryBuilder helpers (push_in: ` AND col IN (...)`)
-    auth/
-      cookie.rs          React Router `__session` cookie decode/encode
-      session.rs         session -> user lookup, super-admin company switch
-      mod.rs             extractors: CurrentUser, EmployeeUser, AdminUser
-    routes/
-      mod.rs             merges every domain router
-      <domain>/
-        mod.rs           router() registering handlers with routes! + a doc list of the routes
-        handlers.rs      #[utoipa::path] + auth extractor + params -> query -> Json
-        queries.rs       SQL, one function per database read
-        schemas.rs       request params, response rows (serde + FromRow + ToSchema)
+    lib.rs               app(state) -> Router (middleware, every route); used by main and by tests
+    openapi.rs           OpenAPI document info, security schemes, tags
+    routes/mod.rs        merges every crate's routes
+    routes/jobs/         the scheduled jobs (/v1/jobs/*), which call into every area
+  crates/                bottom to top; a crate may use only the crates below it
+    core/      api-core       AppState and the clients it holds, ApiError, the auth
+                              extractors (auth/), the route macros (openapi.rs), sql,
+                              Stripe billing (billing/), add-ons (entitlements.rs),
+                              self-serve signup (signup/), onboarding_call/
+    media/     api-media      pictures (HEIC, thumbnails) and PDFs, signing PDFs
+    crm/       api-crm        customers, deals, texts (routes/sms), emails, calls,
+                              templates, uploads, Granite Phone's logic (phone/)
+    accounts/  api-accounts   sign-in (routes/auth), me, users, onboarding, leaderboard
+    schedule/  api-schedule   calendars, events, the schedule board
+    inventory/ api-inventory  stones, slabs, sinks, faucets, suppliers, sales, documents
+    followups/ api-followups  AI follow-ups (followups/) and their routes
+    quotes/    api-quotes     quote pricing and editor, online quotes, signatures,
+                              QuickBooks, commissions
+    phone/     api-phone      Granite Phone's routes (routes/phone) and Telnyx's webhooks
+    admin/     api-admin      admin and superuser screens, billing, integrations,
+                              marketing, the PostHog auto-fix
+    ai/        api-ai         the AI chat (chat/), routes/ai, call notes and coaching
+  <crate>/src/routes/<domain>/
+      mod.rs               router() registering handlers with routes! + a doc list of the routes
+      handlers.rs          #[crate::openapi::path] + auth extractor + params -> query -> Json
+      queries.rs           SQL, one function per database read
+      schemas.rs           request params, response rows (serde + FromRow + ToSchema)
+  macros/                `#[path]`, `routes!` (see crates/core/src/openapi.rs)
   tests/
     common/mod.rs        test server, signed cookies, seeded session ids
-    <domain>.rs          integration tests per domain
-    openapi.rs           every route documented, openapi.json current (no DB)
+    <area>/main.rs       one test binary per area (crm, phone, telnyx, quotes, ...)
+    <area>/<domain>.rs   integration tests of a domain, a module of its area's binary
+    app/openapi.rs       every route documented, openapi.json current (no DB)
+    server_errors.rs     5xx reports to PostHog, a binary of its own
   openapi.json           generated spec, checked in (`make api-openapi`)
   seed/local_seed.sql    deterministic data for tests and local runs
   examples/sign_session.rs   print a Cookie header for curl
 ```
 
+Paths in this document like `routes/sms/send.rs` or `phone/texting.rs` are
+module paths: relative to the `src/` of the crate that holds them.
+
+`core` holds what every area needs; the rest is layered by what it uses:
+
+```
+core -> media -> crm -> accounts, schedule, inventory, followups
+                          -> quotes (schedule), phone (accounts), admin (accounts, schedule)
+                          -> ai (followups, inventory, quotes, accounts) -> api
+```
+
+New code goes in the crate of its domain. When it needs something from a
+crate above (say `crm` code calling a `followups` function), move the shared
+piece down instead, as `routes::sms::flow_stops`, `auth::job` and
+`app_origin` were. State a crate above `core` keeps per `AppState` (the AI
+composer's cache, the PostHog auto-fix settings) lives in
+`state.extensions` (`Extensions::get_or_insert_with`). A new crate goes in
+the root `Cargo.toml`'s members by name (the auto-fix workflow reads them)
+and re-exports the crates below it like the others' `lib.rs`.
+
 ### Domains and where routes go
 
-One folder under `routes/` per business area. Name it after the resource, not
-the Remix page that uses it. Pick the folder by the main table the query reads:
+One folder under a crate's `routes/` per business area (see Layout for which
+crate holds which). Name it after the resource, not the Remix page that uses
+it. Pick the folder by the main table the query reads:
 
 | Domain folder   | Paths                     | Main tables                                    |
 |-----------------|---------------------------|------------------------------------------------|
@@ -62,9 +104,9 @@ Create the others as their first route is migrated, following the same files.
 
 ### Public routes
 
-`/v1/public/...` take no session (no extractor): `tests/openapi.rs` exempts
+`/v1/public/...` take no session (no extractor): `tests/app/openapi.rs` exempts
 them from `security` and 401. They must never return costs, hidden items or
-other companies' data; `tests/public.rs` checks that.
+other companies' data; `tests/app/public.rs` checks that.
 
 `/v1/webhooks/...` are third parties' callbacks (Stripe, SignWell): no
 session either, the sender proves itself (`Stripe-Signature` with
@@ -81,7 +123,7 @@ that function (`main.rs` then uses `run_with_streaming_response`). Put it on
 a subdomain of the session cookie's domain (for example through CloudFront)
 so the browser sends the cookie; the frontend calls it from
 `VITE_GRANITE_STREAM_URL`. The chat's CRM manual is
-`api/src/chat/crm_manual.json`, rebuilt from the CRM repo with
+`api/crates/ai/src/chat/crm_manual.json`, rebuilt from the CRM repo with
 `node scripts/sync-crm-manual.mjs ../general_datebase`.
 
 ### Pictures, PDFs and audio
@@ -141,8 +183,8 @@ now" sends the first step before the response. After an outbound call the
 
 `src/billing/` keeps `company_billing` in step with Stripe (the state machine
 is a port of the CRM's `stripeBilling.ts`, tested in memory in
-`billing/machine.rs`, against MySQL in `tests/billing.rs` with a fake Stripe,
-and against Stripe's test mode in `tests/billing_stripe_live.rs` when
+`billing/machine.rs`, against MySQL in `tests/admin/billing.rs` with a fake Stripe,
+and against Stripe's test mode in `tests/admin/billing_stripe_live.rs` when
 `STRIPE_TEST_SECRET_KEY=sk_test_...` is set). Env: `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET`, `STRIPE_BILLING_PLANS` (`price|Name|cents,...`) or
 `STRIPE_PRICE_ID`. A failed payment gets 7 days of grace, a company asked to
@@ -159,14 +201,14 @@ reconciles with Stripe (a pass every 6 hours, 50 companies per run, cursor in
 `GET /v1/superuser/billing/setup` checks the env and the Stripe webhook and
 prices. Optional env: `BILLING_EMAIL_FROM_ADDRESS`.
 
-Add-ons (`src/entitlements.rs`): Signatures, Quotes and QuickBooks are free
+Add-ons (`entitlements.rs` in api-core): Signatures, Quotes and QuickBooks are free
 for legacy companies (`company.plan_source = 'legacy'`, everyone before
 self-serve) and need an active `company_addons` row on a subscription plan.
 Session routes check `user.plan.require(AddonKey::...)` (the session query
 loads the plan); a refusal is 403 with `addon`. Superusers grant one free
 with `PUT /v1/superuser/companies/{id}/addons/{key}`.
 
-Self-serve signup (`src/signup/`, `routes/signup/`, `/v1/public/plans` and
+Self-serve signup (`signup/` in api-core, `routes/signup/` in api-accounts, `/v1/public/plans` and
 `/v1/public/signups/...`) is off until `SELF_SERVE_SIGNUP_ENABLED=1`; it
 prices from the Stripe lookup keys in `billing/catalog.rs` and also reads
 `STRIPE_PUBLIC_KEY`, `STRIPE_AUTOMATIC_TAX`, `SIGNUP_NOTIFY_USER_ID`,
@@ -174,7 +216,7 @@ prices from the Stripe lookup keys in `billing/catalog.rs` and also reads
 `SIGNUP_TEST_PAYMENT_METHOD`. `POST /v1/jobs/subscription-maintenance`
 resumes stuck provisioning, expires abandoned signups and reconciles seats.
 
-Onboarding with Dima (`src/onboarding_call/`, Terms section 11): provisioning
+Onboarding with Dima (`onboarding_call/` in api-core, Terms section 11): provisioning
 gives each self-serve company a commitment to complete an onboarding call
 within 30 days or pay the fee fixed at signup. `GET /v1/onboarding-call`
 hands Managers and Admins a booking link, the widget's booking is recorded with
@@ -198,7 +240,7 @@ never charged later). The onboarding emails are sent from
 (`fee_failed`): `SIGNUP_NOTIFY_USER_ID` (Telegram) and `SIGNUP_NOTIFY_EMAIL`
 also get that alert, and staff follow up by hand.
 
-Move to plan (`src/billing/invites/`, `routes/superuser_plan_invites.rs`,
+Move to plan (`billing/invites/` in api-core, `routes/superuser_plan_invites.rs`,
 `routes/plan_invites.rs`): a superuser invites a legacy company's Managers to
 a plan (`plan_invites`, links `PAYMENTS_APP_URL/upgrade/<token>`, only token
 hashes stored); a Manager's acceptance makes the subscription under
@@ -265,7 +307,7 @@ answer 400 with a message the page can show.
    against the Remix page before migrating it.
 8. **Document it for agents.** AI agents call this API from the OpenAPI spec
    alone, so every route is described well enough to use without reading
-   the code. See [OpenAPI](#openapi) below; `tests/openapi.rs` fails on
+   the code. See [OpenAPI](#openapi) below; `tests/app/openapi.rs` fails on
    anything missing.
 
 ### Steps to migrate a route
@@ -274,7 +316,7 @@ answer 400 with a message the page can show.
 2. Add rows to `seed/local_seed.sql` (append only; ids >= 100) covering each
    branch of the query (filters, NULLs, deleted rows, a second company).
 3. For each read: add a function in `queries.rs`, a handler with
-   `#[utoipa::path]`, `.routes(routes!(handlers::name))` in the domain
+   `#[crate::openapi::path]`, `.routes(routes!(handlers::name))` in the domain
    `mod.rs`, and tests. `make api-openapi`, then `make api-test`.
 4. Frontend: add typed callers in `app/lib/api/<domain>.ts`, fetch them with
    React Query in the page, delete the route's `loader`, and prove the page
@@ -327,15 +369,24 @@ Changing an existing row breaks assertions in both repos; add a new row.
 
 ## OpenAPI
 
-The spec is generated from the code with `utoipa` and served unauthenticated
-at `GET /openapi.json`; the same document is checked in as `api/openapi.json`.
+The spec is generated from the code with `utoipa` and checked in as
+`api/openapi.json`, which `GET /openapi.json` serves unauthenticated. utoipa
+only runs with the `openapi` cargo feature (`make api-openapi`, and
+`cargo test -p api --features openapi --test app openapi::` for the checks
+that every route is documented; CI skips them for now): it is a large share
+of the crates' compile time. Without it
+`#[crate::openapi::path]` reads only the method and the path, `routes!`
+registers handlers straight with axum, and `ToSchema`/`IntoParams` derive
+nothing (`api/macros`); `every_documented_operation_is_routed` checks that
+every operation of the checked-in spec still reaches its handler.
 AI agents turn each operation into a tool: `operationId` becomes the tool
 name, `summary` + `description` its description, and the parameter and schema
 descriptions tell it what to send and what comes back.
 
 For every route:
 
-- **Handler**: `#[utoipa::path(...)]` with the method, full `path`, an explicit
+- **Handler**: `#[crate::openapi::path(...)]` (the arguments of
+  `#[utoipa::path]`) with the method, full `path`, an explicit
   verb_noun `operation_id` (`list_customers`, not `list`), `tag` = the domain,
   `params(...)` / `request_body = ...`, every status the handler can return
   (`body = ErrorBody` for errors; always 401, 403 when it takes
@@ -355,7 +406,7 @@ For every route:
   route is served but missing from the spec.
 - Run `make api-openapi` to regenerate `api/openapi.json` and commit it.
 
-`tests/openapi.rs` checks all of this (descriptions, operation ids, tags,
+`tests/app/openapi.rs` checks all of this (descriptions, operation ids, tags,
 security, 401s, unresolved `$ref`s, plain `.route(` calls) and that
 `api/openapi.json` is current.
 
@@ -396,7 +447,7 @@ Rust reads it. Don't move the session into `localStorage`/bearer tokens: the
 
 ```
 make api-db-reset   # docker MySQL on :3307, all migrations, seed data
-make api-test       # unit + integration tests (sqlx::test makes a DB per test)
+make api-test       # every api crate's tests (cargo test -p 'api*')
 make api-local      # Lambda emulator on http://localhost:9100/lambda-url/api
 ```
 
@@ -443,9 +494,13 @@ that flag, so copy any new variable to both. The browser reaches it at
 ## Scheduled jobs and webhooks
 
 `time-triggered` (every minute) posts to `<API_URL>/v1/jobs/*` with
-`Authorization: <LAMBDA_KEY>`, the API's `LAMBDA_KEY`. `webhooks` asks the API
-whether a called customer answered (`<API_URL>/v1/followups/call-check`, same
-key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
+`Authorization: <LAMBDA_KEY>`, the API's `LAMBDA_KEY`, and has due activity
+reminders pushed to phones (`<API_URL>/v1/phone/pushes/notification`, same
+key). `webhooks` asks the API whether a called customer answered
+(`<API_URL>/v1/followups/call-check`, same key), after storing an inbound
+email has it pushed to the recipients' phones
+(`<API_URL>/v1/emails/inbound-push`, same key), and has the lead alerts it
+sends to Telegram pushed too (`<API_URL>/v1/phone/pushes/lead`, same key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
 `WEBHOOKS_KEY` = the webhooks Lambda's `REMIX_KEY`).
 
 ## Phone (Telnyx)
@@ -463,6 +518,7 @@ app's `X-Granite-Device` token), `telnyx.rs`, `push.rs` (FCM), `phone/`
 |---|---|
 | `POST /v1/auth/device-sessions`, `DELETE /v1/auth/device-sessions/current`, `/v1/me/devices*` | the app's sign-in and signed-in phones (device token; `/v1/me/devices` takes the cookie too) |
 | `/v1/phone/*` | the app (device token): bootstrap, devices and login JWTs, settings, contacts, Recents, notes, Call via my cell, 911 alerts, problem reports, the Texts tab (`/v1/phone/texts*`, `phone/texts.rs`) |
+| `/v1/emails*`, `/v1/schedule*`, `/v1/events*`, `GET /v1/me/schedule` (`auth::DEVICE_ROUTES`) | the CRM routes the app shows natively: they take the device token in place of the cookie, with the user's CRM rights. Installers and template makers (`PhoneUser.portal` `installer` / `template`, the `/v1/app/shell` rule) get only their own schedule in the app and never register for calls |
 | `/v1/phone/web/*`, `PUT /v1/phone/calls/recording` | the CRM's phone dock (cookie): the browser registers as a phone of its own (`platform = 'web'`, `device_sessions.web_session_id` = the cookie's session), gets login JWTs (the app's limits), says while it is connected (`presence`: only then it rings), declines; the Record button of a live call (also the app's). Call via my cell and cell verification take the cookie too |
 | `/v1/phone/admin/numbers*`, `/v1/phone/admin/devices*` | company admins (cookie): numbers and who they ring, importing them from Telnyx, signing phones out |
 | `/v1/phone/admin/ports*` | company admins (cookie): porting existing numbers to Telnyx (portability, draft orders, business details, LOA and bill, port date, submit, cancel, comments) |
@@ -639,10 +695,11 @@ then `main`) before deploying the code, by hand as usual, from an LF checkout
 `cargo sqlx migrate run --source migrations --database-url '<RDS URL>'`. Then
 deploy the API, then `time-triggered` (it calls the job).
 
-Tests: `api/tests/phone_*.rs`, one area per file, with shared fixtures and one
-stand-in for Telnyx, FCM, AssemblyAI and OpenAI in `tests/phone_common/`. With
-the local MySQL up (`make api-db-up`), run a file at a time, e.g.
-`cargo test -p api --test phone_jobs`. `.github/workflows/api-pr.yml` runs
+Tests: `api/tests/phone/` (the app and its admin pages) and `api/tests/telnyx/`
+(Telnyx's webhooks, dialing, 10DLC), one area per file, with shared fixtures
+and one stand-in for Telnyx, FCM, AssemblyAI and OpenAI in
+`tests/phone_common/`. With the local MySQL up (`make api-db-up`), run a file
+at a time, e.g. `cargo test -p api --test phone phone_jobs::`. `.github/workflows/api-pr.yml` runs
 them all and the OpenAPI checks on every pull request to main.
 
 ## Dev environment
@@ -681,3 +738,12 @@ aws cloudformation deploy --region us-east-1 --stack-name granite-api-dev \
 ```
 
 The frontend's `make deploy-dev` builds against `api-dev.granite-manager.com`.
+
+Call settings (the app's Settings: incoming call rules, forward all calls,
+incoming call information, hold music; the company's spam and blocked
+numbers for admins) are `phone/call_rules.rs`, `phone/blocking.rs` and
+`phone/hold_music.rs`; `phone::routing::route` applies them to every
+incoming call before anything rings. Semantics, and what Telnyx's docs
+confirm versus what needs a real call: `docs/call-settings.md` in
+granite-phone. The built-in hold music (`data/hold-music/`, CC0) is served
+at `GET /v1/public/hold-music/{track}.mp3`.

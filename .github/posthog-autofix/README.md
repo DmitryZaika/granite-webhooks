@@ -27,9 +27,9 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
 | Piece | Path |
 |---|---|
 | Ledger table | `migrations/20261022120000_create-posthog-autofix-runs.sql` |
-| Intake, signatures, rules, emails | `api/src/posthog_autofix/` (start at `mod.rs`) |
+| Intake, signatures, rules, emails | `api/crates/admin/src/posthog_autofix/` (start at `mod.rs`) |
 | Intake job route | `api/src/routes/jobs/posthog_autofix.rs` |
-| Callbacks | `api/src/routes/posthog_autofix.rs` |
+| Callbacks | `api/crates/admin/src/routes/posthog_autofix.rs` |
 | Workflow | `.github/workflows/posthog-autofix.yml` |
 | Agent instructions, result schema, PostHog MCP | `fixer-prompt.md`, `result.schema.json`, `mcp.json` |
 | Guardrails (Claude Code settings, hook) | `settings.json`, `guard.py` |
@@ -260,7 +260,12 @@ could reach.
   - The hook fails closed (`onFailure: block`), and `--restricted` ignores any
     settings found in the checkouts.
   - `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` keeps the model token out of the
-    environment of the commands the agent runs.
+    environment of the commands the agent runs. On Linux the CLI runs each
+    command in bubblewrap for it (user and PID namespaces, the filesystem and
+    network as they are); `isolate.sh` installs it and lifts Ubuntu's AppArmor
+    block on user namespaces, and `check-isolation` starts it as the agent
+    user, so a missing sandbox fails the job before the agent runs. Recheck
+    the probe's flags when the pinned CLI version changes.
   - The account's claude.ai connectors are switched off
     (`ENABLE_CLAUDEAI_MCP_SERVERS=false`).
 - **The build cache stays clean.** Only the trusted `prepare` job saves it;

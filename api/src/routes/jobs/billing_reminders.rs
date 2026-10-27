@@ -7,7 +7,7 @@
 //! pay, first charge coming). Port of the CRM's
 //! `api.subscription-reminders.process.ts`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::billing::CompanyBilling;
 use crate::billing::account::{default_card, reconcile_batch};
 use crate::billing::amount_notice::process_amount_notices;
@@ -23,6 +23,7 @@ use crate::billing::reminders::{
 use crate::billing::stripe::StripeError;
 use crate::error::{ApiResult, ErrorBody};
 use crate::job_runs::{self, Claim};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use crate::webhooks_client::OutgoingEmail;
 use axum::Json;
@@ -32,9 +33,8 @@ use lambda_http::tracing;
 use serde::Serialize;
 use std::sync::LazyLock;
 use std::time::Instant;
-use utoipa::ToSchema;
 
-static POSTHOG_HTTP: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+static POSTHOG_HTTP: LazyLock<reqwest::Client> = LazyLock::new(common::http::client);
 
 const PRUNE_KEY: &str = "billing-prune-webhook-events";
 const RECONCILE_KEY: &str = "billing-reconcile";
@@ -375,7 +375,7 @@ async fn reconcile(state: &AppState, now: NaiveDateTime) -> Option<ReconcileRun>
 /// by 25 s, inside the API Gateway's 30 s) to the company's Managers, 10 minutes after the request at the earliest
 /// (`confirmations_resent`). Reminders, notices and confirmations are skipped
 /// while the mail service is not configured.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/billing-reminders",
     operation_id = "run_billing_reminders",

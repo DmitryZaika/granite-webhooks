@@ -10,7 +10,7 @@
 //! (`POST /v1/invoices/create_preview`: the items' monthly sum, or 404 when the
 //! subscription ends at its period end), `GET /v1/invoices` from `invoices`,
 //! and `payment_methods`, which a customer's default expands into. Include it with
-//! `#[path = "support/fake_stripe.rs"] mod fake_stripe;`.
+//! `#[path = "../support/fake_stripe.rs"] mod fake_stripe;` in the area's `main.rs`.
 #![allow(dead_code)]
 
 use api::billing::stripe::Stripe;

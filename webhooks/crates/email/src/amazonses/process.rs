@@ -1,0 +1,381 @@
+use lambda_http::tracing;
+use sqlx::MySqlPool;
+
+use crate::amazon::bucket::S3Bucket;
+use crate::amazonses::parse_email::{Attachment, ParsedEmail};
+use crate::amazonses::push::push_inbound_email;
+use crate::amazonses::upload::upload_attachments;
+use crate::axum_helpers::guards::NotificationsTelegramBot;
+use crate::crud::deals::{maybe_cancel_flow_on_inbound_email, maybe_move_deal_on_inbound_email};
+use crate::crud::email::{
+    PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context,
+    get_prior_email, get_prior_email_by_message_id_prefix, get_prior_email_by_reply_context,
+    resolve_inbound_customer_name,
+};
+use crate::crud::users::{
+    ReceivingEmail, get_company_id_by_user_id, get_id_by_email_normalized,
+    get_id_by_email_with_forward,
+};
+use crate::libs::constants::{OK_RESPONSE, internal_error};
+use crate::libs::types::BasicResponse;
+use crate::telegram::crm::{InboundEmailTelegramNotify, send_inbound_email_telegram_notification};
+
+pub struct EmailInfo<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub parsed: &'a ParsedEmail,
+    pub attachments: Vec<Attachment>,
+}
+
+impl EmailInfo<'_> {
+    pub fn s3_url(&self) -> String {
+        format!("s3://{}/{}", self.bucket, self.key)
+    }
+}
+
+/// Owning company for an inbound message, taken from the resolved receiver.
+/// A lookup failure is not fatal — the message is still stored, just without
+/// company attribution, which leaves it legacy-visible rather than lost.
+async fn resolve_company_id(pool: &MySqlPool, user_id: Option<i32>) -> Option<i32> {
+    let user_id = user_id?;
+    match get_company_id_by_user_id(pool, user_id).await {
+        Ok(company_id) => company_id,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                user_id,
+                "Failed to resolve company for inbound email"
+            );
+            None
+        }
+    }
+}
+
+fn message_id_lookup_candidates(raw: &str) -> Vec<String> {
+    let cleaned = raw.trim().trim_matches(['<', '>']).trim();
+    if cleaned.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = vec![cleaned.to_string()];
+    if let Some(idx) = cleaned.find('@') {
+        let local = cleaned[..idx].trim();
+        if !local.is_empty() && local != cleaned {
+            candidates.push(local.to_string());
+        }
+    }
+    candidates
+}
+
+pub async fn get_prior_email_backwards_compatible(
+    pool: &MySqlPool,
+    message_id: &str,
+) -> Result<Option<PriorEmail>, sqlx::Error> {
+    let candidates = message_id_lookup_candidates(message_id);
+    for candidate in &candidates {
+        if let Some(prior) = get_prior_email(pool, candidate).await? {
+            return Ok(Some(prior));
+        }
+    }
+    for candidate in &candidates {
+        if let Some(prior) = get_prior_email_by_message_id_prefix(pool, candidate).await? {
+            return Ok(Some(prior));
+        }
+    }
+    Ok(None)
+}
+
+/// Find the thread an inbound message belongs to.
+///
+/// `In-Reply-To` is tried first, then each `References` entry from nearest
+/// ancestor backwards, since some clients drop `In-Reply-To` on a forwarded
+/// message but keep the chain. If those Message-IDs were never stored (or
+/// were stored as a UUID by History backfill), fall back to the recent
+/// outbound with the same subject and the same two addresses.
+pub async fn find_prior_email(
+    pool: &MySqlPool,
+    parsed: &ParsedEmail,
+) -> Result<Option<PriorEmail>, sqlx::Error> {
+    if let Some(in_reply_to) = parsed.in_reply_to.as_deref()
+        && let Some(prior) = get_prior_email_backwards_compatible(pool, in_reply_to).await?
+    {
+        return Ok(Some(prior));
+    }
+    for reference in parsed.references.iter().rev() {
+        if let Some(prior) = get_prior_email_backwards_compatible(pool, reference).await? {
+            return Ok(Some(prior));
+        }
+    }
+    get_prior_email_by_reply_context(
+        pool,
+        &parsed.sender_email,
+        &parsed.receiver_email,
+        parsed.subject.as_deref(),
+    )
+    .await
+}
+
+pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
+    pool: &MySqlPool,
+    client: C,
+    email_info: EmailInfo<'_>,
+) -> BasicResponse {
+    let s3_url = email_info.s3_url();
+    let prior_raw = match find_prior_email(pool, email_info.parsed).await {
+        Ok(email) => email,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = email_info.bucket,
+                key = email_info.key,
+                "Failed to retrieve prior email"
+            );
+            return internal_error("Unable to retrieve prior email");
+        }
+    };
+    let Some(prior) = prior_raw else {
+        tracing::info!(
+            bucket = email_info.bucket,
+            key = email_info.key,
+            "No prior email found. Processed as first email"
+        );
+        let parsed = email_info.parsed.for_unknown_parent();
+        let restored = EmailInfo {
+            bucket: email_info.bucket,
+            key: email_info.key,
+            parsed: &parsed,
+            attachments: email_info.attachments,
+        };
+        return process_first_email(pool, client, restored).await;
+    };
+
+    let received_id = match prior.receiver_user_id {
+        Some(user_id) => Some(ReceivingEmail::To(user_id)),
+        None => match resolve_first_email_receiver(pool, email_info.parsed).await {
+            Ok(receiver) => receiver,
+            Err(error) => return receiver_lookup_failure(&email_info, &error),
+        },
+    };
+    let uploaded_attachments = match upload_attachments(
+        client,
+        &email_info.parsed.message_id,
+        email_info.attachments,
+    )
+    .await
+    {
+        Ok(attachments) => attachments,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = email_info.bucket,
+                key = email_info.key,
+                "Failed to upload attachments"
+            );
+            return internal_error("Failed to upload attachments");
+        }
+    };
+    let company_id = resolve_company_id(pool, received_id.map(ReceivingEmail::inner)).await;
+    let send_email =
+        SendEmail::new(email_info.parsed, prior.thread_id, received_id).with_company_id(company_id);
+    let result =
+        create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
+    let stored = match result {
+        Ok(stored) => stored,
+        Err(error) => return email_insert_failure(&email_info.parsed.message_id, error),
+    };
+    maybe_move_deal_on_inbound_email(pool, &send_email).await;
+    maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
+    maybe_send_inbound_email_telegram(pool, &send_email).await;
+    // Only a row stored just now: a redelivery or a duplicate insert stops above.
+    push_inbound_email(stored.last_insert_id()).await;
+    OK_RESPONSE
+}
+
+fn receiver_lookup_failure(email_info: &EmailInfo<'_>, error: &sqlx::Error) -> BasicResponse {
+    tracing::error!(
+        ?error,
+        bucket = email_info.bucket,
+        key = email_info.key,
+        "Failed to resolve email receiver"
+    );
+    internal_error("Unable to resolve email receiver")
+}
+
+fn is_duplicate_email_insert(error: &sqlx::Error) -> bool {
+    error.as_database_error().is_some_and(|db_error| {
+        db_error.code().as_deref() == Some("23000") || db_error.message().contains("Duplicate")
+    })
+}
+
+fn email_insert_failure(message_id: &str, error: sqlx::Error) -> BasicResponse {
+    tracing::error!("Error inserting email: {message_id} into the db: {error}");
+    if is_duplicate_email_insert(&error) {
+        return OK_RESPONSE;
+    }
+    internal_error("Failed to insert email into the database")
+}
+
+pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
+    pool: &MySqlPool,
+    client: C,
+    email_info: EmailInfo<'_>,
+) -> BasicResponse {
+    let s3_url = email_info.s3_url();
+    // Resolve the receiver before uploading: an email nobody receives is not
+    // stored, so its attachments must not be written to S3 either.
+    let receiver = match resolve_first_email_receiver(pool, email_info.parsed).await {
+        Ok(receiver) => receiver,
+        Err(error) => return receiver_lookup_failure(&email_info, &error),
+    };
+    let Some(receiver) = receiver else {
+        let recipients: Vec<&str> = email_info
+            .parsed
+            .to_recipients
+            .iter()
+            .chain(email_info.parsed.cc_recipients.iter())
+            .chain(email_info.parsed.bcc_recipients.iter())
+            .map(|recipient| recipient.address.as_str())
+            .collect();
+        // No addresses in logs: bucket and key locate the raw email in S3.
+        tracing::error!(
+            bucket = email_info.bucket,
+            key = email_info.key,
+            recipient_count = recipients.len(),
+            "Reciever email not found"
+        );
+        return OK_RESPONSE;
+    };
+    let uploaded_attachments = match upload_attachments(
+        client,
+        &email_info.parsed.message_id,
+        email_info.attachments,
+    )
+    .await
+    {
+        Ok(attachments) => attachments,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = email_info.bucket,
+                key = email_info.key,
+                "Failed to upload attachments"
+            );
+            return internal_error("Failed to upload attachments");
+        }
+    };
+    let company_id = resolve_company_id(pool, Some(receiver.inner())).await;
+    let send_email =
+        SendEmail::new(email_info.parsed, None, Some(receiver)).with_company_id(company_id);
+    let result =
+        create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
+    let stored = match result {
+        Ok(stored) => stored,
+        Err(error) => return email_insert_failure(&email_info.parsed.message_id, error),
+    };
+    maybe_move_deal_on_inbound_email(pool, &send_email).await;
+    maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
+    maybe_send_inbound_email_telegram(pool, &send_email).await;
+    // Only a row stored just now: a redelivery or a duplicate insert stops above.
+    push_inbound_email(stored.last_insert_id()).await;
+    OK_RESPONSE
+}
+
+/// A company user anywhere on To/Cc/Bcc receives the message.
+///
+/// The first `To:` is often the customer (`pdekemper58@gmail.com,
+/// liza@…, masha@…`). Looking only at that address dropped the copy
+/// SES had already accepted for the employees.
+async fn resolve_first_email_receiver(
+    pool: &MySqlPool,
+    parsed: &ParsedEmail,
+) -> Result<Option<ReceivingEmail>, sqlx::Error> {
+    let candidates = parsed
+        .to_recipients
+        .iter()
+        .chain(parsed.cc_recipients.iter())
+        .chain(parsed.bcc_recipients.iter());
+    for recipient in candidates {
+        if let Some(user_id) = get_id_by_email_normalized(pool, &recipient.address).await? {
+            return Ok(Some(ReceivingEmail::To(user_id)));
+        }
+    }
+    if let Some(receiver) = get_id_by_email_with_forward(
+        pool,
+        &parsed.receiver_email,
+        parsed.forward_to_email.as_deref(),
+    )
+    .await?
+    {
+        return Ok(Some(receiver));
+    }
+    resolve_envelope_receiver(pool, parsed).await
+}
+
+/// SES accepted the message for an address no header names: the employee was
+/// BCC'd, or a copy addressed to `undisclosed-recipients:;` was forwarded in.
+/// Tried last, so an email that resolves today keeps its receiver and stored
+/// `receiver_email`. `To` (not `Forward`): `Forward` would store
+/// `forward_to_email`, which such an email usually lacks.
+async fn resolve_envelope_receiver(
+    pool: &MySqlPool,
+    parsed: &ParsedEmail,
+) -> Result<Option<ReceivingEmail>, sqlx::Error> {
+    let Some(envelope) = parsed.envelope_recipient.as_deref() else {
+        return Ok(None);
+    };
+    let already_tried = parsed
+        .to_recipients
+        .iter()
+        .chain(parsed.cc_recipients.iter())
+        .chain(parsed.bcc_recipients.iter())
+        .any(|recipient| recipient.address == envelope);
+    if already_tried {
+        return Ok(None);
+    }
+    Ok(get_id_by_email_normalized(pool, envelope)
+        .await?
+        .map(ReceivingEmail::To))
+}
+
+async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
+    let Some(receiver_user_id) = send.receiver_user_id() else {
+        return;
+    };
+
+    let context =
+        match get_inbound_email_notify_context(pool, send.thread_id(), receiver_user_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    thread_id = send.thread_id(),
+                    "Failed to load inbound email notify context"
+                );
+                return;
+            }
+        };
+    let (deal_id, customer_name) = match context {
+        Some(value) => (
+            value.deal_id,
+            resolve_inbound_customer_name(value.customer_name, value.sender_email.as_deref()),
+        ),
+        None => (None, None),
+    };
+
+    let payload = InboundEmailTelegramNotify {
+        receiver_user_id,
+        thread_id: send.thread_id().to_string(),
+        subject: send.subject().map(str::to_string),
+        body: Some(send.body().to_string()),
+        deal_id,
+        customer_name,
+    };
+    let bot = NotificationsTelegramBot::default();
+    if let Err(error) = send_inbound_email_telegram_notification(&pool, &bot, &payload).await {
+        tracing::error!(
+            ?error,
+            receiver_user_id = receiver_user_id,
+            thread_id = send.thread_id(),
+            "Failed to send inbound email telegram notification"
+        );
+    }
+}

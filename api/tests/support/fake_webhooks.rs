@@ -1,5 +1,5 @@
 //! A stand-in for the `webhooks` Lambda: the emails and Telegram messages the
-//! api sends. Include it with `#[path = "support/fake_webhooks.rs"] mod fake_webhooks;`.
+//! api sends. Include it with `#[path = "../support/fake_webhooks.rs"] mod fake_webhooks;` in the area's `main.rs`.
 #![allow(dead_code)]
 
 use api::webhooks_client::WebhooksClient;

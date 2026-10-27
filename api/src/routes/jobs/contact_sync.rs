@@ -6,14 +6,14 @@
 //! a few customers without a contact per provider; one that is still missing
 //! after its try waits a while (`Provider::retry_after_hours`) for the next.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 /// What a run did.
 #[derive(Debug, Default, Serialize, ToSchema)]
@@ -143,7 +143,7 @@ async fn sync_provider(state: &AppState, provider: Provider) -> Result<usize, sq
 ///
 /// Pushes a few customers without a `RingCentral` or `CloudTalk` contact to
 /// their company's provider.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/contact-sync",
     operation_id = "run_contact_sync",
