@@ -49,6 +49,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(image_library::router())
         .merge(supports::router())
         .merge(invoice_queue::router())
+        .merge(invoices::router())
         .merge(maintenance::router())
         .merge(marketing::router())
         .merge(quote_presets::router())
