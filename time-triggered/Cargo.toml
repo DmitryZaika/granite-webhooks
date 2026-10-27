@@ -11,6 +11,8 @@ lambda_runtime = "1.0.1"
 serde = "1"
 tokio = { version = "1", features = ["macros"] }
 serde_json = "1.0"
-teloxide = { git = "https://github.com/colin99d/teloxide", features = ["macros"] }
-openssl-sys = { version = "0.9", features = ["vendored"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# rustls without aws-lc-rs (a C build); `common::http` clients run on ring.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+
+[dev-dependencies]
+test-db = { path = "../test-db" }

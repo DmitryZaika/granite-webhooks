@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push)",
+      "Bash(git push *)",
+      "Bash(git remote)",
+      "Bash(git remote *)",
+      "Bash(git config)",
+      "Bash(git config *)",
+      "Bash(git reset)",
+      "Bash(git reset *)",
+      "Bash(git rebase)",
+      "Bash(git rebase *)",
+      "Bash(git checkout)",
+      "Bash(git checkout *)",
+      "Bash(git switch)",
+      "Bash(git switch *)",
+      "Bash(git clean)",
+      "Bash(git clean *)",
+      "Bash(curl)",
+      "Bash(curl *)",
+      "Bash(wget)",
+      "Bash(wget *)",
+      "Bash(gh)",
+      "Bash(gh *)",
+      "WebFetch",
+      "WebSearch"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$AUTOFIX_TOOLS_DIR/guard.py\"",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ]
+  }
+}

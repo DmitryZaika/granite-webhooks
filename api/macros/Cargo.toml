@@ -1,0 +1,16 @@
+[package]
+name = "api-macros"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[features]
+# Set by api's `openapi` feature: `path` also expands to `#[utoipa::path]`.
+openapi = []
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

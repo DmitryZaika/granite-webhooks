@@ -1,0 +1,25 @@
+Return-Path: <outside.mailbox+caf_=sales=granitedepotcolumbus.com@example.com>
+Received: from mail-lj1-f123.google.com (mail-lj1-f123.google.com [209.85.208.123]) by inbound-smtp.us-east-2.amazonaws.com with SMTP id 4tbcpfs1umfhm01234shicfe567oveq890hq1o2 for sales@granitedepotcolumbus.com; Fri, 02 Oct 2026 21:05:11 +0000 (UTC)
+X-SES-Spam-Verdict: PASS
+X-SES-Virus-Verdict: PASS
+Received: by mail-lj1-f123.google.com with SMTP id 38308e7fff4ca-36a1b2c3d4eso1234567fa.0
+        for <sales@granitedepotcolumbus.com>; Fri, 02 Oct 2026 14:05:10 -0700 (PDT)
+X-Forwarded-To: sales@granitedepotcolumbus.com
+X-Forwarded-For:
+Delivered-To: outside.mailbox@example.com
+Received: by 2002:a05:6512:1234:b0:5a1:2b3c:4d5e with SMTP id x1csp123456lfa;
+        Fri, 2 Oct 2026 14:05:09 -0700 (PDT)
+Received: from mail.example.net (mail.example.net [192.0.2.10])
+        by mx.google.com with ESMTPS id a1b2c3d4e5f6.1.2026.10.02.14.05.08
+        for <outside.mailbox@example.com>;
+        Fri, 02 Oct 2026 14:05:08 -0700 (PDT)
+From: Customer Name <customer@example.net>
+To: undisclosed-recipients:;
+Bcc: outside.mailbox@example.com
+Subject: White quartz question
+Date: Fri, 2 Oct 2026 17:05:07 -0400
+Message-ID: <undisclosed-forwarded-1@mail.example.net>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+Hello, do you have white quartz in stock for a kitchen island?

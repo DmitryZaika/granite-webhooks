@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
 
 const START_HOUR: u32 = 8;
@@ -13,9 +13,7 @@ fn store_wall_to_utc(year: i32, month: u32, day: u32, hour: u32, minute: u32) ->
     match Indianapolis.from_local_datetime(&naive) {
         chrono::LocalResult::Single(local) => local.with_timezone(&Utc),
         chrono::LocalResult::Ambiguous(earliest, _) => earliest.with_timezone(&Utc),
-        chrono::LocalResult::None => Indianapolis
-            .from_utc_datetime(&naive)
-            .with_timezone(&Utc),
+        chrono::LocalResult::None => Indianapolis.from_utc_datetime(&naive).with_timezone(&Utc),
     }
 }
 
@@ -90,13 +88,18 @@ pub fn clamp_automated_email_send_at(when: DateTime<Utc>) -> DateTime<Utc> {
             start
         } else {
             let next = cursor.with_timezone(&Indianapolis).date_naive() + Duration::days(1);
-            store_wall_to_utc(next.year(), next.month(), next.day(), START_HOUR, START_MINUTE)
+            store_wall_to_utc(
+                next.year(),
+                next.month(),
+                next.day(),
+                START_HOUR,
+                START_MINUTE,
+            )
         };
         if !is_major_holiday_store_day(candidate) {
             return candidate;
         }
-        let after_holiday =
-            candidate.with_timezone(&Indianapolis).date_naive() + Duration::days(1);
+        let after_holiday = candidate.with_timezone(&Indianapolis).date_naive() + Duration::days(1);
         cursor = store_wall_to_utc(
             after_holiday.year(),
             after_holiday.month(),
@@ -108,12 +111,141 @@ pub fn clamp_automated_email_send_at(when: DateTime<Utc>) -> DateTime<Utc> {
     cursor
 }
 
+/// Automated SMS go out 9:00 AM to before 6:00 PM store time (end
+/// exclusive), skipping the same holidays as email. Port of
+/// `scheduledAutomatedSmsSendAt` in the Remix app (`smsFlowSendWindow.ts`).
+pub fn clamp_automated_sms_send_at(when: DateTime<Utc>) -> DateTime<Utc> {
+    const SMS_START: (u32, u32) = (9, 0);
+    const SMS_END: (u32, u32) = (18, 0);
+    let bounds = |at: DateTime<Utc>| {
+        let local = at.with_timezone(&Indianapolis);
+        let wall = |(hour, minute): (u32, u32)| {
+            store_wall_to_utc(local.year(), local.month(), local.day(), hour, minute)
+        };
+        (wall(SMS_START), wall(SMS_END))
+    };
+    let next_morning = |at: DateTime<Utc>| {
+        let next = at.with_timezone(&Indianapolis).date_naive() + Duration::days(1);
+        store_wall_to_utc(
+            next.year(),
+            next.month(),
+            next.day(),
+            SMS_START.0,
+            SMS_START.1,
+        )
+    };
+    let mut cursor = when;
+    for _ in 0..10 {
+        let (start, end) = bounds(cursor);
+        let candidate = if cursor >= start && cursor < end {
+            cursor
+        } else if cursor < start {
+            start
+        } else {
+            next_morning(cursor)
+        };
+        if !is_major_holiday_store_day(candidate) {
+            return candidate;
+        }
+        cursor = next_morning(candidate);
+    }
+    cursor
+}
+
+/// The channel of a follow-up step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FollowupChannel {
+    Sms,
+    Email,
+}
+
+impl FollowupChannel {
+    /// Window start and end, store local time.
+    const fn window(self) -> ((u32, u32), (u32, u32)) {
+        match self {
+            Self::Email => ((START_HOUR, START_MINUTE), (END_HOUR, END_MINUTE)),
+            Self::Sms => ((9, 0), (18, 0)),
+        }
+    }
+
+    /// The channel's next open moment at or after `when`.
+    pub fn clamp(self, when: DateTime<Utc>) -> DateTime<Utc> {
+        match self {
+            Self::Email => clamp_automated_email_send_at(when),
+            Self::Sms => clamp_automated_sms_send_at(when),
+        }
+    }
+
+    /// Inside the day's window (SMS end exclusive, email end inclusive);
+    /// holidays are not checked.
+    fn window_open(self, when: DateTime<Utc>) -> bool {
+        let local = when.with_timezone(&Indianapolis);
+        let ((start_hour, start_minute), (end_hour, end_minute)) = self.window();
+        let wall = |hour, minute| {
+            store_wall_to_utc(local.year(), local.month(), local.day(), hour, minute)
+        };
+        let (start, end) = (wall(start_hour, start_minute), wall(end_hour, end_minute));
+        match self {
+            Self::Sms => when >= start && when < end,
+            Self::Email => when >= start && when <= end,
+        }
+    }
+}
+
+/// When the next step of a follow-up goes out, `gap_minutes` after `from`.
+/// Whole-day gaps move by store calendar days and keep the local time (the
+/// window start when `from` was outside it); shorter gaps add minutes. Then
+/// the channel's window applies. Port of `followupNextSendAt`.
+pub fn followup_next_send_at(
+    from: DateTime<Utc>,
+    gap_minutes: i64,
+    channel: FollowupChannel,
+) -> DateTime<Utc> {
+    const MINUTES_PER_DAY: i64 = 24 * 60;
+    if gap_minutes >= MINUTES_PER_DAY && gap_minutes % MINUTES_PER_DAY == 0 {
+        let local = from.with_timezone(&Indianapolis);
+        let target = local.date_naive() + Duration::days(gap_minutes / MINUTES_PER_DAY);
+        let (hour, minute) = if channel.window_open(from) {
+            (local.hour(), local.minute())
+        } else {
+            channel.window().0
+        };
+        let candidate =
+            store_wall_to_utc(target.year(), target.month(), target.day(), hour, minute);
+        return channel.clamp(candidate);
+    }
+    channel.clamp(from + Duration::minutes(gap_minutes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn utc(iso: &str) -> DateTime<Utc> {
         iso.parse().expect("valid rfc3339")
+    }
+
+    #[test]
+    fn whole_day_gaps_keep_the_local_time() {
+        // Tue 10:15 EDT + 2 days → Thu 10:15 EDT.
+        assert_eq!(
+            followup_next_send_at(utc("2026-07-28T14:15:00Z"), 2 * 1440, FollowupChannel::Sms),
+            utc("2026-07-30T14:15:00Z")
+        );
+        // From 8 PM (outside the SMS window) + 1 day → 9 AM the next day.
+        assert_eq!(
+            followup_next_send_at(utc("2026-07-29T00:00:00Z"), 1440, FollowupChannel::Sms),
+            utc("2026-07-29T13:00:00Z")
+        );
+        // Minute gaps add up, then wait for the window.
+        assert_eq!(
+            followup_next_send_at(utc("2026-07-28T21:30:00Z"), 60, FollowupChannel::Sms),
+            utc("2026-07-29T13:00:00Z")
+        );
+        assert_eq!(
+            followup_next_send_at(utc("2026-07-28T21:30:00Z"), 60, FollowupChannel::Email),
+            utc("2026-07-28T22:30:00Z")
+        );
     }
 
     #[test]
@@ -153,6 +285,25 @@ mod tests {
         assert_eq!(
             clamp_automated_email_send_at(utc("2026-07-27T23:01:00Z")),
             utc("2026-07-28T12:30:00Z")
+        );
+    }
+
+    #[test]
+    fn sms_window_is_nine_to_before_six() {
+        assert_eq!(
+            clamp_automated_sms_send_at(utc("2026-07-28T12:30:00Z")),
+            utc("2026-07-28T13:00:00Z")
+        );
+        let at = utc("2026-07-28T21:59:00Z");
+        assert_eq!(clamp_automated_sms_send_at(at), at);
+        assert_eq!(
+            clamp_automated_sms_send_at(utc("2026-07-28T22:00:00Z")),
+            utc("2026-07-29T13:00:00Z")
+        );
+        // July 4th is skipped.
+        assert_eq!(
+            clamp_automated_sms_send_at(utc("2026-07-03T22:30:00Z")),
+            utc("2026-07-05T13:00:00Z")
         );
     }
 }

@@ -1,0 +1,364 @@
+name: PostHog auto-fix
+run-name: PostHog auto-fix run ${{ inputs.run_id }}
+
+# Started by the api's PostHog auto-fix job for one ledger row
+# (posthog_autofix_runs). Three jobs, because the agent's code is untrusted:
+#
+#   prepare: trusted, never runs agent code. Warms the Rust cache from `main`
+#            and is the only job that saves it.
+#   fix:     checks out both repos and does every networked setup step, then
+#            isolates the agent: a dedicated `autofix` user (no sudo, no
+#            docker) whose egress reaches only the Anthropic API and two
+#            pinned hosts (isolate.sh). The agent, its tests and every git
+#            command on its repos run as that user. Hands the commits over as
+#            a git bundle. Read-only GitHub access, never saves a cache.
+#   report:  on a fresh runner that never executes agent code, re-checks the
+#            bundle, pushes it and opens the pull request with the only write
+#            token of the run, then reports the result to the api.
+#
+# Steps call `python3 -m autofix <command>` (.github/posthog-autofix/autofix);
+# inputs reach them through `env:`, never through `${{ }}` in `run:`.
+# /srv/autofix is the layout in autofix/isolation.py (a test pins the two).
+#
+# Environment `posthog-autofix`:
+#   secrets AUTOFIX_APP_PRIVATE_KEY, AUTOFIX_CALLBACK_SECRET,
+#           CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, POSTHOG_AUTOFIX_MCP_KEY
+#   vars    AUTOFIX_APP_ID, AUTOFIX_API_URL,
+#           optional AUTOFIX_EFFORT, AUTOFIX_MAX_TURNS, AUTOFIX_BUDGET_USD
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Ledger id (posthog_autofix_runs.id)
+        type: string
+        required: true
+      issue_id:
+        description: PostHog issue UUID
+        type: string
+        required: true
+      event_id:
+        description: Sample $exception event uuid of the bug to fix (may be empty)
+        type: string
+        required: false
+        default: ""
+
+permissions: {}
+
+env:
+  RUN_ID: ${{ inputs.run_id }}
+  ISSUE_ID: ${{ inputs.issue_id }}
+  EVENT_ID: ${{ inputs.event_id }}
+  CARGO_TERM_COLOR: never
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    # The same paths as the fix job, so the cached target dir stays valid.
+    env:
+      CARGO_HOME: /srv/autofix/cargo
+      RUSTUP_HOME: /srv/autofix/rustup
+    steps:
+      - name: Check out the auto-fix tools
+        uses: actions/checkout@v4
+        with:
+          path: autofix-tools
+          sparse-checkout: .github/posthog-autofix
+          persist-credentials: false
+
+      - name: Check out granite-webhooks
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: granite-webhooks
+          persist-credentials: false
+
+      - name: Lay out /srv/autofix
+        working-directory: autofix-tools/.github/posthog-autofix
+        run: python3 -m autofix layout
+
+      - name: Start the test database
+        working-directory: /srv/autofix/tools
+        run: python3 -m autofix database start
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: /srv/autofix/work/granite-webhooks
+          shared-key: posthog-autofix-o1
+
+      - name: Apply migrations
+        working-directory: /srv/autofix/tools
+        run: python3 -m autofix database migrate
+
+      - name: Warm the target dir
+        working-directory: /srv/autofix/work/granite-webhooks
+        run: |
+          cargo test --no-run --workspace --locked
+          cargo clippy --workspace --all-targets --locked
+
+  fix:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    environment: posthog-autofix
+    permissions:
+      contents: read
+    env:
+      AUTOFIX_WORKSPACE: /srv/autofix/work
+      CARGO_HOME: /srv/autofix/cargo
+      RUSTUP_HOME: /srv/autofix/rustup
+    outputs:
+      started: ${{ steps.started.outputs.started }}
+      base_granite_webhooks: ${{ steps.base.outputs.granite_webhooks }}
+      base_general_datebase: ${{ steps.base.outputs.general_datebase }}
+    steps:
+      # --- Setup, with the network, as the runner user ---------------------
+      - name: Read-only GitHub App token
+        id: read-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.AUTOFIX_APP_ID }}
+          private-key: ${{ secrets.AUTOFIX_APP_PRIVATE_KEY }}
+          owner: DmitryZaika
+          repositories: granite-webhooks,general_datebase
+          permission-contents: read
+
+      # The tools come from this workflow's own commit; the repos the agent
+      # works on are `main`. No checkout keeps credentials.
+      - name: Check out the auto-fix tools
+        uses: actions/checkout@v4
+        with:
+          path: autofix-tools
+          sparse-checkout: .github/posthog-autofix
+          persist-credentials: false
+
+      - name: Check out granite-webhooks
+        uses: actions/checkout@v4
+        with:
+          repository: DmitryZaika/granite-webhooks
+          ref: main
+          path: granite-webhooks
+          token: ${{ steps.read-token.outputs.token }}
+          fetch-depth: 100
+          persist-credentials: false
+
+      - name: Check out general_datebase
+        uses: actions/checkout@v4
+        with:
+          repository: DmitryZaika/general_datebase
+          ref: main
+          path: general_datebase
+          token: ${{ steps.read-token.outputs.token }}
+          fetch-depth: 100
+          persist-credentials: false
+
+      - name: Lay out /srv/autofix
+        working-directory: autofix-tools/.github/posthog-autofix
+        run: python3 -m autofix layout
+
+      - name: Start the test database
+        working-directory: /srv/autofix/tools
+        run: python3 -m autofix database start
+
+      - name: Validate inputs
+        working-directory: /srv/autofix/tools
+        run: python3 -m autofix validate-inputs
+
+      # Best effort: the issue's summary and latest event go into the agent's
+      # first message. It never fails the step; without it the agent pulls the
+      # issue through the PostHog tools itself.
+      - name: Fetch the issue context
+        working-directory: /srv/autofix/tools
+        env:
+          POSTHOG_AUTOFIX_MCP_KEY: ${{ secrets.POSTHOG_AUTOFIX_MCP_KEY }}
+        run: python3 -m autofix issue-context
+
+      # Fails the job unless the api accepts the run: only runs the ledger
+      # dispatched go further.
+      - name: Report started
+        id: started
+        working-directory: /srv/autofix/tools
+        env:
+          AUTOFIX_API_URL: ${{ vars.AUTOFIX_API_URL }}
+          AUTOFIX_CALLBACK_SECRET: ${{ secrets.AUTOFIX_CALLBACK_SECRET }}
+        run: python3 -m autofix callback started
+
+      - name: Record base commits
+        id: base
+        run: |
+          echo "granite_webhooks=$(git -C "$AUTOFIX_WORKSPACE/granite-webhooks" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "general_datebase=$(git -C "$AUTOFIX_WORKSPACE/general_datebase" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set the commit author
+        working-directory: /srv/autofix/tools
+        env:
+          APP_SLUG: ${{ steps.read-token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+        run: python3 -m autofix git-identity
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # Restores what `prepare` saved; this job's cache would hold agent output.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: /srv/autofix/work/granite-webhooks
+          shared-key: posthog-autofix-o1
+          save-if: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: |
+          (cd "$AUTOFIX_WORKSPACE/general_datebase" && bun install --frozen-lockfile)
+          (cd "$AUTOFIX_WORKSPACE/granite-webhooks" && cargo fetch --locked)
+          npm install -g @anthropic-ai/claude-code@2.1.302
+
+      - name: Apply migrations
+        working-directory: /srv/autofix/tools
+        run: python3 -m autofix database migrate
+
+      # --- Isolation: from here on, agent-controlled content is only executed
+      # --- or read by the `autofix` user ----------------------------------
+      - name: Isolate the agent
+        working-directory: /srv/autofix/tools
+        run: python3 -m autofix isolate
+
+      - name: Check the isolation
+        working-directory: /srv/autofix/tools
+        run: python3 -m autofix check-isolation
+
+      # The only step after isolation with a secret. It does not fail when
+      # the agent does: the outcome is saved for `verify` to classify.
+      - name: Run the agent
+        timeout-minutes: 60
+        working-directory: /srv/autofix/tools
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          POSTHOG_AUTOFIX_MCP_KEY: ${{ secrets.POSTHOG_AUTOFIX_MCP_KEY }}
+          AUTOFIX_EFFORT: ${{ vars.AUTOFIX_EFFORT }}
+          AUTOFIX_MAX_TURNS: ${{ vars.AUTOFIX_MAX_TURNS }}
+          AUTOFIX_BUDGET_USD: ${{ vars.AUTOFIX_BUDGET_USD }}
+        run: python3 -m autofix agent
+
+      - name: Verify the fix
+        timeout-minutes: 30
+        working-directory: /srv/autofix/tools
+        env:
+          BASE_SHA_GRANITE_WEBHOOKS: ${{ steps.base.outputs.granite_webhooks }}
+          BASE_SHA_GENERAL_DATEBASE: ${{ steps.base.outputs.general_datebase }}
+        run: python3 -m autofix verify
+
+      - name: Bundle the fix commits
+        working-directory: /srv/autofix/tools
+        run: python3 -m autofix bundle
+
+      - name: Upload the run's files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: posthog-autofix-${{ inputs.run_id }}
+          path: ${{ runner.temp }}/autofix-out
+          retention-days: 14
+          if-no-files-found: ignore
+
+  report:
+    needs: fix
+    # Runs after a failed or cancelled fix job too, to report it, but only for
+    # a run the api accepted.
+    if: always() && needs.fix.outputs.started == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: posthog-autofix
+    permissions:
+      contents: read
+    env:
+      BASE_SHA_GRANITE_WEBHOOKS: ${{ needs.fix.outputs.base_granite_webhooks }}
+      BASE_SHA_GENERAL_DATEBASE: ${{ needs.fix.outputs.base_general_datebase }}
+    steps:
+      - name: Check out the auto-fix tools
+        uses: actions/checkout@v4
+        with:
+          path: autofix-tools
+          sparse-checkout: .github/posthog-autofix
+          persist-credentials: false
+
+      # Missing when the fix job broke before writing anything; the failure
+      # report below copes with that.
+      - name: Download the run's files
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: posthog-autofix-${{ inputs.run_id }}
+          path: ${{ runner.temp }}/autofix-out
+
+      - name: Decide whether to publish
+        id: plan
+        if: needs.fix.result == 'success'
+        working-directory: autofix-tools/.github/posthog-autofix
+        run: python3 -m autofix plan
+
+      # The run's only write token, minted after every check and scoped to
+      # the one repository the fix is in.
+      - name: Write GitHub App token
+        id: write-token
+        if: steps.plan.outputs.publish == 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.AUTOFIX_APP_ID }}
+          private-key: ${{ secrets.AUTOFIX_APP_PRIVATE_KEY }}
+          owner: DmitryZaika
+          repositories: ${{ steps.plan.outputs.target_repo }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Check out the base commit
+        if: steps.plan.outputs.publish == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: DmitryZaika/${{ steps.plan.outputs.target_repo }}
+          ref: ${{ steps.plan.outputs.base_sha }}
+          path: target
+          token: ${{ steps.write-token.outputs.token }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Push and open the pull request
+        id: open-pr
+        if: steps.plan.outputs.publish == 'true'
+        working-directory: autofix-tools/.github/posthog-autofix
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          TARGET_DIR: ${{ github.workspace }}/target
+        run: python3 -m autofix open-pr
+
+      - name: Report the result
+        id: result
+        if: success() && needs.fix.result == 'success'
+        working-directory: autofix-tools/.github/posthog-autofix
+        env:
+          AUTOFIX_API_URL: ${{ vars.AUTOFIX_API_URL }}
+          AUTOFIX_CALLBACK_SECRET: ${{ secrets.AUTOFIX_CALLBACK_SECRET }}
+        run: python3 -m autofix callback result
+
+      # Not after a failed result report: that run may have a pull request,
+      # and the api's watchdog is the better judge than a "failed" report.
+      - name: Report the failure
+        if: (failure() || cancelled() || needs.fix.result != 'success') && steps.result.outcome != 'failure'
+        working-directory: autofix-tools/.github/posthog-autofix
+        env:
+          AUTOFIX_API_URL: ${{ vars.AUTOFIX_API_URL }}
+          AUTOFIX_CALLBACK_SECRET: ${{ secrets.AUTOFIX_CALLBACK_SECRET }}
+          FIX_JOB_RESULT: ${{ needs.fix.result }}
+        run: python3 -m autofix callback failed

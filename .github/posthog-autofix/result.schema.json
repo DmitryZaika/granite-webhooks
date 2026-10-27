@@ -1,0 +1,104 @@
+{
+  "title": "PostHog auto-fix result",
+  "description": "What the fixer agent concluded about one PostHog issue. Mirrors AgentResult in api/crates/admin/src/posthog_autofix/model.rs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "outcome",
+    "target_repo",
+    "summary",
+    "root_cause",
+    "fix_summary",
+    "risk",
+    "test",
+    "recommendation",
+    "duplicate_of",
+    "pr_title"
+  ],
+  "properties": {
+    "outcome": {
+      "description": "fixed_with_test and fixed_without_test are the only outcomes with commits.",
+      "enum": [
+        "fixed_with_test",
+        "fixed_without_test",
+        "not_a_code_bug",
+        "not_reproducible",
+        "duplicate",
+        "needs_human"
+      ]
+    },
+    "target_repo": {
+      "description": "The one repository the commits are in; null without a fix.",
+      "enum": ["granite-webhooks", "general_datebase", null]
+    },
+    "summary": {
+      "description": "One line: what goes wrong for the user, in plain words.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "root_cause": {
+      "description": "Why it happens, with file paths and line references.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 3000
+    },
+    "fix_summary": {
+      "description": "What the fix changes and why that removes the cause. Empty string without a fix.",
+      "type": "string",
+      "maxLength": 3000
+    },
+    "risk": {
+      "description": "What the fix could break and how likely that is. Empty string without a fix.",
+      "type": "string",
+      "maxLength": 1500
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "files", "command", "why_not_possible", "manual_test_steps"],
+      "properties": {
+        "status": {
+          "description": "written: a test in the first commit reproduces the bug. not_possible: a fix without a test. not_applicable: no fix.",
+          "enum": ["written", "not_possible", "not_applicable"]
+        },
+        "files": {
+          "description": "Test files, relative to the target repository.",
+          "type": "array",
+          "maxItems": 10,
+          "items": { "type": "string", "maxLength": 300 }
+        },
+        "command": {
+          "description": "Exactly `bunx vitest run <test files>` or `cargo test -p <crate> [--test <target>] <filter>` (an `api/tests/<area>/<file>.rs` test: `cargo test -p api --test <area> <file>::<test name>`). null without a test.",
+          "type": ["string", "null"],
+          "maxLength": 500
+        },
+        "why_not_possible": {
+          "description": "Why no automated test can reproduce the bug. null when a test was written.",
+          "type": ["string", "null"],
+          "maxLength": 1500
+        },
+        "manual_test_steps": {
+          "description": "Numbered steps a reviewer follows to see the fix in the app. Give them for every fix; required when status is not_possible.",
+          "type": ["string", "null"],
+          "maxLength": 2000
+        }
+      }
+    },
+    "recommendation": {
+      "description": "The concrete next step for a person when there is no fix: a migration to apply, a PostHog suppression or grouping rule, a setting to change.",
+      "type": ["string", "null"],
+      "maxLength": 1500
+    },
+    "duplicate_of": {
+      "description": "The pull request URL or commit SHA that already covers this issue (outcome duplicate).",
+      "type": ["string", "null"],
+      "maxLength": 300
+    },
+    "pr_title": {
+      "description": "Conventional-commit style pull request title, e.g. `fix(sms): handle an empty CloudTalk reply`. null without a fix.",
+      "type": ["string", "null"],
+      "maxLength": 100
+    }
+  }
+}

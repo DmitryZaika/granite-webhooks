@@ -1,0 +1,41 @@
+[package]
+name = "webhooks-leads"
+version = "0.1.0"
+edition = "2024"
+description = "Lead forms, the Telegram bot that hands leads to sales reps, the lead and referral logic, email templates."
+
+[lib]
+# No doc tests; rustdoc would still compile the whole crate looking for them.
+doctest = false
+
+[features]
+# Generates the OpenAPI document of the lead form route with utoipa
+# (`openapi`), for `make webhooks-openapi` and its test. Builds without it
+# serve the checked-in webhooks/openapi.json.
+openapi = ["dep:utoipa", "webhooks-core/openapi"]
+# See webhooks-core's `test-support`.
+test-support = ["webhooks-phone/test-support"]
+
+[dependencies]
+webhooks-core = { path = "../core" }
+webhooks-phone = { path = "../phone" }
+common = { path = "../../../common" }
+axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+lambda_http = "1.1"
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls-no-provider"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_urlencoded = "0.7"
+sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+utoipa = { version = "5.5.0", features = ["axum_extras"], optional = true }
+
+[dev-dependencies]
+webhooks-core = { path = "../core", features = ["test-support"] }
+webhooks-phone = { path = "../phone", features = ["test-support"] }
+test-db = { path = "../../../test-db" }
+axum-test = "19"
+http-body-util = "0.1"
+tracing-test = "0.2.6"

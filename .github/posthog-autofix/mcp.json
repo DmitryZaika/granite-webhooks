@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "posthog": {
+      "type": "http",
+      "url": "https://mcp.posthog.com/mcp?features=error_tracking",
+      "headers": {
+        "Authorization": "Bearer ${POSTHOG_AUTOFIX_MCP_KEY}",
+        "x-posthog-project-id": "141685",
+        "x-posthog-read-only": "true"
+      }
+    }
+  }
+}

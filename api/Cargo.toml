@@ -1,0 +1,89 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+# No doc tests; rustdoc would still compile the whole crate looking for them.
+doctest = false
+
+[[bin]]
+name = "api"
+path = "src/main.rs"
+test = false
+
+[[example]]
+name = "sign_session"
+path = "examples/sign_session.rs"
+test = false
+
+[features]
+# Generates the OpenAPI document from the route annotations with utoipa, for
+# `make api-openapi` and the spec tests (`--features openapi`). utoipa is a
+# large share of the crate's compile time, so builds without it register the
+# routes straight with axum and serve the checked-in api/openapi.json.
+openapi = [
+    "dep:utoipa",
+    "dep:utoipa-axum",
+    "api-core/openapi",
+    "api-phone/openapi",
+    "api-admin/openapi",
+    "api-ai/openapi",
+]
+
+[dependencies]
+api-core = { path = "crates/core" }
+api-phone = { path = "crates/phone" }
+api-admin = { path = "crates/admin" }
+api-ai = { path = "crates/ai" }
+ammonia = "4.1"
+bcrypt = "0.17"
+getrandom = "0.3"
+common = { path = "../common" }
+axum = "0.8"
+aes-gcm = "0.10"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+hmac = "0.13"
+lambda_http = "1.1"
+lopdf = { version = "0.45", default-features = false }
+miniz_oxide = "0.8"
+pdf-writer = "0.15"
+percent-encoding = "2.3"
+regex = "1"
+fancy-regex = "0.19"
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+sha2 = "0.11"
+unicode-normalization = "0.1"
+sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.6", features = ["catch-panic", "cors"] }
+utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"], optional = true }
+utoipa-axum = { version = "0.3.0", optional = true }
+tower-layer = "0.3"
+tower-service = "0.3"
+serde_html_form = "0.4.1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+# JPEG with 4:2:0 chroma and fitted Huffman tables (`image` writes 4:4:4 with stock tables).
+jpeg-encoder = "0.7"
+# Pure Rust: HEIC photos (iPhone) and PDF pages, no system libraries on Lambda.
+zune-heic = "0.5"
+hayro = "0.8"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+# `rustls` would bring aws-lc-rs; `common::http` clients run on ring.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+# Ed25519 (Telnyx webhook signatures) and RS256 (the FCM service-account JWT).
+ring = "0.17"
+hickory-resolver = "0.25"
+
+[dev-dependencies]
+test-db = { path = "../test-db" }
+axum-test = "19"
+tower = { version = "0.5", features = ["util"] }

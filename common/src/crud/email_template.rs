@@ -6,13 +6,15 @@ pub struct EmailTemplate {
     pub hour_delay: Option<i32>,
 }
 
+/// The company email drips of `list_id` that go out for deals of `user_id`:
+/// those naming no sales reps, or naming them.
 pub async fn get_templates_for_list_id(
     pool: &MySqlPool,
     list_id: i32,
     company_id: i32,
+    user_id: i32,
 ) -> Result<Vec<EmailTemplate>, sqlx::Error> {
-    sqlx::query_as!(
-        EmailTemplate,
+    let rows: Vec<(i32, Option<i32>)> = sqlx::query_as(
         r#"
         SELECT email_templates.id, email_templates.hour_delay
         FROM email_templates
@@ -20,21 +22,30 @@ pub async fn get_templates_for_list_id(
           AND email_templates.company_id = ?
           AND email_templates.user_id IS NULL
           AND email_templates.deleted_at IS NULL
+          AND (email_templates.sales_rep_ids IS NULL
+               OR JSON_LENGTH(email_templates.sales_rep_ids) = 0
+               OR JSON_CONTAINS(email_templates.sales_rep_ids, CAST(? AS JSON)))
         ORDER BY email_templates.hour_delay ASC, email_templates.id ASC
         "#,
-        list_id,
-        company_id,
     )
+    .bind(list_id)
+    .bind(company_id)
+    .bind(user_id)
     .fetch_all(pool)
-    .await
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, hour_delay)| EmailTemplate { id, hour_delay })
+        .collect())
 }
 
 pub async fn get_template_from_list_id(
     pool: &MySqlPool,
     list_id: i32,
     company_id: i32,
+    user_id: i32,
 ) -> Result<Option<EmailTemplate>, sqlx::Error> {
-    let templates = get_templates_for_list_id(pool, list_id, company_id).await?;
+    let templates = get_templates_for_list_id(pool, list_id, company_id, user_id).await?;
     Ok(templates.into_iter().next())
 }
 

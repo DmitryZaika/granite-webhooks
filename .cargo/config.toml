@@ -1,0 +1,7 @@
+# Pin every cargo invocation (tests, sqlx::test, compile-time query! checks,
+# cargo run) to the local MySQL from docker-compose.local.yml. `force = true`
+# overrides DATABASE_URL from the shell, and dotenvy never overrides an
+# existing variable, so the RDS URL in .env is ignored. Start it with
+# `make api-db-up` (and `make api-db-reset` for a migrated schema).
+[env]
+DATABASE_URL = { value = "mysql://root:granite@127.0.0.1:3307/granite_local", force = true }
