@@ -210,7 +210,11 @@ pub fn line_rules(
     history
         .iter()
         .filter_map(|(shape, past)| {
-            let latest: Vec<Outcome> = past.iter().take(WINDOW).map(|p| p.outcome.clone()).collect();
+            let latest: Vec<Outcome> = past
+                .iter()
+                .take(WINDOW)
+                .map(|p| p.outcome.clone())
+                .collect();
             let always = decide(&latest).and_then(|(winner, _)| rule_of(&winner));
             let rule = match always {
                 Some(rule) => ShapeRule { rule, when: None },
@@ -391,9 +395,10 @@ pub fn header_value(rule: Option<&Outcome>, rep: Option<&str>) -> Option<String>
     let rule = rule?;
     match rule.outcome.as_str() {
         "sales_rep" => rep.map(|rep| {
-            rule.value
-                .as_ref()
-                .map_or_else(|| rep.to_string(), |parent| format!("{parent}:{}", rep.trim()))
+            rule.value.as_ref().map_or_else(
+                || rep.to_string(),
+                |parent| format!("{parent}:{}", rep.trim()),
+            )
         }),
         "value" => rule.value.clone(),
         _ => None,
@@ -485,10 +490,29 @@ pub(super) struct Filled {
 
 /// Invoice keys `QuickBooks` fills itself, or that a draft always sets.
 const NOT_FILLED: &[&str] = &[
-    "Id", "SyncToken", "MetaData", "domain", "sparse", "Line", "CustomField", "CustomerRef",
-    "DocNumber", "TxnDate", "DueDate", "TotalAmt", "Balance", "HomeTotalAmt", "HomeBalance",
-    "LinkedTxn", "TxnTaxDetail", "CurrencyRef", "ExchangeRate", "EmailStatus", "PrintStatus",
-    "InvoiceLink", "DeliveryInfo",
+    "Id",
+    "SyncToken",
+    "MetaData",
+    "domain",
+    "sparse",
+    "Line",
+    "CustomField",
+    "CustomerRef",
+    "DocNumber",
+    "TxnDate",
+    "DueDate",
+    "TotalAmt",
+    "Balance",
+    "HomeTotalAmt",
+    "HomeBalance",
+    "LinkedTxn",
+    "TxnTaxDetail",
+    "CurrencyRef",
+    "ExchangeRate",
+    "EmailStatus",
+    "PrintStatus",
+    "InvoiceLink",
+    "DeliveryInfo",
 ];
 /// Longest value kept, in characters.
 const FILLED_CHARS: usize = 200;
@@ -499,7 +523,11 @@ fn filled_text(value: &Value) -> Option<String> {
         Value::String(text) => text.trim().to_string(),
         Value::Number(number) => number.to_string(),
         Value::Bool(true) => "Yes".into(),
-        Value::Array(list) => list.iter().filter_map(filled_text).collect::<Vec<_>>().join("; "),
+        Value::Array(list) => list
+            .iter()
+            .filter_map(filled_text)
+            .collect::<Vec<_>>()
+            .join("; "),
         Value::Object(fields) => ["name", "Address", "value"]
             .iter()
             .find_map(|key| fields.get(*key).and_then(filled_text))
@@ -787,11 +815,7 @@ async fn item_history(
 
 /// A header field's outcomes on invoices made here, newest first, then the
 /// scanned ones.
-async fn header_history(
-    pool: &MySqlPool,
-    company_id: i32,
-    field: &str,
-) -> sqlx::Result<Vec<Seen>> {
+async fn header_history(pool: &MySqlPool, company_id: i32, field: &str) -> sqlx::Result<Vec<Seen>> {
     let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT outcome, saved_value, draft_text FROM qbo_invoice_draft_outcomes
           WHERE company_id = ? AND field = ? ORDER BY id DESC LIMIT ?",
@@ -908,7 +932,12 @@ pub async fn invoice_draft(
         .ok_or(ApiError::NotFound)?;
     let (history, common) = line_history(&state.pool, company_id).await?;
     let rules = line_rules(&history, &common);
-    let draft_words = words(input.lines.iter().filter_map(|line| line.description.as_deref()));
+    let draft_words = words(
+        input
+            .lines
+            .iter()
+            .filter_map(|line| line.description.as_deref()),
+    );
     let texts: Vec<String> = input
         .lines
         .iter()
@@ -919,12 +948,20 @@ pub async fn invoice_draft(
     let told = instructions::holding(&told, &texts);
     let scan = scan(&state, company_id).await?.unwrap_or_default();
     let class_name = header_value(
-        decided_header(&header_history(&state.pool, company_id, "class").await?, &scan.class).as_ref(),
+        decided_header(
+            &header_history(&state.pool, company_id, "class").await?,
+            &scan.class,
+        )
+        .as_ref(),
         rep.name.as_deref(),
     )
     .filter(|name| scan.classes.is_empty() || scan.classes.iter().any(|c| same(c, name)));
     let bill_email_cc = header_value(
-        decided_header(&header_history(&state.pool, company_id, "cc").await?, &scan.cc).as_ref(),
+        decided_header(
+            &header_history(&state.pool, company_id, "cc").await?,
+            &scan.cc,
+        )
+        .as_ref(),
         rep.email.as_deref(),
     );
     let class_name = instructions::class(&told).or(class_name);
@@ -1117,11 +1154,15 @@ mod tests {
             "PrivateNote": "",
         });
         let fields = filled(&invoice);
-        let pairs = |map: BTreeMap<String, String>| -> Vec<(String, String)> { map.into_iter().collect() };
+        let pairs =
+            |map: BTreeMap<String, String>| -> Vec<(String, String)> { map.into_iter().collect() };
         let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
         assert_eq!(
             pairs(fields.custom),
-            [pair("Custom field 3", "Eased"), pair("Room & Color", "Kitchen - Calacatta")]
+            [
+                pair("Custom field 3", "Eased"),
+                pair("Room & Color", "Kitchen - Calacatta")
+            ]
         );
         assert_eq!(
             pairs(fields.other),
@@ -1307,12 +1348,7 @@ mod tests {
                 }),
             }
         );
-        let draft = |extra: &str| {
-            vec![
-                text("a", "40 sq ft Fabrication"),
-                text("b", extra),
-            ]
-        };
+        let draft = |extra: &str| vec![text("a", "40 sq ft Fabrication"), text("b", extra)];
         let with = draft("10 Cabinets");
         let with_words = words(with.iter().filter_map(|l| l.description.as_deref()));
         let (kept_lines, removed_lines) = apply(with, &rules, &with_words);
@@ -1350,7 +1386,10 @@ mod tests {
         );
         past_outcomes.insert(0, past(&kept, &COUNTERS));
         past_outcomes.insert(0, past(&kept, &COUNTERS));
-        let rules = line_rules(&HashMap::from([(installation.clone(), past_outcomes)]), &common);
+        let rules = line_rules(
+            &HashMap::from([(installation.clone(), past_outcomes)]),
+            &common,
+        );
         assert_eq!(rules.get(&installation), None);
     }
 
@@ -1427,7 +1466,10 @@ mod tests {
             { "DetailType": "DescriptionOnly", "Description": "Template" },
             { "DetailType": "SalesItemLineDetail", "SalesItemLineDetail": { "ClassRef": { "value": "5", "name": "Countertops:Tania" } } },
         ] });
-        assert_eq!(invoice_class(&invoice).as_deref(), Some("Countertops:Tania"));
+        assert_eq!(
+            invoice_class(&invoice).as_deref(),
+            Some("Countertops:Tania")
+        );
         assert_eq!(invoice_class(&serde_json::json!({ "Line": [] })), None);
     }
 
@@ -1440,7 +1482,10 @@ mod tests {
         scanned.extend([gmail(), seen(o("none", None))]);
         assert_eq!(decided(&scanned), None);
         assert_eq!(decided_header(&[], &scanned), Some(o("sales_rep", None)));
-        assert_eq!(decided_header(&[rep()], &scanned), Some(o("sales_rep", None)));
+        assert_eq!(
+            decided_header(&[rep()], &scanned),
+            Some(o("sales_rep", None))
+        );
         assert_eq!(decided_header(&[seen(o("none", None))], &scanned), None);
         let mixed = [rep(), rep(), gmail(), gmail(), seen(o("none", None))];
         assert_eq!(decided_header(&[], &mixed), None);

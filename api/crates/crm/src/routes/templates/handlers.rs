@@ -400,7 +400,11 @@ pub async fn create(
     .bind(automation.as_ref().map(|a| a.group))
     .bind(automation.as_ref().map(|a| a.list))
     .bind(automation.as_ref().map(|a| a.hours))
-    .bind(automation.as_ref().and_then(|a| super::reps::to_json(&a.reps)))
+    .bind(
+        automation
+            .as_ref()
+            .and_then(|a| super::reps::to_json(&a.reps)),
+    )
     .execute(&state.pool)
     .await?
     .last_insert_id();
@@ -470,7 +474,11 @@ pub async fn update(
     .bind(automation.as_ref().map(|a| a.group))
     .bind(automation.as_ref().map(|a| a.list))
     .bind(automation.as_ref().map(|a| a.hours))
-    .bind(automation.as_ref().and_then(|a| super::reps::to_json(&a.reps)))
+    .bind(
+        automation
+            .as_ref()
+            .and_then(|a| super::reps::to_json(&a.reps)),
+    )
     .bind(id)
     .bind(user.company_id)
     .execute(&state.pool)

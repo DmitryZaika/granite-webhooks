@@ -15,13 +15,13 @@
 
 use super::calls::SALES_MANAGER_POSITION;
 use super::devices::push_to_users;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use common::telegram::crm::notification_type_title;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 use std::collections::BTreeMap;
-use crate::openapi::ToSchema;
 
 /// A push's data: `{granite: "1", type: kind}` and `fields`.
 fn data(kind: &str, fields: Vec<(&str, String)>) -> BTreeMap<String, String> {

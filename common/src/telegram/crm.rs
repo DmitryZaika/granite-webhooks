@@ -369,7 +369,10 @@ mod tests {
             None,
             "thread-4",
         );
-        assert!(msg.text.ends_with("💬 <i>Is that installation included?</i>"));
+        assert!(
+            msg.text
+                .ends_with("💬 <i>Is that installation included?</i>")
+        );
         assert!(!msg.text.contains("wrote"));
     }
 

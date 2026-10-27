@@ -519,14 +519,12 @@ pub async fn create_invoice(
     let invoice = editable(created)
         .ok_or_else(|| ApiError::Upstream("Failed to parse created invoice".into()))?;
     if let Some(quote_id) = input.quote_id {
-        sqlx::query(
-            "UPDATE quotes SET qbo_invoice_id = ? WHERE id = ? AND company_id = ?",
-        )
-        .bind(&invoice.id)
-        .bind(quote_id)
-        .bind(company_id)
-        .execute(&state.pool)
-        .await?;
+        sqlx::query("UPDATE quotes SET qbo_invoice_id = ? WHERE id = ? AND company_id = ?")
+            .bind(&invoice.id)
+            .bind(quote_id)
+            .bind(company_id)
+            .execute(&state.pool)
+            .await?;
     }
     if let Some(draft) = &input.draft
         && let Err(err) = rules::record(
@@ -552,7 +550,9 @@ async fn class_per_line(state: &AppState, access: &Access) -> bool {
         .get(access, "preferences")
         .await
         .ok()
-        .and_then(|prefs| prefs["Preferences"]["AccountingInfoPrefs"]["ClassTrackingPerTxnLine"].as_bool())
+        .and_then(|prefs| {
+            prefs["Preferences"]["AccountingInfoPrefs"]["ClassTrackingPerTxnLine"].as_bool()
+        })
         .unwrap_or(false)
 }
 

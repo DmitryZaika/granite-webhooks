@@ -278,7 +278,10 @@ async fn a_quote_makes_invoices_with_the_companys_items(pool: MySqlPool) {
         items["items"],
         json!([{ "id": "3", "name": "Stone" }, { "id": "5", "name": "tile" }])
     );
-    assert_eq!(items["classes"], json!(["Rita", "Rita Rep", "Rita:Kitchens"]));
+    assert_eq!(
+        items["classes"],
+        json!(["Rita", "Rita Rep", "Rita:Kitchens"])
+    );
     let line = |id: &str, detail: &str, amount: Value, item: Value| {
         json!({ "id": id, "line_num": null, "detail_type": detail, "description": "Kitchen",
                 "amount": amount, "qty": null, "unit_price": amount, "item_ref_value": item,
@@ -314,7 +317,10 @@ async fn a_quote_makes_invoices_with_the_companys_items(pool: MySqlPool) {
     assert_eq!(sent["CustomerRef"]["value"], "42");
     assert_eq!(sent["BillEmail"]["Address"], "alice@example.com");
     assert_eq!(sent["ShipAddr"]["City"], "Carmel");
-    assert_eq!(sent["Line"][0]["SalesItemLineDetail"]["ItemRef"]["value"], "3");
+    assert_eq!(
+        sent["Line"][0]["SalesItemLineDetail"]["ItemRef"]["value"],
+        "3"
+    );
     assert_eq!(sent["Line"][1]["DetailType"], "DescriptionOnly");
     let linked: Option<String> =
         sqlx::query_scalar("SELECT qbo_invoice_id FROM quotes WHERE id = 9801")
@@ -332,7 +338,11 @@ async fn a_quote_makes_invoices_with_the_companys_items(pool: MySqlPool) {
     .await
     .unwrap();
     let outcome = |field: &str, outcome: &str, value: Option<&str>| {
-        (field.to_string(), outcome.to_string(), value.map(String::from))
+        (
+            field.to_string(),
+            outcome.to_string(),
+            value.map(String::from),
+        )
     };
     assert_eq!(
         outcomes,
@@ -458,8 +468,14 @@ async fn instructions_become_rules_every_draft_follows(pool: MySqlPool) {
         .await
         .json();
     assert_eq!(saved["rules"].as_array().unwrap().len(), 4);
-    assert_eq!(saved["rules"][0]["action"], json!({ "type": "product", "item_id": "3", "item_name": "Stone" }));
-    assert_eq!(saved["not_understood"], json!(["QuickBooks has no product named “Granite Package”."]));
+    assert_eq!(
+        saved["rules"][0]["action"],
+        json!({ "type": "product", "item_id": "3", "item_name": "Stone" })
+    );
+    assert_eq!(
+        saved["not_understood"],
+        json!(["QuickBooks has no product named “Granite Package”."])
+    );
     let read: Value = server
         .get("/v1/qbo/invoice-instructions")
         .with_session(sessions::ADMIN)
@@ -488,7 +504,10 @@ async fn instructions_become_rules_every_draft_follows(pool: MySqlPool) {
     assert_eq!(cabinets["item_id"], "3");
     assert_eq!(cabinets["lines"][0]["item_ref_name"], "Stone");
     assert_eq!(cabinets["lines"].as_array().unwrap().len(), 2);
-    assert_eq!(cabinets["removed"][0]["description"], "30 sq ft Fabrication");
+    assert_eq!(
+        cabinets["removed"][0]["description"],
+        "30 sq ft Fabrication"
+    );
     let counters: Value = server
         .post("/v1/quotes/9803/invoice-draft")
         .with_session(sessions::REP)

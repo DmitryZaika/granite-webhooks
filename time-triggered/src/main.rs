@@ -1,6 +1,6 @@
 use common::crud::setup::create_db_pool;
 use generic_handler::function_handler;
-use lambda_runtime::{Error, run, tracing};
+use lambda_runtime::{run, tracing, Error};
 
 mod generic_handler;
 mod posthog;

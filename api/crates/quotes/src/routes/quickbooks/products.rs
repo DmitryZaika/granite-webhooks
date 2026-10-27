@@ -129,10 +129,13 @@ impl<'a> Model<'a> {
             .iter()
             .filter(|product| !avoid.contains(product.value))
             .map(|product| (product, self.score(product, &draft)))
-            .fold(None, |best: Option<(&Product, f64)>, (product, s)| match best {
-                Some(best) if best.1 >= s => Some(best),
-                _ => Some((product, s)),
-            })?
+            .fold(
+                None,
+                |best: Option<(&Product, f64)>, (product, s)| match best {
+                    Some(best) if best.1 >= s => Some(best),
+                    _ => Some((product, s)),
+                },
+            )?
             .0;
         Some((winner.value.to_string(), winner.name.map(str::to_string)))
     }
@@ -200,10 +203,16 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            Model::learn(&saved).pick(&draft(&["Fabrication"]), &none).unwrap().0,
+            Model::learn(&saved)
+                .pick(&draft(&["Fabrication"]), &none)
+                .unwrap()
+                .0,
             "30"
         );
-        assert_eq!(Model::learn(&[]).pick(&draft(&["Fabrication"]), &none), None);
+        assert_eq!(
+            Model::learn(&[]).pick(&draft(&["Fabrication"]), &none),
+            None
+        );
     }
 
     #[test]
@@ -216,7 +225,10 @@ mod tests {
         scanned.extend((0..30).map(|_| item("5", "Sales", &COUNTERS)));
         let none = HashSet::new();
         assert_eq!(
-            Model::learn(&scanned).pick(&draft(&COUNTERS), &none).unwrap().0,
+            Model::learn(&scanned)
+                .pick(&draft(&COUNTERS), &none)
+                .unwrap()
+                .0,
             "30"
         );
         // Reps pick Sales for countertop-only quotes: a few such choices turn it.

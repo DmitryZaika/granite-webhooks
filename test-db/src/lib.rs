@@ -345,7 +345,9 @@ async fn restore(
     }
     if dirty || schema_changed {
         script.push_str("SET FOREIGN_KEY_CHECKS = 1;");
-        sqlx::raw_sql(AssertSqlSafe(script)).execute(&mut *conn).await?;
+        sqlx::raw_sql(AssertSqlSafe(script))
+            .execute(&mut *conn)
+            .await?;
     }
     // A renamed table takes the foreign keys that pointed to it along.
     Ok(!schema_changed || foreign_keys(conn, database).await? == plan.foreign_keys)
