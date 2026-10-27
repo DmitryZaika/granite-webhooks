@@ -12,7 +12,7 @@
 //! invoices' words ([`super::products`]).
 
 use super::instructions;
-use super::invoice::{EditableInvoice, Line, text};
+use super::invoice::{EditableInvoice, Line, rows, text};
 use super::products::Model;
 use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
@@ -27,7 +27,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::MySqlPool;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 
 /// Outcomes a rule is decided from, newest first.
@@ -451,6 +451,77 @@ struct Scan {
     cc: Vec<Seen>,
     item: Vec<Seen>,
     classes: Vec<String>,
+    /// What each invoice filled in (newest first); none in a scan kept
+    /// before fields were read.
+    #[serde(default)]
+    fields: Option<Vec<Filled>>,
+}
+
+/// What an invoice filled in besides its customer, lines, dates and amounts:
+/// each custom field by its name, every other field by its `QuickBooks` key.
+/// Every company fills different ones, so all are kept.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct Filled {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) custom: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) other: BTreeMap<String, String>,
+}
+
+/// Invoice keys `QuickBooks` fills itself, or that a draft always sets.
+const NOT_FILLED: &[&str] = &[
+    "Id", "SyncToken", "MetaData", "domain", "sparse", "Line", "CustomField", "CustomerRef",
+    "DocNumber", "TxnDate", "DueDate", "TotalAmt", "Balance", "HomeTotalAmt", "HomeBalance",
+    "LinkedTxn", "TxnTaxDetail", "CurrencyRef", "ExchangeRate", "EmailStatus", "PrintStatus",
+    "InvoiceLink", "DeliveryInfo",
+];
+/// Longest value kept, in characters.
+const FILLED_CHARS: usize = 200;
+
+/// A field's value as text; none when empty or false.
+fn filled_text(value: &Value) -> Option<String> {
+    let text = match value {
+        Value::String(text) => text.trim().to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(true) => "Yes".into(),
+        Value::Array(list) => list.iter().filter_map(filled_text).collect::<Vec<_>>().join("; "),
+        Value::Object(fields) => ["name", "Address", "value"]
+            .iter()
+            .find_map(|key| fields.get(*key).and_then(filled_text))
+            .unwrap_or_else(|| {
+                fields
+                    .iter()
+                    .filter(|(key, _)| !matches!(key.as_str(), "Id" | "Lat" | "Long"))
+                    .filter_map(|(_, value)| filled_text(value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }),
+        _ => return None,
+    };
+    (!text.is_empty()).then(|| text.chars().take(FILLED_CHARS).collect())
+}
+
+/// What a `QuickBooks` invoice filled in.
+pub(super) fn filled(invoice: &Value) -> Filled {
+    let custom = rows(&invoice["CustomField"])
+        .iter()
+        .filter_map(|field| {
+            let name = text(&field["Name"])
+                .or_else(|| text(&field["DefinitionId"]).map(|id| format!("Custom field {id}")))?;
+            let value = ["StringValue", "NumberValue", "DateValue", "BooleanValue"]
+                .iter()
+                .find_map(|key| filled_text(&field[*key]))?;
+            Some((name, value))
+        })
+        .collect();
+    let other = invoice
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| !NOT_FILLED.contains(&key.as_str()))
+        .filter_map(|(key, value)| Some((key.clone(), filled_text(value)?)))
+        .collect();
+    Filled { custom, other }
 }
 
 fn seen(outcome: Outcome) -> Seen {
@@ -509,7 +580,7 @@ async fn fresh_scan(state: &AppState, company_id: i32) -> Option<Scan> {
     let access = state.qbo.access(&state.pool, company_id).await.ok()?;
     let invoices = match state
         .qbo
-        .query(
+        .query_with_custom_fields(
             &access,
             &format!("select * from Invoice ORDERBY MetaData.CreateTime DESC MAXRESULTS {SCANNED}"),
             "Invoice",
@@ -565,6 +636,7 @@ async fn fresh_scan(state: &AppState, company_id: i32) -> Option<Scan> {
             })
             .collect(),
         item: invoices.iter().filter_map(first_item).collect(),
+        fields: Some(invoices.iter().map(filled).collect()),
         classes: classes
             .iter()
             .filter_map(|c| text(&c["FullyQualifiedName"]).or_else(|| text(&c["Name"])))
@@ -595,10 +667,11 @@ async fn scan(state: &AppState, company_id: i32) -> sqlx::Result<Option<Scan>> {
     .bind(company_id)
     .fetch_optional(&state.pool)
     .await?;
-    // A scan kept before invoices' words were read is read again.
+    // A scan kept before invoices' words or fields were read is read again.
     if let Some(scan) = kept
         .and_then(|json| serde_json::from_str::<Scan>(&json).ok())
         .filter(|scan| scan.item.is_empty() || scan.item.iter().any(|seen| !seen.words.is_empty()))
+        .filter(|scan| scan.fields.is_some())
     {
         return Ok(Some(scan));
     }
@@ -970,6 +1043,44 @@ mod tests {
 
     fn o(outcome: &str, value: Option<&str>) -> Outcome {
         Outcome::new(outcome, value)
+    }
+
+    #[test]
+    fn a_scan_keeps_every_field_an_invoice_filled() {
+        let invoice = serde_json::json!({
+            "Id": "9", "SyncToken": "2", "DocNumber": "1001", "TxnDate": "2026-10-01",
+            "CustomerRef": { "value": "42", "name": "Alice" }, "TotalAmt": 120,
+            "Line": [{ "DetailType": "DescriptionOnly", "Description": "Template" }],
+            "CustomField": [
+                { "DefinitionId": "1", "Name": "Room & Color", "Type": "StringType", "StringValue": "Kitchen - Calacatta" },
+                { "DefinitionId": "2", "Name": "Sink & Stove", "Type": "StringType", "StringValue": " " },
+                { "DefinitionId": "3", "Type": "StringType", "StringValue": "Eased" },
+            ],
+            "ClassRef": { "value": "1", "name": "Rita" },
+            "BillEmailCc": { "Address": "office@example.com" },
+            "ShipAddr": { "Id": "7", "Line1": "1 Main", "City": "Carmel", "Lat": "39.9" },
+            "SalesTermRef": { "value": "3" },
+            "AllowOnlineACHPayment": true,
+            "ApplyTaxAfterDiscount": false,
+            "PrivateNote": "",
+        });
+        let fields = filled(&invoice);
+        let pairs = |map: BTreeMap<String, String>| -> Vec<(String, String)> { map.into_iter().collect() };
+        let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(
+            pairs(fields.custom),
+            [pair("Custom field 3", "Eased"), pair("Room & Color", "Kitchen - Calacatta")]
+        );
+        assert_eq!(
+            pairs(fields.other),
+            [
+                pair("AllowOnlineACHPayment", "Yes"),
+                pair("BillEmailCc", "office@example.com"),
+                pair("ClassRef", "Rita"),
+                pair("SalesTermRef", "3"),
+                pair("ShipAddr", "1 Main, Carmel"),
+            ]
+        );
     }
 
     #[test]
