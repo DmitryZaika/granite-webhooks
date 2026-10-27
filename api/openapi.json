@@ -54259,7 +54259,7 @@
           "phone"
         ],
         "summary": "Push a CRM notification to its user's phones",
-        "description": "Called by the `time-triggered` Lambda (job key) when an activity\ndeadline reminder is due, as it sends the Telegram message. The\nnotification is pushed to its user's signed-in phones as data\n`{granite: \"1\", type: \"notification\", notificationId}`: ids only. The app\nreads it with `GET /v1/notifications/{id}`. Nothing is pushed\n(`pushed: 0`) for an unknown notification or a deleted user. Calling it\nagain pushes again.",
+        "description": "Called by the `time-triggered` Lambda (job key) when an activity\ndeadline reminder is due, as it sends the Telegram message. The\nnotification is pushed to its user's signed-in phones as data\n`{granite: \"1\", type: \"notification\", notificationId, heading}`: its id\nand heading (\"Activity Reminder\"). The app reads the rest with\n`GET /v1/notifications/{id}`. Nothing is pushed\n(`pushed: 0`) for an unknown notification or a deleted user. Calling it\nagain pushes again.",
         "operationId": "push_notification",
         "requestBody": {
           "content": {

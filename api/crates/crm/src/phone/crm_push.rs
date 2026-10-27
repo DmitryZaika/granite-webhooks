@@ -8,13 +8,15 @@
 //!   customer with `GET /v1/customers/{id}` and opens the deal
 //! - `maintenance`: the shop's maintenance checks due today
 //!
-//! Ids only, like every Granite push (never names, messages or numbers).
+//! Ids only, like every Granite push (never names, messages or numbers);
+//! a notification also carries its heading ("Activity Reminder").
 //! Telegram's on/off settings are Telegram's: a phone gets these whether or
 //! not its user linked Telegram, as it does new email.
 
 use super::calls::SALES_MANAGER_POSITION;
 use super::devices::push_to_users;
 use crate::state::AppState;
+use common::telegram::crm::notification_type_title;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
@@ -36,26 +38,34 @@ fn data(kind: &str, fields: Vec<(&str, String)>) -> BTreeMap<String, String> {
 }
 
 /// Pushes `notifications` row `notification_id` to its user's phones as
-/// `{granite: "1", type: "notification", notificationId}`. The number of
-/// phones told; 0 for an unknown row or a deleted user.
+/// `{granite: "1", type: "notification", notificationId, heading}`:
+/// `heading` names what it is ("Activity Reminder"), so the phone says so
+/// even when it can't read the rest. The number of phones told; 0 for an
+/// unknown row or a deleted user.
 pub async fn push_notification(state: &AppState, notification_id: i64) -> sqlx::Result<usize> {
     if !state.push.is_enabled() {
         return Ok(0);
     }
-    let owner: Option<(i32, i32)> = sqlx::query_as(
-        "SELECT n.user_id, u.company_id FROM notifications n
+    let owner: Option<(i32, i32, Option<String>)> = sqlx::query_as(
+        "SELECT n.user_id, u.company_id, n.notification_type FROM notifications n
            JOIN users u ON u.id = n.user_id AND u.is_deleted = 0
           WHERE n.id = ?",
     )
     .bind(notification_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((user_id, company_id)) = owner else {
+    let Some((user_id, company_id, kind)) = owner else {
         return Ok(0);
     };
     let data = data(
         "notification",
-        vec![("notificationId", notification_id.to_string())],
+        vec![
+            ("notificationId", notification_id.to_string()),
+            (
+                "heading",
+                notification_type_title(kind.as_deref().unwrap_or_default()).to_string(),
+            ),
+        ],
     );
     push_to_users(state, company_id, &[user_id], &data).await
 }
