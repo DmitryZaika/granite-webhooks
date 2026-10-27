@@ -476,13 +476,15 @@ pub fn update_payload(current: &Value, edited: &EditableInvoice) -> Result<Value
 }
 
 /// A new invoice for `customer` (its `QuickBooks` id) with the editor's
-/// lines and CC, in class `class` (a `QuickBooks` class id), emailed to
+/// lines and CC, in class `class` (a `QuickBooks` class id, set on each
+/// priced line for a company that sets classes per line), emailed to
 /// `email` when `QuickBooks` sends it.
 pub fn create_payload(
     customer: &str,
     edited: &EditableInvoice,
     email: Option<&str>,
     class: Option<&str>,
+    class_per_line: bool,
 ) -> Result<Value, String> {
     let mut lines = Vec::new();
     for line in &edited.lines {
@@ -521,8 +523,16 @@ pub fn create_payload(
     {
         payload["BillEmailBcc"] = json!({ "Address": bcc });
     }
-    if let Some(class) = class {
-        payload["ClassRef"] = json!({ "value": class });
+    match class {
+        Some(class) if class_per_line => {
+            for line in payload["Line"].as_array_mut().into_iter().flatten() {
+                if line["DetailType"] == "SalesItemLineDetail" {
+                    line["SalesItemLineDetail"]["ClassRef"] = json!({ "value": class });
+                }
+            }
+        }
+        Some(class) => payload["ClassRef"] = json!({ "value": class }),
+        None => {}
     }
     Ok(payload)
 }
@@ -608,7 +618,7 @@ mod tests {
         invoice.lines[1].id = Some("new:b".into());
         invoice.bill_email_cc = Some(" rep@x.test ".into());
         invoice.bill_email_bcc = Some("office@x.test".into());
-        let payload = create_payload("42", &invoice, Some(" a@x.test "), Some("7")).unwrap();
+        let payload = create_payload("42", &invoice, Some(" a@x.test "), Some("7"), false).unwrap();
         assert_eq!(payload["CustomerRef"]["value"], "42");
         let lines = payload["Line"].as_array().unwrap();
         assert_eq!(lines.len(), 2);
@@ -620,8 +630,8 @@ mod tests {
         assert!(payload.get("Id").is_none());
 
         invoice.lines[0].item_ref_value = None;
-        assert!(create_payload("42", &invoice, None, None).is_err());
+        assert!(create_payload("42", &invoice, None, None, false).is_err());
         invoice.lines.remove(0);
-        assert!(create_payload("42", &invoice, None, None).is_err());
+        assert!(create_payload("42", &invoice, None, None, false).is_err());
     }
 }
