@@ -24,7 +24,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::MySqlPool;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// Outcomes a rule is decided from, newest first.
@@ -302,15 +302,15 @@ async fn quote_rep(pool: &MySqlPool, company_id: i32, quote_id: i32) -> sqlx::Re
 
 /// A class, CC or product as an invoice had it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct Seen {
-    outcome: String,
-    value: Option<String>,
+pub(super) struct Seen {
+    pub(super) outcome: String,
+    pub(super) value: Option<String>,
     /// The product's name.
-    name: Option<String>,
+    pub(super) name: Option<String>,
     /// A scanned invoice's words (see [`words`]), for learning which lines go
     /// with which product.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    words: Vec<String>,
+    pub(super) words: Vec<String>,
 }
 
 impl Seen {
@@ -325,10 +325,10 @@ impl Seen {
 /// How the company's newest `QuickBooks` invoices set class, CC and product
 /// (newest first), and its classes.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct Scan {
+pub(super) struct Scan {
     class: Vec<Seen>,
     cc: Vec<Seen>,
-    item: Vec<Seen>,
+    pub(super) item: Vec<Seen>,
     classes: Vec<String>,
 }
 
@@ -342,7 +342,7 @@ fn seen(outcome: Outcome) -> Seen {
 }
 
 /// The distinct words (letters only, 3 or more) of some line texts.
-fn words<'a>(texts: impl Iterator<Item = &'a str>) -> Vec<String> {
+pub(super) fn words<'a>(texts: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut words: Vec<String> = texts
         .flat_map(|text| text.split(|c: char| !c.is_alphabetic()))
         .filter(|word| word.chars().count() >= 3)
@@ -452,7 +452,7 @@ async fn fresh_scan(state: &AppState, company_id: i32) -> Option<Scan> {
 
 /// The company's scan, read again when over a day old; none without
 /// `QuickBooks`.
-async fn scan(state: &AppState, company_id: i32) -> sqlx::Result<Option<Scan>> {
+pub(super) async fn scan(state: &AppState, company_id: i32) -> sqlx::Result<Option<Scan>> {
     let kept: Option<String> = sqlx::query_scalar(
         "SELECT CAST(stats_json AS CHAR) FROM qbo_invoice_scans
           WHERE company_id = ? AND scanned_at > DATE_SUB(NOW(), INTERVAL 1 DAY)",
@@ -496,7 +496,7 @@ async fn line_history(
 
 /// A header field's outcomes on invoices made here, newest first, then the
 /// scanned ones.
-async fn header_history(
+pub(super) async fn header_history(
     pool: &MySqlPool,
     company_id: i32,
     field: &str,
@@ -521,93 +521,6 @@ async fn header_history(
         })
         .chain(scanned.iter().cloned())
         .collect())
-}
-
-/// Words on fewer of the scanned invoices than this tell nothing about the
-/// product.
-const MIN_WORD_INVOICES: usize = 3;
-
-/// One product as the company's invoices use it.
-struct Product<'a> {
-    value: &'a str,
-    name: Option<&'a str>,
-    invoices: usize,
-    /// On how many of its invoices each word is.
-    words: HashMap<&'a str, usize>,
-}
-
-/// The product for a draft with these words, learned from the company's own
-/// invoices: the one whose invoices read most like the draft (which words
-/// they have and which they lack), weighed by how often it is used. Without
-/// scanned invoices, the most used one. The newest wins a tie.
-fn usual_item(history: &[Seen], draft: &[String]) -> Option<(String, Option<String>)> {
-    let used: Vec<&Seen> = history
-        .iter()
-        .filter(|seen| seen.outcome == "value" && seen.value.is_some())
-        .collect();
-    let examples: Vec<&Seen> = used
-        .iter()
-        .copied()
-        .filter(|seen| !seen.words.is_empty())
-        .collect();
-    let mut products: Vec<Product> = Vec::new();
-    for seen in if examples.is_empty() { &used } else { &examples } {
-        let value = seen.value.as_deref().unwrap_or_default();
-        let index = match products.iter().position(|p| p.value == value) {
-            Some(index) => index,
-            None => {
-                products.push(Product {
-                    value,
-                    name: None,
-                    invoices: 0,
-                    words: HashMap::new(),
-                });
-                products.len() - 1
-            }
-        };
-        let product = &mut products[index];
-        product.invoices += 1;
-        product.name = product.name.or(seen.name.as_deref());
-        for word in &seen.words {
-            *product.words.entry(word.as_str()).or_default() += 1;
-        }
-    }
-    let mut on_invoices: HashMap<&str, usize> = HashMap::new();
-    for seen in &examples {
-        for word in &seen.words {
-            *on_invoices.entry(word.as_str()).or_default() += 1;
-        }
-    }
-    let vocabulary: Vec<&str> = on_invoices
-        .into_iter()
-        .filter(|(_, count)| *count >= MIN_WORD_INVOICES)
-        .map(|(word, _)| word)
-        .collect();
-    let draft: HashSet<&str> = draft.iter().map(String::as_str).collect();
-    let total = products.iter().map(|p| p.invoices).sum::<usize>() + products.len();
-    #[allow(clippy::cast_precision_loss)]
-    let score = |product: &Product| {
-        let n = product.invoices as f64;
-        let prior = (n + 1.0).ln() - (total as f64).ln();
-        prior
-            + vocabulary
-                .iter()
-                .map(|word| {
-                    let seen = product.words.get(word).copied().unwrap_or(0) as f64;
-                    let p = (seen + 1.0) / (n + 2.0);
-                    if draft.contains(word) { p.ln() } else { (1.0 - p).ln() }
-                })
-                .sum::<f64>()
-    };
-    let winner = products
-        .iter()
-        .map(|product| (product, score(product)))
-        .fold(None, |best: Option<(&Product, f64)>, (product, s)| match best {
-            Some(best) if best.1 >= s => Some(best),
-            _ => Some((product, s)),
-        })?
-        .0;
-    Some((winner.value.to_string(), winner.name.map(str::to_string)))
 }
 
 fn decided(history: &[Seen]) -> Option<Outcome> {
@@ -686,7 +599,10 @@ pub async fn invoice_draft(
         rep.email.as_deref(),
     );
     let items = header_history(&state.pool, company_id, "item", &scan.item).await?;
-    let (item_id, item_name) = usual_item(&items, &draft_words).unzip();
+    let off = super::products::turned_off(&state.pool, company_id).await;
+    let (item_id, item_name) = super::products::Model::learn(&items)
+        .pick(&draft_words, &off)
+        .unzip();
     let item_name = item_name.flatten();
     if let Some(id) = &item_id {
         for line in lines
@@ -832,60 +748,6 @@ mod tests {
 
     fn o(outcome: &str, value: Option<&str>) -> Outcome {
         Outcome::new(outcome, value)
-    }
-
-    fn item(value: &str, name: &str, lines: &[&str]) -> Seen {
-        Seen {
-            outcome: "value".into(),
-            value: Some(value.into()),
-            name: Some(name.into()),
-            words: words(lines.iter().copied()),
-        }
-    }
-
-    #[test]
-    fn the_product_follows_what_the_companys_invoices_with_such_lines_use() {
-        let package = [
-            "Kitchen based @ 70 sqft",
-            "Granite Black Pearl",
-            "12 Shaker Cabinets - White",
-            "Installation",
-        ];
-        let counters = ["Granite Black Pearl", "Fabrication", "Installation"];
-        // The package is the most used, but only ever with cabinets.
-        let mut history: Vec<Seen> = (0..6)
-            .map(|_| item("30", "Package $11999", &package))
-            .collect();
-        history.extend((0..4).map(|_| item("5", "Sales", &counters)));
-        history.push(item("9", "Square Footage", &counters));
-        let draft = |lines: &[&str]| words(lines.iter().copied());
-
-        assert_eq!(
-            usual_item(&history, &draft(&["Granite Black Pearl", "Fabrication", "Installation"])),
-            Some(("5".into(), Some("Sales".into())))
-        );
-        assert_eq!(
-            usual_item(
-                &history,
-                &draft(&[
-                    "Kitchen based @ 65 sqft",
-                    "Granite Black Pearl",
-                    "10 Shaker Cabinets - White",
-                    "Installation",
-                ])
-            ),
-            Some(("30".into(), Some("Package $11999".into())))
-        );
-        // Saved choices only (no scanned words): the most used.
-        let saved: Vec<Seen> = history
-            .iter()
-            .map(|seen| Seen { words: Vec::new(), ..seen.clone() })
-            .collect();
-        assert_eq!(
-            usual_item(&saved, &draft(&["Fabrication"])),
-            Some(("30".into(), Some("Package $11999".into())))
-        );
-        assert_eq!(usual_item(&[], &draft(&["Fabrication"])), None);
     }
 
     #[test]

@@ -19,6 +19,7 @@
 
 pub mod class_sales;
 pub mod invoice;
+pub mod products;
 pub mod rules;
 pub mod sales;
 
@@ -51,6 +52,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(items))
         .routes(routes!(recent_invoices))
         .routes(routes!(rules::invoice_draft))
+        .routes(routes!(products::product_rules))
+        .routes(routes!(products::turn_product))
         .routes(routes!(sales::my_sales))
         .routes(routes!(sales::my_customers))
         .routes(routes!(class_sales::class_sales))
@@ -436,7 +439,7 @@ pub struct InvoiceCreate {
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 404, description = "No such customer, or no such quote of the customer", body = ErrorBody),
-        (status = 409, description = "QuickBooks is not connected, or the quote has an invoice", body = ErrorBody),
+        (status = 409, description = "QuickBooks is not connected", body = ErrorBody),
         (status = 502, description = "QuickBooks failed", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -449,8 +452,10 @@ pub async fn create_invoice(
 ) -> ApiResult<Json<EditableInvoice>> {
     let company_id = user.company_id;
     if let Some(quote_id) = input.quote_id {
-        let invoiced: Option<Option<String>> = sqlx::query_scalar(
-            "SELECT qbo_invoice_id FROM quotes
+        // A quote may be invoiced again (e.g. its invoice was deleted in
+        // QuickBooks); it keeps the newest invoice's id.
+        let quote: Option<i32> = sqlx::query_scalar(
+            "SELECT id FROM quotes
               WHERE id = ? AND company_id = ? AND customer_id = ? AND deleted_at IS NULL",
         )
         .bind(quote_id)
@@ -458,14 +463,10 @@ pub async fn create_invoice(
         .bind(customer_id)
         .fetch_optional(&state.pool)
         .await?;
-        match invoiced {
-            None => return Err(ApiError::NotFound),
-            Some(Some(_)) => {
-                return Err(ApiError::Conflict(
-                    "This quote already has an invoice".into(),
-                ));
-            }
-            Some(None) => {}
+        if quote.is_none() {
+            return Err(ApiError::Denied(
+                "This quote is not one of this customer's.".into(),
+            ));
         }
     }
     let row = customer(&state, company_id, customer_id).await?;
@@ -514,7 +515,7 @@ pub async fn create_invoice(
         .ok_or_else(|| ApiError::Upstream("Failed to parse created invoice".into()))?;
     if let Some(quote_id) = input.quote_id {
         sqlx::query(
-            "UPDATE quotes SET qbo_invoice_id = ? WHERE id = ? AND company_id = ? AND qbo_invoice_id IS NULL",
+            "UPDATE quotes SET qbo_invoice_id = ? WHERE id = ? AND company_id = ?",
         )
         .bind(&invoice.id)
         .bind(quote_id)
@@ -595,7 +596,9 @@ async fn owned_invoice(
         .first()
         .and_then(|row| text(&row["CustomerRef"]["value"]));
     if owner.is_none() {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Conflict(format!(
+            "QuickBooks has no invoice {invoice_id}: it was deleted there."
+        )));
     }
     if owner.as_deref() != Some(expected.as_str()) {
         let from_quote: Option<i32> = sqlx::query_scalar(
@@ -609,7 +612,9 @@ async fn owned_invoice(
         .fetch_optional(&state.pool)
         .await?;
         if from_quote.is_none() {
-            return Err(ApiError::Forbidden);
+            return Err(ApiError::Denied(format!(
+                "Invoice {invoice_id} belongs to another customer in QuickBooks."
+            )));
         }
     }
     Ok(access)

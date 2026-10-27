@@ -239,7 +239,7 @@ async fn an_invoice_is_edited_and_its_pdf_read(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
+async fn a_quote_makes_invoices_with_the_companys_items(pool: MySqlPool) {
     sqlx::query(
         "INSERT INTO quotes (id, customer_id, quote_name, quote_type, created_date, sales_rep,
                              company_id, salesperson_id, created_by, status)
@@ -324,13 +324,14 @@ async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
             outcome("item", "value", Some("3")),
         ]
     );
+    // The quote can be invoiced again (its invoice deleted in QuickBooks).
     server
         .post("/v1/customers/1000/qbo-invoices")
         .with_session(sessions::REP)
         .json(&body)
         .await
-        .assert_status(StatusCode::CONFLICT);
-    assert_eq!(posted.lock().unwrap().len(), 1);
+        .assert_status_ok();
+    assert_eq!(posted.lock().unwrap().len(), 2);
 }
 
 #[test_db::test(seed)]
