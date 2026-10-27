@@ -1152,6 +1152,7 @@ fn asks_inventory_link(normalized: &str) -> bool {
             r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:live )?(?:inventory|stones)\b"
         )
         .is_match(normalized)
+        || re!(r"\b(?:customer (?:inventory|stones?)|showroom) page\b").is_match(normalized)
 }
 
 /// Asks for the company's customer quote link ("customer quote link", "link to the online quote").
@@ -1159,6 +1160,8 @@ fn asks_quote_link(normalized: &str) -> bool {
     re!(r"\bquote(?: page)? (?:link|url)\b").is_match(normalized)
         || re!(r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:customer |online )?quote\b")
             .is_match(normalized)
+        // Not a bare "quote page": that is also the quote page inside the app.
+        || re!(r"\b(?:customer|online) quote page\b").is_match(normalized)
 }
 
 /// Asks for the inventory or the customer quote link.
@@ -1364,6 +1367,8 @@ mod tests {
             "What is our inventory link?",
             "send me the link to our inventory",
             "stones page url",
+            "what's the customer inventory page",
+            "customer stones page?",
         ] {
             let answer = customer_link_answer(asked, 7, domain).expect(asked);
             assert!(
@@ -1375,6 +1380,8 @@ mod tests {
             "customer quote link?",
             "Link to the online quote please",
             "what's the quote url",
+            "what's the customer quote page",
+            "send me the online quote page",
         ] {
             let answer = customer_link_answer(asked, 7, domain).expect(asked);
             assert!(
@@ -1389,6 +1396,7 @@ mod tests {
             "how do I create a quote",
             "how do I link a quote to a deal",
             "how many stones are in inventory",
+            "how do I open the quote page",
         ] {
             assert_eq!(customer_link_answer(other, 7, domain), None, "{other}");
         }
