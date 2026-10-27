@@ -65,29 +65,10 @@ fn customer_originated_scope_evidence(p: &FollowupContactPressure) -> String {
     .join("\n")
 }
 
-/// Offers of things nobody has made: there is no checklist, guide or
-/// comparison to send, so a "yes" would leave the rep to invent one.
-pub fn unsupported_offer_errors(body: &str) -> Vec<String> {
-    if re!(
-        r"\b(?:send|share|email|text|put together|make|create|prepare|draft) (?:you |over )?an? (?:[\w'-]+ ){0,2}?(?:checklist|check list|guide|side-by-side|side by side|comparison|cheat sheet|tip sheet|worksheet)s?\b|\bwould an? (?:[\w'-]+ ){0,2}?(?:checklist|check list|guide|side-by-side|side by side|comparison|cheat sheet|tip sheet|worksheet)s?\b",
-        "i"
-    )
-    .is_match(body)
-    {
-        vec![
-            "unsupported offer: we have no checklist, guide or comparison to send; offer their quote, the stones page, a visit, a measure or a call instead"
-                .to_string(),
-        ]
-    } else {
-        Vec::new()
-    }
-}
-
 /// Every problem with AI-written copy for this customer.
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
 pub fn validate_generated_followup_copy(body: &str, p: &FollowupContactPressure) -> Vec<String> {
     let mut errors = followup_tone_errors(body, p.days_since_last_outbound.is_none());
-    errors.extend(unsupported_offer_errors(body));
     let evidence = [
         text(p.last_customer_originated_information.as_ref()).to_string(),
         text(p.last_conversation_reply.as_ref()).to_string(),
@@ -513,29 +494,4 @@ pub fn validate_generated_followup_copy_for_send_at(
         errors.push("timeline copy must match where the send date falls relative to the expected project window".to_string());
     }
     errors
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn offers_of_things_nobody_made_are_refused() {
-        for body in [
-            "I can send a short guide to the kitchen measurements needed. Would that be useful?",
-            "Would a short checklist help?",
-            "If your clients are comparing stones, would a side-by-side comparison help?",
-            "I can put together a quick tip sheet for the island.",
-        ] {
-            assert_eq!(unsupported_offer_errors(body).len(), 1, "{body}");
-        }
-        for body in [
-            "Want me to resend your quote so it's easy to find?",
-            "You can browse our stones here: https://acme.granite-manager.com/customer/7/stones",
-            "Want me to check for a Bianco Absoluto remnant that fits your 82\" x 20\" top?",
-            "I can help put together the details for your quote. Which room is it for?",
-        ] {
-            assert!(unsupported_offer_errors(body).is_empty(), "{body}");
-        }
-    }
 }

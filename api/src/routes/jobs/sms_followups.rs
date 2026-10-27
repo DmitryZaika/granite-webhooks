@@ -1,9 +1,8 @@
 //! `POST /v1/jobs/sms-followups`: the scheduled follow-up texts and emails.
 //!
 //! The due steps of SMS / email flows, the drip texts of lead lists
-//! (`scheduled_sms`) and everyone's scheduled emails and texts; then tells reps
-//! about follow-ups that ended (`followups::alerts`). Replaces the Remix
-//! `api.sms-followups.process` route.
+//! (`scheduled_sms`) and everyone's scheduled emails and texts. Replaces the
+//! Remix `api.sms-followups.process` route.
 
 use crate::auth::job::JobCaller;
 use crate::auth::session::find_user;
@@ -304,12 +303,6 @@ pub async fn run(
         failed,
         stopped,
     } = process_due_followups(&state).await?;
-    // Telling reps never holds up the sends.
-    match crate::followups::alerts::alert_ended_followups(&state).await {
-        Ok(0) => {}
-        Ok(alerted) => tracing::info!(alerted, "follow-up end alerts sent"),
-        Err(err) => tracing::warn!(?err, "follow-up end alerts failed"),
-    }
     let scheduled_sms = process_due_drips(&state).await?;
     let delayed = process_due_in(&state, None).await?;
     Ok(Json(SmsFollowupsRun {
