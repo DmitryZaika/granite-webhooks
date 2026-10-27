@@ -6,8 +6,8 @@
 //! PostHog issue the events landed in. A bug settles, is judged on its own
 //! events (noise skipped, a browser 5xx folded into the API error of the same
 //! request), and the GitHub workflow `posthog-autofix.yml` is started within
-//! the caps. The workflow's
-//! agent reproduces the error as a failing test, fixes it, and the workflow
+//! the caps. The workflow's agent reproduces the error as a failing test,
+//! fixes it, and the workflow
 //! proves red/green before it opens a pull request. It reports back through
 //! `POST /v1/posthog-autofix/runs/{id}/started` and `.../result`, and the
 //! developers are emailed.

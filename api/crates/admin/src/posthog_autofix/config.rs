@@ -106,8 +106,10 @@ pub struct Config {
     /// More new bugs than this in one storm window sends one digest email.
     pub storm_threshold: u32,
     pub storm_window_minutes: i64,
-    /// Events of a bug whose row was discovered this recently count on that
-    /// row; after it, the bug gets a new row and is judged again.
+    /// A run that reported its outcome keeps counting its bug's events for
+    /// this long after it ended (a failed run for a day), and a skipped bug's
+    /// row for this long after its last event. After that, the bug gets a
+    /// new row and is judged again.
     pub signature_window_days: i64,
     /// A dispatched or running run is given up after this long.
     pub run_timeout_minutes: i64,

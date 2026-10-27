@@ -32,8 +32,23 @@ const RETRY_CAP_MINUTES: i64 = 4 * 60;
 /// The SPA's toast and API error types.
 const TOAST: &str = "ErrorToast";
 const GRANITE_API_ERROR: &str = "GraniteApiError";
-/// A toast with one of these words reports a failure, not a hint.
-const FAILURE_WORDS: [&str; 2] = ["could not", "server"];
+/// A toast with one of these reports a failure, not a hint: the app's own
+/// failure words, or the message of a JavaScript error it caught and showed.
+const FAILURE_WORDS: [&str; 13] = [
+    "could not",
+    "couldn't",
+    "failed",
+    "unable to",
+    "server",
+    "went wrong",
+    "timed out",
+    "undefined",
+    "null",
+    "is not a function",
+    "is not defined",
+    "not iterable",
+    "unexpected",
+];
 /// The api's bodies for a 5xx, which say nothing the api did not report.
 const GENERIC_API_BODIES: [&str; 3] = ["database error", "internal error", "internal server error"];
 /// axum's rejections, and the api's own refusals of data the client built:
@@ -644,6 +659,25 @@ mod tests {
         }
         let toast_source = event(Source::Web, "Error", "No deals found", Some("toast"), None);
         assert_eq!(judge(&toast_source), Err(SkipReason::HintToast));
+    }
+
+    // A component that catches an exception often shows its message in a
+    // toast: that is a bug in the code, never a hint.
+    #[test]
+    fn a_toast_that_shows_a_caught_code_error_passes() {
+        for message in [
+            "Error: Cannot read properties of undefined (reading 'map')",
+            "Error: Cannot read properties of null (reading 'id')",
+            "Failed to add note: note.trim is not a function",
+            "Error: rooms is not iterable",
+            "Error: formatPrice is not defined",
+            r#"Error: Unexpected token '<', "<!doctype "... is not valid JSON"#,
+            "Error: Something went wrong",
+            "Could not save: the request timed out",
+            "Error: Unable to load the quote",
+        ] {
+            assert_eq!(judge(&toast(message)), Ok(()), "{message}");
+        }
     }
 
     #[test]

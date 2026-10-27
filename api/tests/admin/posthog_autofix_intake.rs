@@ -791,6 +791,110 @@ async fn a_web_500_waits_for_its_api_error_to_be_judged(pool: MySqlPool) {
 }
 
 #[test_db::test]
+async fn a_full_batch_of_browser_500s_never_holds_up_their_api_errors(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    // 20 routes (a whole judge batch): each browser 500 settles before the
+    // api error of its route, and waits for it.
+    for n in 0..20 {
+        let letter = |k: u32| char::from_u32('a' as u32 + k % 26).unwrap();
+        let name = format!("{}{}", letter(n / 26), letter(n));
+        let route = format!("/v1/route{name}");
+        let browser = web_api(500, &route, DATABASE_ERROR);
+        source.event(100 + n, minutes(1), &browser);
+        source.event(100 + n, minutes(25), &browser);
+        let error = format!(
+            "Database(Database(MySqlDatabaseError {{ code: Some(\"42S22\"), number: 1054, \
+             message: \"Unknown column 'co.column_{name}' in 'field list'\" }}))"
+        );
+        source.event(200 + n, minutes(25), &api(&error, &route));
+    }
+
+    world.tick(&pool, &config, minutes(30)).await;
+    world.drain(&pool, &config, 60).await;
+    assert_eq!(count(&pool, "status = 'duplicate'").await, 20);
+}
+
+#[test_db::test]
+async fn a_bug_whose_run_failed_runs_again_a_day_later(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    let bug = field_state_bug();
+    source.event(1, minutes(1), &bug);
+    world.tick(&pool, &config, minutes(5)).await;
+    world.tick(&pool, &config, minutes(40)).await;
+    let (id, status, _) = row_of(&pool, "Cannot read properties").await;
+    assert_eq!(status, "dispatched");
+    // The workflow broke before the agent could conclude.
+    sqlx::query("UPDATE posthog_autofix_runs SET status = 'failed', finished_at = ? WHERE id = ?")
+        .bind(minutes(60).naive_utc())
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    source.event(1, minutes(120), &bug);
+    world.tick(&pool, &config, minutes(125)).await;
+    assert_eq!(
+        count(&pool, "1").await,
+        1,
+        "within a day it counts on the run"
+    );
+    assert_eq!(counters(&pool, id).await.0, 2);
+
+    let next_day = minutes(60) + Duration::hours(25);
+    source.event(1, next_day, &bug);
+    world
+        .tick(&pool, &config, next_day + Duration::minutes(5))
+        .await;
+    assert_eq!(count(&pool, "1").await, 2);
+    assert_eq!(
+        count(&pool, "status = 'discovered'").await,
+        1,
+        "judged again"
+    );
+}
+
+#[test_db::test]
+async fn a_finished_run_holds_its_bug_for_the_window_after_it_ended(pool: MySqlPool) {
+    let config = Config {
+        signature_window_days: 2,
+        ..live()
+    };
+    let world = World::default();
+    let source = &world.source;
+    let bug = field_state_bug();
+    source.event(1, minutes(1), &bug);
+    world.tick(&pool, &config, minutes(5)).await;
+    world.tick(&pool, &config, minutes(40)).await;
+    let (id, _, _) = row_of(&pool, "Cannot read properties").await;
+    sqlx::query(
+        "UPDATE posthog_autofix_runs SET status = 'succeeded', outcome = 'needs_human', \
+         finished_at = ? WHERE id = ?",
+    )
+    .bind(minutes(60).naive_utc())
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // The bug keeps happening every day; the run ended at 01:00 on day 0.
+    for hours in [21, 45] {
+        let at = t0() + Duration::hours(hours);
+        source.event(1, at, &bug);
+        world.tick(&pool, &config, at + Duration::minutes(5)).await;
+        assert_eq!(count(&pool, "1").await, 1, "{hours} h: within the window");
+    }
+    let at = t0() + Duration::hours(69);
+    source.event(1, at, &bug);
+    world.tick(&pool, &config, at + Duration::minutes(5)).await;
+    assert_eq!(count(&pool, "1").await, 2, "two days after the run ended");
+    assert_eq!(counters(&pool, id).await.0, 3);
+}
+
+#[test_db::test]
 async fn polls_count_each_event_once_and_a_failed_read_is_read_again(pool: MySqlPool) {
     let config = live();
     let world = World::default();

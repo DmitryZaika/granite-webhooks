@@ -148,24 +148,35 @@ pub struct Sighting {
     pub last_seen: DateTime<Utc>,
 }
 
-/// The row that counts the events of the bug with `signature`.
+/// The row that counts the events of the bug with `signature`; `None` when
+/// the bug needs a new row (and a new judgement).
 ///
-/// It is one whose last event is at or after `since` (a bug that keeps
-/// happening keeps its row), or one still waiting or in flight. A row folded
-/// into another is only taken when it is the bug's only row.
+/// A row still waiting or in flight always counts them. A run that reported
+/// its outcome holds its bug until `since` passes its end, so a fix has time
+/// to ship before the bug runs again; one that failed or never reported only
+/// until `failed_since` does, so a broken run is retried while the bug keeps
+/// happening. A skipped or folded row holds its bug while its events keep
+/// coming within `since`, so noise is not judged again. A row folded into
+/// another is only taken when it is the bug's only row.
 pub async fn bug_row(
     db: impl MySqlExecutor<'_>,
     signature: &str,
     since: DateTime<Utc>,
+    failed_since: DateTime<Utc>,
 ) -> Result<Option<u64>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id FROM posthog_autofix_runs
           WHERE signature = ?
-            AND (COALESCE(last_seen_at, discovered_at) >= ?
-                 OR status IN ('discovered', 'queued', 'dispatched', 'running'))
+            AND (status IN ('discovered', 'queued', 'dispatched', 'running')
+                 OR (status = 'succeeded' AND finished_at >= ?)
+                 OR (status IN ('failed', 'timed_out') AND finished_at >= ?)
+                 OR (status IN ('skipped', 'duplicate', 'previewed')
+                     AND COALESCE(last_seen_at, discovered_at) >= ?))
           ORDER BY status = 'duplicate', id DESC LIMIT 1",
     )
     .bind(signature)
+    .bind(since.naive_utc())
+    .bind(failed_since.naive_utc())
     .bind(since.naive_utc())
     .fetch_optional(db)
     .await
@@ -361,7 +372,9 @@ impl SettledRow {
     }
 }
 
-/// Discovered rows first seen at or before `created_by`, oldest first.
+/// Discovered rows first seen at or before `created_by`: server rows first,
+/// then oldest first. A browser 5xx waits for the API error of its route to
+/// be judged, so that error must never queue behind a full batch of them.
 pub async fn settled(
     db: impl MySqlExecutor<'_>,
     created_by: DateTime<Utc>,
@@ -373,7 +386,7 @@ pub async fn settled(
                 error_source, first_seen_at, last_seen_at
            FROM posthog_autofix_runs
           WHERE status = 'discovered' AND issue_created_at <= ?
-          ORDER BY issue_created_at, id LIMIT ?",
+          ORDER BY source = 'web', issue_created_at, id LIMIT ?",
     )
     .bind(created_by.naive_utc())
     .bind(limit)

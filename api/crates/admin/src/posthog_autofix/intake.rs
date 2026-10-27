@@ -72,6 +72,9 @@ const INGESTION_LAG_MINUTES: i64 = 2;
 const MAX_READ_HOURS: i64 = 24;
 /// Settled bugs judged per poll.
 const JUDGE_BATCH: u32 = 20;
+/// A bug whose run failed or never reported runs again this long after the
+/// run ended, if it keeps happening.
+const FAILED_RUN_RETRY_HOURS: i64 = 24;
 /// A browser 5xx and the API error of its request are this close in time.
 const LINK_SLACK_MINUTES: i64 = 10;
 /// Events of previewed issues are read from this long before the oldest.
@@ -283,11 +286,13 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         }
         let sightings = sightings(&groups);
         let since = self.now - Duration::days(config.signature_window_days);
+        let failed_since = self.now - Duration::hours(FAILED_RUN_RETRY_HOURS);
         // Rows and cursor move together: a read is never counted twice.
         let mut tx = self.conn.begin().await?;
         let mut discovered = 0;
         for sighting in &sightings {
-            if let Some(id) = ledger::bug_row(&mut *tx, &sighting.signature, since).await? {
+            let row = ledger::bug_row(&mut *tx, &sighting.signature, since, failed_since).await?;
+            if let Some(id) = row {
                 ledger::count_sighting(&mut *tx, id, sighting).await?;
                 ledger::lift_folded_users(&mut *tx, id).await?;
             } else {
@@ -340,7 +345,9 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
     async fn judge_settled(&mut self) -> Result<(), sqlx::Error> {
         let config = self.deps.config;
         let settled_by = self.now - Duration::minutes(config.settle_minutes);
-        let mut rows = ledger::settled(&mut *self.conn, settled_by, JUDGE_BATCH).await?;
+        // Server rows come first: a browser 5xx of this batch folds into its
+        // API error.
+        let rows = ledger::settled(&mut *self.conn, settled_by, JUDGE_BATCH).await?;
         if rows.is_empty() {
             return Ok(());
         }
@@ -361,8 +368,6 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             .iter()
             .map(|issue| (issue.id.as_str(), issue))
             .collect();
-        // Servers first: a browser 5xx of this batch folds into its API error.
-        rows.sort_by_key(|row| row.source() == Source::Web);
         for row in &rows {
             let status = issues
                 .get(row.posthog_issue_id.as_str())
@@ -519,7 +524,8 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         Ok(())
     }
 
-    /// Starts the most widespread queued runs the caps allow.
+    /// Starts the queued runs the caps allow: bugs seen in the last day
+    /// first, then the most widespread.
     async fn dispatch(&mut self) -> Result<(), sqlx::Error> {
         let config = self.deps.config;
         let in_flight = ledger::count_in_flight(&mut *self.conn).await?;

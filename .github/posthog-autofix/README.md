@@ -45,10 +45,12 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
    source and, once source maps work, the symbolicated top frame. A bug is a
    signature, not a PostHog issue: one "Failed to fetch" split over 110
    issues is one bug, and a catch-all issue titled with a 401 that also holds
-   a 500 gives the 500 its own row. A signature with a row from the last 14
-   days (or one still waiting or in flight) only adds to that row's counts;
-   otherwise it gets a new row. Browser events from outside production are
-   dropped.
+   a 500 gives the 500 its own row. A signature's events add to its row
+   while that row waits or runs, for 14 days after a run reported its
+   outcome (one day after a run failed or never reported, so a broken run
+   is retried), or while a skipped bug keeps happening within 14 days;
+   otherwise the bug gets a new row. Browser events from outside production
+   are dropped.
 2. **Settle.** A bug waits 30 minutes after its first event, so its first
    burst of events and the api error behind a browser one arrive first.
 3. **Judge.** On the bug's own events, the bug is skipped when its issue is
@@ -138,7 +140,7 @@ sent after it releases the database lock.
 | `POSTHOG_AUTOFIX_MAX_PER_DAY` | `8` | Runs dispatched in any rolling 24 hours. |
 | `POSTHOG_AUTOFIX_SETTLE_MINUTES` | `30` | Wait after a bug's first event before it is judged. |
 | `POSTHOG_AUTOFIX_POLL_MINUTES` | `5` | PostHog is read at most this often. |
-| `POSTHOG_AUTOFIX_SIGNATURE_WINDOW_DAYS` | `14` | How long a bug's row counts its new events before the bug gets a new row. |
+| `POSTHOG_AUTOFIX_SIGNATURE_WINDOW_DAYS` | `14` | How long after a run reported its outcome (or after a skipped bug's last event) its row counts the bug's new events before the bug gets a new row. |
 | `POSTHOG_AUTOFIX_RUN_TIMEOUT_MINUTES` | `120` | The watchdog gives up on a silent run after this. |
 | `POSTHOG_AUTOFIX_MAX_ATTEMPTS` | `3` | Dispatch failures and usage-limit retries before a run fails. |
 | `POSTHOG_AUTOFIX_STORM_THRESHOLD` | `20` | More new bugs than this in one storm window send one digest. |
@@ -191,13 +193,15 @@ one back to `queued` to fix it (below).
 
 ## Run one issue by hand
 
-Re-run an issue that already has a ledger row; the next tick dispatches it,
-within the caps:
+Re-run a bug that already has a ledger row; the next tick dispatches it,
+within the caps. One issue can hold several bugs, so pick the row by its id:
 
 ```sql
+SELECT id, CAST(status AS CHAR), issue_name, LEFT(issue_description, 80)
+  FROM posthog_autofix_runs WHERE posthog_issue_id = '<issue uuid>';
 UPDATE posthog_autofix_runs
    SET status = 'queued', retry_at = NULL, attempts = 0
- WHERE posthog_issue_id = '<issue uuid>';
+ WHERE id = <row id>;
 ```
 
 First end-to-end check of the workflow, without waiting for the intake. Insert
@@ -211,7 +215,8 @@ SELECT LAST_INSERT_ID();
 ```
 
 Then go to Actions, then PostHog auto-fix, then Run workflow, with `run_id` =
-that id and `issue_id` = the uuid. The `started` callback refuses any run the
+that id, `issue_id` = the uuid and, optionally, `event_id` = the uuid of one
+`$exception` event of the bug (the run is then about that event's error). The `started` callback refuses any run the
 ledger did not dispatch, so a typo stops the run before the agent starts.
 
 ## Reading the ledger
