@@ -194,6 +194,27 @@ fn bad(message: &str) -> ApiError {
     ApiError::BadRequest(message.into())
 }
 
+/// Manager and Office Manager (the scheduling manager) positions.
+const SEE_EVERY_EVENT: [i32; 2] = [5, 10];
+
+/// Everyone sees the events they made or are assigned to; admins, Managers
+/// and Office Managers see the whole company's. `None` for those, else the
+/// caller's id, bound three times to
+/// `(? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)`.
+pub async fn own_events_only(
+    pool: &MySqlPool,
+    user: &crate::auth::session::SessionUser,
+) -> sqlx::Result<Option<i32>> {
+    if user.is_admin {
+        return Ok(None);
+    }
+    let positions = crate::auth::session::user_positions(pool, user.id).await?;
+    let sees_all = positions
+        .iter()
+        .any(|row| row.company_id == user.company_id && SEE_EVERY_EVENT.contains(&row.position_id));
+    Ok((!sees_all).then_some(user.id))
+}
+
 /// Optimize a day's route
 ///
 /// Orders the events by the shortest drive from the company address and

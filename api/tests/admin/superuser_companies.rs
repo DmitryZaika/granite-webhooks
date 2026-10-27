@@ -455,6 +455,7 @@ async fn superusers_switch_features_and_billing(pool: MySqlPool) {
         ("signature", true),
         ("onboarding", false),
         ("leaderboard", true),
+        ("projects", true),
     ] {
         server
             .put(&format!("/v1/superuser/companies/100/features/{feature}"))
@@ -494,7 +495,7 @@ async fn superusers_switch_features_and_billing(pool: MySqlPool) {
         .unwrap();
     assert_eq!(
         acme["features"],
-        json!({ "quickbooks": false, "signature": true, "onboarding": false, "leaderboard": true })
+        json!({ "quickbooks": false, "signature": true, "onboarding": false, "leaderboard": true, "projects": true })
     );
     assert_eq!(acme["billing_required"], true);
     server

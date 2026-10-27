@@ -140,15 +140,17 @@ pub async fn events(
     EmployeeUser(user): EmployeeUser,
     MultiQuery(query): MultiQuery<EventsQuery>,
 ) -> ApiResult<Json<ScheduleEvents>> {
-    load_events(&state, user.company_id, &query, Scope::Board(user.id))
+    let own = super::own_events_only(&state.pool, &user).await?;
+    load_events(&state, user.company_id, &query, Scope::Board(user.id, own))
         .await
         .map(Json)
 }
 
 /// Which events of the company a range read returns.
 enum Scope {
-    /// The whole board, less the calendars hidden from this viewer.
-    Board(i32),
+    /// The whole board, less the calendars hidden from this viewer; with an
+    /// id, only the events that person made or is assigned to.
+    Board(i32, Option<i32>),
     /// Only the events assigned to this person, whatever calendar they are on.
     AssignedTo(i32),
 }
@@ -165,9 +167,9 @@ async fn load_events(
             "The range ends before it starts".into(),
         ));
     }
-    let (viewer, assigned) = match scope {
-        Scope::Board(viewer) => (Some(viewer), None),
-        Scope::AssignedTo(person) => (None, Some(person)),
+    let (viewer, own, assigned) = match scope {
+        Scope::Board(viewer, own) => (Some(viewer), own, None),
+        Scope::AssignedTo(person) => (None, None, Some(person)),
     };
     let start = query.start.naive_utc();
     let end = query.end.naive_utc();
@@ -191,6 +193,7 @@ async fn load_events(
                    WHERE h.calendar_id = e.calendar_id AND h.company_id = u.company_id
                      AND h.user_id = ?))
             AND (? IS NULL OR e.assigned_user_id = ?)
+            AND (? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)
             AND (
               (NULLIF(TRIM(e.rrule), '') IS NULL
                 AND e.start_date <= ? AND e.end_date >= ?)
@@ -205,6 +208,9 @@ async fn load_events(
     .bind(viewer)
     .bind(assigned)
     .bind(assigned)
+    .bind(own)
+    .bind(own)
+    .bind(own)
     .bind(end)
     .bind(start)
     .bind(end)
@@ -263,6 +269,7 @@ pub async fn unscheduled(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<Vec<ScheduleEvent>>> {
+    let own = super::own_events_only(&state.pool, &user).await?;
     let events = sqlx::query_as(
         "SELECT e.id, e.title, e.description, e.location,
                 DATE_FORMAT(e.start_date, '%Y-%m-%dT%H:%i:%sZ') AS start_date,
@@ -280,10 +287,14 @@ pub async fn unscheduled(
                   SELECT 1 FROM calendar_hidden_users h
                    WHERE h.calendar_id = e.calendar_id AND h.company_id = u.company_id
                      AND h.user_id = ?))
+            AND (? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)
           ORDER BY e.created_date, e.id",
     )
     .bind(user.company_id)
     .bind(user.id)
+    .bind(own)
+    .bind(own)
+    .bind(own)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(events))

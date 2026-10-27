@@ -1,4 +1,5 @@
--- Additive schema only. Apply through the normal reviewed deployment workflow.
+-- Projects: a won deal in production, from template to paid. Additive only.
+-- Off for every company until a superuser turns it on (company.projects_enabled).
 CREATE TABLE projects (
     id INT AUTO_INCREMENT PRIMARY KEY,
     company_id INT NOT NULL,
@@ -57,7 +58,8 @@ CREATE TABLE project_activities (
     company_id INT NOT NULL,
     name VARCHAR(255) NOT NULL,
     assigned_user_id INT NULL,
-    deadline DATE NULL,
+    -- Store wall time, like deal activities; midnight means no time.
+    deadline DATETIME NULL,
     priority ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
     completed_at DATETIME NULL,
     created_by INT NOT NULL,
@@ -106,3 +108,15 @@ ALTER TABLE events
     ADD COLUMN project_id INT NULL,
     ADD KEY idx_events_project (project_id, deleted_date, start_date),
     ADD CONSTRAINT fk_events_project FOREIGN KEY (project_id) REFERENCES projects(id);
+
+-- Task notifications (assigned, due) open their project from the bell; a due
+-- reminder shows only while its task is open.
+ALTER TABLE notifications
+    ADD COLUMN project_id INT NULL AFTER deal_id,
+    ADD COLUMN project_task_id INT NULL AFTER project_id,
+    ADD CONSTRAINT fk_notifications_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
+    ADD CONSTRAINT fk_notifications_project_task FOREIGN KEY (project_task_id) REFERENCES project_activities(id) ON DELETE CASCADE;
+
+-- The superuser's Projects switch on the Companies page.
+ALTER TABLE company
+    ADD COLUMN projects_enabled TINYINT(1) NOT NULL DEFAULT 0;

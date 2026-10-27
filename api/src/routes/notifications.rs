@@ -353,6 +353,8 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "activity_edited" => "Edited an Activity",
         "activity_deleted" => "Deleted an Activity",
         "activity_deadline_reminder" => "Activity Reminder",
+        "project_task_assigned" => "Gave You a Task",
+        "project_task_reminder" => "Task Due",
         "estimate_appointment_reminder" => "In-Home Estimate Reminder",
         "installation_appointment_reminder" => "Installation Reminder",
         "template_appointment_reminder" => "Template Appointment Reminder",
@@ -407,6 +409,8 @@ struct EmailRow {
 struct ActivityRow {
     id: i64,
     deal_id: Option<i64>,
+    /// A project task's notification.
+    project_id: Option<i32>,
     /// `None` only for a 911 alert.
     customer_id: Option<i32>,
     message: String,
@@ -512,26 +516,35 @@ async fn activity(
     only: Option<i64>,
 ) -> Result<Vec<NotificationItem>, sqlx::Error> {
     let rows: Vec<ActivityRow> = sqlx::query_as(
-        "SELECT CAST(n.id AS SIGNED) AS id, CAST(n.deal_id AS SIGNED) AS deal_id, c.id AS customer_id, n.message,
+        "SELECT CAST(n.id AS SIGNED) AS id, CAST(n.deal_id AS SIGNED) AS deal_id,
+                pr.id AS project_id, c.id AS customer_id, n.message,
                 c.name AS customer_name, n.notification_type, n.actor_name,
                 -- A deadline reminder happens at its deadline, not when it was scheduled.
-                DATE_FORMAT(CASE WHEN n.notification_type = 'activity_deadline_reminder'
+                DATE_FORMAT(CASE WHEN n.notification_type IN ('activity_deadline_reminder',
+                                                              'project_task_reminder')
                                  THEN n.due_at ELSE n.created_at END,
                             '%Y-%m-%dT%H:%i:%sZ') AS created_at
            FROM notifications n
            LEFT JOIN deals d ON d.id = n.deal_id AND d.deleted_at IS NULL
-           LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, n.customer_id)
+           LEFT JOIN projects pr ON pr.id = n.project_id
+           LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, pr.customer_id, n.customer_id)
           WHERE n.user_id = ? AND n.is_done = 0 AND (? IS NULL OR n.id = ?)
-            -- On a live deal, except 911 alerts, the texting registration's
-            -- and number ports' (they name no deal).
-            AND ((d.id IS NOT NULL AND c.id IS NOT NULL)
+            -- On a live deal or a project, except 911 alerts, the texting
+            -- registration's and number ports' (they name no deal).
+            AND (((d.id IS NOT NULL OR pr.id IS NOT NULL) AND c.id IS NOT NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
                                             'phone_port'))
+            -- A project task's reminder shows while the task is open.
+            AND (COALESCE(n.notification_type, '') <> 'project_task_reminder' OR EXISTS (
+                  SELECT 1 FROM project_activities pa
+                   WHERE pa.id = n.project_task_id AND pa.deleted_at IS NULL
+                     AND pa.completed_at IS NULL))
             -- Signature status is emailed to the sender, so it is not listed here.
             AND (n.notification_type IS NULL OR n.notification_type NOT IN
                  ('signature_viewed', 'signature_signed', 'signature_declined'))
             -- Deadline reminders stay until dismissed or the activity is completed.
-            AND CASE WHEN n.notification_type = 'activity_deadline_reminder'
+            AND CASE WHEN n.notification_type IN ('activity_deadline_reminder',
+                                                  'project_task_reminder')
                      THEN n.due_at <= UTC_TIMESTAMP()
                      ELSE n.due_at <= NOW() END
             AND (n.notification_type != 'activity_deadline_reminder' OR EXISTS (
@@ -558,6 +571,10 @@ async fn activity(
                 _ if alert => E911_ALERT_HREF.to_string(),
                 _ if kind == Some(TENDLC_READY) => TENDLC_READY_HREF.to_string(),
                 _ if texting || port => E911_ALERT_HREF.to_string(),
+                _ if row.project_id.is_some() => format!(
+                    "/employee/projects/edit/{}",
+                    row.project_id.unwrap_or_default()
+                ),
                 (Some(deal), _) => format!("/employee/deals/edit/{deal}/project"),
                 (None, Some(customer)) => format!("/employee/customers/info/{customer}/documents"),
                 (None, None) => E911_ALERT_HREF.to_string(),

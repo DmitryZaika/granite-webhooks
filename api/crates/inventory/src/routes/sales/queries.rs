@@ -532,6 +532,14 @@ pub async fn sell(
     .await?;
     let sale_id = i32::try_from(result.last_insert_id())
         .map_err(|_| ApiError::BadRequest("sale id out of range".into()))?;
+    // The customer's open project gets its transaction.
+    api_crm::routes::projects::service::link_new_sale(
+        &mut *conn,
+        company_id,
+        input.customer_id,
+        sale_id,
+    )
+    .await;
 
     assign_first_sales_rep(
         &mut *conn,
