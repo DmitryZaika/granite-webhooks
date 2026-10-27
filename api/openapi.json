@@ -68609,6 +68609,17 @@
               "type": "string"
             },
             "description": "Customer sources that get it; empty or left out: only leads."
+          },
+          "sales_rep_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Sales reps whose deals get it; empty: every rep's. Left out keeps the\ntemplate's reps."
           }
         }
       },
@@ -69197,7 +69208,8 @@
           "template_body",
           "attachments",
           "scope",
-          "can_edit"
+          "can_edit",
+          "sales_rep_ids"
         ],
         "properties": {
           "id": {
@@ -69247,6 +69259,14 @@
             ],
             "format": "int32",
             "description": "Hours after a deal enters `lead_list_id` that it is sent."
+          },
+          "sales_rep_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Company drip: sales reps whose deals get it; empty: every rep's."
           },
           "list_name": {
             "type": [
@@ -69342,6 +69362,17 @@
             ],
             "format": "int32",
             "description": "Hours to wait (0–8760); required with `lead_list_id`."
+          },
+          "sales_rep_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "With `lead_list_id`: sales reps whose deals get it; empty: every\nrep's. Left out keeps the template's reps."
           }
         },
         "additionalProperties": false
@@ -86827,7 +86858,8 @@
           "scope",
           "can_edit",
           "minute_delay",
-          "customer_sources"
+          "customer_sources",
+          "sales_rep_ids"
         ],
         "properties": {
           "id": {
@@ -86898,6 +86930,14 @@
               "type": "string"
             },
             "description": "Company drip: customer sources (`customers.source`) that get it."
+          },
+          "sales_rep_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Company drip: sales reps whose deals get it; empty: every rep's."
           }
         }
       },
