@@ -121,7 +121,9 @@ fn noise(candidate: &Candidate<'_>) -> Option<SkipReason> {
         );
         let body = granite_api_call(candidate.message).map_or("", |call| call.body);
         let body_lower = body.to_lowercase();
-        let rule = status.is_some_and(|status| (400..500).contains(&status));
+        // A 403 is the api refusing what the page offered the user: a bug in
+        // one or the other, never a rule the user broke.
+        let rule = status.is_some_and(|status| (400..500).contains(&status) && status != 403);
         let contract = CONTRACT_REJECTIONS
             .iter()
             .any(|text| body_lower.contains(text));
@@ -546,6 +548,11 @@ mod tests {
             web_api("Granite API 404 on /v1/phone/admin/numbers: ", Some(404)),
             web_api("Granite API 404 on /v1/quotes/52/files: ", Some(404)),
             web_api("Granite API 404 on /v1/schedule/notifications: ", Some(404)),
+            // A quote's QuickBooks invoice the api would not open (fixed in 7aac45d).
+            web_api(
+                r#"Granite API 403 on /v1/customers/100146/qbo-invoices/23732: {"error":"forbidden"}"#,
+                Some(403),
+            ),
         ];
         for bug in &real {
             assert_eq!(judge(bug), Ok(()), "{}", bug.message);
