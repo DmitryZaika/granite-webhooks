@@ -594,3 +594,23 @@ async fn a_rep_on_two_providers_reads_every_text_in_one_inbox(pool: MySqlPool) {
     assert_eq!(thread["can_send"], false);
     assert_eq!(thread["reply_provider"], Value::Null);
 }
+
+#[test_db::test(seed)]
+async fn a_ringcentral_text_tagged_with_its_extension_stays_unread(pool: MySqlPool) {
+    seed(&pool).await;
+    sqlx::raw_sql(RINGCENTRAL).execute(&pool).await.unwrap();
+    // RingCentral's push names the extension that received the text.
+    sqlx::raw_sql(
+        "INSERT INTO ringcentral_sms (id, ringcentral_id, sender, recipient, text, direction, status, agent,
+                                     company_id, created_date, sender10, recipient10, phone_digits, is_echo)
+         VALUES (9002, 502, 3175550100, 3175550998, 'Final invoice?', 'inbound', 'received', '601',
+                 100, '2025-06-06 10:00:00', '3175550100', '3175550998', '3175550100', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let list = get(&pool, "/v1/sms/ringcentral/threads", sessions::REP).await;
+    assert_eq!(list["threads"][0]["phone_digits"], "3175550100");
+    assert_eq!(list["threads"][0]["unread_count"], 1);
+}
