@@ -24152,6 +24152,483 @@
         ]
       }
     },
+    "/v1/invoices": {
+      "get": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "List the company's invoices",
+        "description": "Returns the invoices the CRM keeps itself (not QuickBooks invoices, which\nare at `GET /v1/customers/{id}/qbo-invoices`), highest number first, at\nmost 500, with `next_number`: the number a new invoice gets. Filters\ncombine: `customer_id`, `quote_id`, `status`, and `search` (an invoice\nnumber, or part of the bill-to name, email or project address). Open one\nwith `GET /v1/invoices/{id}`.",
+        "operationId": "list_invoices",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "Only this customer's invoices.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "quote_id",
+            "in": "query",
+            "description": "Only invoices made from this quote.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only invoices with this status.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/InvoiceStatus"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Matches the invoice number exactly, or part of the bill-to name,\nemail or project address.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching invoices and the next number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A filter is not valid (unknown status, non-numeric id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Create an invoice",
+        "description": "Saves a new invoice as a `draft`, for companies that invoice without\nQuickBooks. Line amounts, the subtotal and the total (subtotal + tax)\nare computed here. Without `invoice_number` it takes the company's next\nnumber. With a `quote_id` and no `customer_id`, the quote's customer is\nbilled. Nothing is sent: email it to the customer with `POST /v1/emails`\n(the invoice PDF attached), then mark it sent with\n`PUT /v1/invoices/{id}/status`.",
+        "operationId": "create_invoice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, bad date or email, no priced line, or an unknown customer or quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The invoice number is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/invoices/{id}": {
+      "get": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Get one invoice",
+        "description": "Returns the whole invoice: its lines, totals, status, customer and\nquote. Only the caller's company's invoices are found.",
+        "operationId": "get_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Edit an invoice",
+        "description": "Replaces the invoice's number, customer, quote, dates, bill-to, lines,\ntax and notes with the body (same rules as `POST /v1/invoices`; leaving\nout `invoice_number` keeps the current one). The status is not changed:\nuse `PUT /v1/invoices/{id}/status`. Returns the saved invoice.",
+        "operationId": "update_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, bad date or email, no priced line, or an unknown customer or quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The invoice number is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/invoices/{id}/status": {
+      "put": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Change an invoice's status",
+        "description": "Marks the invoice `draft`, `sent`, `paid` or `void`. `sent` (and `paid`)\nrecord when it was first sent; `paid` records when it was paid, and any\nother status clears that. Call it with `sent` after emailing the invoice\nto the customer. Returns the invoice.",
+        "operationId": "set_invoice_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceStatusInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The invoice with its new status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/shop/maintenance": {
       "get": {
         "tags": [
@@ -41724,7 +42201,7 @@
             }
           },
           "409": {
-            "description": "QuickBooks is not connected, or the quote has an invoice",
+            "description": "QuickBooks is not connected",
             "content": {
               "application/json": {
                 "schema": {
@@ -42488,6 +42965,158 @@
           },
           "500": {
             "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/qbo/invoice-instructions": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Read the invoice instructions",
+        "description": "What the admin told the AI about the company's invoices and the rules it\nmade of them.",
+        "operationId": "get_qbo_invoice_instructions",
+        "responses": {
+          "200": {
+            "description": "The instructions and their rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceInstructions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Save the invoice instructions",
+        "description": "The AI turns them into exact rules (checked against the company's\n`QuickBooks` products and classes) that every new invoice draft follows.\nEmpty instructions remove them.",
+        "operationId": "save_qbo_invoice_instructions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstructionsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved, with the rules made of them",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceInstructions"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks or the AI failed; nothing was saved",
             "content": {
               "application/json": {
                 "schema": {
@@ -59246,6 +59875,156 @@
           }
         }
       },
+      "Action": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The priced lines get this product.",
+            "required": [
+              "item_id",
+              "item_name",
+              "type"
+            ],
+            "properties": {
+              "item_id": {
+                "type": "string"
+              },
+              "item_name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "product"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The priced lines never get this product (another one is learned).",
+            "required": [
+              "item_id",
+              "item_name",
+              "type"
+            ],
+            "properties": {
+              "item_id": {
+                "type": "string"
+              },
+              "item_name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "avoid_product"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Text lines with the phrase are left out (the editor offers them back).",
+            "required": [
+              "line",
+              "type"
+            ],
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "hide"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The phrase in a line becomes `to`.",
+            "required": [
+              "line",
+              "to",
+              "type"
+            ],
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "rename"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A text line added at the end.",
+            "required": [
+              "text",
+              "type"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "add_line"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The invoice's class.",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "class"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The invoice's CC.",
+            "required": [
+              "email",
+              "type"
+            ],
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "cc"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What a rule does."
+      },
       "ActiveCompany": {
         "type": "object",
         "description": "Body of `PUT /v1/auth/active-company`.",
@@ -68887,6 +69666,13 @@
               "null"
             ],
             "description": "CC of the invoice email (set on a new invoice only)."
+          },
+          "bill_email_bcc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BCC of the invoice email (set on a new invoice only)."
           }
         }
       },
@@ -72631,6 +73417,32 @@
           }
         }
       },
+      "InstructionRule": {
+        "type": "object",
+        "description": "One rule the AI made of the instructions.",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "when_has": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Phrases the quote must all have."
+          },
+          "when_lacks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Phrases the quote must not have."
+          },
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          }
+        }
+      },
       "InstructionScope": {
         "type": "string",
         "description": "Which instructions to reorder.",
@@ -72638,6 +73450,19 @@
           "company",
           "general"
         ]
+      },
+      "InstructionsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/qbo/invoice-instructions`.",
+        "required": [
+          "instructions"
+        ],
+        "properties": {
+          "instructions": {
+            "type": "string",
+            "description": "Plain words; empty removes them."
+          }
+        }
       },
       "Intent": {
         "type": "string",
@@ -72870,45 +73695,135 @@
       },
       "Invoice": {
         "type": "object",
-        "description": "An invoice of the company.",
+        "description": "A whole invoice.",
         "required": [
-          "stripe_invoice_id",
+          "id",
+          "invoice_number",
           "status",
-          "amount_due_cents",
-          "amount_paid_cents"
+          "invoice_date",
+          "bill_to_name",
+          "lines",
+          "subtotal",
+          "tax",
+          "total"
         ],
         "properties": {
-          "stripe_invoice_id": {
-            "type": "string",
-            "description": "Stripe invoice id (`in_...`)."
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Invoice id."
+          },
+          "invoice_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Invoice number, unique in the company."
           },
           "status": {
+            "$ref": "#/components/schemas/InvoiceStatus",
+            "description": "`draft`, `sent`, `paid` or `void`."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The CRM customer billed; null when the invoice bills someone else."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That customer's current name in the CRM; null without a customer."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The quote it was made from; null for an invoice made by hand."
+          },
+          "quote_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That quote's name; null without a quote."
+          },
+          "invoice_date": {
             "type": "string",
-            "description": "`paid` or `open`."
+            "description": "Invoice date, `YYYY-MM-DD`."
           },
-          "amount_due_cents": {
-            "type": "integer",
-            "format": "int64",
-            "description": "What is still owed, in cents (0 once paid)."
-          },
-          "amount_paid_cents": {
-            "type": "integer",
-            "format": "int64",
-            "description": "What was paid, in cents."
-          },
-          "hosted_invoice_url": {
+          "due_date": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Stripe's page to pay or view the invoice, or null."
+            "description": "Due date, `YYYY-MM-DD`; null when due on receipt."
           },
-          "invoice_pdf": {
+          "bill_to_name": {
+            "type": "string",
+            "description": "Name under \"Bill to\"."
+          },
+          "bill_to_email": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The invoice PDF, or null."
+            "description": "Email it is sent to; null when none."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job site address; null when none."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceLine"
+            },
+            "description": "The lines, in order."
+          },
+          "subtotal": {
+            "type": "number",
+            "format": "double",
+            "description": "Sum of the line amounts, in dollars."
+          },
+          "tax": {
+            "type": "number",
+            "format": "double",
+            "description": "Sales tax, in dollars."
+          },
+          "total": {
+            "type": "number",
+            "format": "double",
+            "description": "`subtotal` + `tax`, in dollars."
+          },
+          "customer_memo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Message to the customer printed on the invoice; null when none."
+          },
+          "private_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal note, never printed; null when none."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was first sent (ISO 8601, UTC); null while a draft."
           },
           "paid_at": {
             "type": [
@@ -72916,7 +73831,30 @@
               "null"
             ],
             "format": "date-time",
-            "description": "When it was paid (ISO 8601), or null."
+            "description": "When it was marked paid (ISO 8601, UTC); null unless `paid`."
+          },
+          "created_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the user who created it; null when unknown."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was created (ISO 8601, UTC)."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it last changed (ISO 8601, UTC)."
           }
         }
       },
@@ -72979,6 +73917,205 @@
           "instruction": {
             "type": "string",
             "description": "What to change."
+          }
+        }
+      },
+      "InvoiceInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/invoices` and `PUT /v1/invoices/{id}`: the whole\ninvoice as the editor shows it. Totals are computed by the API.",
+        "required": [
+          "invoice_date",
+          "bill_to_name",
+          "lines"
+        ],
+        "properties": {
+          "invoice_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Invoice number, unique in the company. Leave it out on create to\ntake the next one (`next_number` of `GET /v1/invoices`); on update,\nleaving it out keeps the current number."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The CRM customer billed (`GET /v1/customers`). Null bills someone\nwho is not a customer record; with a `quote_id` and no customer, the\nquote's customer is used."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The quote the invoice was made from, if any. It must be one of the\ncompany's quotes, and of `customer_id` when both are given."
+          },
+          "invoice_date": {
+            "type": "string",
+            "description": "Invoice date, `YYYY-MM-DD`."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Due date, `YYYY-MM-DD`, on or after `invoice_date`; null or empty for\nnone (due on receipt)."
+          },
+          "bill_to_name": {
+            "type": "string",
+            "description": "Name printed under \"Bill to\"; required."
+          },
+          "bill_to_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email the invoice is sent to; null or empty for none."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job site address printed on the invoice, on one line."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceLine"
+            },
+            "description": "The lines, in order; at least one must have a price. Blank lines\n(no text, no price) are dropped. At most 200."
+          },
+          "tax": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sales tax in dollars, added to the subtotal; 0 when left out."
+          },
+          "customer_memo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Message to the customer printed on the invoice."
+          },
+          "private_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal note; never printed or sent."
+          }
+        }
+      },
+      "InvoiceInstructions": {
+        "type": "object",
+        "description": "`GET`/`PUT /v1/qbo/invoice-instructions`.",
+        "properties": {
+          "instructions": {
+            "type": "string",
+            "description": "As the admin wrote them."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstructionRule"
+            },
+            "description": "The rules made of them, in order."
+          },
+          "not_understood": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What could not be made into a rule, and why."
+          }
+        }
+      },
+      "InvoiceLine": {
+        "type": "object",
+        "description": "One line of an invoice, in the order it is printed.\n\nA line with a `unit_price` is priced: `amount` = `qty` × `unit_price`,\nrounded to cents (a negative price makes a discount). A line without a\n`unit_price` is text only (a note under the line above) and has no `qty`\nor `amount`.",
+        "required": [
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "What was sold, or the note's text."
+          },
+          "qty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Quantity; 1 when a priced line leaves it out. Null on a text line."
+          },
+          "unit_price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Price of one unit, in dollars. Null makes the line text only."
+          },
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "`qty` × `unit_price` in dollars, rounded to cents. Computed by the\nAPI: a value sent in a request is ignored. Null on a text line."
+          }
+        }
+      },
+      "InvoiceList": {
+        "type": "object",
+        "description": "`GET /v1/invoices`.",
+        "required": [
+          "invoices",
+          "next_number"
+        ],
+        "properties": {
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceSummary"
+            },
+            "description": "Matching invoices, highest number first; at most 500."
+          },
+          "next_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number the next new invoice gets when none is given."
+          }
+        }
+      },
+      "InvoiceStatus": {
+        "type": "string",
+        "description": "Where an invoice stands.\n\n- `draft`: saved, not emailed to the customer yet\n- `sent`: emailed to the customer (or handed over), not paid\n- `paid`: the customer paid it\n- `void`: cancelled; kept so its number is not reused",
+        "enum": [
+          "draft",
+          "sent",
+          "paid",
+          "void"
+        ]
+      },
+      "InvoiceStatusInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/invoices/{id}/status`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/InvoiceStatus",
+            "description": "The new status. `sent` records when it was first sent; `paid` records\nwhen it was paid (cleared again by any other status)."
           }
         }
       },
@@ -93319,6 +94456,10 @@
     {
       "name": "quickbooks",
       "description": "QuickBooks Online invoices and customers"
+    },
+    {
+      "name": "invoices",
+      "description": "Invoices the CRM keeps itself, for companies without QuickBooks"
     },
     {
       "name": "followups",
