@@ -235,6 +235,9 @@ pub struct EditableInvoice {
     /// CC of the invoice email (set on a new invoice only).
     #[serde(default)]
     pub bill_email_cc: Option<String>,
+    /// BCC of the invoice email (set on a new invoice only).
+    #[serde(default)]
+    pub bill_email_bcc: Option<String>,
 }
 
 fn rows(value: &Value) -> Vec<Value> {
@@ -285,6 +288,7 @@ pub fn editable(value: &Value) -> Option<EditableInvoice> {
         lines: rows(&value["Line"]).iter().filter_map(parse_line).collect(),
         class_name: text(&value["ClassRef"]["name"]),
         bill_email_cc: text(&value["BillEmailCc"]["Address"]),
+        bill_email_bcc: text(&value["BillEmailBcc"]["Address"]),
     })
 }
 
@@ -509,6 +513,14 @@ pub fn create_payload(
     {
         payload["BillEmailCc"] = json!({ "Address": cc });
     }
+    if let Some(bcc) = edited
+        .bill_email_bcc
+        .as_deref()
+        .map(str::trim)
+        .filter(|bcc| !bcc.is_empty())
+    {
+        payload["BillEmailBcc"] = json!({ "Address": bcc });
+    }
     if let Some(class) = class {
         payload["ClassRef"] = json!({ "value": class });
     }
@@ -595,6 +607,7 @@ mod tests {
         invoice.lines[0].id = Some("new:a".into());
         invoice.lines[1].id = Some("new:b".into());
         invoice.bill_email_cc = Some(" rep@x.test ".into());
+        invoice.bill_email_bcc = Some("office@x.test".into());
         let payload = create_payload("42", &invoice, Some(" a@x.test "), Some("7")).unwrap();
         assert_eq!(payload["CustomerRef"]["value"], "42");
         let lines = payload["Line"].as_array().unwrap();
@@ -602,6 +615,8 @@ mod tests {
         assert_eq!(lines[0]["SalesItemLineDetail"]["ItemRef"]["value"], "9");
         assert_eq!(lines[1]["DetailType"], "DescriptionOnly");
         assert_eq!(payload["BillEmail"]["Address"], "a@x.test");
+        assert_eq!(payload["BillEmailCc"]["Address"], "rep@x.test");
+        assert_eq!(payload["BillEmailBcc"]["Address"], "office@x.test");
         assert!(payload.get("Id").is_none());
 
         invoice.lines[0].item_ref_value = None;
