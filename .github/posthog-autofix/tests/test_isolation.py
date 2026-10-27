@@ -121,8 +121,11 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(isolation.SANDBOX_PROBE[0], "bwrap")
         self.assertIn("--unshare-user", isolation.SANDBOX_PROBE)
         self.assertNotIn("--unshare-net", isolation.SANDBOX_PROBE)
+        # Without socat the CLI runs but refuses every command (runs 7347/7348).
+        self.assertIn((True, ["socat", "-V"]), isolation.TOOL_PROBES)
+        self.assertIn((True, ["rg", "--version"]), isolation.TOOL_PROBES)
         script = (TOOLS_DIR / "isolate.sh").read_text()
-        self.assertIn("install -y --no-install-recommends bubblewrap", script)
+        self.assertIn("install -y --no-install-recommends bubblewrap socat ripgrep", script)
         self.assertIn("kernel.apparmor_restrict_unprivileged_userns=0", script)
         sandbox_at = script.index("bubblewrap")
         self.assertLess(sandbox_at, script.index("iptables -N AUTOFIX_EGRESS"))

@@ -200,6 +200,8 @@ def network_probes(blocked_ip: str) -> list[tuple[bool, list[str]]]:
 
 # What the CLI runs each agent command in under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB
 # (its flags, from 2.1.302): without it the CLI exits before the first turn.
+# socat and rg are the sandbox's other dependencies: without socat the agent
+# runs, but every one of its commands fails.
 SANDBOX_PROBE = [
     "bwrap",
     *("--new-session", "--die-with-parent"),
@@ -211,6 +213,8 @@ SANDBOX_PROBE = [
 
 TOOL_PROBES: list[tuple[bool, list[str]]] = [
     (True, SANDBOX_PROBE),
+    (True, ["socat", "-V"]),
+    (True, ["rg", "--version"]),
     (True, ["claude", "--version"]),
     (True, ["cargo", "--version"]),
     (True, ["cargo", "clippy", "--version"]),

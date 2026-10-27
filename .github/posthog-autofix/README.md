@@ -271,10 +271,16 @@ could reach.
   - `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` keeps the model token out of the
     environment of the commands the agent runs. On Linux the CLI runs each
     command in bubblewrap for it (user and PID namespaces, the filesystem and
-    network as they are); `isolate.sh` installs it and lifts Ubuntu's AppArmor
-    block on user namespaces, and `check-isolation` starts it as the agent
-    user, so a missing sandbox fails the job before the agent runs. Recheck
-    the probe's flags when the pinned CLI version changes.
+    network as they are), with socat for its network proxy and ripgrep;
+    `isolate.sh` installs all three and lifts Ubuntu's AppArmor block on user
+    namespaces, and `check-isolation` starts bubblewrap as the agent user and
+    checks the other two, so a missing sandbox fails the job before the agent
+    runs (without socat the agent ran, but every command it tried failed).
+    Recheck the probe's flags when the pinned CLI version changes.
+  - Under that variable the CLI expands no `${VAR}` in `mcp.json` (the
+    PostHog server got an empty key and answered 401), so `agent.py` fills
+    the key in and passes the config as one argument. The agent's commands
+    cannot read it: each runs in its own PID namespace and `/proc`.
   - The account's claude.ai connectors are switched off
     (`ENABLE_CLAUDEAI_MCP_SERVERS=false`).
 - **The build cache stays clean.** Only the trusted `prepare` job saves it;
