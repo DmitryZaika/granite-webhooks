@@ -372,8 +372,9 @@ impl SettledRow {
     }
 }
 
-/// Discovered rows first seen at or before `created_by`: server rows first,
-/// then oldest first. A browser 5xx waits for the API error of its route to
+/// Discovered rows first seen at or before `created_by`, server rows first.
+///
+/// Then oldest first. A browser 5xx waits for the API error of its route to
 /// be judged, so that error must never queue behind a full batch of them.
 pub async fn settled(
     db: impl MySqlExecutor<'_>,
