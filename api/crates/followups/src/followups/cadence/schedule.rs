@@ -1,5 +1,5 @@
 //! Pinning the plan to real send times: holds, the customer's contact
-//! window, send windows, and spreading out weekly chains (`planAiFollowupCadence`
+//! window, send windows, and the minimum sequence (`planAiFollowupCadence`
 //! and the schedule helpers of `smsFlowAiCadence.ts`).
 
 use super::super::classify::SMS_FLOW_AI_SENTINEL;
@@ -22,7 +22,7 @@ use super::super::send_window::{
 };
 use super::plan::{ConversationPlanInputs, conversation_plan, with_step_delays};
 use super::ramp::{
-    AI_MAX_DELAY_MINUTES, ConversationPace, MAX_CADENCE_GAP_DAYS, MIN_AI_FOLLOWUP_MESSAGES,
+    AI_MAX_DELAY_MINUTES, MAX_CADENCE_GAP_DAYS, MIN_AI_FOLLOWUP_MESSAGES,
     MIN_AI_FOLLOWUP_SPAN_DAYS, MINUTES_PER_DAY, cap_cadence_gap_days, clamp_ai_cadence_send_at,
     days_between, delay_label_from_minutes,
 };
@@ -113,12 +113,15 @@ pub fn plan_ai_followup_cadence(
         now,
     );
     let trimmed_after_close = trim_sequence_after_close_loop(rewritten, pressure);
-    let with_minimum_length = expand_compressed_gaps_after_long_first(pad_to_minimum_sequence(
-        drop_early_close_loop(trimmed_after_close),
-    ));
-    let paced = keep_conversation_pace(with_minimum_length, options.pace.as_ref());
-    let with_contact_window =
-        apply_customer_contact_window_to_planned_steps(paced, pressure, now, options.hold_until_at);
+    let with_minimum_length = expand_compressed_gaps_after_long_first(
+        ensure_minimum_followup_sequence(trimmed_after_close),
+    );
+    let with_contact_window = apply_customer_contact_window_to_planned_steps(
+        with_minimum_length,
+        pressure,
+        now,
+        options.hold_until_at,
+    );
     let requested_followup_at = options
         .customer_requested_followup_at
         .or_else(|| pressure.and_then(|p| p.customer_requested_followup_at));
@@ -476,6 +479,65 @@ fn is_close_loop_step(step: &PlannedAiCadenceStep) -> bool {
     step.angle == A::CloseLoop || step.semantic_objective == Some(S::CloseLoop)
 }
 
+fn is_phone_only_cadence(planned: &[PlannedAiCadenceStep]) -> bool {
+    !planned.is_empty()
+        && planned
+            .iter()
+            .all(|step| step.manual_action == Some("PHONE_CALL"))
+}
+
+struct Pad {
+    goal: &'static str,
+    angle: A,
+    subangle: &'static str,
+    purpose: &'static str,
+    semantic_objective: S,
+    phase: FollowupPhase,
+}
+
+const MINIMUM_SEQUENCE_PADS: [Pad; 5] = [
+    Pad {
+        goal: "Change angle",
+        angle: A::HelpfulInformation,
+        subangle: "different_hook",
+        purpose: "Different hook. Give a new reason to reply. Do not repeat an earlier question.",
+        semantic_objective: S::EducateMaterial,
+        phase: FollowupPhase::Decay,
+    },
+    Pad {
+        goal: "Check project status",
+        angle: A::ProjectStatus,
+        subangle: "still_active",
+        purpose: "Ask whether the project is still happening. One easy question.",
+        semantic_objective: S::ConfirmProjectActive,
+        phase: FollowupPhase::Reactivation,
+    },
+    Pad {
+        goal: "Check whether the project is still relevant",
+        angle: A::LongTermNurture,
+        subangle: "project_still_relevant",
+        purpose: NURTURE_PURPOSE,
+        semantic_objective: S::ProjectStillRelevant,
+        phase: FollowupPhase::LongTermNurture,
+    },
+    Pad {
+        goal: "Offer an easy restart",
+        angle: A::LongTermNurture,
+        subangle: "easy_restart",
+        purpose: NURTURE_PURPOSE,
+        semantic_objective: S::EasyRestart,
+        phase: FollowupPhase::LongTermNurture,
+    },
+    Pad {
+        goal: "Light nurture",
+        angle: A::Reactivation,
+        subangle: "light_checkin",
+        purpose: NURTURE_PURPOSE,
+        semantic_objective: S::RestartProject,
+        phase: FollowupPhase::LongTermNurture,
+    },
+];
+
 /// Never a flat weekly cadence: a weekly chain, or compressed gaps after a
 /// long first wait, get spread out.
 pub fn expand_compressed_gaps_after_long_first(
@@ -512,11 +574,11 @@ pub fn expand_compressed_gaps_after_long_first(
     }
 }
 
-/// Spread-out gaps: widen, never stuck at weekly.
+/// Padding gaps: widen, never stuck at weekly.
 const PROGRESSIVE_PAD_GAPS: [f64; 7] = [7.0, 14.0, 21.0, 30.0, 30.0, 30.0, 30.0];
 
-/// Offsets for a spread-out plan: progressive 7→14→21→30 gaps (30 after a
-/// long first wait), the last step at least 30 days out.
+/// Offsets for a padded plan: progressive 7→14→21→30 gaps (30 after a long
+/// first wait), the last step at least 30 days out.
 pub fn apply_minimum_sequence_offsets(
     planned: Vec<PlannedAiCadenceStep>,
 ) -> Vec<PlannedAiCadenceStep> {
@@ -557,191 +619,73 @@ pub fn apply_minimum_sequence_offsets(
     out
 }
 
-fn is_phone_only_cadence(planned: &[PlannedAiCadenceStep]) -> bool {
-    !planned.is_empty()
-        && planned
-            .iter()
-            .all(|step| step.manual_action == Some("PHONE_CALL"))
-}
-
-struct Pad {
-    goal: &'static str,
-    angle: A,
-    subangle: &'static str,
-    purpose: &'static str,
-    semantic_objective: S,
-    phase: FollowupPhase,
-}
-
-const MINIMUM_SEQUENCE_PADS: [Pad; 5] = [
-    Pad {
-        goal: "Change angle",
-        angle: A::HelpfulInformation,
-        subangle: "different_hook",
-        purpose: "Different hook. Give a new reason to reply. Do not repeat an earlier question.",
-        semantic_objective: S::EducateMaterial,
-        phase: FollowupPhase::Decay,
-    },
-    Pad {
-        goal: "Offer an easy next step",
-        angle: A::PreferredNextStep,
-        subangle: "easy_response",
-        purpose: "One easy next step: a showroom visit, a call, a measure, or resending their quote. Do not repeat an earlier offer.",
-        semantic_objective: S::ScheduleNextStep,
-        phase: FollowupPhase::Decay,
-    },
-    Pad {
-        goal: "Check project status",
-        angle: A::ProjectStatus,
-        subangle: "still_active",
-        purpose: "Ask whether the project is still happening. One easy question.",
-        semantic_objective: S::ConfirmProjectActive,
-        phase: FollowupPhase::Reactivation,
-    },
-    Pad {
-        goal: "Check whether the project is still relevant",
-        angle: A::LongTermNurture,
-        subangle: "project_still_relevant",
-        purpose: NURTURE_PURPOSE,
-        semantic_objective: S::ProjectStillRelevant,
-        phase: FollowupPhase::LongTermNurture,
-    },
-    Pad {
-        goal: "Offer an easy restart",
-        angle: A::LongTermNurture,
-        subangle: "easy_restart",
-        purpose: NURTURE_PURPOSE,
-        semantic_objective: S::EasyRestart,
-        phase: FollowupPhase::LongTermNurture,
-    },
-];
-
-/// A follow-up has at least five messages: steps with angles not used yet
-/// go before a closing message, each wait at least as long as the one
-/// before (the pace is kept afterwards).
-fn pad_to_minimum_sequence(planned: Vec<PlannedAiCadenceStep>) -> Vec<PlannedAiCadenceStep> {
-    if planned.is_empty()
-        || planned.len() >= MIN_AI_FOLLOWUP_MESSAGES
-        || is_phone_only_cadence(&planned)
-    {
+/// An automated follow-up has at least 5 messages over at least 30 days,
+/// and close-the-loop is never the second (or only) message.
+fn ensure_minimum_followup_sequence(
+    planned: Vec<PlannedAiCadenceStep>,
+) -> Vec<PlannedAiCadenceStep> {
+    if planned.is_empty() || is_phone_only_cadence(&planned) {
         return planned;
     }
-    let mut body = planned;
-    let close = if body.last().is_some_and(is_close_loop_step) {
-        body.pop()
-    } else {
-        None
-    };
-    let Some(template) = body.last().or(close.as_ref()).cloned() else {
-        return body;
-    };
-    let key = |angle: A, subangle: Option<&str>| format!("{angle}:{}", subangle.unwrap_or(""));
-    let mut used: Vec<String> = body
+    if planned.len() >= MIN_AI_FOLLOWUP_MESSAGES
+        && planned.last().map_or(0.0, |s| s.offset_days) >= MIN_AI_FOLLOWUP_SPAN_DAYS
+    {
+        return expand_compressed_gaps_after_long_first(planned);
+    }
+    let close_steps: Vec<&PlannedAiCadenceStep> =
+        planned.iter().filter(|s| is_close_loop_step(s)).collect();
+    let body: Vec<PlannedAiCadenceStep> = planned
         .iter()
-        .map(|s| key(s.angle, s.subangle.as_deref()))
+        .filter(|s| !is_close_loop_step(s))
+        .cloned()
         .collect();
-    let mut previous_offset = body.last().map_or(0.0, |s| s.offset_days);
-    let mut previous_gap = match body.as_slice() {
-        [.., before, last] => last.offset_days - before.offset_days,
-        _ => 0.0,
+    let Some(template) = body.first().or_else(|| planned.first()).cloned() else {
+        return planned;
     };
-    let wanted = MIN_AI_FOLLOWUP_MESSAGES - usize::from(close.is_some());
-    // SMS and email take turns when the plan already mixes them.
-    let mixed = body
+    let mut used_keys: Vec<String> = body
         .iter()
-        .chain(close.iter())
-        .any(|s| s.channel == FollowupChannel::Sms)
-        && body
-            .iter()
-            .chain(close.iter())
-            .any(|s| s.channel == FollowupChannel::Email);
-    let mut next_step = |mut step: PlannedAiCadenceStep, pad_index: usize| {
-        let gap = previous_gap
-            .max(PROGRESSIVE_PAD_GAPS[pad_index.min(PROGRESSIVE_PAD_GAPS.len() - 1)])
-            .min(MAX_CADENCE_GAP_DAYS);
-        previous_offset += gap;
-        previous_gap = gap;
-        step.offset_days = previous_offset;
-        step.delay_minutes = js_round(gap * MINUTES_PER_DAY).min(AI_MAX_DELAY_MINUTES);
-        step.delay_label = delay_label_from_minutes(step.delay_minutes, &step.delay_label);
-        step
-    };
-    let mut added = 0;
-    for pad in &MINIMUM_SEQUENCE_PADS {
-        if body.len() >= wanted {
-            break;
-        }
-        if used.contains(&key(pad.angle, Some(pad.subangle))) {
-            continue;
-        }
-        used.push(key(pad.angle, Some(pad.subangle)));
+        .map(|s| format!("{}:{}", s.angle, s.subangle.as_deref().unwrap_or("")))
+        .collect();
+    let needed_body = body
+        .len()
+        .max(MIN_AI_FOLLOWUP_MESSAGES - usize::from(!close_steps.is_empty()));
+    let mut padded = body;
+    let pad_step = |pad: &Pad, goal: String, subangle: String| {
         let mut step = template.clone();
-        step.goal = pad.goal.into();
+        step.goal = goal;
         step.angle = pad.angle;
-        step.subangle = Some(pad.subangle.into());
+        step.subangle = Some(subangle);
         step.purpose = pad.purpose.into();
         step.semantic_objective = Some(pad.semantic_objective);
         step.phase = Some(pad.phase);
         step.situation = FollowupSituation::StalledConversation;
         step.manual_action = None;
-        if mixed && let Some(last) = body.last() {
-            step.channel = match last.channel {
-                FollowupChannel::Sms => FollowupChannel::Email,
-                FollowupChannel::Email => FollowupChannel::Sms,
-            };
-        }
-        body.push(next_step(step, added));
-        added += 1;
-    }
-    if let Some(close) = close {
-        body.push(next_step(close, added));
-    }
-    body
-}
-
-/// Pushes the steps out to keep the conversation's pace.
-fn keep_conversation_pace(
-    planned: Vec<PlannedAiCadenceStep>,
-    pace: Option<&ConversationPace>,
-) -> Vec<PlannedAiCadenceStep> {
-    let Some(pace) = pace else {
-        return planned;
+        step
     };
-    let mut previous_offset = 0.0;
-    let delays: Vec<f64> = planned
-        .iter()
-        .map(|step| {
-            let gap = (step.offset_days - previous_offset).max(0.0);
-            previous_offset = step.offset_days;
-            gap * MINUTES_PER_DAY
-        })
-        .collect();
-    let mut offset_days = 0.0;
-    planned
-        .into_iter()
-        .zip(pace.keep(&delays))
-        .map(|(mut step, delay)| {
-            offset_days += delay / MINUTES_PER_DAY;
-            step.offset_days = offset_days;
-            step.delay_minutes = js_round(delay).min(AI_MAX_DELAY_MINUTES);
-            step.delay_label = delay_label_from_minutes(step.delay_minutes, &step.delay_label);
-            step
-        })
-        .collect()
-}
-
-/// Of several messages close-the-loop is never the first or second, days
-/// after the first.
-fn drop_early_close_loop(planned: Vec<PlannedAiCadenceStep>) -> Vec<PlannedAiCadenceStep> {
-    if planned.len() < 2 {
-        return planned;
+    for pad in &MINIMUM_SEQUENCE_PADS {
+        if padded.len() >= needed_body {
+            break;
+        }
+        let key = format!("{}:{}", pad.angle, pad.subangle);
+        if used_keys.contains(&key) {
+            continue;
+        }
+        used_keys.push(key);
+        padded.push(pad_step(pad, pad.goal.into(), pad.subangle.into()));
     }
-    planned
-        .into_iter()
-        .enumerate()
-        .filter(|(index, step)| *index >= 2 || !is_close_loop_step(step))
-        .map(|(_, step)| step)
-        .collect()
+    while padded.len() < needed_body {
+        let pad = &MINIMUM_SEQUENCE_PADS[padded.len() % MINIMUM_SEQUENCE_PADS.len()];
+        let n = padded.len();
+        padded.push(pad_step(
+            pad,
+            format!("{} (continued)", pad.goal),
+            format!("{}_{n}", pad.subangle),
+        ));
+    }
+    if let Some(close) = close_steps.first() {
+        padded.push((*close).clone());
+    }
+    apply_minimum_sequence_offsets(padded)
 }
 
 fn trim_sequence_after_close_loop(
@@ -890,24 +834,8 @@ fn preview_delay(delay: Option<f64>) -> Option<f64> {
         .map(|d| js_round(d).max(0.0).min(HOLD_MAX_MINUTES))
 }
 
-/// The flow steps to save from the plan and the generated (or edited)
-/// preview. No step after the first waits over 30 days, even when it takes
-/// on the wait of a message left out.
+/// The flow steps to save from the plan and the generated (or edited) preview.
 pub fn build_ai_cadence_flow_steps(
-    planned: &[PlannedAiCadenceStep],
-    preview: &[AiCadenceFlowPreviewStep],
-    channel: Option<FollowupChannel>,
-) -> Vec<SmsFlowStepInput> {
-    let mut steps = flow_steps_from_preview(planned, preview, channel);
-    for step in steps.iter_mut().skip(1) {
-        step.delay_minutes = step
-            .delay_minutes
-            .min(MAX_CADENCE_GAP_DAYS * MINUTES_PER_DAY);
-    }
-    steps
-}
-
-fn flow_steps_from_preview(
     planned: &[PlannedAiCadenceStep],
     preview: &[AiCadenceFlowPreviewStep],
     channel: Option<FollowupChannel>,
@@ -976,130 +904,4 @@ fn flow_steps_from_preview(
         }
     }
     steps
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn step(goal: &str, angle: A, offset_days: f64) -> PlannedAiCadenceStep {
-        PlannedAiCadenceStep {
-            offset_days,
-            delay_label: String::new(),
-            situation: FollowupSituation::StalledConversation,
-            goal: goal.into(),
-            purpose: goal.into(),
-            angle,
-            subangle: None,
-            phase: None,
-            semantic_objective: None,
-            delay_minutes: offset_days * MINUTES_PER_DAY,
-            channel: FollowupChannel::Sms,
-            manual_action: None,
-            original_step_index: None,
-            preflight_status: None,
-            preflight_reason: None,
-            expected_send_on: None,
-        }
-    }
-
-    fn goals(planned: &[PlannedAiCadenceStep]) -> Vec<&str> {
-        planned.iter().map(|s| s.goal.as_str()).collect()
-    }
-
-    #[test]
-    fn a_short_plan_gets_five_messages_with_waits_that_never_shrink() {
-        let padded = pad_to_minimum_sequence(vec![
-            step("Quote", A::QuoteStatus, 1.0),
-            step("Visit", A::EstimateOffer, 4.0),
-            step("Close", A::CloseLoop, 11.0),
-        ]);
-        assert_eq!(
-            goals(&padded),
-            [
-                "Quote",
-                "Visit",
-                "Change angle",
-                "Offer an easy next step",
-                "Close"
-            ]
-        );
-        let offsets: Vec<f64> = padded.iter().map(|s| s.offset_days).collect();
-        assert_eq!(offsets, [1.0, 4.0, 11.0, 25.0, 46.0]);
-    }
-
-    #[test]
-    fn the_plan_keeps_the_conversation_pace() {
-        let pace = ConversationPace {
-            sent: 2,
-            last_gap_days: 12.0,
-            days_since_last: 2.0,
-        };
-        let paced = keep_conversation_pace(
-            vec![
-                step("One", A::QuoteStatus, 2.0),
-                step("Two", A::EstimateOffer, 5.0),
-                step("Three", A::DesignHelp, 40.0),
-            ],
-            Some(&pace),
-        );
-        let offsets: Vec<f64> = paced.iter().map(|s| s.offset_days).collect();
-        assert_eq!(offsets, [10.0, 22.0, 57.0]);
-        assert_eq!(paced[1].delay_minutes, 12.0 * MINUTES_PER_DAY);
-    }
-
-    #[test]
-    fn close_the_loop_is_never_second() {
-        let quote = step("Quote", A::QuoteStatus, 0.0);
-        let close = step("Close", A::CloseLoop, 3.0);
-        let visit = step("Visit", A::EstimateOffer, 10.0);
-        // A close-the-loop as the second message goes.
-        assert_eq!(
-            goals(&drop_early_close_loop(vec![quote.clone()])),
-            ["Quote"]
-        );
-        assert_eq!(
-            goals(&drop_early_close_loop(vec![quote.clone(), close.clone()])),
-            ["Quote"]
-        );
-        assert_eq!(
-            goals(&drop_early_close_loop(vec![
-                close.clone(),
-                quote.clone(),
-                visit.clone()
-            ])),
-            ["Quote", "Visit"]
-        );
-        // Alone, or after two messages, it stays.
-        assert_eq!(
-            goals(&drop_early_close_loop(vec![close.clone()])),
-            ["Close"]
-        );
-        assert_eq!(
-            goals(&drop_early_close_loop(vec![quote, visit, close])),
-            ["Quote", "Visit", "Close"]
-        );
-    }
-
-    #[test]
-    fn a_saved_step_never_waits_over_thirty_days() {
-        let planned = [
-            step("One", A::QuoteStatus, 0.0),
-            step("Two", A::EstimateOffer, 20.0),
-            step("Three", A::DesignHelp, 25.0),
-        ];
-        let message = |skip: bool| AiCadenceFlowPreviewStep {
-            skip,
-            body: "Text".into(),
-            ..AiCadenceFlowPreviewStep::default()
-        };
-        // The left-out second message's wait would make the third wait 45 days.
-        let steps = build_ai_cadence_flow_steps(
-            &planned,
-            &[message(false), message(true), message(false)],
-            Some(FollowupChannel::Sms),
-        );
-        let delays: Vec<f64> = steps.iter().map(|s| s.delay_minutes).collect();
-        assert_eq!(delays, [0.0, 30.0 * MINUTES_PER_DAY]);
-    }
 }

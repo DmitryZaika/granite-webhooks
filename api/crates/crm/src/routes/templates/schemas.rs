@@ -50,6 +50,8 @@ pub struct EmailTemplate {
     pub lead_list_id: Option<i32>,
     /// Hours after a deal enters `lead_list_id` that it is sent.
     pub hour_delay: Option<i32>,
+    /// Company drip: sales reps whose deals get it; empty: every rep's.
+    pub sales_rep_ids: Vec<i32>,
     /// Name of that list (null when it was deleted).
     pub list_name: Option<String>,
     /// Name of the list's group.
@@ -80,6 +82,10 @@ pub struct EmailTemplateInput {
     /// Hours to wait (0–8760); required with `lead_list_id`.
     #[serde(default)]
     pub hour_delay: Option<i32>,
+    /// With `lead_list_id`: sales reps whose deals get it; empty: every
+    /// rep's. Left out keeps the template's reps.
+    #[serde(default)]
+    pub sales_rep_ids: Option<Vec<i32>>,
 }
 
 /// Body of `POST /v1/email-templates/{id}/attachments`.

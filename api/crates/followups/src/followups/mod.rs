@@ -19,7 +19,6 @@
 )]
 
 pub mod ai_cadence;
-pub mod alerts;
 pub mod attribution;
 pub mod cadence;
 pub mod classify;

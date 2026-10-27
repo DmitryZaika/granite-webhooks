@@ -240,7 +240,7 @@ pub struct EditableInvoice {
     pub bill_email_bcc: Option<String>,
 }
 
-fn rows(value: &Value) -> Vec<Value> {
+pub(super) fn rows(value: &Value) -> Vec<Value> {
     match value {
         Value::Array(rows) => rows.clone(),
         Value::Null => Vec::new(),

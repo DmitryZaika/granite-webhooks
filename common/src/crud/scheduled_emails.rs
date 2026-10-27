@@ -163,7 +163,7 @@ pub async fn schedule_templates_for_deal_list(
         return Ok(());
     }
     if is_lead_customer(pool, customer_id).await? {
-        let templates = get_templates_for_list_id(pool, list_id, company_id).await?;
+        let templates = get_templates_for_list_id(pool, list_id, company_id, user_id).await?;
         for template in templates {
             insert_scheduled_email(
                 pool,

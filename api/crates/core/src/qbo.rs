@@ -395,9 +395,33 @@ impl Qbo {
         query: &str,
         entity: &str,
     ) -> Result<Vec<Value>, QboError> {
+        self.query_path(access, query, entity, "").await
+    }
+
+    /// [`Self::query`] with every custom field, those made in `QuickBooks`'
+    /// newer custom fields included.
+    pub async fn query_with_custom_fields(
+        &self,
+        access: &Access,
+        query: &str,
+        entity: &str,
+    ) -> Result<Vec<Value>, QboError> {
+        self.query_path(access, query, entity, "&include=enhancedAllCustomFields")
+            .await
+    }
+
+    async fn query_path(
+        &self,
+        access: &Access,
+        query: &str,
+        entity: &str,
+        extra: &str,
+    ) -> Result<Vec<Value>, QboError> {
         let encoded =
             percent_encoding::utf8_percent_encode(query, percent_encoding::NON_ALPHANUMERIC);
-        let body = self.get(access, &format!("query?query={encoded}")).await?;
+        let body = self
+            .get(access, &format!("query?query={encoded}{extra}"))
+            .await?;
         Ok(match &body["QueryResponse"][entity] {
             Value::Array(rows) => rows.clone(),
             Value::Object(_) => vec![body["QueryResponse"][entity].clone()],

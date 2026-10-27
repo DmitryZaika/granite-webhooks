@@ -3,16 +3,12 @@
 //! Each due enrollment is claimed (its `next_send_at` pushed out 20 minutes)
 //! so overlapping runs never send twice. Before sending: a CRM or customer
 //! hold reschedules it, a pending phone call the customer asked for blocks it
-//! (rechecked daily), any reply, email or incoming call since the start
-//! stops it, and a text or email from the team during a step's wait
-//! restarts that wait from their message. AI steps are written then, and
-//! the approved copy of an AI follow-up is written again when the
-//! conversation changed after the rep approved it; template steps fill
-//! their variables. A refused send is retried twice (then the run fails);
-//! an AI step the writer skips completes the run. Port of
+//! (rechecked daily), and any reply, email or incoming call since the start
+//! stops it. AI steps are written then; template steps fill their
+//! variables. A refused send is retried twice (then the run fails); an AI
+//! step the writer skips completes the run. Port of
 //! `smsFlowProcessor.server.ts`.
 
-use super::cadence::types::AI_CADENCE_FLOW_NAME;
 use super::classify::SMS_FLOW_AI_SENTINEL;
 use super::crm_hold::must_reschedule_for_hold;
 use super::dates::Instant;
@@ -39,9 +35,6 @@ const DISPATCH_BATCH_LIMIT: i64 = 50;
 const PER_COMPANY_BATCH_LIMIT: i64 = 10;
 const MAX_SEND_ATTEMPTS: i32 = 3;
 const CLAIM_WINDOW_MINUTES: i64 = 20;
-/// A run takes no new enrollment after this, so it stays inside the API's
-/// 30 s limit with the job's other work; the rest stay due for the next run.
-const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 /// A customer-requested phone call is rechecked daily until it happened.
 const MANUAL_ACTION_RECHECK_MINUTES: i64 = 24 * 60;
 
@@ -66,34 +59,22 @@ struct Due {
     current_step_position: i32,
     attempt_count: i32,
     started_at: NaiveDateTime,
-    /// When the current step's wait began (the start, or the last send).
-    anchor_at: NaiveDateTime,
     phone_digits: Option<String>,
     customer_email: Option<String>,
-    flow_name: String,
-}
-
-impl Due {
-    /// A follow-up the rep approved in the picker ("Generated with AI").
-    fn is_ai_cadence(&self) -> bool {
-        self.flow_name == AI_CADENCE_FLOW_NAME
-    }
 }
 
 const DUE_COLUMNS: &str = "e.id, e.flow_id, e.company_id, e.customer_id, e.user_id, e.current_step_position, e.attempt_count,
-    CAST(e.started_at AS DATETIME) AS started_at, CAST(e.anchor_at AS DATETIME) AS anchor_at,
-    CAST(e.customer_phone_digits AS CHAR) AS phone_digits, e.customer_email, f.name AS flow_name";
+    CAST(e.started_at AS DATETIME) AS started_at, CAST(e.customer_phone_digits AS CHAR) AS phone_digits, e.customer_email";
 
 /// Due by the run's clock (a test's, or now), like every send time it sets.
 async fn due_enrollments(state: &AppState, now: Instant) -> Result<Vec<Due>, sqlx::Error> {
     sqlx::query_as(
         "SELECT id, flow_id, company_id, customer_id, user_id, current_step_position, attempt_count, started_at,
-                anchor_at, phone_digits, customer_email, flow_name
+                phone_digits, customer_email
            FROM (
              SELECT e.id, e.flow_id, e.company_id, e.customer_id, e.user_id, e.current_step_position, e.attempt_count,
-                    CAST(e.started_at AS DATETIME) AS started_at, CAST(e.anchor_at AS DATETIME) AS anchor_at,
-                    CAST(e.customer_phone_digits AS CHAR) AS phone_digits, e.customer_email, f.name AS flow_name,
-                    e.next_send_at,
+                    CAST(e.started_at AS DATETIME) AS started_at, CAST(e.customer_phone_digits AS CHAR) AS phone_digits,
+                    e.customer_email, e.next_send_at,
                     ROW_NUMBER() OVER (PARTITION BY e.company_id ORDER BY e.next_send_at ASC) AS rn
                FROM sms_flow_enrollments e
                JOIN sms_flows f ON f.id = e.flow_id AND f.deleted_at IS NULL AND f.company_id = e.company_id
@@ -262,141 +243,6 @@ async fn incoming_call_since(state: &AppState, due: &Due) -> Result<bool, sqlx::
                 .and_then(super::dates::from_millis)
                 .is_some_and(|at| at > started)
     }))
-}
-
-/// The customer's numbers (the run's and the customer's), last 10 digits.
-async fn customer_phones10(state: &AppState, due: &Due) -> Result<Vec<String>, sqlx::Error> {
-    let last10 = |raw: &str| {
-        let digits: String = raw.chars().filter(char::is_ascii_digit).collect();
-        (digits.len() >= 10).then(|| digits[digits.len() - 10..].to_string())
-    };
-    let mut phones: Vec<String> = due
-        .phone_digits
-        .as_deref()
-        .and_then(last10)
-        .into_iter()
-        .collect();
-    if let Some(customer_id) = due.customer_id {
-        let row: Option<(Option<String>, Option<String>)> =
-            sqlx::query_as("SELECT phone, phone_2 FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL")
-                .bind(customer_id)
-                .bind(due.company_id)
-                .fetch_optional(&state.pool)
-                .await?;
-        for phone in row
-            .into_iter()
-            .flat_map(<[_; 2]>::from)
-            .flatten()
-            .filter_map(|raw| last10(&raw))
-        {
-            if !phones.contains(&phone) {
-                phones.push(phone);
-            }
-        }
-    }
-    Ok(phones)
-}
-
-/// The latest text or email a person on the team sent the customer after
-/// `since`; flows and other automations do not count.
-async fn last_rep_message_since(
-    state: &AppState,
-    due: &Due,
-    since: NaiveDateTime,
-) -> Result<Option<NaiveDateTime>, sqlx::Error> {
-    let phones = customer_phones10(state, due).await?;
-    let mut latest: Option<NaiveDateTime> = None;
-    if !phones.is_empty() {
-        let marks = vec!["?"; phones.len()].join(", ");
-        for table in ["cloudtalk_sms", "ringcentral_sms", "telnyx_sms"] {
-            let sql = format!(
-                "SELECT CAST(MAX(created_date) AS DATETIME) FROM {table}
-                  WHERE company_id = ? AND is_echo = 0 AND phone_digits IN ({marks})
-                    AND direction = 'outbound' AND is_automated = 0 AND status IN ('sent', 'pending')
-                    AND created_date > ?"
-            );
-            let mut query =
-                sqlx::query_scalar::<_, Option<NaiveDateTime>>(sqlx::AssertSqlSafe(sql))
-                    .bind(due.company_id);
-            for phone in &phones {
-                query = query.bind(phone);
-            }
-            latest = latest.max(query.bind(since).fetch_one(&state.pool).await?);
-        }
-    }
-    let email = due.customer_email.as_deref().map(bare_address);
-    let emailed: Option<NaiveDateTime> = sqlx::query_scalar(
-        "SELECT CAST(MAX(e.sent_at) AS DATETIME) FROM emails e
-          WHERE e.company_id = ? AND e.sender_user_id IS NOT NULL AND e.is_automated = 0
-            AND e.is_draft = 0 AND e.deleted_at IS NULL AND e.sent_at > ?
-            AND (EXISTS (SELECT 1 FROM email_participants ep
-                          WHERE ep.email_id = e.id AND ep.type <> 'from' AND ep.customer_id = ?)
-              OR LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.receiver_email, '<', -1), '>', 1))) IN (
-                   SELECT LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(ce.email, '<', -1), '>', 1)))
-                     FROM customers_emails ce WHERE ce.customer_id = ?)
-              OR LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.receiver_email, '<', -1), '>', 1))) = LOWER(?))",
-    )
-    .bind(due.company_id)
-    .bind(since)
-    .bind(due.customer_id)
-    .bind(due.customer_id)
-    .bind(email)
-    .fetch_one(&state.pool)
-    .await?;
-    Ok(latest.max(emailed))
-}
-
-/// Something the approved copy of an AI follow-up could not know happened
-/// after the rep approved it: a message from the team, a deal note or
-/// activity, a deal change, or the current offer changed or ended.
-async fn changed_since_approval(
-    state: &AppState,
-    due: &Due,
-    gathered: &super::gather::GatheredContext,
-    now: Instant,
-) -> Result<bool, sqlx::Error> {
-    let approved_at = due.started_at;
-    if let Some(offer) = &gathered.offer {
-        let approved_day = super::store_time::store_day(approved_at.and_utc());
-        let ended = offer
-            .ends_on
-            .is_some_and(|last| approved_day <= last && last < super::store_time::store_day(now));
-        if offer.updated_at > approved_at || ended {
-            return Ok(true);
-        }
-    }
-    if last_rep_message_since(state, due, approved_at)
-        .await?
-        .is_some()
-    {
-        return Ok(true);
-    }
-    let Some(customer_id) = due.customer_id.or(gathered.customer_id) else {
-        return Ok(false);
-    };
-    sqlx::query_scalar(
-        "SELECT EXISTS (
-           SELECT 1 FROM deals d
-            WHERE d.customer_id = ? AND d.deleted_at IS NULL AND d.updated_at > ?
-           UNION ALL
-           SELECT 1 FROM deal_notes dn JOIN deals d ON d.id = dn.deal_id
-            WHERE d.customer_id = ? AND dn.company_id = ? AND dn.deleted_at IS NULL AND dn.created_at > ?
-           UNION ALL
-           SELECT 1 FROM deal_activities da JOIN deals d ON d.id = da.deal_id
-            WHERE d.customer_id = ? AND da.company_id = ? AND da.deleted_at IS NULL
-              AND (da.created_at > ? OR da.completed_at > ?))",
-    )
-    .bind(customer_id)
-    .bind(approved_at)
-    .bind(customer_id)
-    .bind(due.company_id)
-    .bind(approved_at)
-    .bind(customer_id)
-    .bind(due.company_id)
-    .bind(approved_at)
-    .bind(approved_at)
-    .fetch_one(&state.pool)
-    .await
 }
 
 async fn customer_responded(state: &AppState, due: &Due) -> Result<bool, sqlx::Error> {
@@ -662,19 +508,6 @@ async fn send_step(state: &AppState, due: &Due, now: Instant) -> Result<Outcome,
         });
     };
     let channel = current.channel();
-    // Someone on the team texted or emailed the customer during this step's
-    // wait: the wait counts from their message instead.
-    if let Some(at) = last_rep_message_since(state, due, due.anchor_at).await? {
-        let mut resume =
-            followup_next_send_at(at.and_utc(), f64::from(current.delay_minutes), channel);
-        if due.is_ai_cadence() || current.is_ai() {
-            resume = next_send_at_avoiding_sunday(resume, channel, None);
-        }
-        if resume > now {
-            reschedule(state, due.id, resume, false).await?;
-            return Ok(Outcome::Nothing);
-        }
-    }
     if !is_followup_send_window_open(channel, now) {
         reschedule(state, due.id, clamp_followup_send_at(now, channel), false).await?;
         return Ok(Outcome::Nothing);
@@ -704,24 +537,7 @@ async fn send_step(state: &AppState, due: &Due, now: Instant) -> Result<Outcome,
         && pressure
             .manual_action_completed_at
             .is_some_and(|at| at > due.started_at.and_utc());
-    // An approved AI follow-up is written again when the conversation
-    // changed after the rep approved it.
-    let rewrite = due.is_ai_cadence()
-        && !current.is_ai()
-        && (replan || changed_since_approval(state, due, &execution, now).await?);
-    let approved = (
-        current
-            .custom_text
-            .clone()
-            .or_else(|| current.template_body.clone())
-            .unwrap_or_default(),
-        current
-            .subject
-            .clone()
-            .or_else(|| current.template_subject.clone())
-            .unwrap_or_default(),
-    );
-    let (mut body, mut subject) = if rewrite || current.is_ai() || replan {
+    let (mut body, mut subject) = if current.is_ai() || replan {
         let mut write = request.clone();
         write.channel = channel;
         write.step_position = usize::try_from(current.position).unwrap_or(1);
@@ -730,39 +546,13 @@ async fn send_step(state: &AppState, due: &Due, now: Instant) -> Result<Outcome,
             customer_id = Some(found);
             set_customer(state, due.id, found).await?;
         }
-        let written = if rewrite {
-            match super::ai_cadence::rewrite_due_message(state, &write, &gathered, &approved.0, now)
-                .await
-            {
-                Ok(Some((body, subject))) => Ok(GeneratedFollowup::Message {
-                    skip: false,
-                    body,
-                    subject,
-                }),
-                Ok(None) => Ok(GeneratedFollowup::Skip {
-                    skip: true,
-                    reason: "nothing_to_send".into(),
-                }),
-                // The approved copy beats no follow-up at all.
-                Err(err) => {
-                    tracing::warn!(%err, enrollment = due.id, "ai follow-up rewrite failed, sending the approved copy");
-                    Ok(GeneratedFollowup::Message {
-                        skip: false,
-                        body: approved.0.clone(),
-                        subject: Some(approved.1.clone()),
-                    })
-                }
-            }
-        } else {
-            let writer = Writer {
-                pool: &state.pool,
-                ai: &state.ai,
-                company_id: due.company_id,
-                user_id: due.user_id,
-            };
-            complete_followup(writer, &write, &gathered, now).await
+        let writer = Writer {
+            pool: &state.pool,
+            ai: &state.ai,
+            company_id: due.company_id,
+            user_id: due.user_id,
         };
-        match written {
+        match complete_followup(writer, &write, &gathered).await {
             Ok(GeneratedFollowup::Skip { .. }) => {
                 sqlx::query(
                     "UPDATE sms_flow_enrollments SET status = 'completed', next_send_at = NULL, anchor_at = UTC_TIMESTAMP(),
@@ -789,7 +579,18 @@ async fn send_step(state: &AppState, due: &Due, now: Instant) -> Result<Outcome,
             }
         }
     } else {
-        approved
+        (
+            current
+                .custom_text
+                .clone()
+                .or_else(|| current.template_body.clone())
+                .unwrap_or_default(),
+            current
+                .subject
+                .clone()
+                .or_else(|| current.template_subject.clone())
+                .unwrap_or_default(),
+        )
     };
     if body.contains("{{") || subject.contains("{{") {
         if customer_id.is_none() {
@@ -1120,14 +921,11 @@ pub async fn process_due_followups_at(
     clock: Option<Instant>,
 ) -> Result<FollowupRun, sqlx::Error> {
     let due = due_enrollments(state, clock.unwrap_or_else(Utc::now)).await?;
-    let started = std::time::Instant::now();
-    let mut run = FollowupRun::default();
+    let mut run = FollowupRun {
+        processed: due.len(),
+        ..FollowupRun::default()
+    };
     for enrollment in due {
-        // AI writing takes seconds: what is left waits for the next run.
-        if started.elapsed() > RUN_BUDGET {
-            break;
-        }
-        run.processed += 1;
         let id = enrollment.id;
         if let Err(err) = process_one(state, enrollment, &mut run, clock).await {
             tracing::error!(?err, enrollment = id, "sms follow-up dispatch failed");
