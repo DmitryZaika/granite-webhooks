@@ -24,6 +24,7 @@ mod email_signatures;
 mod email_signatures_native;
 mod emails;
 mod media_previews;
+mod projects;
 mod send_email;
 mod sms;
 mod sms_send;

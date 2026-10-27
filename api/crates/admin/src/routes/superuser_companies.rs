@@ -84,6 +84,8 @@ pub struct Features {
     pub onboarding: bool,
     /// The points leaderboard is on (own switch, else the platform default).
     pub leaderboard: bool,
+    /// Projects (sold jobs from template to paid) is on.
+    pub projects: bool,
 }
 
 /// The old company eSignatures switch. It no longer gates anything:
@@ -94,9 +96,10 @@ const LEGACY_SIGNATURE_SWITCH: &str = "(COALESCE(c.signature_enabled, 0) <> 0)";
 fn features_sql() -> String {
     format!(
         "COALESCE(c.quickbooks_enabled, 1) <> 0 AS quickbooks, {LEGACY_SIGNATURE_SWITCH} AS signature,
-         {} AS onboarding, {} AS leaderboard",
+         {} AS onboarding, {} AS leaderboard, {} AS projects",
         crate::routes::company::queries::ONBOARDING_ON,
-        crate::routes::company::queries::LEADERBOARD_ON
+        crate::routes::company::queries::LEADERBOARD_ON,
+        crate::routes::company::queries::PROJECTS_ON
     )
 }
 
@@ -276,6 +279,9 @@ pub struct CompanyDetails {
     /// Points leaderboard switch (own setting, else the platform default).
     #[sqlx(skip)]
     pub leaderboard_enabled: bool,
+    /// Projects switch.
+    #[sqlx(skip)]
+    pub projects_enabled: bool,
 }
 
 /// Get a company
@@ -310,11 +316,12 @@ pub async fn get_company(
                 c.qbo_realm_id, c.signwell_api_key,
                 COALESCE(c.quickbooks_enabled, 1) <> 0 AS quickbooks_enabled,
                 {LEGACY_SIGNATURE_SWITCH} AS signature_enabled, COALESCE(c.billing_required, 0) <> 0 AS billing_required,
-                {} AS onboarding, {} AS leaderboard
+                {} AS onboarding, {} AS leaderboard, {} AS projects
            FROM company c {}
           WHERE c.id = ? AND c.deleted_at IS NULL",
         crate::routes::company::queries::ONBOARDING_ON,
         crate::routes::company::queries::LEADERBOARD_ON,
+        crate::routes::company::queries::PROJECTS_ON,
         crate::routes::company::queries::ROLLOUT_JOINS,
     );
     let row: CompanyDetailsWithRollout = sqlx::query_as(sqlx::AssertSqlSafe(sql))
@@ -325,6 +332,7 @@ pub async fn get_company(
     let mut details = row.details;
     details.onboarding_enabled = row.onboarding;
     details.leaderboard_enabled = row.leaderboard;
+    details.projects_enabled = row.projects;
     Ok(Json(details))
 }
 
@@ -334,6 +342,7 @@ struct CompanyDetailsWithRollout {
     details: CompanyDetails,
     onboarding: bool,
     leaderboard: bool,
+    projects: bool,
 }
 
 /// Body of `POST /v1/superuser/companies` and `PUT /v1/superuser/companies/{id}`.
@@ -1134,6 +1143,7 @@ pub async fn switch_feature(
         "signature" => "signature_enabled",
         "onboarding" => "onboarding_enabled",
         "leaderboard" => "leaderboard_enabled",
+        "projects" => "projects_enabled",
         _ => return Err(ApiError::BadRequest("Invalid feature toggle".into())),
     };
     let updated = sqlx::query(sqlx::AssertSqlSafe(format!(

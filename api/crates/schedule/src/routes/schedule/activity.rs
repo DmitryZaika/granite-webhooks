@@ -126,15 +126,17 @@ pub async fn activity(
     let pool = &state.pool;
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = query.offset.unwrap_or(0).max(0);
+    let own = super::own_events_only(pool, &user).await?;
     // Only constants and placeholders are spliced in.
     let latest: Vec<(i32, DateTime<Utc>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT a.event_id, MAX(a.created_at) AS last_at
            FROM ({HISTORY_LINES} UNION ALL {COMMENT_LINES}) a
            JOIN events e ON e.id = a.event_id AND e.deleted_date IS NULL
-          WHERE e.calendar_id IS NULL OR NOT EXISTS (
+          WHERE (e.calendar_id IS NULL OR NOT EXISTS (
                   SELECT 1 FROM calendar_hidden_users hu
                    WHERE hu.calendar_id = e.calendar_id AND hu.company_id = ?
-                     AND hu.user_id = ?)
+                     AND hu.user_id = ?))
+            AND (? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)
           GROUP BY a.event_id
           ORDER BY last_at DESC, a.event_id DESC
           LIMIT ? OFFSET ?"
@@ -143,6 +145,9 @@ pub async fn activity(
     .bind(user.company_id)
     .bind(user.company_id)
     .bind(user.id)
+    .bind(own)
+    .bind(own)
+    .bind(own)
     .bind(limit + 1)
     .bind(offset)
     .fetch_all(pool)

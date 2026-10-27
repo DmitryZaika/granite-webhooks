@@ -19,6 +19,8 @@ pub struct CompanyFeatures {
     /// The points leaderboard (the company's own switch, else the
     /// platform-wide default). See `GET /v1/points-leaderboard`.
     pub leaderboard: bool,
+    /// Projects: sold jobs from template to paid (`GET /v1/projects`).
+    pub projects: bool,
     /// E-signatures: the company has a SignWell API key. Each user still needs
     /// their own `is_signature_available` flag.
     pub e_signature: bool,

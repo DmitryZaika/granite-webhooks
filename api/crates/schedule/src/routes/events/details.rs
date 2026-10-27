@@ -793,6 +793,7 @@ pub async fn search(
     }
     let limit = query.limit.unwrap_or(25).clamp(1, 50);
     let like = format!("%{}%", escape_like(q));
+    let own = crate::routes::schedule::own_events_only(&state.pool, &user).await?;
     let rows: Vec<FoundRow> = sqlx::query_as(
         "SELECT e.id, e.title, e.description, e.location, e.notes, e.start_date, e.end_date,
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.calendar_id, e.rrule,
@@ -804,6 +805,7 @@ pub async fn search(
                 AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL
             AND (e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)
+            AND (? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)
           ORDER BY e.start_date DESC
           LIMIT ?",
     )
@@ -813,6 +815,9 @@ pub async fn search(
     .bind(&like)
     .bind(&like)
     .bind(&like)
+    .bind(own)
+    .bind(own)
+    .bind(own)
     .bind(limit)
     .fetch_all(&state.pool)
     .await?;

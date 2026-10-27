@@ -706,6 +706,16 @@ pub async fn mark_quote_sold(
     .execute(pool)
     .await?;
     add_waiting_jobs(pool, &quote, user_id).await?;
+    // Sold: the job goes to Projects, with the waiting events just added.
+    if let Some(deal_id) = deal_id {
+        api_crm::routes::projects::service::start_for_won_deal(
+            pool,
+            quote.company_id,
+            deal_id,
+            user_id.or(quote.salesperson_id),
+        )
+        .await;
+    }
     Ok(Some(QuoteSale { deal_id, amount }))
 }
 

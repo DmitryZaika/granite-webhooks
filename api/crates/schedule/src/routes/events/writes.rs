@@ -96,6 +96,9 @@ pub struct EventInput {
     /// leave out to keep the saved choice.
     #[serde(default)]
     pub picked_notification_flow_ids: Option<Vec<i32>>,
+    /// Create only: the project this template or installation is for.
+    #[serde(default)]
+    pub project_id: Option<i32>,
 }
 
 /// `POST /v1/events`.
@@ -449,11 +452,23 @@ pub async fn create(
     let event = check(&input)?;
     check_calendar(pool, user.company_id, event.calendar_id).await?;
     let customer = check_customer(pool, user.company_id, &input).await?;
+    let project = match input.project_id.filter(|id| *id > 0) {
+        Some(project) => {
+            let found: Option<i32> =
+                sqlx::query_scalar("SELECT id FROM projects WHERE id = ? AND company_id = ?")
+                    .bind(project)
+                    .bind(user.company_id)
+                    .fetch_optional(pool)
+                    .await?;
+            Some(found.ok_or_else(|| ApiError::BadRequest("No such project".into()))?)
+        }
+        None => None,
+    };
     let id = sqlx::query(
         "INSERT INTO events (title, description, location, start_date, end_date, all_day,
             unscheduled, color, status, notes, created_user_id, assigned_user_id, sale_id,
-            customer_id, calendar_id, rrule, recurrence_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            customer_id, calendar_id, rrule, recurrence_until, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(event.title)
     .bind(event.description)
@@ -472,6 +487,7 @@ pub async fn create(
     .bind(event.calendar_id)
     .bind(event.rrule)
     .bind(event.recurrence_until)
+    .bind(project)
     .execute(pool)
     .await?
     .last_insert_id();

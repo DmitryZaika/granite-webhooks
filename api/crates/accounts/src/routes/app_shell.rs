@@ -22,8 +22,11 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(shell))
 }
 
+const SALES_REP: i32 = 1;
+const SALES_MANAGER: i32 = 2;
 const SHOP_MANAGER: i32 = 3;
 const MANAGER: i32 = 5;
+const OFFICE_MANAGER: i32 = 10;
 const INSTALLER: i32 = 6;
 const CHECK_IN: i32 = 8;
 const MARKETING: i32 = 7;
@@ -54,6 +57,8 @@ pub struct ShellFeatures {
     pub onboarding: bool,
     /// The points leaderboard is on.
     pub leaderboard: bool,
+    /// Projects is on.
+    pub projects: bool,
 }
 
 /// `GET /v1/app/shell`.
@@ -97,6 +102,9 @@ pub struct AppShell {
     pub can_manage_billing: bool,
     /// Holds the Shop Manager position in the company.
     pub is_shop_manager: bool,
+    /// Projects is on and the caller's position has a Projects board (admin,
+    /// Manager, Sales Manager, Office Manager, Shop Manager, sales rep).
+    pub has_projects_board: bool,
     /// Holds Template in the company (their portal is their own schedule).
     pub is_template_maker: bool,
     /// May send documents for signature.
@@ -254,6 +262,17 @@ pub async fn shell(
         can_manage_company: user.is_superuser || here(MANAGER),
         can_manage_billing: here(MANAGER),
         is_shop_manager: here(SHOP_MANAGER),
+        has_projects_board: features.projects
+            && (user.is_admin
+                || [
+                    SALES_REP,
+                    SALES_MANAGER,
+                    SHOP_MANAGER,
+                    MANAGER,
+                    OFFICE_MANAGER,
+                ]
+                .into_iter()
+                .any(here)),
         is_template_maker: here(TEMPLATE_MAKER),
         user_signature_access: user.is_signature_available,
         company_features: ShellFeatures {
@@ -261,6 +280,7 @@ pub async fn shell(
             signature: features.e_signature,
             onboarding: features.onboarding,
             leaderboard: features.leaderboard,
+            projects: features.projects,
         },
         feature_capabilities,
         user,
