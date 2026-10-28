@@ -283,7 +283,7 @@
   {"question": "special order price calc how", "sections": ["samples-special-order"]},
   {"question": "special order from chat", "sections": ["samples-special-order", "ai-chat"]},
   {"question": "samples page where", "sections": ["samples-special-order"]},
-  {"question": "where are my sales", "sections": ["transactions-employee-admin"]},
+  {"question": "where are my sales", "sections": ["transactions-employee-admin", "employee-dashboard-widgets"]},
   {"question": "how to mark a job installed", "sections": ["transactions-employee-admin"]},
   {"question": "open the contract for a sale", "sections": ["transactions-employee-admin"]},
   {"question": "cancel a sale", "sections": ["transactions-employee-admin"], "role": "admin"},
