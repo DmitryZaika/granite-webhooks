@@ -634,6 +634,66 @@
         ]
       }
     },
+    "/v1/me/ai-assistant": {
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Turn my AI personal assistant on or off",
+        "description": "For users who have the AI personal assistant (`users.ai_promises` 1 = on,\n2 = switched off by the user): off stops reading their calls, texts and\nemails, the reminders and the morning list, and hides it in the CRM; on\nresumes it. Users without it get 403.",
+        "operationId": "set_ai_assistant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAssistantSwitch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, or has no AI personal assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/onboarding-feedback": {
       "post": {
         "tags": [
@@ -47141,6 +47201,247 @@
         ]
       }
     },
+    "/v1/company/position-sections": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "List position access",
+        "description": "Every section of the app, and for Inventory Manager and Scheduling\nManager the sections they open in the company, their defaults and\nwhether the company changed them. Someone who holds only these positions\nreaches only their sections (with several, all of them together); any\nother position except the portal ones keeps the whole app. Superusers and\ncompany managers (admins with the Manager position); superusers may pass\n`company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
+        "operationId": "list_position_sections",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sections and each position's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionAccess"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/position-sections/{position_id}": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Save a position's sections",
+        "description": "Replaces the sections the position opens in the company, from then on\nfor every user holding it (their next request). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
+        "operationId": "save_position_sections",
+        "parameters": [
+          {
+            "name": "position_id",
+            "in": "path",
+            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionSectionsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not a sectioned position, or an unknown section",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Reset a position's sections",
+        "description": "The position opens its default sections again in the company.",
+        "operationId": "reset_position_sections",
+        "parameters": [
+          {
+            "name": "position_id",
+            "in": "path",
+            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Back to the defaults"
+          },
+          "400": {
+            "description": "Not a sectioned position",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/superuser/companies": {
       "get": {
         "tags": [
@@ -60908,6 +61209,19 @@
           }
         }
       },
+      "AiAssistantSwitch": {
+        "type": "object",
+        "description": "Body of `PUT /v1/me/ai-assistant`.",
+        "required": [
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "The AI personal assistant (AI promises) runs for me."
+          }
+        }
+      },
       "AiPromise": {
         "type": "object",
         "description": "A promise the rep made a customer, or a change a customer asked for in\ntheir quote.",
@@ -60965,6 +61279,13 @@
               "null"
             ],
             "description": "The customer's email, for an email."
+          },
+          "customer_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the customer goes by in the call or message (for a caller\nwhose number is on no customer)."
           },
           "quote_id": {
             "type": [
@@ -61253,6 +61574,7 @@
           "is_template_maker",
           "user_signature_access",
           "user_ai_promises",
+          "user_ai_promises_available",
           "company_features",
           "feature_capabilities"
         ],
@@ -61297,6 +61619,16 @@
               "null"
             ],
             "description": "That portal's start page."
+          },
+          "sections": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The sections of the app the user reaches, when a sectioned position\n(Inventory Manager, Scheduling Manager) limits them: keys such as\n`inventory`, `inventory_admin`, `customers`, `schedule`\n(`GET /v1/company/position-sections` lists them all). The API refuses\nthe rest. Null when they reach the whole app."
           },
           "has_cloudtalk_api": {
             "type": "boolean",
@@ -61352,6 +61684,10 @@
           "user_ai_promises": {
             "type": "boolean",
             "description": "AI promises is on for the user (`users.ai_promises`): the promise list\nand the promised messages in the composers."
+          },
+          "user_ai_promises_available": {
+            "type": "boolean",
+            "description": "The user has the AI personal assistant, on or switched off by them\n(the switch on My Account)."
           },
           "company_features": {
             "$ref": "#/components/schemas/ShellFeatures",
@@ -61529,6 +61865,13 @@
           "url": {
             "type": "string",
             "description": "Stored URL."
+          },
+          "is_inline": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Drawn inside the body (a signature logo) rather than attached; null\nfor files saved before this was recorded."
           },
           "signed_url": {
             "type": [
@@ -68584,7 +68927,7 @@
         "properties": {
           "kitchen": {
             "type": "string",
-            "description": "The kitchen photo as a `data:image/...;base64,` URL (at most 15 MB)."
+            "description": "The kitchen photo as a `data:image/...;base64,` URL (at most 4 MB)."
           },
           "stoneIds": {
             "type": "array",
@@ -80543,6 +80886,30 @@
           }
         }
       },
+      "PositionAccess": {
+        "type": "object",
+        "description": "`GET /v1/company/position-sections`.",
+        "required": [
+          "sections",
+          "positions"
+        ],
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SectionInfo"
+            },
+            "description": "Every section, in the order to show them."
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PositionSections"
+            },
+            "description": "Each sectioned position. My Account and Report a Bug always stay open."
+          }
+        }
+      },
       "PositionRow": {
         "type": "object",
         "description": "A position the user holds in the current company.",
@@ -80556,6 +80923,58 @@
             "description": "`positions.id`, e.g. 1 = sales rep, 9 = super admin."
           }
         }
+      },
+      "PositionSections": {
+        "type": "object",
+        "description": "One sectioned position in the company.",
+        "required": [
+          "position_id",
+          "sections",
+          "default_sections",
+          "customized"
+        ],
+        "properties": {
+          "position_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`positions.id`: 12 Inventory Manager, 13 Scheduling Manager."
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The sections it opens in this company, in [`SectionInfo`] order."
+          },
+          "default_sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The sections it opens in a company that has not changed it."
+          },
+          "customized": {
+            "type": "boolean",
+            "description": "The company changed it (false: it uses the defaults)."
+          }
+        }
+      },
+      "PositionSectionsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/position-sections/{position_id}`.",
+        "required": [
+          "sections"
+        ],
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Section keys the position opens (may be empty: then only My Account)."
+          }
+        },
+        "additionalProperties": false
       },
       "PrepareAttachments": {
         "type": "object",
@@ -85976,6 +86395,29 @@
             ],
             "format": "int32",
             "description": "A calendar of the caller's company."
+          }
+        }
+      },
+      "SectionInfo": {
+        "type": "object",
+        "description": "A part of the app a position may open.",
+        "required": [
+          "key",
+          "label",
+          "admin"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable key (`inventory`, `customers`, `schedule`, ...)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its name on the Company page."
+          },
+          "admin": {
+            "type": "boolean",
+            "description": "Opens admin pages (e.g. the admin inventory) without making the user\na company admin."
           }
         }
       },

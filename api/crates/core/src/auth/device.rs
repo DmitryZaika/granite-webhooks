@@ -171,7 +171,9 @@ impl FromRequestParts<AppState> for DeviceUser {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let token = device_token(parts).ok_or(ApiError::Unauthorized)?;
-        authenticate_device(&token, state).await
+        let device = authenticate_device(&token, state).await?;
+        super::check_sections(parts, state, &device.user).await?;
+        Ok(device)
     }
 }
 
@@ -225,6 +227,7 @@ impl FromRequestParts<AppState> for PhoneCaller {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         if let Some(token) = device_token(parts) {
             let device = authenticate_device(&token, state).await?;
+            super::check_sections(parts, state, &device.user).await?;
             return Ok(Self {
                 user: device.user,
                 auth: CallerAuth::Device {
