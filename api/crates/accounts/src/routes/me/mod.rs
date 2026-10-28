@@ -9,6 +9,7 @@
 //! - `GET`/`PUT /v1/me/notification-preferences` → Telegram alert settings
 //! - `POST /v1/me/onboarding-feedback` → rate the guided tours (once)
 //! - `PUT /v1/me/sidebar-pin` → keep the desktop sidebar open
+//! - `PUT /v1/me/ai-assistant` → switch my AI personal assistant on or off
 //! - `GET /v1/me/marketing-companies` → companies the user markets for
 //! - `/v1/me/todos`, `/v1/me/todo-order` → the to-do list (see [`todos`])
 
@@ -31,6 +32,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::link_leads_telegram))
         .routes(routes!(handlers::link_notifications_telegram))
         .routes(routes!(handlers::set_sidebar_pin))
+        .routes(routes!(handlers::set_ai_assistant))
         .routes(routes!(handlers::onboarding_feedback))
         .routes(routes!(
             handlers::notification_preferences,

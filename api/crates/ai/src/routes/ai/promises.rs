@@ -330,11 +330,12 @@ pub struct PromiseUpdate {
 }
 
 async fn require_enabled(state: &AppState, user: &SessionUser) -> ApiResult<()> {
-    let on: Option<bool> = sqlx::query_scalar("SELECT ai_promises FROM users WHERE id = ?")
-        .bind(user.id)
-        .fetch_optional(&state.pool)
-        .await?;
-    if on == Some(true) {
+    let on: Option<i64> =
+        sqlx::query_scalar("SELECT CAST(ai_promises AS SIGNED) FROM users WHERE id = ?")
+            .bind(user.id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if on == Some(1) {
         Ok(())
     } else {
         Err(ApiError::Denied(
