@@ -19,6 +19,8 @@
 //! - `POST /v1/jobs/posthog-autofix` → new PostHog errors into fix runs
 //! - `POST /v1/jobs/tendlc-checks` → the AI check of a 10DLC texting
 //!   registration marked ready
+//! - `POST /v1/jobs/promises` → what reps promised customers on calls, texts
+//!   and emails, with the message that keeps each
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
@@ -29,6 +31,7 @@ pub mod contact_sync;
 pub mod maintenance_reminders;
 pub mod phone;
 pub mod posthog_autofix;
+pub mod promises;
 pub mod signature_reminders;
 pub mod sms_followups;
 pub mod supplier_files;
@@ -52,4 +55,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(phone::run))
         .routes(routes!(posthog_autofix::run))
         .routes(routes!(tendlc_checks::run))
+        .routes(routes!(promises::run))
 }

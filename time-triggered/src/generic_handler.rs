@@ -336,6 +336,12 @@ async fn start_tendlc_checks_job() {
     start_api_job("tendlc-checks", "10DLC AI checks").await;
 }
 
+/// Starts the AI promises job without waiting for it: it transcribes calls
+/// and writes messages, which takes longer than a tick waits.
+async fn start_promises_job() {
+    start_api_job("promises", "AI promises").await;
+}
+
 /// Starts a long API job (`POST <API_URL>/v1/jobs/<job>`) without waiting
 /// for it. Sent to the long-running deployment (`API_STREAM_URL`) when there
 /// is one.
@@ -539,6 +545,7 @@ pub(crate) async fn function_handler(
     .await;
     start_supplier_files_job().await;
     start_tendlc_checks_job().await;
+    start_promises_job().await;
     let call_points_count = match report_job("call-points", process_call_points().await).await {
         Ok(count) => count,
         Err(error) => {

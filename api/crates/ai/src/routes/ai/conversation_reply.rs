@@ -646,7 +646,19 @@ pub async fn conversation_reply(
     EmployeeUser(user): EmployeeUser,
     JsonBody(input): JsonBody<ConversationReplyInput>,
 ) -> ApiResult<Json<ConversationReply>> {
-    let (channel, phone_digits, email, has_email, custom) = checked(&input)?;
+    let body = draft(&state, &user, &input, "quick_reply").await?;
+    Ok(Json(ConversationReply { body }))
+}
+
+/// The AI Reply's draft for `user`, its AI calls logged as `feature` (the
+/// promise job's ready messages are custom drafts too).
+pub async fn draft(
+    state: &AppState,
+    user: &crate::auth::session::SessionUser,
+    input: &ConversationReplyInput,
+    feature: &'static str,
+) -> ApiResult<String> {
+    let (channel, phone_digits, email, has_email, custom) = checked(input)?;
     if let Some(id) = input.customer_id {
         let found: Option<i32> = sqlx::query_scalar(
             "SELECT id FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
@@ -667,8 +679,8 @@ pub async fn conversation_reply(
     let include_instructions =
         input.mode != ReplyMode::Custom || input.include_instructions != Some(false);
     let extras = load_extras(
-        &state,
-        &user,
+        state,
+        user,
         gathered.customer_id,
         input.deal_id,
         &gathered,
@@ -692,7 +704,7 @@ pub async fn conversation_reply(
         now,
     );
     let caller = Caller {
-        feature: "quick_reply",
+        feature,
         user_id: Some(user.id),
         company_id: Some(user.company_id),
     };
@@ -764,7 +776,7 @@ pub async fn conversation_reply(
         .await;
         return Err(ApiError::Internal("Failed to generate AI reply".into()));
     }
-    Ok(Json(ConversationReply { body }))
+    Ok(body)
 }
 
 #[cfg(test)]

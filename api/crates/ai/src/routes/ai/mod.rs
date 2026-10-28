@@ -17,6 +17,8 @@
 //! - `POST /v1/ai/first-contact-email` → the first email to a new lead
 //! - `POST /v1/ai/chat` → the AI chat's answer, streamed (server-sent events)
 //! - `POST /v1/ai/crm-manual-feedback` → a thumbs-down on a CRM manual answer
+//! - `GET /v1/ai/promises`, `PATCH /v1/ai/promises/{id}` → what the rep
+//!   promised customers, and closing a promise
 //!
 //! Replaces the Remix `api.aiImprove.email` and `api.aiSummarize.callNote` routes.
 
@@ -34,6 +36,7 @@ pub mod first_contact;
 pub mod improve;
 pub mod invoice_edit;
 pub mod manual_feedback;
+pub mod promises;
 pub mod reply_context;
 pub mod signature_fields;
 
@@ -62,4 +65,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(conversation_reply::conversation_reply))
         .routes(routes!(chat::ask))
         .routes(routes!(manual_feedback::feedback))
+        .routes(routes!(promises::list))
+        .routes(routes!(promises::update))
 }
