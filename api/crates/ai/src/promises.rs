@@ -77,16 +77,17 @@ const DUE: &str = "status = 'pending' AND attempts < ?
 
 pub const PROMISES_SYSTEM_PROMPT: &str = r#"You read what a countertop sales rep said to a customer: a phone call transcript, a text the rep sent (with the texts before it), or an email the rep sent (with the messages it quotes). Answer three things.
 1. "promises": every promise the rep made to the customer: something the rep said THEY would do later ("I'll text you our inventory link", "I'll send you the price tonight", "I'll call you back Tuesday", "Let me check if that slab is in stock", "I'll come measure Friday at 10").
-Only the rep's own promises to this customer. Not what the customer will do, not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages under AFTER THE CALL THE REP SENT are context only: a promise from the call that they already keep is not listed.
-2. "kept": the numbers (#) of OPEN PROMISES this call or message keeps: the rep did it here (sent the link or the price, called back, answered, came by). Only ones clearly done.
+Only the rep's own promises to this customer. Not what the customer will do, not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages under AFTER THE CALL THE REP SENT are context only: a promise from the call that they already keep is not listed (an email to another address counts when it is clearly to this same customer). Combine promises about the same thing into one ("I'll text Andrew" and "I'll let you know his answer" are one: "Ask Andrew and get back to her").
+2. "kept": the numbers (#) of OPEN PROMISES this call or message keeps: the rep did it here (sent the link or the price, called back, answered, came by). Only ones clearly done. OPEN PROMISES TO CALLERS NOT ON FILE are the rep's promises to people whose number matched no customer: count one kept only when this message clearly goes to that same person (their name, what was promised, the timing).
 3. "quote_changes": changes the CUSTOMER asked for in their countertop quote, anywhere in what you read: a different sink, color or stone, edge, backsplash, sizes, adding or removing a piece or a cutout. Not questions about the price, and nothing already in OPEN QUOTE CHANGES.
+4. "customer_name": the name the customer goes by in what you read ("Donna"), or null.
 In a transcript the speakers are labeled A, B...; the rep is the one from the countertop company.
-Return JSON {"promises": [...], "kept": [numbers], "quote_changes": [...]}, with empty lists when there is nothing. Each promise:
+Return JSON {"promises": [...], "kept": [numbers], "quote_changes": [...], "customer_name": ...}, with empty lists when there is nothing. Each promise:
 - "title": what the rep has to do, a short imperative of at most 8 words ("Send the inventory link", "Call back about the sink").
 - "said": the rep's words that made the promise, as said (at most 200 characters).
 - "due": when the rep promised it, "YYYY-MM-DD HH:MM" in the same local time as WHEN and NOW, or null when they named no time. "Tonight" is 19:00, "tomorrow" with no hour is 10:00, "this week" is Friday 17:00, "right after this call" or "in a minute" is 15 minutes after WHEN.
 - "visit": true when it is an appointment at a set time: a visit, measuring or templating, a showroom meeting, an installation; else false.
-- "message": "sms" or "email" when a text or an email that needs only words and a link keeps the promise (send the inventory link, send the online quote link, answer with facts the rep already has, confirm a time); "email" only when the rep said they would email. null when keeping it takes anything else: a call, a visit, measuring, ordering, checking stock, a price or a document the rep must prepare, photos.
+- "message": "sms" or "email" only when a text or an email TO THIS CUSTOMER, needing only words and a link, keeps the promise (a promise to contact someone else, or to answer once someone else replies, is null) (send the inventory link, send the online quote link, answer with facts the rep already has, confirm a time); "email" only when the rep said they would email. null when keeping it takes anything else: a call, a visit, measuring, ordering, checking stock, a price or a document the rep must prepare, photos.
 - "link": "inventory" when the message is about our stones, colors or inventory; "quote" when it is about sending their measurements or the online quote form; else null.
 Each quote change:
 - "change": what to change in the quote, a short imperative of at most 12 words ("Replace the sink with a 33-inch undermount", "Switch the color to Calacatta Gold").
@@ -172,6 +173,8 @@ pub struct Reading {
     /// Open promises (their ids) this call or message keeps.
     pub kept: Vec<u64>,
     pub quote_changes: Vec<QuoteChange>,
+    /// The name the customer goes by in it.
+    pub customer_name: Option<String>,
 }
 
 /// An open promise or quote change of the customer, as the AI is shown it.
@@ -181,6 +184,10 @@ pub struct OpenItem {
     /// `promise` or `quote`.
     pub kind: String,
     pub title: String,
+    /// It is this customer's; else a promise to a caller not on file.
+    pub same_customer: bool,
+    /// Whom it is for: a name, phone or email.
+    pub who: String,
 }
 
 /// `text` within `max` characters: its first quarter and the rest from its end.
@@ -249,6 +256,11 @@ pub fn parse_reading(raw: &str, open: &[OpenItem]) -> Reading {
         promises: parse_promises(&list("promises")),
         kept,
         quote_changes,
+        customer_name: value
+            .get("customer_name")
+            .and_then(Value::as_str)
+            .map(|name| clip(name, 120))
+            .filter(|name| !name.is_empty()),
     }
 }
 
@@ -257,6 +269,7 @@ pub fn parse_reading(raw: &str, open: &[OpenItem]) -> Reading {
 pub fn without_repeats(reading: &mut Reading, open: &[OpenItem]) {
     let mut seen: Vec<String> = open
         .iter()
+        .filter(|item| item.same_customer)
         .map(|item| format!("{}:{}", item.kind, item.title.to_lowercase()))
         .collect();
     let mut first = |key: String| {
@@ -337,7 +350,7 @@ pub fn extraction_prompt(
     let listed = |kind: &str| {
         let lines: Vec<String> = open
             .iter()
-            .filter(|item| item.kind == kind)
+            .filter(|item| item.kind == kind && item.same_customer)
             .map(|item| format!("- #{} {}", item.id, item.title))
             .collect();
         if lines.is_empty() {
@@ -346,8 +359,21 @@ pub fn extraction_prompt(
             lines.join("\n")
         }
     };
+    let others: Vec<String> = open
+        .iter()
+        .filter(|item| item.kind == "promise" && !item.same_customer)
+        .map(|item| format!("- #{} {} — for {}", item.id, item.title, item.who))
+        .collect();
+    let not_on_file = if others.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "OPEN PROMISES TO CALLERS NOT ON FILE (other people unless this is clearly to them):\n{}\n",
+            others.join("\n")
+        )
+    };
     format!(
-        "SALES REP: {rep_name}\nWHEN: {when}\nNOW: {now}\nOPEN PROMISES (already on the rep's list):\n{}\nOPEN QUOTE CHANGES (already on the list):\n{}\n\n{what}:\n{text}",
+        "SALES REP: {rep_name}\nWHEN: {when}\nNOW: {now}\nOPEN PROMISES (already on the rep's list):\n{}\nOPEN QUOTE CHANGES (already on the list):\n{}\n{not_on_file}\n{what}:\n{text}",
         listed("promise"),
         listed("quote"),
     )
@@ -1145,11 +1171,21 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
     let when = local_time(scan.happened_at, tz);
     let customer_id = customer_of(pool, scan).await?;
     let open: Vec<OpenItem> = sqlx::query_as(
-        "SELECT id, CAST(kind AS CHAR) AS kind, title FROM ai_promises
+        // The customer's, and the rep's recent promises to callers whose
+        // number matched no customer (this message may be to one of them).
+        "SELECT id, CAST(kind AS CHAR) AS kind, title,
+                (customer_id = ? OR customer_digits = ? OR customer_email = ?) IS TRUE AS same_customer,
+                COALESCE(customer_label, customer_digits, customer_email, '') AS who
+           FROM ai_promises
           WHERE user_id = ? AND status = 'open'
-            AND (customer_id = ? OR customer_digits = ? OR customer_email = ?)
-          ORDER BY id DESC LIMIT 20",
+            AND ((customer_id = ? OR customer_digits = ? OR customer_email = ?)
+                 OR (customer_id IS NULL AND kind = 'promise'
+                     AND promised_at > UTC_TIMESTAMP() - INTERVAL 3 DAY))
+          ORDER BY id DESC LIMIT 30",
     )
+    .bind(customer_id)
+    .bind(scan.customer_digits.as_deref())
+    .bind(scan.customer_email.as_deref())
     .bind(user.id)
     .bind(customer_id)
     .bind(scan.customer_digits.as_deref())
@@ -1212,9 +1248,9 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         sqlx::query(
             "INSERT INTO ai_promises
                     (company_id, user_id, scan_id, source, promised_at, customer_id,
-                     customer_digits, customer_email, title, said, due_at, is_appointment,
+                     customer_digits, customer_email, customer_label, title, said, due_at, is_appointment,
                      channel, draft)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(scan.company_id)
         .bind(user.id)
@@ -1224,6 +1260,7 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         .bind(customer_id)
         .bind(scan.customer_digits.as_deref())
         .bind(scan.customer_email.as_deref())
+        .bind(reading.customer_name.as_deref())
         .bind(&promise.title)
         .bind(&promise.said)
         .bind(promise.due.and_then(|due| due_utc(due, tz)))
@@ -1237,8 +1274,8 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         sqlx::query(
             "INSERT INTO ai_promises
                     (company_id, user_id, scan_id, source, kind, promised_at, customer_id,
-                     customer_digits, customer_email, quote_id, title, said)
-             VALUES (?, ?, ?, ?, 'quote', ?, ?, ?, ?, ?, ?, ?)",
+                     customer_digits, customer_email, customer_label, quote_id, title, said)
+             VALUES (?, ?, ?, ?, 'quote', ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(scan.company_id)
         .bind(user.id)
@@ -1248,6 +1285,7 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         .bind(customer_id)
         .bind(scan.customer_digits.as_deref())
         .bind(scan.customer_email.as_deref())
+        .bind(reading.customer_name.as_deref())
         .bind(quote_id)
         .bind(&change.change)
         .bind(&change.said)
@@ -1542,32 +1580,55 @@ async fn later_messages(
             }
         }
     }
-    if let Some(customer_id) = customer_id {
-        let rows: Vec<(Option<String>, Option<String>, NaiveDateTime)> = sqlx::query_as(
-            "SELECT e.subject, e.body, e.sent_at FROM emails e
-              WHERE e.company_id = ? AND e.sender_user_id = ? AND e.deleted_at IS NULL
-                AND COALESCE(e.is_draft, 0) = 0 AND e.sent_at > ?
-                AND LOWER(TRIM(e.receiver_email)) IN
-                    (SELECT LOWER(TRIM(ce.email)) FROM customers_emails ce WHERE ce.customer_id = ?)
-              ORDER BY e.sent_at LIMIT 5",
+    // A caller whose number is on no customer may get the email under
+    // another address: then every email the rep sent in the 12 hours after,
+    // with whom it went to, for the AI to tell.
+    let rows: Vec<(
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        NaiveDateTime,
+    )> = if let Some(customer_id) = customer_id {
+        sqlx::query_as(
+                "SELECT e.receiver_email, e.subject, e.body, e.sent_at FROM emails e
+                  WHERE e.company_id = ? AND e.sender_user_id = ? AND e.deleted_at IS NULL
+                    AND COALESCE(e.is_draft, 0) = 0 AND e.sent_at > ?
+                    AND LOWER(TRIM(e.receiver_email)) IN
+                        (SELECT LOWER(TRIM(ce.email)) FROM customers_emails ce WHERE ce.customer_id = ?)
+                  ORDER BY e.sent_at LIMIT 5",
+            )
+            .bind(scan.company_id)
+            .bind(scan.user_id)
+            .bind(scan.happened_at)
+            .bind(customer_id)
+            .fetch_all(pool)
+            .await?
+    } else {
+        sqlx::query_as(
+            "SELECT e.receiver_email, e.subject, e.body, e.sent_at FROM emails e
+                  WHERE e.company_id = ? AND e.sender_user_id = ? AND e.deleted_at IS NULL
+                    AND COALESCE(e.is_draft, 0) = 0 AND COALESCE(e.is_automated, 0) = 0
+                    AND e.sent_at > ? AND e.sent_at < ? + INTERVAL 12 HOUR
+                  ORDER BY e.sent_at LIMIT 8",
         )
         .bind(scan.company_id)
         .bind(scan.user_id)
         .bind(scan.happened_at)
-        .bind(customer_id)
+        .bind(scan.happened_at)
         .fetch_all(pool)
-        .await?;
-        for (subject, body, at) in rows {
-            sent.push((
-                at,
-                format!(
-                    "[{}] EMAIL: {}: {}",
-                    local_time(at, tz),
-                    subject.as_deref().map_or("", str::trim),
-                    clip(without_quoted(body.as_deref().unwrap_or("")), 500)
-                ),
-            ));
-        }
+        .await?
+    };
+    for (to, subject, body, at) in rows {
+        sent.push((
+            at,
+            format!(
+                "[{}] EMAIL to {}: {}: {}",
+                local_time(at, tz),
+                to.as_deref().map_or("?", str::trim),
+                subject.as_deref().map_or("", str::trim),
+                clip(without_quoted(body.as_deref().unwrap_or("")), 500)
+            ),
+        ));
     }
     sent.sort_by_key(|(at, _)| *at);
     Ok(sent.into_iter().map(|(_, line)| line).collect())
@@ -1654,6 +1715,8 @@ mod tests {
             id,
             kind: kind.into(),
             title: title.into(),
+            same_customer: true,
+            who: String::new(),
         }
     }
 
@@ -1811,6 +1874,7 @@ mod tests {
                 change: "Swap the sink".into(),
                 said: String::new(),
             }],
+            customer_name: None,
         };
         without_repeats(
             &mut reading,

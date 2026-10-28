@@ -62,6 +62,9 @@ pub struct AiPromise {
     pub customer_digits: Option<String>,
     /// The customer's email, for an email.
     pub customer_email: Option<String>,
+    /// The name the customer goes by in the call or message (for a caller
+    /// whose number is on no customer).
+    pub customer_label: Option<String>,
     /// A quote change's quote: the customer's newest.
     pub quote_id: Option<i32>,
     /// What to do, e.g. "Send the inventory link".
@@ -389,7 +392,7 @@ pub async fn list(
     let mut promises: Vec<AiPromise> = sqlx::query_as(
         "SELECT p.id, CAST(p.kind AS CHAR) AS kind, CAST(p.source AS CHAR) AS source,
                 p.promised_at, p.customer_id, c.name AS customer_name, p.customer_digits,
-                p.customer_email, p.quote_id, p.title, p.said, p.due_at, p.is_appointment,
+                p.customer_email, p.customer_label, p.quote_id, p.title, p.said, p.due_at, p.is_appointment,
                 CAST(p.channel AS CHAR) AS channel, p.draft
            FROM ai_promises p
            LEFT JOIN customers c ON c.id = p.customer_id AND c.deleted_at IS NULL
