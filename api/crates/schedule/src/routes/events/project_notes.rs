@@ -44,17 +44,69 @@ pub struct ProjectNoteInput {
     pub audience: Option<String>,
 }
 
-/// The event's sale, when the event is the company's and has one.
-async fn event_sale(pool: &MySqlPool, company_id: i32, event_id: i32) -> ApiResult<i32> {
+/// The event's project: its own sale, else its customer's latest sale that
+/// is not cancelled (events made by hand or synced from TimeTree carry only
+/// the customer). `None` when neither; 404 when the event is not the company's.
+async fn find_event_sale(
+    pool: &MySqlPool,
+    company_id: i32,
+    event_id: i32,
+) -> ApiResult<Option<i32>> {
     let sale: Option<Option<i32>> = sqlx::query_scalar(
-        "SELECT e.sale_id FROM events e JOIN users u ON e.created_user_id = u.id
+        "SELECT COALESCE(e.sale_id, (
+                  SELECT s.id FROM sales s
+                   WHERE s.customer_id = e.customer_id AND s.company_id = u.company_id
+                     AND s.cancelled_date IS NULL
+                   ORDER BY s.sale_date DESC, s.id DESC LIMIT 1))
+           FROM events e JOIN users u ON e.created_user_id = u.id
           WHERE e.id = ? AND u.company_id = ? AND e.deleted_date IS NULL",
     )
     .bind(event_id)
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-    sale.flatten().ok_or(ApiError::NotFound)
+    sale.ok_or(ApiError::NotFound)
+}
+
+async fn event_sale(pool: &MySqlPool, company_id: i32, event_id: i32) -> ApiResult<i32> {
+    find_event_sale(pool, company_id, event_id)
+        .await?
+        .ok_or(ApiError::NotFound)
+}
+
+/// `GET /v1/events/{id}/sale`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EventSale {
+    /// The event's own sale, else its customer's latest; null when neither.
+    pub sale_id: Option<i32>,
+}
+
+/// The event's project
+///
+/// The sale the event's project view shows: the event's own, else its
+/// customer's latest sale that is not cancelled.
+#[crate::openapi::path(
+    get,
+    path = "/v1/events/{id}/sale",
+    operation_id = "get_event_sale",
+    tag = "schedule",
+    params(("id" = i32, Path, description = "Event id")),
+    responses(
+        (status = 200, description = "The sale, or null", body = EventSale),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such event in the caller's company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn sale(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<Json<EventSale>> {
+    let sale_id = find_event_sale(&state.pool, user.company_id, id).await?;
+    Ok(Json(EventSale { sale_id }))
 }
 
 /// List the project's notes
