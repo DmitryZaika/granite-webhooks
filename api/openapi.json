@@ -63734,6 +63734,24 @@
                 "type": "null"
               }
             ]
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pictures added to the question, as `data:image/…` URLs (at most\n[`MAX_IMAGES`])."
+          },
+          "page": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PageInput",
+                "description": "The page the user is on, when they share it."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -78235,6 +78253,29 @@
             "description": "Questions in creation order."
           }
         }
+      },
+      "PageInput": {
+        "type": "object",
+        "description": "The page the user is looking at.",
+        "required": [
+          "path",
+          "text"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The page's address (path and query)."
+          },
+          "title": {
+            "type": "string",
+            "description": "The page's title."
+          },
+          "text": {
+            "type": "string",
+            "description": "The text the page shows."
+          }
+        },
+        "additionalProperties": false
       },
       "ParentInput": {
         "type": "object",
