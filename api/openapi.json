@@ -35804,6 +35804,339 @@
         ]
       }
     },
+    "/v1/events/{id}/project-notes": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "List the project's notes",
+        "description": "The notes on the event's sale, oldest first.",
+        "operationId": "list_project_notes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectNote"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event with a sale in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Leave a note on the project",
+        "description": "Signed with the caller; every event of the sale shows it.",
+        "operationId": "add_project_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectNoteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added"
+          },
+          "400": {
+            "description": "Empty, too long or an unknown audience",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event with a sale in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/sale": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "The event's project",
+        "description": "The sale the event's project view shows: the event's own, else its\ncustomer's latest sale that is not cancelled.",
+        "operationId": "get_event_sale",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sale, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSale"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/project-notes/{note_id}": {
+      "delete": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Delete my project note",
+        "description": "Only the author can delete a note.",
+        "operationId": "delete_project_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "note_id",
+            "in": "path",
+            "description": "Note id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's note on this project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/schedule/day-map": {
       "get": {
         "tags": [
@@ -41348,6 +41681,166 @@
         ]
       }
     },
+    "/v1/ai/promises": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "List the caller's open promises",
+        "description": "What the caller promised customers on calls, texts and emails and has not\ndone yet, and the changes customers asked for in their quotes, newest\nfirst: each promise with the message that keeps it when a text or email\ncan, each appointment with its event on the schedule and what it clashes\nwith. With a customer, phone or email: only that customer's; without,\nalso the customers whose text waits for the caller's reply.",
+        "operationId": "list_ai_promises",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "Only this customer's promises.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "phone_digits",
+            "in": "query",
+            "description": "Only promises to this phone (its last 10 digits count).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customer_email",
+            "in": "query",
+            "description": "Only promises to this email.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open promises",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiPromises"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, or AI promises are not on for them",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/promises/{id}": {
+      "patch": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Close or reopen a promise",
+        "description": "`done` once the rep kept it (sending its message does this), `dismissed`\nwhen it was not a promise or is not wanted, `open` to bring it back.",
+        "operationId": "update_ai_promise",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Promise id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromiseUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Status is not done, dismissed or open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, or AI promises are not on for them",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not one of the caller's promises",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/notifications": {
       "get": {
         "tags": [
@@ -41724,7 +42217,7 @@
             }
           },
           "409": {
-            "description": "QuickBooks is not connected, or the quote has an invoice",
+            "description": "QuickBooks is not connected",
             "content": {
               "application/json": {
                 "schema": {
@@ -42504,6 +42997,158 @@
         ]
       }
     },
+    "/v1/qbo/invoice-instructions": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Read the invoice instructions",
+        "description": "What the admin told the AI about the company's invoices and the rules it\nmade of them.",
+        "operationId": "get_qbo_invoice_instructions",
+        "responses": {
+          "200": {
+            "description": "The instructions and their rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceInstructions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Save the invoice instructions",
+        "description": "The AI turns them into exact rules (checked against the company's\n`QuickBooks` products and classes) that every new invoice draft follows.\nEmpty instructions remove them.",
+        "operationId": "save_qbo_invoice_instructions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstructionsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved, with the rules made of them",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceInstructions"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks or the AI failed; nothing was saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/qbo-sales": {
       "get": {
         "tags": [
@@ -43217,6 +43862,53 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TenDlcChecksRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs/promises": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Read reps' calls and messages for promises",
+        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, sends their morning list (once a day from 8 AM their time), queues\ntheir calls, texts and emails of the last 3 days not read yet, then reads\nup to 4 (a call is transcribed first): saves what the rep promised the\ncustomer and by when, closes the open promises it keeps, saves the quote\nchanges the customer asked for, and writes the text or email that keeps\neach promise a message can keep, in the rep's own style.",
+        "operationId": "run_promises",
+        "responses": {
+          "200": {
+            "description": "What the run did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromisesRun"
                 }
               }
             }
@@ -58982,6 +59674,156 @@
           }
         }
       },
+      "Action": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The priced lines get this product.",
+            "required": [
+              "item_id",
+              "item_name",
+              "type"
+            ],
+            "properties": {
+              "item_id": {
+                "type": "string"
+              },
+              "item_name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "product"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The priced lines never get this product (another one is learned).",
+            "required": [
+              "item_id",
+              "item_name",
+              "type"
+            ],
+            "properties": {
+              "item_id": {
+                "type": "string"
+              },
+              "item_name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "avoid_product"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Text lines with the phrase are left out (the editor offers them back).",
+            "required": [
+              "line",
+              "type"
+            ],
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "hide"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The phrase in a line becomes `to`.",
+            "required": [
+              "line",
+              "to",
+              "type"
+            ],
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "rename"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A text line added at the end.",
+            "required": [
+              "text",
+              "type"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "add_line"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The invoice's class.",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "class"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The invoice's CC.",
+            "required": [
+              "email",
+              "type"
+            ],
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "cc"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What a rule does."
+      },
       "ActiveCompany": {
         "type": "object",
         "description": "Body of `PUT /v1/auth/active-company`.",
@@ -60066,6 +60908,154 @@
           }
         }
       },
+      "AiPromise": {
+        "type": "object",
+        "description": "A promise the rep made a customer, or a change a customer asked for in\ntheir quote.",
+        "required": [
+          "id",
+          "kind",
+          "source",
+          "promised_at",
+          "title",
+          "said",
+          "is_appointment"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "`promise`: the rep's; `quote`: a change the customer asked for in\ntheir quote."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where it was said: `call`, `sms` or `email`."
+          },
+          "promised_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was said."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer_digits": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's phone (10 digits), for a call or a text."
+          },
+          "customer_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's email, for an email."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A quote change's quote: the customer's newest."
+          },
+          "title": {
+            "type": "string",
+            "description": "What to do, e.g. \"Send the inventory link\"."
+          },
+          "said": {
+            "type": "string",
+            "description": "The words that made it (the customer's, for a quote change)."
+          },
+          "due_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was promised for."
+          },
+          "is_appointment": {
+            "type": "boolean",
+            "description": "An appointment at a set time (a visit, measuring, a showroom meeting)."
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`sms` or `email` when a message keeps it."
+          },
+          "draft": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That message, ready to send (null when the AI could not write it)."
+          },
+          "scheduled": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScheduleEvent",
+                "description": "An appointment's event for the customer within 12 hours of it (null:\nnot on the schedule, or not an appointment)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "clash": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScheduleEvent",
+                "description": "Another appointment within the hour: one the rep promised someone\nelse, or an event assigned to them."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AiPromises": {
+        "type": "object",
+        "description": "Open promises.",
+        "required": [
+          "promises",
+          "waiting"
+        ],
+        "properties": {
+          "promises": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiPromise"
+            },
+            "description": "Newest first."
+          },
+          "waiting": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaitingCustomer"
+            },
+            "description": "Oldest wait first; only without a customer, phone or email."
+          }
+        }
+      },
       "AnswerAttempt": {
         "type": "object",
         "description": "One answer to a training question.",
@@ -60262,6 +61252,7 @@
           "is_shop_manager",
           "is_template_maker",
           "user_signature_access",
+          "user_ai_promises",
           "company_features",
           "feature_capabilities"
         ],
@@ -60357,6 +61348,10 @@
           "user_signature_access": {
             "type": "boolean",
             "description": "May send documents for signature."
+          },
+          "user_ai_promises": {
+            "type": "boolean",
+            "description": "AI promises is on for the user (`users.ai_promises`): the promise list\nand the promised messages in the composers."
           },
           "company_features": {
             "$ref": "#/components/schemas/ShellFeatures",
@@ -68634,6 +69629,13 @@
               "null"
             ],
             "description": "CC of the invoice email (set on a new invoice only)."
+          },
+          "bill_email_bcc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BCC of the invoice email (set on a new invoice only)."
           }
         }
       },
@@ -69863,6 +70865,20 @@
           "source": {
             "type": "string",
             "description": "Always `photo`."
+          }
+        }
+      },
+      "EventSale": {
+        "type": "object",
+        "description": "`GET /v1/events/{id}/sale`.",
+        "properties": {
+          "sale_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The event's own sale, else its customer's latest; null when neither."
           }
         }
       },
@@ -72364,6 +73380,32 @@
           }
         }
       },
+      "InstructionRule": {
+        "type": "object",
+        "description": "One rule the AI made of the instructions.",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "when_has": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Phrases the quote must all have."
+          },
+          "when_lacks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Phrases the quote must not have."
+          },
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          }
+        }
+      },
       "InstructionScope": {
         "type": "string",
         "description": "Which instructions to reorder.",
@@ -72371,6 +73413,19 @@
           "company",
           "general"
         ]
+      },
+      "InstructionsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/qbo/invoice-instructions`.",
+        "required": [
+          "instructions"
+        ],
+        "properties": {
+          "instructions": {
+            "type": "string",
+            "description": "Plain words; empty removes them."
+          }
+        }
       },
       "Intent": {
         "type": "string",
@@ -72712,6 +73767,30 @@
           "instruction": {
             "type": "string",
             "description": "What to change."
+          }
+        }
+      },
+      "InvoiceInstructions": {
+        "type": "object",
+        "description": "`GET`/`PUT /v1/qbo/invoice-instructions`.",
+        "properties": {
+          "instructions": {
+            "type": "string",
+            "description": "As the admin wrote them."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstructionRule"
+            },
+            "description": "The rules made of them, in order."
+          },
+          "not_understood": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What could not be made into a rule, and why."
           }
         }
       },
@@ -80238,6 +81317,68 @@
           }
         }
       },
+      "ProjectNote": {
+        "type": "object",
+        "description": "A note on the project.",
+        "required": [
+          "id",
+          "audience",
+          "content",
+          "created_at",
+          "own"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The note."
+          },
+          "audience": {
+            "type": "string",
+            "description": "`installers`, `sales_rep` or `everyone`."
+          },
+          "content": {
+            "type": "string",
+            "description": "The text."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was written."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Author's name."
+          },
+          "own": {
+            "type": "boolean",
+            "description": "Whether the caller wrote it (only they can delete it)."
+          }
+        }
+      },
+      "ProjectNoteInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/events/{id}/project-notes`.",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "1 to 2000 characters (trimmed)."
+          },
+          "audience": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`installers`, `sales_rep` or `everyone` (the default)."
+          }
+        }
+      },
       "ProjectSale": {
         "type": "object",
         "description": "A sale to a customer of the family.",
@@ -80285,6 +81426,58 @@
             ],
             "format": "date-time",
             "description": "When it was sold."
+          }
+        }
+      },
+      "PromiseUpdate": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/ai/promises/{id}`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`done` (kept), `dismissed` (not a promise, or not wanted) or `open`."
+          }
+        }
+      },
+      "PromisesRun": {
+        "type": "object",
+        "description": "What a run did.",
+        "required": [
+          "processed",
+          "queued",
+          "promises",
+          "reminded",
+          "digests"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Calls, texts and emails read.",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls, texts and emails newly queued to read.",
+            "minimum": 0
+          },
+          "promises": {
+            "type": "integer",
+            "description": "Promises and quote changes saved.",
+            "minimum": 0
+          },
+          "reminded": {
+            "type": "integer",
+            "description": "Due promises the reps were reminded of.",
+            "minimum": 0
+          },
+          "digests": {
+            "type": "integer",
+            "description": "Morning lists sent.",
+            "minimum": 0
           }
         }
       },
@@ -92659,6 +93852,42 @@
           "visible": {
             "type": "boolean",
             "description": "Published to employees (false: a draft)."
+          }
+        }
+      },
+      "WaitingCustomer": {
+        "type": "object",
+        "description": "A customer whose text waits for the caller's reply.",
+        "required": [
+          "phone_digits",
+          "text",
+          "at"
+        ],
+        "properties": {
+          "phone_digits": {
+            "type": "string",
+            "description": "10 digits."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "Their last text."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

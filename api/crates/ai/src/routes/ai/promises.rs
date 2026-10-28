@@ -14,12 +14,14 @@ use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
+use crate::phone::company;
 use crate::promises::waiting_customers;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc, Weekday};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 /// Query of `GET /v1/ai/promises`. With more than one, a promise matching
@@ -108,12 +110,147 @@ pub struct AiPromises {
 /// An hour either side of an appointment is the same time.
 const CLASH_MINUTES: i64 = 60;
 
+/// A repeating event assigned to the rep.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RecurringEvent {
+    pub title: String,
+    /// The first occurrence (UTC).
+    pub start: NaiveDateTime,
+    pub finish: NaiveDateTime,
+    pub recurrence_until: Option<NaiveDateTime>,
+    /// Local dates left out, `YYYY-MM-DD` comma-separated.
+    pub exdates: String,
+    pub rrule: String,
+}
+
+fn weekday(code: &str) -> Option<Weekday> {
+    let code = code.trim();
+    Some(
+        match code
+            .get(code.len().checked_sub(2)?..)?
+            .to_ascii_uppercase()
+            .as_str()
+        {
+            "MO" => Weekday::Mon,
+            "TU" => Weekday::Tue,
+            "WE" => Weekday::Wed,
+            "TH" => Weekday::Thu,
+            "FR" => Weekday::Fri,
+            "SA" => Weekday::Sat,
+            "SU" => Weekday::Sun,
+            _ => return None,
+        },
+    )
+}
+
+fn week_start(day: NaiveDate) -> NaiveDate {
+    day - Duration::days(i64::from(day.weekday().num_days_from_monday()))
+}
+
+/// The start (UTC) of the event's occurrence that runs within the hour after
+/// `at`, if one does: `FREQ=DAILY` or `WEEKLY` with `INTERVAL`, `BYDAY` and
+/// `UNTIL`, as the schedule writes them, each at the first one's local time,
+/// less the excluded local dates.
+pub fn occurrence_over(event: &RecurringEvent, at: DateTime<Utc>, tz: Tz) -> Option<DateTime<Utc>> {
+    let (mut freq, mut interval, mut by_day, mut until) = (None, 1_i64, Vec::new(), None);
+    for part in event.rrule.split(';') {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        match key.trim().to_ascii_uppercase().as_str() {
+            "FREQ" => freq = Some(value.trim().to_ascii_uppercase()),
+            "INTERVAL" => interval = value.trim().parse().unwrap_or(1).max(1),
+            "BYDAY" => by_day = value.split(',').filter_map(weekday).collect(),
+            "UNTIL" => {
+                until = value
+                    .trim()
+                    .get(..8)
+                    .and_then(|day| NaiveDate::parse_from_str(day, "%Y%m%d").ok());
+            }
+            _ => {}
+        }
+    }
+    let ends = event
+        .recurrence_until
+        .map(|last| tz.from_utc_datetime(&last).date_naive());
+    let until = match (until, ends) {
+        (Some(rule), Some(column)) => Some(rule.min(column)),
+        (rule, column) => rule.or(column),
+    };
+    let first = tz.from_utc_datetime(&event.start);
+    let length = (event.finish - event.start).max(Duration::minutes(1));
+    let skipped: Vec<&str> = event.exdates.split(',').map(str::trim).collect();
+    let today = at.with_timezone(&tz).date_naive();
+    // The one of the day before may still be running.
+    for day in [today, today - Duration::days(1)] {
+        let date = day.format("%Y-%m-%d").to_string();
+        if day < first.date_naive()
+            || until.is_some_and(|last| day > last)
+            || skipped.contains(&date.as_str())
+        {
+            continue;
+        }
+        let on = match freq.as_deref() {
+            Some("DAILY") => {
+                (day - first.date_naive()).num_days() % interval == 0
+                    && (by_day.is_empty() || by_day.contains(&day.weekday()))
+            }
+            Some("WEEKLY") => {
+                (week_start(day) - week_start(first.date_naive())).num_days() / 7 % interval == 0
+                    && if by_day.is_empty() {
+                        day.weekday() == first.weekday()
+                    } else {
+                        by_day.contains(&day.weekday())
+                    }
+            }
+            _ => false,
+        };
+        let Some(start) = on
+            .then(|| {
+                tz.from_local_datetime(&day.and_time(first.time()))
+                    .earliest()
+            })
+            .flatten()
+            .map(|start| start.with_timezone(&Utc))
+        else {
+            continue;
+        };
+        if start < at + Duration::hours(1) && start + length > at {
+            return Some(start);
+        }
+    }
+    None
+}
+
 /// Each appointment's event on the schedule, and what it clashes with.
 async fn check_schedule(
     state: &AppState,
-    user_id: i32,
+    user: &SessionUser,
     promises: &mut [AiPromise],
 ) -> sqlx::Result<()> {
+    let user_id = user.id;
+    if !promises
+        .iter()
+        .any(|p| p.is_appointment && p.due_at.is_some())
+    {
+        return Ok(());
+    }
+    let config = company::load(&state.pool, user.company_id)
+        .await
+        .unwrap_or(None);
+    let tz = company::time_zone_of(config.as_ref());
+    // Repeating events assigned to the rep, matched by their occurrences.
+    let recurring: Vec<RecurringEvent> = sqlx::query_as(
+        "SELECT COALESCE(title, '') AS title, start_date AS start,
+                COALESCE(end_date, start_date + INTERVAL 1 HOUR) AS finish, recurrence_until,
+                COALESCE(recurrence_exdates, '') AS exdates, rrule
+           FROM events
+          WHERE assigned_user_id = ? AND deleted_date IS NULL AND COALESCE(unscheduled, 0) = 0
+            AND COALESCE(rrule, '') <> ''",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
     let appointments: Vec<(u64, DateTime<Utc>, String)> = promises
         .iter()
         .filter(|p| p.kind == "promise" && p.is_appointment)
@@ -160,6 +297,7 @@ async fn check_schedule(
             promise.clash = sqlx::query_as(
                 "SELECT COALESCE(title, '') AS title, start_date AS start FROM events
                   WHERE assigned_user_id = ? AND deleted_date IS NULL AND COALESCE(unscheduled, 0) = 0
+                    AND COALESCE(rrule, '') = ''
                     AND start_date < ? + INTERVAL 1 HOUR
                     AND COALESCE(end_date, start_date + INTERVAL 1 HOUR) > ?
                     AND (customer_id IS NULL OR customer_id <> COALESCE(?, 0))
@@ -171,6 +309,14 @@ async fn check_schedule(
             .bind(promise.customer_id)
             .fetch_optional(&state.pool)
             .await?;
+        }
+        if promise.clash.is_none() {
+            promise.clash = recurring.iter().find_map(|event| {
+                occurrence_over(event, due, tz).map(|start| ScheduleEvent {
+                    title: event.title.clone(),
+                    start,
+                })
+            });
         }
     }
     Ok(())
@@ -259,7 +405,7 @@ pub async fn list(
     .bind(email)
     .fetch_all(&state.pool)
     .await?;
-    check_schedule(&state, user.id, &mut promises).await?;
+    check_schedule(&state, &user, &mut promises).await?;
     let waiting = if filtered {
         Vec::new()
     } else {
@@ -331,4 +477,74 @@ pub async fn update(
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(text: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M").unwrap()
+    }
+
+    fn event(rrule: &str, start: &str, finish: &str, exdates: &str) -> RecurringEvent {
+        RecurringEvent {
+            title: "Team meeting".into(),
+            start: at(start),
+            finish: at(finish),
+            recurrence_until: None,
+            exdates: exdates.into(),
+            rrule: rrule.into(),
+        }
+    }
+
+    #[test]
+    fn repeating_events_are_matched_by_their_occurrences() {
+        let tz = chrono_tz::America::Indiana::Indianapolis;
+        let utc = |text| at(text).and_utc();
+        // Every other Friday, 10:00 to 11:00 local, from Oct 2.
+        let meeting = event(
+            "FREQ=WEEKLY;INTERVAL=2;BYDAY=FR",
+            "2026-10-02 14:00",
+            "2026-10-02 15:00",
+            "",
+        );
+        assert_eq!(
+            occurrence_over(&meeting, utc("2026-10-16 14:30"), tz),
+            Some(utc("2026-10-16 14:00"))
+        );
+        // Within the hour before it starts.
+        assert_eq!(
+            occurrence_over(&meeting, utc("2026-10-16 13:30"), tz),
+            Some(utc("2026-10-16 14:00"))
+        );
+        // The week off.
+        assert_eq!(occurrence_over(&meeting, utc("2026-10-09 14:30"), tz), None);
+        // Still 10:00 local once the clocks go back (15:00 UTC).
+        assert_eq!(
+            occurrence_over(&meeting, utc("2026-11-13 15:30"), tz),
+            Some(utc("2026-11-13 15:00"))
+        );
+        // A date left out, and the end of the rule.
+        let skipped = event(
+            "FREQ=WEEKLY;INTERVAL=2;BYDAY=FR",
+            "2026-10-02 14:00",
+            "2026-10-02 15:00",
+            "2026-10-16",
+        );
+        assert_eq!(occurrence_over(&skipped, utc("2026-10-16 14:30"), tz), None);
+        let ended = event(
+            "FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;UNTIL=20261010",
+            "2026-10-02 14:00",
+            "2026-10-02 15:00",
+            "",
+        );
+        assert_eq!(occurrence_over(&ended, utc("2026-10-16 14:30"), tz), None);
+        // Every day, all day.
+        let daily = event("FREQ=DAILY", "2026-10-01 04:00", "2026-10-02 03:59", "");
+        assert_eq!(
+            occurrence_over(&daily, utc("2026-10-20 18:00"), tz),
+            Some(utc("2026-10-20 04:00"))
+        );
+    }
 }
