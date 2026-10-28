@@ -6,7 +6,7 @@ use super::history::{History, record};
 use super::notify::{Booking, Channel, NotifyKind, customer_email, customer_phone, notify_booking};
 use super::reminders::{self, Appointment};
 use super::writes::{EventInput, check};
-use crate::auth::EmployeeUser;
+use crate::auth::ShopOrEmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
@@ -129,7 +129,7 @@ fn bad(message: &str) -> ApiError {
         (status = 201, description = "Booked", body = BookedEstimate),
         (status = 400, description = "Invalid field, not the Estimates calendar, or a customer without phone or email", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such customer in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -137,7 +137,7 @@ fn bad(message: &str) -> ApiError {
 )]
 pub async fn book(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     JsonBody(input): JsonBody<EstimateInput>,
 ) -> ApiResult<(axum::http::StatusCode, Json<BookedEstimate>)> {
     let created = |id, channel| {

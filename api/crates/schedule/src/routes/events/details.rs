@@ -5,7 +5,7 @@
 //! `api.events.search`.
 
 use super::history::{History, record};
-use crate::auth::EmployeeUser;
+use crate::auth::ShopOrEmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -163,7 +163,7 @@ fn last_segment(url: &str) -> &str {
     responses(
         (status = 200, description = "Details", body = EventDetails),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -171,7 +171,7 @@ fn last_segment(url: &str) -> &str {
 )]
 pub async fn details(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<EventDetails>> {
     let pool = &state.pool;
@@ -287,7 +287,7 @@ fn viewer(user: &SessionUser) -> &str {
         (status = 201, description = "Added"),
         (status = 400, description = "Empty or too long", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -295,7 +295,7 @@ fn viewer(user: &SessionUser) -> &str {
 )]
 pub async fn add_comment(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<CommentInput>,
 ) -> ApiResult<StatusCode> {
@@ -330,7 +330,7 @@ pub async fn add_comment(
         (status = 204, description = "Saved"),
         (status = 400, description = "Empty or too long", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "Not the caller's comment on this event", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -338,7 +338,7 @@ pub async fn add_comment(
 )]
 pub async fn edit_comment(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, comment_id)): Path<(i32, i32)>,
     JsonBody(input): JsonBody<CommentInput>,
 ) -> ApiResult<StatusCode> {
@@ -378,7 +378,7 @@ pub async fn edit_comment(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "Not the caller's comment on this event", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -386,7 +386,7 @@ pub async fn edit_comment(
 )]
 pub async fn delete_comment(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, comment_id)): Path<(i32, i32)>,
 ) -> ApiResult<StatusCode> {
     people(&state.pool, user.company_id, id).await?;
@@ -428,7 +428,7 @@ pub struct PhotosInput {
         (status = 201, description = "Posted"),
         (status = 400, description = "No files, or a URL that was not uploaded", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database or storage error", body = ErrorBody),
     ),
@@ -436,7 +436,7 @@ pub struct PhotosInput {
 )]
 pub async fn add_photos(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<PhotosInput>,
 ) -> ApiResult<StatusCode> {
@@ -494,7 +494,7 @@ async fn remove_if_unused(state: &AppState, company_id: i32, url: &str) -> Resul
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "Not the caller's file on this event", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -502,7 +502,7 @@ async fn remove_if_unused(state: &AppState, company_id: i32, url: &str) -> Resul
 )]
 pub async fn delete_photo(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, photo_id)): Path<(i32, i32)>,
 ) -> ApiResult<StatusCode> {
     people(&state.pool, user.company_id, id).await?;
@@ -568,7 +568,7 @@ fn attachment_kind(name: &str) -> Option<&'static str> {
         (status = 201, description = "Attached"),
         (status = 400, description = "No files, an unsupported type, or a URL that was not uploaded", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database or storage error", body = ErrorBody),
     ),
@@ -576,7 +576,7 @@ fn attachment_kind(name: &str) -> Option<&'static str> {
 )]
 pub async fn add_attachments(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<AttachmentsInput>,
 ) -> ApiResult<StatusCode> {
@@ -649,7 +649,7 @@ pub async fn add_attachments(
     responses(
         (status = 204, description = "Removed"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such attachment on this event", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -657,7 +657,7 @@ pub async fn add_attachments(
 )]
 pub async fn delete_attachment(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, attachment_id)): Path<(i32, i32)>,
 ) -> ApiResult<StatusCode> {
     people(&state.pool, user.company_id, id).await?;
@@ -777,14 +777,14 @@ pub struct FoundEvent {
     responses(
         (status = 200, description = "Events", body = [FoundEvent]),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn search(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Query(query): Query<EventSearchQuery>,
 ) -> ApiResult<Json<Vec<FoundEvent>>> {
     let q = query.q.trim();

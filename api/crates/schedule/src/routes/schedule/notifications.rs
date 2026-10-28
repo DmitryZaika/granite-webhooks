@@ -19,7 +19,7 @@
 //! customer is its own (`customer_id`), else its sale's.
 //! An event with a flow on no longer gets the built-in reminders.
 
-use crate::auth::{AdminUser, EmployeeUser};
+use crate::auth::{AdminUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
@@ -1018,14 +1018,14 @@ pub struct ActiveFlows {
     responses(
         (status = 200, description = "The flows", body = ActiveFlows),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn active(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Query(query): Query<ActiveQuery>,
 ) -> ApiResult<Json<ActiveFlows>> {
     let pool = &state.pool;
@@ -1697,7 +1697,7 @@ fn confirmation_failure(code: &str) -> ApiError {
         (status = 200, description = "Sent", body = ConfirmationSent),
         (status = 400, description = "Unscheduled, no customer, unknown template, or the customer cannot be reached", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 502, description = "The text or email failed to send", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -1706,7 +1706,7 @@ fn confirmation_failure(code: &str) -> ApiError {
 )]
 pub async fn send_confirmation(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<ConfirmationInput>,
 ) -> ApiResult<Json<ConfirmationSent>> {
