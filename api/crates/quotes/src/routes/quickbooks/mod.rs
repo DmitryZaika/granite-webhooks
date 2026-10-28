@@ -24,6 +24,7 @@ pub mod products;
 pub mod rules;
 pub mod sales;
 
+use crate::auth::session::SessionUser;
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -60,6 +61,36 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(sales::my_sales))
         .routes(routes!(sales::my_customers))
         .routes(routes!(class_sales::class_sales))
+}
+
+/// `positions.id` of an installer.
+const INSTALLER: i32 = 6;
+
+/// An installer of the company who is not an admin: they are locked into the
+/// installer portal and see only the invoice the office linked to their job.
+async fn installer_only(state: &AppState, user: &SessionUser) -> ApiResult<bool> {
+    if user.is_admin || user.is_superuser {
+        return Ok(false);
+    }
+    let found: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM users_positions WHERE user_id = ? AND company_id = ? AND position_id = ? LIMIT 1",
+    )
+    .bind(user.id)
+    .bind(user.company_id)
+    .bind(INSTALLER)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(found.is_some())
+}
+
+/// Installers may not browse, create or edit invoices.
+async fn refuse_installer(state: &AppState, user: &SessionUser) -> ApiResult<()> {
+    if installer_only(state, user).await? {
+        return Err(ApiError::Denied(
+            "Installers see only the invoice linked to their job.".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// What a `QuickBooks` failure means to the page.
@@ -297,6 +328,7 @@ pub async fn customer_invoices(
     EmployeeUser(user): EmployeeUser,
     Path(customer_id): Path<i32>,
 ) -> ApiResult<Json<CustomerInvoices>> {
+    refuse_installer(&state, &user).await?;
     invoices_of_customer(&state, user.company_id, customer_id)
         .await
         .map(Json)
@@ -453,6 +485,7 @@ pub async fn create_invoice(
     Path(customer_id): Path<i32>,
     JsonBody(input): JsonBody<InvoiceCreate>,
 ) -> ApiResult<Json<EditableInvoice>> {
+    refuse_installer(&state, &user).await?;
     let company_id = user.company_id;
     if let Some(quote_id) = input.quote_id {
         // A quote may be invoiced again (e.g. its invoice was deleted in
@@ -680,6 +713,7 @@ pub async fn get_invoice(
     EmployeeUser(user): EmployeeUser,
     Path((customer_id, invoice_id)): Path<(i32, String)>,
 ) -> ApiResult<Json<EditableInvoice>> {
+    refuse_installer(&state, &user).await?;
     let access = owned_invoice(&state, user.company_id, customer_id, &invoice_id).await?;
     let raw = fetch_invoice(&state, &access, &invoice_id)
         .await
@@ -746,6 +780,7 @@ pub async fn update_invoice(
     Path((customer_id, invoice_id)): Path<(i32, String)>,
     JsonBody(input): JsonBody<InvoiceUpdate>,
 ) -> ApiResult<Json<EditableInvoice>> {
+    refuse_installer(&state, &user).await?;
     if input.invoice.id != invoice_id {
         return Err(ApiError::BadRequest("Invalid invoice payload".into()));
     }
@@ -807,6 +842,7 @@ pub async fn customer_invoice_pdf(
     EmployeeUser(user): EmployeeUser,
     Path((customer_id, invoice_id)): Path<(i32, String)>,
 ) -> ApiResult<impl IntoResponse> {
+    refuse_installer(&state, &user).await?;
     customer_invoice_pdf_of(&state, user.company_id, customer_id, &invoice_id).await
 }
 
@@ -854,6 +890,25 @@ pub async fn invoice_pdf(
 ) -> ApiResult<impl IntoResponse> {
     if !valid_id(&invoice_id) {
         return Err(ApiError::BadRequest("Invalid invoice".into()));
+    }
+    if installer_only(&state, &user).await? {
+        let linked: Option<i32> = sqlx::query_scalar(
+            "SELECT 1 FROM event_qbo_invoices i
+               JOIN events e ON e.id = i.event_id
+              WHERE i.company_id = ? AND i.qbo_invoice_id = ?
+                AND e.assigned_user_id = ? AND e.deleted_date IS NULL
+              LIMIT 1",
+        )
+        .bind(user.company_id)
+        .bind(&invoice_id)
+        .bind(user.id)
+        .fetch_optional(&state.pool)
+        .await?;
+        if linked.is_none() {
+            return Err(ApiError::Denied(
+                "This invoice is not linked to one of your jobs.".into(),
+            ));
+        }
     }
     let access = state
         .qbo
@@ -911,6 +966,7 @@ pub async fn customers(
     EmployeeUser(user): EmployeeUser,
     Query(query): Query<CustomersQuery>,
 ) -> ApiResult<Json<QboCustomers>> {
+    refuse_installer(&state, &user).await?;
     let name = query.name.as_deref().map_or("", str::trim);
     let email = query.email.as_deref().map_or("", str::trim);
     if name.is_empty() && email.is_empty() {
@@ -982,6 +1038,7 @@ pub async fn items(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<QboItems>> {
+    refuse_installer(&state, &user).await?;
     company_items(&state, user.company_id).await.map(Json)
 }
 
