@@ -220,6 +220,7 @@ async fn save(
     mut messages: Vec<Message>,
     answer: &str,
 ) {
+    log_answer(pool, user_id, &messages, answer).await;
     messages.push(Message::new("assistant", answer));
     let history = serde_json::to_string(&messages).unwrap_or_else(|_| "[]".into());
     let result = match id {
@@ -241,6 +242,28 @@ async fn save(
     };
     if let Err(err) = result {
         tracing::error!(error = %err, user = user_id, "chat history not saved");
+    }
+}
+
+/// Keeps the question (the last user message, as typed) and its answer in
+/// `chat_log` for good: a new chat overwrites `chat_history`.
+async fn log_answer(pool: &MySqlPool, user_id: i32, messages: &[Message], answer: &str) {
+    let Some(asked) = messages.iter().rev().find(|m| m.role == "user") else {
+        return;
+    };
+    let result = sqlx::query(
+        "INSERT INTO chat_log (user_id, company_id, question, answer, from_manual)
+         SELECT ?, company_id, ?, ?, ? FROM users WHERE id = ?",
+    )
+    .bind(user_id)
+    .bind(prompts::asked_question(&asked.content))
+    .bind(answer)
+    .bind(prompts::is_manual_question(&asked.content))
+    .bind(user_id)
+    .execute(pool)
+    .await;
+    if let Err(err) = result {
+        tracing::error!(error = %err, user = user_id, "chat log not saved");
     }
 }
 

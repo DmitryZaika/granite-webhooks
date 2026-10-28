@@ -859,6 +859,22 @@ async fn a_how_to_about_records_is_answered_from_the_manual(pool: MySqlPool) {
             .iter()
             .any(|c| c.contains("### Deleting a deal"))
     );
+    // Kept for good, as asked, in chat_log.
+    let logged: (i32, Option<i32>, String, String, bool) =
+        sqlx::query_as("SELECT user_id, company_id, question, answer, from_manual FROM chat_log")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        logged,
+        (
+            100,
+            Some(100),
+            "can i delete a deal?".into(),
+            reply.into(),
+            true
+        )
+    );
 }
 
 /// Admins and super admins who are not marked employees keep the assistant.
