@@ -216,6 +216,16 @@ prices from the Stripe lookup keys in `billing/catalog.rs` and also reads
 `SIGNUP_TEST_PAYMENT_METHOD`. `POST /v1/jobs/subscription-maintenance`
 resumes stuck provisioning, expires abandoned signups and reconciles seats.
 
+Payment methods (`billing/methods.rs`, `routes/billing_methods.rs`): card and
+US bank account through SetupIntents confirmed by the payments app's Payment
+Element. A bank account waiting for micro-deposits gives a signup the CRM for
+10 days and its subscription once Stripe verifies it; `POST
+/v1/billing/payment-setup`, `/payment-method` and `/invoice-payment` serve the
+account, pay and upgrade pages. A blocked bank account or a dispute pauses
+access 7 days later unless a new method is saved. `BILLING_ALERT_EMAIL`
+(optional) gets the internal notice of returned debits, blocked accounts and
+disputes. The Stripe Dashboard setup is `general_datebase/apps/payments/STRIPE-DASHBOARD.md`.
+
 Onboarding with Dima (`onboarding_call/` in api-core, Terms section 11): provisioning
 gives each self-serve company a commitment to complete an onboarding call
 within 30 days or pay the fee fixed at signup. `GET /v1/onboarding-call`

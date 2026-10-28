@@ -258,6 +258,8 @@ async fn create_stores_the_signup_and_emails_a_code(pool: MySqlPool) {
     assert_eq!(signup["status"], "started");
     assert_eq!(signup["company_name"], "Fresh Stone");
     assert_eq!(signup["payment_mode"], "test");
+    assert_eq!(signup["publishable_key"], Value::Null);
+    assert_eq!(signup["payment_method"], Value::Null);
     assert!(signup["resend_in_seconds"].as_i64().unwrap() > 0);
     assert_eq!(signup["quote"]["monthly_cents"], 43500);
 }
@@ -496,15 +498,31 @@ async fn consents_follow_verification_and_the_plan(pool: MySqlPool) {
     verify(&env, &id, &code).await.assert_status_ok();
     let consents: Value = env.server.get(&path).await.json();
     let list = consents["consents"].as_array().unwrap();
-    let kinds: Vec<_> = list.iter().map(|c| c["kind"].as_str().unwrap()).collect();
+    let kinds: Vec<_> = list
+        .iter()
+        .map(|c| {
+            (
+                c["kind"].as_str().unwrap(),
+                c["payment_method_type"].clone(),
+            )
+        })
+        .collect();
     assert_eq!(
         kinds,
         [
-            "terms",
-            "auto_renewal",
-            "per_user_pricing",
-            "onboarding_fee"
+            ("terms", Value::Null),
+            ("auto_renewal", Value::Null),
+            ("per_user_pricing", Value::Null),
+            ("onboarding_fee", Value::Null),
+            ("card_authorization", json!("card")),
+            ("ach_authorization", json!("us_bank_account")),
         ]
+    );
+    assert!(
+        list[5]["text"]
+            .as_str()
+            .unwrap()
+            .contains("debit the bank account I add on this page for: (a) $375.00 per month")
     );
     for consent in list {
         assert_eq!(consent["sha256"], sha(consent["text"].as_str().unwrap()));
@@ -652,10 +670,140 @@ async fn payment_setup_in_stripe_mode(pool: MySqlPool) {
     assert_eq!(json["mode"], "stripe");
     assert_eq!(json["publishable_key"], "pk_test_fake");
     assert!(json["client_secret"].as_str().unwrap().contains("_secret_"));
+    let setup = {
+        let stripe = env.stripe.lock().unwrap();
+        let made = stripe.calls("POST", "/v1/setup_intents");
+        assert_eq!(made[0].field("payment_method"), None);
+        assert_eq!(made[0].field("confirm"), None);
+        stripe.setup_intents.keys().next().unwrap().clone()
+    };
+    let path = format!("/v1/public/signups/{id}");
+    let signup: Value = env.server.get(&path).await.json();
+    assert_eq!(signup["publishable_key"], "pk_test_fake");
+    // Not confirmed yet: nothing usable is saved.
+    assert_eq!(signup["payment_method"], Value::Null);
+
+    // The browser confirmed a card: a reload shows it saved.
+    env.stripe
+        .lock()
+        .unwrap()
+        .confirm_setup_intent(&setup, "pm_card_visa");
+    let signup: Value = env.server.get(&path).await.json();
+    assert_eq!(
+        signup["payment_method"],
+        json!({ "status": "ready", "type": "card", "brand": "visa", "last4": "4242",
+                "verify_url": null, "verify_by": null })
+    );
+    // Stripe unreadable: the field is null, the page still loads.
+    env.stripe.lock().unwrap().fail(
+        axum::http::Method::GET,
+        "/v1/setup_intents/",
+        fake_stripe::FailMode::Before,
+        3,
+    );
+    let res = env.server.get(&path).await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>()["payment_method"], Value::Null);
+}
+
+/// The test seam answers only with a `sk_test_` key: a live-looking key
+/// collects the payment method with the Payment Element, even with a test
+/// payment method configured.
+#[test_db::test(seed)]
+async fn a_live_key_never_takes_the_test_seam(pool: MySqlPool) {
+    let stripe = fake_stripe::FakeStripe::with_catalog();
+    let sink = Arc::new(Mutex::new(fake_webhooks::Sink::default()));
+    let base = fake_stripe::start(Arc::clone(&stripe)).await;
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+        .with_stripe(api::billing::stripe::Stripe::new(
+            Some("sk_live_fake"),
+            &base,
+        ))
+        .with_webhooks(fake_webhooks::start(&sink).await)
+        .with_app_url("https://app.example")
+        .with_signup(SignupConfig {
+            enabled: true,
+            test_payment_method: Some("pm_card_visa".into()),
+            publishable_key: Some("pk_live_fake".into()),
+            ..Default::default()
+        });
+    assert!(!api::signup::payment::is_test_mode(&state));
+    let env = Env {
+        server: TestServer::new(app(state)),
+        stripe,
+        sink,
+        pool,
+    };
+    let id = verified(&env, "live@fresh.test").await;
+    let res = env
+        .server
+        .post(&format!("/v1/public/signups/{id}/payment-setup"))
+        .await;
+    res.assert_status_ok();
+    let json: Value = res.json();
+    assert_eq!(json["mode"], "stripe");
+    assert_eq!(json["publishable_key"], "pk_live_fake");
     let stripe = env.stripe.lock().unwrap();
     let made = stripe.calls("POST", "/v1/setup_intents");
-    assert_eq!(made[0].field("payment_method"), None);
+    assert_eq!(made.len(), 1);
     assert_eq!(made[0].field("confirm"), None);
+    assert_eq!(made[0].field("payment_method"), None);
+    assert_eq!(
+        stripe.setup_intents.values().next().unwrap()["status"],
+        "requires_payment_method"
+    );
+}
+
+/// Another request holding the email's lock: 503 `signup_busy`, nothing stored.
+#[test_db::test(seed)]
+async fn a_busy_email_lock_is_signup_busy(pool: MySqlPool) {
+    let env = env(pool).await;
+    let email = "busy@fresh.test";
+    let held =
+        api::billing::lock::NamedLock::acquire(&env.pool, &api::signup::email_lock_name(email), 1)
+            .await
+            .ok()
+            .unwrap();
+    let res = env
+        .server
+        .post("/v1/public/signups")
+        .json(&body(email))
+        .await;
+    held.release().await;
+    res.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let json: Value = res.json();
+    assert_eq!(json["code"], "signup_busy");
+    assert_eq!(
+        json["error"],
+        "We're finishing another request. Try again in a moment."
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM signup_intents")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+}
+
+/// Prices that cannot be read: 503 `payments_unavailable`, not the kill switch's code.
+#[test_db::test(seed)]
+async fn unreadable_prices_are_payments_unavailable(pool: MySqlPool) {
+    let env = env(pool).await;
+    env.stripe.lock().unwrap().fail(
+        axum::http::Method::GET,
+        "/v1/prices",
+        fake_stripe::FailMode::Before,
+        10,
+    );
+    for res in [
+        env.server.get("/v1/public/plans").await,
+        env.server
+            .post("/v1/public/signups")
+            .json(&body("prices@fresh.test"))
+            .await,
+    ] {
+        res.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(res.json::<Value>()["code"], "payments_unavailable");
+    }
 }
 
 #[test_db::test(seed)]
@@ -674,7 +822,7 @@ async fn stripe_mode_without_a_publishable_key_is_unavailable(pool: MySqlPool) {
         .post(&format!("/v1/public/signups/{id}/payment-setup"))
         .await;
     res.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(res.json::<Value>()["code"], "signup_unavailable");
+    assert_eq!(res.json::<Value>()["code"], "payments_unavailable");
 }
 
 #[test_db::test(seed)]
@@ -699,7 +847,7 @@ async fn the_sixth_payment_setup_is_refused(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn a_stripe_outage_is_a_502(pool: MySqlPool) {
+async fn a_stripe_outage_is_payments_unavailable(pool: MySqlPool) {
     let env = env(pool).await;
     let id = verified(&env, "out@fresh.test").await;
     env.stripe.lock().unwrap().fail(
@@ -712,7 +860,8 @@ async fn a_stripe_outage_is_a_502(pool: MySqlPool) {
         .server
         .post(&format!("/v1/public/signups/{id}/payment-setup"))
         .await;
-    res.assert_status(StatusCode::BAD_GATEWAY);
+    res.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(res.json::<Value>()["code"], "payments_unavailable");
     let signup: Value = env
         .server
         .get(&format!("/v1/public/signups/{id}"))
@@ -830,7 +979,7 @@ async fn a_full_signup_ends_signed_in(pool: MySqlPool) {
     done.assert_status_ok();
     assert_eq!(
         done.json::<Value>(),
-        json!({ "redirect_url": "https://app.example/employee?welcome=1" })
+        json!({ "redirect_url": "https://app.example/employee?welcome=1", "bank_verification": null })
     );
     let cookie = done
         .headers()
@@ -911,7 +1060,7 @@ async fn prices_that_differ_from_the_consent_texts_close_signup(pool: MySqlPool)
     }
     let plans = env.server.get("/v1/public/plans").await;
     plans.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(plans.json::<Value>()["code"], "signup_unavailable");
+    assert_eq!(plans.json::<Value>()["code"], "payments_unavailable");
     let create = env
         .server
         .post("/v1/public/signups")

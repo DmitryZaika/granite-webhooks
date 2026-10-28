@@ -8,6 +8,7 @@ pub mod billing;
 pub mod billing_account;
 pub mod billing_addons;
 pub mod billing_cancellation;
+pub mod billing_methods;
 pub mod billing_setup;
 pub mod bug_reports;
 pub mod checklists;

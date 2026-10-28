@@ -35,6 +35,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(start_reactivation))
         .routes(routes!(finish_reactivation))
         .routes(routes!(stripe_webhook))
+        .merge(super::billing_methods::router())
 }
 
 /// Body of `POST /v1/billing/reactivation`.
@@ -225,7 +226,14 @@ pub struct WebhookReceived {
 /// Stripe's webhook endpoint: checkout, subscription, invoice and payment
 /// method events update the company's billing (each event once); a plan
 /// invite's subscription (`metadata.plan_invite_id`) only once the invite
-/// is accepted. Events of
+/// is accepted. Card and bank account events (`setup_intent.succeeded`,
+/// `setup_intent.setup_failed`, `payment_intent.processing`,
+/// `charge.failed`, `charge.dispute.created`,
+/// `payment_method.automatically_updated`) are re-read from Stripe: a
+/// verified bank account becomes the default (or completes the signup
+/// waiting on it), a failed one is reported to the Managers, a bank payment
+/// in flight keeps access on, a blocked account or a dispute starts a 7-day
+/// hold. Events of
 /// the onboarding fee invoice (`metadata.kind = onboarding_fee`) only move
 /// the company's onboarding commitment. Needs a valid `Stripe-Signature` for
 /// `STRIPE_WEBHOOK_SECRET`; no session.
@@ -268,6 +276,15 @@ pub async fn stripe_webhook(
         }
         return Ok(Json(WebhookReceived { received: true }));
     }
+    if crate::billing::methods::is_method_event(&event) {
+        // Card and bank payment methods: claimed once, re-read from Stripe,
+        // never under the company lock (signup provisioning takes its own).
+        if let Err(err) = crate::billing::methods::apply_method_event(&state, &event).await {
+            tracing::error!(error = %err, "Stripe payment method webhook failed");
+            return Err(ApiError::Internal("Webhook processing failed".into()));
+        }
+        return Ok(Json(WebhookReceived { received: true }));
+    }
     let Some(normalized) = normalize_event(&event) else {
         return Ok(Json(WebhookReceived { received: true }));
     };
@@ -302,6 +319,12 @@ pub async fn stripe_webhook(
                 (company_id, &latest)
             {
                 sync_subscription_items(&state, &store, company_id, subscription).await?;
+            }
+            // A paid or failed invoice ends the bank payment in flight.
+            if let (Some(company_id), BillingEvent::Invoice { .. }) = (company_id, &latest) {
+                crate::billing::methods::clear_processing(&state.pool, company_id)
+                    .await
+                    .map_err(|err| err.to_string())?;
             }
             Ok::<(), String>(())
         }

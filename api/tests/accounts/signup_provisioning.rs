@@ -10,7 +10,7 @@ use api::app;
 use api::billing::catalog::Catalog;
 use api::billing::stripe::SignupCustomer;
 use api::error::ApiError;
-use api::signup::consent::{self, ConsentAcceptance};
+use api::signup::consent::{self, ConsentAcceptance, PaymentMethodType};
 use api::signup::provision::{self, CompletionOutcome};
 use api::signup::{RequestMeta, SignupConfig, intent};
 use api::state::AppState;
@@ -24,21 +24,22 @@ use serde_json::{Value, json};
 use sqlx::MySqlPool;
 use std::sync::{Arc, Mutex};
 
-const JOB_KEY: &str = "job-secret";
+pub(crate) const JOB_KEY: &str = "job-secret";
 const PASSWORD: &str = "Correct-Horse-9";
 const STAFF_USER: i32 = 101;
-const STAFF_EMAIL: &str = "dima@granite.test";
-const APP_URL: &str = "https://granite-manager.com";
+pub(crate) const STAFF_EMAIL: &str = "dima@granite.test";
+pub(crate) const APP_URL: &str = "https://granite-manager.com";
 
-struct Env {
-    pool: MySqlPool,
-    state: AppState,
-    stripe: fake_stripe::Shared,
-    sink: fake_webhooks::Shared,
+/// Shared with `signup_bank`.
+pub(crate) struct Env {
+    pub(crate) pool: MySqlPool,
+    pub(crate) state: AppState,
+    pub(crate) stripe: fake_stripe::Shared,
+    pub(crate) sink: fake_webhooks::Shared,
 }
 
 impl Env {
-    async fn new(pool: &MySqlPool) -> Self {
+    pub(crate) async fn new(pool: &MySqlPool) -> Self {
         let stripe = FakeStripe::with_catalog();
         let client = fake_stripe::client(&stripe).await;
         let sink: fake_webhooks::Shared = Arc::new(Mutex::new(Sink::default()));
@@ -62,12 +63,12 @@ impl Env {
         }
     }
 
-    fn now() -> NaiveDateTime {
+    pub(crate) fn now() -> NaiveDateTime {
         Utc::now().naive_utc().trunc_subsecs(0)
     }
 
     /// A Stripe customer of a signup, as payment setup made it.
-    async fn customer(&self, id: &str, email: &str) -> String {
+    pub(crate) async fn customer(&self, id: &str, email: &str) -> String {
         let customer = self
             .state
             .stripe
@@ -88,7 +89,13 @@ impl Env {
 
     /// Inserts a signup row in `status` with a Stripe customer, created
     /// `age` ago (it expires 24 hours after that).
-    async fn intent_row(&self, email: &str, company: &str, status: &str, age: Duration) -> String {
+    pub(crate) async fn intent_row(
+        &self,
+        email: &str,
+        company: &str,
+        status: &str,
+        age: Duration,
+    ) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let customer = self.customer(&id, email).await;
         let created = Self::now() - age;
@@ -124,7 +131,7 @@ impl Env {
 
     /// A `payment_ready` signup whose SetupIntent the browser confirmed with
     /// a card (unless `confirmed` is false).
-    async fn ready_signup(&self, email: &str, company: &str, confirmed: bool) -> String {
+    pub(crate) async fn ready_signup(&self, email: &str, company: &str, confirmed: bool) -> String {
         let id = self
             .intent_row(email, company, "payment_ready", Duration::minutes(5))
             .await;
@@ -158,13 +165,24 @@ impl Env {
         id
     }
 
-    /// The checkboxes as the page would send them back.
-    async fn acceptances(&self, id: &str) -> Vec<ConsentAcceptance> {
+    /// The checkboxes as the page would send them back, paying by card.
+    pub(crate) async fn acceptances(&self, id: &str) -> Vec<ConsentAcceptance> {
+        self.acceptances_for(id, PaymentMethodType::Card).await
+    }
+
+    /// The base checkboxes and the payment one of `method`, as the page
+    /// shows them.
+    pub(crate) async fn acceptances_for(
+        &self,
+        id: &str,
+        method: PaymentMethodType,
+    ) -> Vec<ConsentAcceptance> {
         let intent = intent::load(&self.pool, id).await.unwrap().unwrap();
         let catalog = Catalog::load(&self.state.stripe).await.unwrap();
         let facts = consent::facts(&catalog, &intent, Utc::now());
         consent::render(&facts, APP_URL)
             .into_iter()
+            .filter(|rendered| rendered.applies_to(method))
             .map(|rendered| ConsentAcceptance {
                 kind: rendered.kind,
                 version: rendered.version.to_string(),
@@ -173,12 +191,12 @@ impl Env {
             .collect()
     }
 
-    async fn complete(&self, id: &str) -> Result<CompletionOutcome, ApiError> {
+    pub(crate) async fn complete(&self, id: &str) -> Result<CompletionOutcome, ApiError> {
         let accepted = self.acceptances(id).await;
         provision::complete(&self.state, id, &accepted, &meta()).await
     }
 
-    async fn job(&self) -> Value {
+    pub(crate) async fn job(&self) -> Value {
         let server = TestServer::new(app(self.state.clone()));
         let response = server
             .post("/v1/jobs/subscription-maintenance")
@@ -188,11 +206,11 @@ impl Env {
         response.json()
     }
 
-    async fn intent(&self, id: &str) -> intent::Intent {
+    pub(crate) async fn intent(&self, id: &str) -> intent::Intent {
         intent::load(&self.pool, id).await.unwrap().unwrap()
     }
 
-    async fn count(&self, sql: &str, bind: &str) -> i64 {
+    pub(crate) async fn count(&self, sql: &str, bind: &str) -> i64 {
         sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_string()))
             .bind(bind)
             .fetch_one(&self.pool)
@@ -200,24 +218,24 @@ impl Env {
             .unwrap()
     }
 
-    async fn companies_named(&self, name: &str) -> i64 {
+    pub(crate) async fn companies_named(&self, name: &str) -> i64 {
         self.count("SELECT COUNT(*) FROM company WHERE name = ?", name)
             .await
     }
 
-    fn subscription_posts(&self) -> Vec<fake_stripe::Seen> {
+    pub(crate) fn subscription_posts(&self) -> Vec<fake_stripe::Seen> {
         self.stripe
             .lock()
             .unwrap()
             .calls("POST", "/v1/subscriptions")
     }
 
-    fn subscriptions(&self) -> usize {
+    pub(crate) fn subscriptions(&self) -> usize {
         self.stripe.lock().unwrap().subscriptions.len()
     }
 
     /// (welcome emails to the owner, Telegram notices, staff emails)
-    fn notices(&self, owner: &str) -> (usize, usize, usize) {
+    pub(crate) fn notices(&self, owner: &str) -> (usize, usize, usize) {
         let sink = self.sink.lock().unwrap();
         (
             sink.emails_to(owner).len(),
@@ -227,7 +245,7 @@ impl Env {
     }
 }
 
-fn meta() -> RequestMeta {
+pub(crate) fn meta() -> RequestMeta {
     RequestMeta {
         ip: Some("203.0.113.9".into()),
         user_agent: Some("test-agent".into()),
@@ -235,7 +253,7 @@ fn meta() -> RequestMeta {
     }
 }
 
-fn code(err: &ApiError) -> (u16, &'static str) {
+pub(crate) fn code(err: &ApiError) -> (u16, &'static str) {
     match err {
         ApiError::Coded(coded) => (coded.status.as_u16(), coded.code),
         other => panic!("expected a coded error, got {other:?}"),
@@ -330,8 +348,30 @@ async fn completion_provisions_the_company_and_subscription(pool: MySqlPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    // Four checkboxes; the terms one records terms, privacy and DPA apart.
-    assert_eq!(consents, 6);
+    // Four checkboxes and the card one; the terms one records terms, privacy
+    // and DPA apart.
+    assert_eq!(consents, 7);
+    let (card, mandate, sec_code): (Option<String>, Option<String>, Option<String>) =
+        sqlx::query_as(
+            "SELECT payment_method_id, stripe_mandate_id, CAST(sec_code_intended AS CHAR)
+               FROM consent_records WHERE signup_intent_id = ? AND kind = 'card_authorization'",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (card.as_deref(), mandate, sec_code),
+        (Some("pm_card_visa"), None, None)
+    );
+    let ach: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM consent_records WHERE signup_intent_id = ? AND kind = 'ach_authorization'",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ach, 0);
     let documents: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT kind, document_version, document_sha256 FROM consent_records
           WHERE signup_intent_id = ? ORDER BY id",
@@ -472,7 +512,7 @@ async fn a_lost_subscription_answer_is_resumed_without_a_second_subscription(poo
             &id
         )
         .await,
-        6
+        7
     );
     assert_eq!(env.notices("owner@lost.test"), (1, 1, 1));
 }
@@ -550,7 +590,7 @@ async fn two_completions_at_once_make_one_company(pool: MySqlPool) {
             &id
         )
         .await,
-        6
+        7
     );
     assert_eq!(env.notices(email), (1, 1, 1));
 
@@ -711,18 +751,20 @@ async fn the_job_expires_abandoned_signups_and_reconciles_seats_daily(pool: MySq
             Duration::days(10),
         )
         .await;
-    let bank_gone = env
+    // Waiting on its bank account for weeks: its company exists, never expired.
+    let bank_old = env
         .intent_row(
             "owner@bank2.test",
-            "Bank Gone",
+            "Bank Old",
             "awaiting_bank_verification",
-            Duration::days(12),
+            Duration::days(30),
         )
         .await;
 
     let first = env.job().await;
-    assert_eq!(first["expired"], 2);
-    assert_eq!(first["processed"], 2);
+    assert_eq!(first["expired"], 1);
+    assert_eq!(first["processed"], 1);
+    assert_eq!(first["resumed"], 0);
     assert_eq!(first["errors"], 0);
     // This signup plus the seeded subscription company 20500 (needs no extra-user item).
     assert_eq!(first["seat_companies"], 2);
@@ -748,8 +790,8 @@ async fn the_job_expires_abandoned_signups_and_reconciles_seats_daily(pool: MySq
         intent::SignupStatus::AwaitingBankVerification
     );
     assert_eq!(
-        env.intent(&bank_gone).await.status,
-        intent::SignupStatus::Expired
+        env.intent(&bank_old).await.status,
+        intent::SignupStatus::AwaitingBankVerification
     );
     assert_eq!(
         env.intent(&done).await.status,
@@ -908,6 +950,23 @@ async fn a_refused_signup_whose_customer_survived_is_cleaned_up_by_the_job(pool:
     assert_eq!(run["customers_deleted"], 1);
     assert!(!env.stripe.lock().unwrap().customers.contains_key(&customer));
     assert_eq!(env.intent(&id).await.stripe_customer_id, None);
+}
+
+#[test]
+fn a_free_period_that_already_ended_starts_now() {
+    use chrono::TimeZone;
+    let now = Utc.with_ymd_and_hms(2027, 1, 10, 12, 0, 0).unwrap();
+    let frozen = |day| {
+        chrono::NaiveDate::from_ymd_opt(2027, 1, day)
+            .unwrap()
+            .and_hms_opt(14, 0, 0)
+            .unwrap()
+    };
+    assert_eq!(
+        provision::trial_end(frozen(23), now),
+        frozen(23).and_utc().timestamp()
+    );
+    assert_eq!(provision::trial_end(frozen(2), now), now.timestamp());
 }
 
 #[test]

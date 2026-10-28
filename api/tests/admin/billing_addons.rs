@@ -447,7 +447,8 @@ async fn a_legacy_company_gets_only_its_plan_source(pool: MySqlPool) {
             "next_charge_at": null, "base": null, "users": null, "addons": [],
             "monthly_total_cents": null, "next_invoice": null, "payment_method": null,
             "payment_method_known": false, "cancellation": null, "invoices": [], "can_change": false,
-            "can_cancel": false,
+            "can_cancel": false, "publishable_key": null, "pending_payment_method": null,
+            "payment_hold": null, "amount_due_cents": 0, "payment_processing": false,
         })
     );
     assert!(f.stripe.lock().unwrap().requests.is_empty());

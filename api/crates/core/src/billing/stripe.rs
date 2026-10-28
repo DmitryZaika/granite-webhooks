@@ -564,7 +564,8 @@ pub struct NewSubscription<'a> {
     pub payment_method: &'a str,
     /// Quantity 1 each: the base price first, then the add-ons.
     pub price_ids: &'a [String],
-    /// When the free period ends (Unix seconds, UTC).
+    /// When the free period ends (Unix seconds, UTC); a time not in the
+    /// future is sent as `now` (billed at once).
     pub trial_end: i64,
     pub automatic_tax: bool,
 }
@@ -613,25 +614,30 @@ impl Stripe {
         .await
     }
 
-    /// Links the customer to the new company and makes `payment_method` its
-    /// default. Idempotency key `signup:<id>:customer-company`.
+    /// Links the customer to the new company and, when given, makes
+    /// `payment_method` its default. Idempotency key
+    /// `signup:<id>:customer-company`, or `signup:<id>:customer-company:awaiting`
+    /// without a method (a bank account still waiting for micro-deposits).
     pub async fn link_signup_customer(
         &self,
         customer: &str,
         signup_id: &str,
         company_id: i32,
-        payment_method: &str,
+        payment_method: Option<&str>,
     ) -> Result<Value, StripeError> {
+        let mut form = vec![("metadata[company_id]", company_id.to_string())];
+        form.extend(
+            payment_method
+                .map(|method| ("invoice_settings[default_payment_method]", method.to_string())),
+        );
+        let key = match payment_method {
+            Some(_) => format!("signup:{signup_id}:customer-company"),
+            None => format!("signup:{signup_id}:customer-company:awaiting"),
+        };
         self.post_keyed(
             &format!("/v1/customers/{}", path_part(customer)),
-            &[
-                ("metadata[company_id]", company_id.to_string()),
-                (
-                    "invoice_settings[default_payment_method]",
-                    payment_method.into(),
-                ),
-            ],
-            &format!("signup:{signup_id}:customer-company"),
+            &form,
+            &key,
         )
         .await
     }
@@ -694,15 +700,25 @@ impl Stripe {
         let (origin_key, origin_id, purpose_name, key) = match purpose {
             SetupPurpose::Signup { signup_id, attempt } => (
                 "metadata[signup_id]",
-                signup_id,
+                signup_id.to_string(),
                 "signup",
                 format!("signup:{signup_id}:si:{attempt}"),
             ),
             SetupPurpose::PlanInvite { invite_id } => (
                 "metadata[plan_invite_id]",
-                invite_id,
+                invite_id.to_string(),
                 "plan_invite",
                 format!("plan-invite:{invite_id}:si"),
+            ),
+            SetupPurpose::Company {
+                company_id,
+                purpose,
+                idempotency_key,
+            } => (
+                "metadata[company_id]",
+                company_id.to_string(),
+                purpose,
+                idempotency_key.to_string(),
             ),
         };
         self.post_keyed(
@@ -713,7 +729,7 @@ impl Stripe {
                 ("payment_method_types[]", "card".into()),
                 ("payment_method", payment_method.into()),
                 ("confirm", "true".into()),
-                (origin_key, origin_id.into()),
+                (origin_key, origin_id),
                 ("metadata[purpose]", purpose_name.into()),
             ],
             &key,
@@ -742,7 +758,17 @@ impl Stripe {
                 "default_payment_method".into(),
                 subscription.payment_method.into(),
             ),
-            ("trial_end".into(), subscription.trial_end.to_string()),
+            // A first charge day already passed (a bank verified late, D21):
+            // Stripe refuses a past time, and `now` keeps the request (and
+            // its idempotency key) the same on a retry.
+            (
+                "trial_end".into(),
+                if subscription.trial_end <= chrono::Utc::now().timestamp() {
+                    "now".into()
+                } else {
+                    subscription.trial_end.to_string()
+                },
+            ),
             ("billing_mode[type]".into(), "flexible".into()),
             (
                 "trial_settings[end_behavior][missing_payment_method]".into(),
@@ -877,6 +903,142 @@ impl Stripe {
 /// `metadata[plan]` of self-serve subscriptions.
 pub const SELF_SERVE_PLAN: &str = "self_serve_v1";
 
+/// Card and bank account payment methods (step 13). Every POST carries an
+/// idempotency key; none sends a `statement_descriptor` (the Dashboard's
+/// applies, D14).
+impl Stripe {
+    /// A SetupIntent for a signed-in Manager's card or bank account, confirmed
+    /// by the browser: `metadata[company_id]`, `metadata[purpose]`
+    /// (`payment_method_update`, `pay` or `plan_invite`) and, for an invite,
+    /// `metadata[plan_invite_id]`. No `link` (D3), verification `automatic`
+    /// (instant, else micro-deposits).
+    pub async fn create_company_setup_intent(
+        &self,
+        customer: &str,
+        company_id: i32,
+        purpose: &str,
+        plan_invite_id: Option<&str>,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        let mut form: Vec<(&str, String)> = vec![
+            ("customer", customer.into()),
+            ("usage", "off_session".into()),
+            ("payment_method_types[]", "card".into()),
+            ("payment_method_types[]", "us_bank_account".into()),
+            (
+                "payment_method_options[us_bank_account][verification_method]",
+                "automatic".into(),
+            ),
+            (
+                "payment_method_options[us_bank_account][financial_connections][permissions][]",
+                "payment_method".into(),
+            ),
+            ("metadata[company_id]", company_id.to_string()),
+            ("metadata[purpose]", purpose.into()),
+        ];
+        if let Some(invite) = plan_invite_id {
+            form.push(("metadata[plan_invite_id]", invite.into()));
+        }
+        self.post_keyed("/v1/setup_intents", &form, idempotency_key)
+            .await
+    }
+
+    /// Cancels a SetupIntent nobody will finish (a bank account replaced
+    /// before it was verified); `Missing` when it is gone.
+    pub async fn cancel_setup_intent(
+        &self,
+        id: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/setup_intents/{}/cancel", path_part(id)),
+            &[],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Detaches a payment method from its customer (a replaced one);
+    /// `Missing` when it is gone.
+    pub async fn detach_payment_method(
+        &self,
+        id: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/payment_methods/{}/detach", path_part(id)),
+            &[],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Makes `payment_method` the customer's default for invoices.
+    pub async fn set_default_payment_method_keyed(
+        &self,
+        customer: &str,
+        payment_method: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/customers/{}", path_part(customer)),
+            &[(
+                "invoice_settings[default_payment_method]",
+                payment_method.into(),
+            )],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Charges the subscription to `payment_method` from now on.
+    pub async fn set_subscription_payment_method_keyed(
+        &self,
+        id: &str,
+        payment_method: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/subscriptions/{}", path_part(id)),
+            &[("default_payment_method", payment_method.into())],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Charges an open invoice now, with `payment_method` when given (else
+    /// the invoice's default). A card decline is `StripeError::Api` with
+    /// kind `card_error`; a card that needs 3D Secure is the code
+    /// `invoice_payment_intent_requires_action`; a bank debit answers the
+    /// invoice still `open` while the payment processes.
+    pub async fn pay_invoice_with(
+        &self,
+        id: &str,
+        payment_method: Option<&str>,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        let form: Vec<(&str, String)> = payment_method
+            .map(|method| vec![("payment_method", method.to_string())])
+            .unwrap_or_default();
+        self.post_keyed(
+            &format!("/v1/invoices/{}/pay", path_part(id)),
+            &form,
+            idempotency_key,
+        )
+        .await
+    }
+
+    pub async fn charge(&self, id: &str) -> Result<Value, StripeError> {
+        self.get(&format!("/v1/charges/{}", path_part(id)), &[])
+            .await
+    }
+
+    pub async fn payment_intent(&self, id: &str) -> Result<Value, StripeError> {
+        self.get(&format!("/v1/payment_intents/{}", path_part(id)), &[])
+            .await
+    }
+}
+
 /// What a test-seam SetupIntent is for: its idempotency key and metadata.
 #[derive(Debug, Clone, Copy)]
 pub enum SetupPurpose<'a> {
@@ -884,6 +1046,14 @@ pub enum SetupPurpose<'a> {
     Signup { signup_id: &'a str, attempt: u8 },
     /// `plan-invite:<id>:si`, `metadata[plan_invite_id]`, purpose `plan_invite`.
     PlanInvite { invite_id: &'a str },
+    /// A signed-in Manager's update (`payment_method_update`) or pay page
+    /// (`pay`): `metadata[company_id]`, the caller's idempotency key
+    /// (`billing-setup:<company_id>:<uuid>`).
+    Company {
+        company_id: i32,
+        purpose: &'a str,
+        idempotency_key: &'a str,
+    },
 }
 
 /// The Stripe customer of a plan invite's company (when it has none yet).

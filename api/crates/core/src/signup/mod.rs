@@ -10,6 +10,11 @@
 //! resumes where it stopped: one signup never makes two companies or two
 //! subscriptions.
 //!
+//! A bank account still waiting for micro-deposits completes the signup
+//! without the subscription (`awaiting_bank_verification`): the owner uses
+//! the CRM at once, and `provision::resume_verified` makes the subscription
+//! once Stripe verifies the account.
+//!
 //! The signup id is a bearer secret: never log it next to the email.
 
 pub mod consent;
@@ -120,7 +125,8 @@ pub fn ensure_enabled(config: &SignupConfig) -> crate::error::ApiResult<()> {
     }
 }
 
-/// 503 `signup_unavailable`.
+/// 503 `signup_unavailable`: the kill switch (`SELF_SERVE_SIGNUP_ENABLED`) is
+/// off. Only [`ensure_enabled`] answers it.
 pub fn unavailable() -> crate::error::ApiError {
     crate::error::ApiError::coded(
         axum::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -129,9 +135,32 @@ pub fn unavailable() -> crate::error::ApiError {
     )
 }
 
+/// 503 `signup_busy`: another request for the same email holds its lock;
+/// the page tries again in a moment.
+pub fn busy() -> crate::error::ApiError {
+    crate::error::ApiError::coded(
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "signup_busy",
+        "We're finishing another request. Try again in a moment.",
+    )
+}
+
+/// 503 `payments_unavailable`: the prices or Stripe cannot be used right now.
+///
+/// Stripe down, throttled or unreachable, the catalog unreadable or no
+/// longer matching the consent texts, or no publishable key. Nothing was
+/// charged; the page offers "Try again".
+pub fn payments_unavailable() -> crate::error::ApiError {
+    crate::error::ApiError::coded(
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "payments_unavailable",
+        "We can't reach our payment provider right now. Nothing was charged. Try again in a few minutes.",
+    )
+}
+
 /// The price list signups quote and charge.
 ///
-/// Refused (503 `signup_unavailable`) when it is unavailable or no longer
+/// Refused (503 `payments_unavailable`) when it is unavailable or no longer
 /// says what the consent texts state (the extra-user price and the included
 /// users are written into them).
 pub async fn signup_catalog(
@@ -141,11 +170,11 @@ pub async fn signup_catalog(
         .await
         .map_err(|err| {
             lambda_http::tracing::error!(error = %err.reason(), "signup catalog unavailable");
-            unavailable()
+            payments_unavailable()
         })?;
     if let Some(mismatch) = consent::catalog_mismatch(&catalog) {
         lambda_http::tracing::error!(%mismatch, "signup prices differ from the consent texts");
-        return Err(unavailable());
+        return Err(payments_unavailable());
     }
     Ok(catalog)
 }

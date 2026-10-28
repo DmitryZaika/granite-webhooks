@@ -69,16 +69,27 @@ pub fn valid_session_id(value: &str) -> bool {
 }
 
 /// `company.billing_required` is on and the company's access is paused: its
-/// payment is suspended, or it never paid and its first-payment window
-/// (`FIRST_PAYMENT_DAYS` from `billing_required_at`) ended. Expects `company`
-/// and a LEFT JOINed `company_billing`; binds the window's days.
+/// payment is suspended, its saved payment method's hold ended
+/// (`method_hold_until`, `billing::methods`), or it never paid and its
+/// first-payment window (`FIRST_PAYMENT_DAYS` from `billing_required_at`)
+/// ended, unless its signup's bank account is still inside its verification
+/// window (`signup_intents.bank_verification_until`). The same decisions as
+/// `billing::gate`. Expects `company` and a LEFT JOINed `company_billing`;
+/// binds the window's days.
 const BILLING_PAUSED: &str = r"
     COALESCE(company.billing_required, 0) <> 0
     AND (company_billing.payment_status = 'suspended'
+         OR (company_billing.method_hold IS NOT NULL
+             AND company_billing.method_hold_until <= UTC_TIMESTAMP())
          OR (COALESCE(company_billing.payment_status, 'none')
                NOT IN ('active', 'past_due', 'suspended')
              AND company.billing_required_at IS NOT NULL
-             AND company.billing_required_at <= UTC_TIMESTAMP() - INTERVAL ? DAY))";
+             AND company.billing_required_at <= UTC_TIMESTAMP() - INTERVAL ? DAY
+             AND NOT EXISTS (
+               SELECT 1 FROM signup_intents bank_signup
+                WHERE bank_signup.company_id = company.id
+                  AND bank_signup.status = 'awaiting_bank_verification'
+                  AND bank_signup.bank_verification_until > UTC_TIMESTAMP())))";
 
 /// A live session's user, and whether their own company's access is paused
 /// for billing.

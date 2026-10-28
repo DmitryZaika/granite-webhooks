@@ -40,9 +40,9 @@ pub enum ConsentKind {
     PerUserPricing,
     /// The onboarding fee if onboarding is not completed in 30 days.
     OnboardingFee,
-    /// Reserved (step 13): ACH debit authorization.
+    /// The ACH debit authorization, when paying by bank account.
     AchAuthorization,
-    /// Reserved (step 13): card authorization.
+    /// The card authorization, when paying by card.
     CardAuthorization,
 }
 
@@ -56,6 +56,33 @@ impl ConsentKind {
             Self::AchAuthorization => "ach_authorization",
             Self::CardAuthorization => "card_authorization",
         }
+    }
+}
+
+/// How a payment method pays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaymentMethodType {
+    /// A credit or debit card.
+    Card,
+    /// A US bank account (ACH debit).
+    UsBankAccount,
+}
+
+impl PaymentMethodType {
+    /// Stripe's `type` of the payment method.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Card => "card",
+            Self::UsBankAccount => "us_bank_account",
+        }
+    }
+
+    /// Stripe's `type`; `None` for any other kind of payment method.
+    pub fn parse(value: &str) -> Option<Self> {
+        [Self::Card, Self::UsBankAccount]
+            .into_iter()
+            .find(|kind| kind.as_str() == value)
     }
 }
 
@@ -90,6 +117,10 @@ pub struct RenderedConsent {
     pub sha256: String,
     /// Documents the text refers to, linked under it.
     pub documents: Vec<DocumentLink>,
+    /// The payment method this checkbox is for (`card` or
+    /// `us_bank_account`): show it only while that kind of method is
+    /// selected or saved. Null: shown for every method.
+    pub payment_method_type: Option<PaymentMethodType>,
     /// `consent_records.document_version`.
     #[serde(skip)]
     pub document_version: &'static str,
@@ -98,13 +129,22 @@ pub struct RenderedConsent {
     pub document_sha256: Option<&'static str>,
 }
 
+impl RenderedConsent {
+    /// Required (and recorded) when paying with `method`.
+    pub fn applies_to(&self, method: PaymentMethodType) -> bool {
+        self.payment_method_type.is_none_or(|kind| kind == method)
+    }
+}
+
 /// Which checkboxes a flow shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsentContext {
-    /// Self-serve signup: terms, auto_renewal, per_user_pricing, onboarding_fee.
+    /// Self-serve signup: terms, auto_renewal, per_user_pricing,
+    /// onboarding_fee, then card_authorization and ach_authorization.
     Signup,
     /// A company moved onto a plan by Granite Manager (plan invite): terms,
-    /// auto_renewal, per_user_pricing. No onboarding commitment.
+    /// auto_renewal, per_user_pricing, card_authorization and
+    /// ach_authorization. No onboarding commitment.
     Invite,
 }
 
@@ -183,6 +223,63 @@ pub const AUTO_RENEWAL_VERSION: &str = "auto-renewal-2026-10-v1";
 pub const PER_USER_PRICING_VERSION: &str = "per-user-pricing-2026-10-v1";
 pub const ONBOARDING_FEE_VERSION: &str = "onboarding-fee-2026-10-v1";
 
+/// Version of [`CARD_AUTHORIZATION_TEXT`].
+pub const CARD_AUTHORIZATION_VERSION: &str = "card-authorization-2026-10-v1";
+/// The card authorization (04-legal.md section 6.2, "Card consent"), ticked
+/// when paying by card. The same for signups and plan invites.
+pub const CARD_AUTHORIZATION_TEXT: &str = "I authorize Granite Manager and Stripe to charge \
+     this card for the amounts and dates in the checkboxes above and to save it for future \
+     charges until I cancel.";
+
+/// Version of the ACH debit authorization ([`ach_authorization_text`]).
+pub const ACH_AUTHORIZATION_VERSION: &str = "ach-authorization-2026-10-v1";
+/// The fixed end of the ACH debit authorization (04-legal.md section 6.2).
+///
+/// Retries (Stripe retries a debit returned for insufficient funds at most
+/// twice within 40 days), revocation, the Nacha clause for business
+/// accounts, and the copy on request.
+pub const ACH_AUTHORIZATION_TERMS: &str = "If a debit is returned for insufficient funds, I \
+     authorize Granite Manager to retry it up to 2 times within 40 days, as Nacha rules allow. \
+     This authorization stays in effect until I revoke it by emailing \
+     support@granite-manager.com or using the account page, at least 3 business days before \
+     the next debit. If this is a business account, I agree to be bound by the Nacha Operating \
+     Rules for these debits. I confirm that I am authorized to debit this account. I can ask \
+     for a copy of this authorization at support@granite-manager.com.";
+
+/// The ACH debit authorization of `context` (04-legal.md section 6.2).
+///
+/// It names "the bank account I add on this page": its last 4 and bank are
+/// unknown until the account is linked, so they are recorded with the
+/// acceptance (`amounts_and_dates`, `payment_method_id`,
+/// `stripe_mandate_id`). The onboarding fee debit, (c), is a signup's only.
+pub fn ach_authorization_text(context: ConsentContext, facts: &ConsentFacts) -> String {
+    let quote = &facts.quote;
+    let monthly = format!(
+        "(a) {} per month plus $30 for each active user above 10, plus applicable sales tax, \
+         starting {}",
+        money(quote.base_and_addons_cents),
+        long_date(quote.first_charge_on),
+    );
+    let changes = "(b) changes to that amount when active users or add-ons change, in the \
+                   amounts shown to me in the app and by email";
+    let debits = match context {
+        ConsentContext::Signup => format!(
+            "{monthly}; {changes}; and (c) a one-time onboarding fee of {fee} on {charge_on} if \
+             onboarding is not completed by {deadline}, as described above.",
+            fee = money(quote.fee_cents),
+            charge_on =
+                long_date(quote.deadline_on + chrono::Days::new(ONBOARDING_FEE_NOTICE_DAYS)),
+            deadline = long_date(quote.deadline_on),
+        ),
+        ConsentContext::Invite => format!("{monthly}; and {changes}."),
+    };
+    format!(
+        "By checking this box I authorize Granite Manager, through its payment processor \
+         Stripe, to electronically debit the bank account I add on this page for: {debits} \
+         {ACH_AUTHORIZATION_TERMS}"
+    )
+}
+
 /// Hex SHA-256 of `text`.
 pub fn sha256_hex(text: &str) -> String {
     use std::fmt::Write;
@@ -213,14 +310,17 @@ pub fn long_date(day: NaiveDate) -> String {
     day.format("%B %-d, %Y").to_string()
 }
 
-/// The four checkboxes of 04-legal.md section 6.1, in order: terms,
-/// auto_renewal, per_user_pricing, onboarding_fee. `app_url` is the main
-/// app's origin, for the document links.
+/// The checkboxes of a signup (04-legal.md sections 6.1 and 6.2).
+///
+/// In order: terms, auto_renewal, per_user_pricing, onboarding_fee, then
+/// the payment ones, card_authorization and ach_authorization. `app_url` is
+/// the main app's origin, for the document links.
 pub fn render(facts: &ConsentFacts, app_url: &str) -> Vec<RenderedConsent> {
     render_for(ConsentContext::Signup, facts, app_url)
 }
 
-/// The checkboxes of `context`, in order (an invite has no onboarding_fee).
+/// The checkboxes of `context`, in order (an invite has no onboarding_fee);
+/// the payment ones last.
 pub fn render_for(
     context: ConsentContext,
     facts: &ConsentFacts,
@@ -271,6 +371,7 @@ pub fn render_for(
         sha256: sha256_hex(&text),
         text,
         documents,
+        payment_method_type: None,
         document_version: version,
         document_sha256: None,
     };
@@ -308,27 +409,61 @@ pub fn render_for(
             Vec::new(),
         ));
     }
+    let payment = |kind, version, text: String, method| RenderedConsent {
+        payment_method_type: Some(method),
+        ..item(kind, version, text, Vec::new())
+    };
+    rendered.push(payment(
+        ConsentKind::CardAuthorization,
+        CARD_AUTHORIZATION_VERSION,
+        CARD_AUTHORIZATION_TEXT.to_string(),
+        PaymentMethodType::Card,
+    ));
+    rendered.push(payment(
+        ConsentKind::AchAuthorization,
+        ACH_AUTHORIZATION_VERSION,
+        ach_authorization_text(context, facts),
+        PaymentMethodType::UsBankAccount,
+    ));
     rendered
 }
 
-/// Every rendered checkbox was accepted with its version and hash.
-pub fn all_accepted(rendered: &[RenderedConsent], given: &[ConsentAcceptance]) -> bool {
-    rendered.iter().all(|consent| {
-        given.iter().any(|accepted| {
-            let same_text = accepted.text_sha256 == consent.sha256;
-            accepted.kind == consent.kind && accepted.version == consent.version && same_text
+/// Every rendered checkbox that applies to `method` was accepted.
+///
+/// `method` is the actual SetupIntent's. Each needs its version and hash:
+/// the base ones and the matching payment one; the other payment one is
+/// ignored.
+pub fn all_accepted(
+    rendered: &[RenderedConsent],
+    given: &[ConsentAcceptance],
+    method: PaymentMethodType,
+) -> bool {
+    rendered
+        .iter()
+        .filter(|consent| consent.applies_to(method))
+        .all(|consent| {
+            given.iter().any(|accepted| {
+                let same_text = accepted.text_sha256 == consent.sha256;
+                accepted.kind == consent.kind && accepted.version == consent.version && same_text
+            })
         })
-    })
 }
 
-/// What a consent record says about the payment method.
+/// What a consent record says about the payment method. Never an account
+/// or routing number.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaymentFacts {
     pub stripe_customer_id: Option<String>,
     pub payment_method_id: Option<String>,
-    /// `card` or `us_bank_account`.
-    pub method_type: Option<String>,
+    pub method_type: Option<PaymentMethodType>,
     pub last4: Option<String>,
+    /// The bank's name; bank accounts only.
+    pub bank_name: Option<String>,
+    /// Stripe's mandate for the debits; bank accounts only.
+    pub mandate_id: Option<String>,
+    /// `CCD` (a company account) or `WEB` (a personal one); bank accounts
+    /// only, none when Stripe does not say.
+    pub sec_code: Option<&'static str>,
 }
 
 fn stamp(at: NaiveDateTime) -> String {
@@ -418,6 +553,7 @@ fn base_amounts(facts: &ConsentFacts, payment: &PaymentFacts) -> serde_json::Val
         "grace_period_days": 7,
         "payment_method_type": payment.method_type,
         "payment_method_last4": payment.last4,
+        "payment_method_bank_name": payment.bank_name,
         "documents": {
             (TERMS_VERSION): TERMS_SHA256,
             (PRIVACY_VERSION): PRIVACY_SHA256,
@@ -429,7 +565,9 @@ fn base_amounts(facts: &ConsentFacts, payment: &PaymentFacts) -> serde_json::Val
 /// Records the accepted consents, inside the caller's transaction.
 ///
 /// One `consent_records` row per rendered checkbox and document it accepts
-/// (the terms checkbox: terms, privacy and DPA). A signup's: source
+/// (the terms checkbox: terms, privacy and DPA), the payment checkbox of
+/// `payment.method_type` only; that row also gets the mandate and SEC
+/// code. A signup's: source
 /// `self_serve`, `signup_intent_id` set, company and user still null. An
 /// invite's: source `staff_move`, `plan_invite_id`, company and the accepting
 /// Manager set.
@@ -460,6 +598,10 @@ pub async fn insert_records(
     };
     let rows: Vec<(&RenderedConsent, (&str, Option<&str>))> = rendered
         .iter()
+        .filter(|consent| {
+            consent.payment_method_type.is_none()
+                || consent.payment_method_type == payment.method_type
+        })
         .flat_map(|consent| {
             recorded_documents(consent)
                 .into_iter()
@@ -467,13 +609,18 @@ pub async fn insert_records(
         })
         .collect();
     for (consent, (document_version, document_sha256)) in rows {
+        let (mandate_id, sec_code) = if consent.payment_method_type.is_some() {
+            (payment.mandate_id.as_deref(), payment.sec_code)
+        } else {
+            (None, None)
+        };
         sqlx::query(
             "INSERT INTO consent_records
                (signup_intent_id, plan_invite_id, company_id, user_id, source, kind,
                 document_version, document_sha256, checkbox_text, checkbox_sha256,
-                amounts_and_dates, stripe_customer_id, payment_method_id, ip, user_agent,
-                locale, accepted_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                amounts_and_dates, stripe_customer_id, payment_method_id, stripe_mandate_id,
+                sec_code_intended, ip, user_agent, locale, accepted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(signup_id)
         .bind(invite_id)
@@ -488,6 +635,8 @@ pub async fn insert_records(
         .bind(&amounts)
         .bind(&payment.stripe_customer_id)
         .bind(&payment.payment_method_id)
+        .bind(mandate_id)
+        .bind(sec_code)
         .bind(&meta.ip)
         .bind(&meta.user_agent)
         .bind(&meta.locale)
@@ -551,16 +700,27 @@ mod tests {
     }
 
     #[test]
-    fn the_four_texts_are_exact() {
+    fn the_signup_texts_are_exact() {
         let rendered = render(&facts(36_000, 30_000), "https://app.example/");
-        let kinds: Vec<_> = rendered.iter().map(|c| c.kind).collect();
+        let kinds: Vec<_> = rendered
+            .iter()
+            .map(|c| (c.kind, c.payment_method_type))
+            .collect();
         assert_eq!(
             kinds,
             [
-                ConsentKind::Terms,
-                ConsentKind::AutoRenewal,
-                ConsentKind::PerUserPricing,
-                ConsentKind::OnboardingFee
+                (ConsentKind::Terms, None),
+                (ConsentKind::AutoRenewal, None),
+                (ConsentKind::PerUserPricing, None),
+                (ConsentKind::OnboardingFee, None),
+                (
+                    ConsentKind::CardAuthorization,
+                    Some(PaymentMethodType::Card)
+                ),
+                (
+                    ConsentKind::AchAuthorization,
+                    Some(PaymentMethodType::UsBankAccount)
+                ),
             ]
         );
         assert_eq!(
@@ -579,6 +739,22 @@ mod tests {
             text_of(&rendered, ConsentKind::OnboardingFee).text,
             "I understand that if onboarding with Granite Manager is not completed by November 22, 2026 (30 days after signup), a one-time onboarding fee of $600.00 will be charged to my payment method as a separate invoice, after a 7-day notice email. The fee is waived if I complete onboarding by then or cancel before then. The deadline moves if Granite Manager has no bookable slot, and I can request one 14-day extension."
         );
+        let card = text_of(&rendered, ConsentKind::CardAuthorization);
+        assert_eq!(card.version, "card-authorization-2026-10-v1");
+        assert_eq!(
+            card.text,
+            "I authorize Granite Manager and Stripe to charge this card for the amounts and dates in the checkboxes above and to save it for future charges until I cancel."
+        );
+        let ach = text_of(&rendered, ConsentKind::AchAuthorization);
+        assert_eq!(ach.version, "ach-authorization-2026-10-v1");
+        assert_eq!(ach.document_version, ach.version);
+        assert_eq!(
+            ach.text,
+            "By checking this box I authorize Granite Manager, through its payment processor Stripe, to electronically debit the bank account I add on this page for: (a) $300.00 per month plus $30 for each active user above 10, plus applicable sales tax, starting January 23, 2027; (b) changes to that amount when active users or add-ons change, in the amounts shown to me in the app and by email; and (c) a one-time onboarding fee of $600.00 on November 29, 2026 if onboarding is not completed by November 22, 2026, as described above. If a debit is returned for insufficient funds, I authorize Granite Manager to retry it up to 2 times within 40 days, as Nacha rules allow. This authorization stays in effect until I revoke it by emailing support@granite-manager.com or using the account page, at least 3 business days before the next debit. If this is a business account, I agree to be bound by the Nacha Operating Rules for these debits. I confirm that I am authorized to debit this account. I can ask for a copy of this authorization at support@granite-manager.com."
+        );
+        for consent in &rendered {
+            assert!(!consent.text.contains('\u{2014}'));
+        }
     }
 
     #[test]
@@ -614,40 +790,71 @@ mod tests {
     fn a_changed_price_changes_the_hash() {
         let before = render(&facts(36_000, 30_000), "https://app.example");
         let after = render(&facts(37_500, 31_500), "https://app.example");
-        for kind in [ConsentKind::AutoRenewal, ConsentKind::OnboardingFee] {
+        for kind in [
+            ConsentKind::AutoRenewal,
+            ConsentKind::OnboardingFee,
+            ConsentKind::AchAuthorization,
+        ] {
             assert_ne!(text_of(&before, kind).sha256, text_of(&after, kind).sha256);
         }
-        for kind in [ConsentKind::Terms, ConsentKind::PerUserPricing] {
+        for kind in [
+            ConsentKind::Terms,
+            ConsentKind::PerUserPricing,
+            ConsentKind::CardAuthorization,
+        ] {
             assert_eq!(text_of(&before, kind).sha256, text_of(&after, kind).sha256);
+        }
+    }
+
+    fn accept(consent: &RenderedConsent) -> ConsentAcceptance {
+        ConsentAcceptance {
+            kind: consent.kind,
+            version: consent.version.to_string(),
+            text_sha256: consent.sha256.clone(),
         }
     }
 
     #[test]
     fn acceptance_needs_every_kind_with_the_same_version_and_hash() {
         let rendered = render(&facts(36_000, 30_000), "https://app.example");
-        let given: Vec<_> = rendered
-            .iter()
-            .map(|c| ConsentAcceptance {
-                kind: c.kind,
-                version: c.version.to_string(),
-                text_sha256: c.sha256.clone(),
-            })
-            .collect();
-        assert!(all_accepted(&rendered, &given));
+        let card = PaymentMethodType::Card;
+        let given: Vec<_> = rendered.iter().map(accept).collect();
+        assert!(all_accepted(&rendered, &given, card));
         let mut extra = given.clone();
         extra.push(ConsentAcceptance {
-            kind: ConsentKind::AchAuthorization,
+            kind: ConsentKind::OnboardingFee,
             version: "x".into(),
             text_sha256: "y".into(),
         });
-        assert!(all_accepted(&rendered, &extra));
-        assert!(!all_accepted(&rendered, &given[..3]));
+        assert!(all_accepted(&rendered, &extra, card));
+        assert!(!all_accepted(&rendered, &given[..3], card));
         let mut stale = given.clone();
         stale[1].text_sha256 = "0".repeat(64);
-        assert!(!all_accepted(&rendered, &stale));
+        assert!(!all_accepted(&rendered, &stale, card));
         let mut old = given;
         old[2].version = "per-user-pricing-2026-09-v1".into();
-        assert!(!all_accepted(&rendered, &old));
+        assert!(!all_accepted(&rendered, &old, card));
+    }
+
+    #[test]
+    fn acceptance_needs_the_payment_checkbox_of_the_method_used() {
+        let rendered = render(&facts(36_000, 30_000), "https://app.example");
+        let with = |kind: Option<ConsentKind>| -> Vec<ConsentAcceptance> {
+            rendered
+                .iter()
+                .filter(|c| c.payment_method_type.is_none() || Some(c.kind) == kind)
+                .map(accept)
+                .collect()
+        };
+        let (card, bank) = (PaymentMethodType::Card, PaymentMethodType::UsBankAccount);
+        let card_only = with(Some(ConsentKind::CardAuthorization));
+        let ach_only = with(Some(ConsentKind::AchAuthorization));
+        assert!(all_accepted(&rendered, &card_only, card));
+        assert!(!all_accepted(&rendered, &card_only, bank));
+        assert!(all_accepted(&rendered, &ach_only, bank));
+        assert!(!all_accepted(&rendered, &ach_only, card));
+        assert!(!all_accepted(&rendered, &with(None), card));
+        assert!(!all_accepted(&rendered, &with(None), bank));
     }
 
     /// An invite for 12 active users with Quotes, first charge Nov 23, 2026.
@@ -663,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn an_invite_renders_terms_auto_renewal_and_per_user_pricing_only() {
+    fn an_invite_renders_no_onboarding_fee() {
         let rendered = render_for(
             ConsentContext::Invite,
             &invite_facts(),
@@ -675,8 +882,14 @@ mod tests {
             [
                 ConsentKind::Terms,
                 ConsentKind::AutoRenewal,
-                ConsentKind::PerUserPricing
+                ConsentKind::PerUserPricing,
+                ConsentKind::CardAuthorization,
+                ConsentKind::AchAuthorization,
             ]
+        );
+        assert_eq!(
+            text_of(&rendered, ConsentKind::AchAuthorization).text,
+            "By checking this box I authorize Granite Manager, through its payment processor Stripe, to electronically debit the bank account I add on this page for: (a) $375.00 per month plus $30 for each active user above 10, plus applicable sales tax, starting November 23, 2026; and (b) changes to that amount when active users or add-ons change, in the amounts shown to me in the app and by email. If a debit is returned for insufficient funds, I authorize Granite Manager to retry it up to 2 times within 40 days, as Nacha rules allow. This authorization stays in effect until I revoke it by emailing support@granite-manager.com or using the account page, at least 3 business days before the next debit. If this is a business account, I agree to be bound by the Nacha Operating Rules for these debits. I confirm that I am authorized to debit this account. I can ask for a copy of this authorization at support@granite-manager.com."
         );
         assert_eq!(
             text_of(&rendered, ConsentKind::AutoRenewal).text,
@@ -687,6 +900,7 @@ mod tests {
             ConsentKind::Terms,
             ConsentKind::AutoRenewal,
             ConsentKind::PerUserPricing,
+            ConsentKind::CardAuthorization,
         ] {
             let (invite, signup) = (text_of(&rendered, kind), text_of(&signup, kind));
             assert_eq!(
@@ -720,5 +934,25 @@ mod tests {
         assert_eq!(signup["onboarding_fee_cents"], 60_000);
         assert_eq!(signup["onboarding_deadline_at"], "2026-11-22T17:00:00Z");
         assert!(signup.get("plan_invite_id").is_none());
+    }
+
+    #[test]
+    fn records_name_the_bank_but_never_its_numbers() {
+        let payment = PaymentFacts {
+            method_type: Some(PaymentMethodType::UsBankAccount),
+            last4: Some("6789".into()),
+            bank_name: Some("STRIPE TEST BANK".into()),
+            ..PaymentFacts::default()
+        };
+        let amounts = amounts_and_dates(
+            ConsentOrigin::Signup { signup_id: "s-1" },
+            &facts(36_000, 30_000),
+            &payment,
+        );
+        assert_eq!(amounts["payment_method_type"], "us_bank_account");
+        assert_eq!(amounts["payment_method_last4"], "6789");
+        assert_eq!(amounts["payment_method_bank_name"], "STRIPE TEST BANK");
+        let text = amounts.to_string();
+        assert!(!text.contains("routing") && !text.contains("account_number"));
     }
 }

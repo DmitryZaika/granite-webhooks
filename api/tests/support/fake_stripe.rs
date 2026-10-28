@@ -9,7 +9,11 @@
 //! (`cancel_at_period_end`, `default_payment_method`), invoice previews
 //! (`POST /v1/invoices/create_preview`: the items' monthly sum, or 404 when the
 //! subscription ends at its period end), `GET /v1/invoices` from `invoices`,
-//! and `payment_methods`, which a customer's default expands into. Include it with
+//! and `payment_methods`, which a customer's default expands into. Payment
+//! methods (step 13): SetupIntent cancel and micro-deposit states
+//! (`pend_microdeposits`, `fail_setup_intent`), payment method detach,
+//! `POST /v1/invoices/{id}/pay` (paid, a bank debit processing, a decline,
+//! 3D Secure), charges and PaymentIntents by id. Include it with
 //! `#[path = "../support/fake_stripe.rs"] mod fake_stripe;` in the area's `main.rs`.
 #![allow(dead_code)]
 
@@ -82,6 +86,15 @@ pub struct FakeStripe {
     pub payment_methods: HashMap<String, Value>,
     /// Tax added to each invoice preview, in cents.
     pub preview_tax: i64,
+    /// Charge objects by id (`GET /v1/charges/{id}`).
+    pub charges: HashMap<String, Value>,
+    /// PaymentIntent objects by id (`GET /v1/payment_intents/{id}`).
+    pub payment_intents: HashMap<String, Value>,
+    /// The next `POST /v1/invoices/{id}/pay` is declined (402 `card_error`).
+    pub decline_next_pay: bool,
+    /// Invoices whose payment needs 3D Secure: paying answers 402
+    /// `invoice_payment_intent_requires_action`.
+    pub requires_action_invoices: Vec<String>,
     pub requests: Vec<Seen>,
     idempotent: HashMap<String, (String, String, StatusCode, Value)>,
     failures: Vec<Failure>,
@@ -163,6 +176,45 @@ impl FakeStripe {
         let intent = self.setup_intents.get_mut(id).expect("setup intent");
         intent["status"] = json!("succeeded");
         intent["payment_method"] = json!(payment_method);
+    }
+
+    /// Micro-deposits sent: the SetupIntent waits (`requires_action`,
+    /// `verify_with_microdeposits`) with `payment_method` attached.
+    pub fn pend_microdeposits(&mut self, setup_intent: &str, payment_method: &str) {
+        let intent = self.setup_intents.get_mut(setup_intent).expect("setup intent");
+        intent["status"] = json!("requires_action");
+        intent["payment_method"] = json!(payment_method);
+        intent["next_action"] = json!({
+            "type": "verify_with_microdeposits",
+            "verify_with_microdeposits": {
+                "arrival_date": 1_800_086_400,
+                "hosted_verification_url": "https://payments.stripe.com/microdeposit/fake",
+                "microdeposit_type": "descriptor_code",
+            },
+        });
+    }
+
+    /// The SetupIntent failed (`requires_payment_method`, `last_setup_error.code`).
+    pub fn fail_setup_intent(&mut self, setup_intent: &str, code: &str) {
+        let intent = self.setup_intents.get_mut(setup_intent).expect("setup intent");
+        intent["status"] = json!("requires_payment_method");
+        intent["next_action"] = Value::Null;
+        intent["last_setup_error"] = json!({ "code": code, "message": "fake failure" });
+    }
+
+    /// Stripe verified the micro-deposits: the SetupIntent succeeded.
+    pub fn verify_microdeposits(&mut self, setup_intent: &str) {
+        let intent = self.setup_intents.get_mut(setup_intent).expect("setup intent");
+        intent["status"] = json!("succeeded");
+        intent["next_action"] = Value::Null;
+    }
+
+    /// The idempotency keys of the requests (not replays) to `path`.
+    pub fn keys(&self, method: &str, path: &str) -> Vec<String> {
+        self.calls(method, path)
+            .into_iter()
+            .filter_map(|seen| seen.idempotency_key)
+            .collect()
     }
 
     fn id(&mut self, prefix: &str) -> String {
@@ -273,19 +325,55 @@ impl FakeStripe {
                     "status": if confirmed { "succeeded" } else { "requires_payment_method" },
                     "payment_method": if confirmed { json!(one("payment_method")) } else { Value::Null },
                     "usage": one("usage"), "metadata": metadata(&params),
+                    "created": 1_800_000_000, "next_action": null,
+                    "payment_method_types": params.iter()
+                        .filter(|(key, _)| key == "payment_method_types[]")
+                        .map(|(_, value)| value.clone()).collect::<Vec<_>>(),
                 });
                 self.setup_intents.insert(id, intent.clone());
                 ok(intent)
             }
+            ("POST", ["v1", "setup_intents", id, "cancel"]) => {
+                let Some(intent) = self.setup_intents.get_mut(*id) else {
+                    return missing();
+                };
+                intent["status"] = json!("canceled");
+                intent["next_action"] = Value::Null;
+                ok(intent.clone())
+            }
+            ("POST", ["v1", "payment_methods", id, "detach"]) => {
+                match self.payment_methods.get_mut(*id) {
+                    Some(method) => {
+                        method["customer"] = Value::Null;
+                        ok(method.clone())
+                    }
+                    None => missing(),
+                }
+            }
+            ("GET", ["v1", "charges", id]) => match self.charges.get(*id) {
+                Some(charge) => ok(charge.clone()),
+                None => missing(),
+            },
+            ("GET", ["v1", "payment_intents", id]) => match self.payment_intents.get(*id) {
+                Some(intent) => ok(intent.clone()),
+                None => missing(),
+            },
+            ("GET", ["v1", "invoices", id]) => {
+                match self.invoices.iter().find(|invoice| invoice["id"] == *id) {
+                    Some(invoice) => ok(invoice.clone()),
+                    None => missing(),
+                }
+            }
+            ("POST", ["v1", "invoices", id, "pay"]) => self.pay(id, one("payment_method")),
             ("GET", ["v1", "setup_intents", id]) => {
                 let Some(mut intent) = self.setup_intents.get(*id).cloned() else {
                     return missing();
                 };
                 if let Some(method) = intent["payment_method"].as_str().map(str::to_string) {
-                    intent["payment_method"] = json!({
+                    intent["payment_method"] = self.payment_methods.get(&method).cloned().unwrap_or_else(|| json!({
                         "id": method, "object": "payment_method", "type": "card",
                         "card": { "brand": "visa", "last4": "4242" },
-                    });
+                    }));
                 }
                 ok(intent)
             }
@@ -301,6 +389,7 @@ impl FakeStripe {
                         .unwrap_or(1);
                     items.push(self.item(&price, quantity, &id));
                 }
+                // `trial_end=now`: the trial is over at once (active, no trial_end).
                 let trial_end = one("trial_end").and_then(|t| t.parse::<i64>().ok());
                 let subscription = json!({
                     "id": id, "object": "subscription", "customer": one("customer"),
@@ -410,10 +499,12 @@ impl FakeStripe {
             }
             ("GET", ["v1", "invoices"]) => {
                 let customer = one("customer");
+                let status = one("status");
                 let data: Vec<Value> = self
                     .invoices
                     .iter()
                     .filter(|invoice| customer.as_deref().is_none_or(|c| invoice["customer"] == c))
+                    .filter(|invoice| status.as_deref().is_none_or(|s| invoice["status"] == s))
                     .cloned()
                     .collect();
                 ok(json!({ "object": "list", "data": data, "has_more": false }))
@@ -474,6 +565,65 @@ impl FakeStripe {
                 json!({ "error": { "message": format!("fake Stripe has no {method} {path}") } }),
             ),
         }
+    }
+
+    /// `POST /v1/invoices/{id}/pay`: declined (`decline_next_pay`), 3D Secure
+    /// (`requires_action_invoices`), processing for a bank account (the
+    /// invoice stays open, its PaymentIntent `processing`), else paid.
+    fn pay(&mut self, id: &str, payment_method: Option<String>) -> (StatusCode, Value) {
+        let Some(index) = self.invoices.iter().position(|invoice| invoice["id"] == id) else {
+            return missing();
+        };
+        if self.invoices[index]["status"] != "open" {
+            return (
+                StatusCode::BAD_REQUEST,
+                json!({ "error": { "type": "invalid_request_error", "code": "invoice_not_open",
+                    "message": "Invoice is already paid" } }),
+            );
+        }
+        if self.decline_next_pay {
+            self.decline_next_pay = false;
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                json!({ "error": { "type": "card_error", "code": "card_declined",
+                    "decline_code": "generic_decline", "message": "Your card was declined." } }),
+            );
+        }
+        if self.requires_action_invoices.iter().any(|invoice| invoice == id) {
+            self.invoices[index]["confirmation_secret"] =
+                json!({ "client_secret": format!("pi_{id}_secret_fake"), "type": "payment_intent" });
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                json!({ "error": { "type": "invalid_request_error",
+                    "code": "invoice_payment_intent_requires_action",
+                    "message": "This payment requires additional user action before it can be completed successfully." } }),
+            );
+        }
+        let bank = payment_method
+            .as_deref()
+            .and_then(|method| self.payment_methods.get(method))
+            .is_some_and(|method| method["type"] == "us_bank_account");
+        let invoice = &mut self.invoices[index];
+        if bank {
+            let intent = format!("pi_{id}");
+            let customer = invoice["customer"].clone();
+            let amount = invoice["amount_remaining"].clone();
+            self.payment_intents.insert(
+                intent.clone(),
+                json!({ "id": intent, "object": "payment_intent", "status": "processing",
+                    "customer": customer, "amount": amount,
+                    "payment_method_types": ["card", "us_bank_account"] }),
+            );
+            return ok(self.invoices[index].clone());
+        }
+        let due = invoice["amount_remaining"]
+            .as_i64()
+            .or_else(|| invoice["amount_due"].as_i64())
+            .unwrap_or_default();
+        invoice["status"] = json!("paid");
+        invoice["amount_paid"] = json!(due);
+        invoice["amount_remaining"] = json!(0);
+        ok(invoice.clone())
     }
 
     fn handle(

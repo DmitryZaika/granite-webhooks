@@ -2,7 +2,10 @@
 //! `stripe_webhook_events` and `billing_notifications`. A trait so the state
 //! machine can be tested in memory.
 
-use super::{BillingInvoice, BillingNotification, CompanyBilling, MANAGER_POSITION, PaymentStatus};
+use super::{
+    BillingInvoice, BillingNotification, CompanyBilling, MANAGER_POSITION, MethodHold, MethodState,
+    PaymentStatus,
+};
 use chrono::NaiveDateTime;
 use sqlx::{FromRow, MySqlPool};
 
@@ -37,6 +40,10 @@ pub trait BillingStore {
         company_id: i32,
         invite_id: &str,
     ) -> StoreResult<Option<String>>;
+    /// `bank_verification_until` of the company's signup still waiting for
+    /// its bank account (`awaiting_bank_verification`); `None` without one.
+    async fn bank_verification_until(&self, company_id: i32)
+    -> StoreResult<Option<NaiveDateTime>>;
 }
 
 /// The MySQL tables.
@@ -67,6 +74,11 @@ struct BillingRow {
     extra_user_item_id: Option<String>,
     billable_users: Option<i64>,
     cancel_at: Option<NaiveDateTime>,
+    pending_setup_intent_id: Option<String>,
+    method_hold: Option<String>,
+    method_hold_at: Option<NaiveDateTime>,
+    method_hold_until: Option<NaiveDateTime>,
+    payment_processing_at: Option<NaiveDateTime>,
 }
 
 /// Blank strings read as missing, like the CRM's `readString`.
@@ -102,6 +114,13 @@ impl From<BillingRow> for CompanyBilling {
             extra_user_item_id: present(row.extra_user_item_id),
             billable_users: row.billable_users,
             cancel_at: row.cancel_at,
+            methods: MethodState {
+                pending_setup_intent_id: present(row.pending_setup_intent_id),
+                hold: row.method_hold.as_deref().and_then(MethodHold::parse),
+                hold_at: row.method_hold_at,
+                hold_until: row.method_hold_until,
+                payment_processing_at: row.payment_processing_at,
+            },
         }
     }
 }
@@ -114,7 +133,9 @@ const BILLING_SELECT: &str =
         CAST(user_count AS SIGNED) AS user_count,
         CAST(outstanding_balance_cents AS SIGNED) AS outstanding_balance_cents,
         recovered_failed_at, recovered_at, trial_end_at, extra_user_item_id,
-        CAST(billable_users AS SIGNED) AS billable_users, cancel_at
+        CAST(billable_users AS SIGNED) AS billable_users, cancel_at, pending_setup_intent_id,
+        CAST(method_hold AS CHAR) AS method_hold, method_hold_at, method_hold_until,
+        payment_processing_at
    FROM company_billing";
 
 #[derive(FromRow)]
@@ -399,4 +420,28 @@ impl BillingStore for MySqlBillingStore<'_> {
         .fetch_optional(self.0)
         .await
     }
+
+    async fn bank_verification_until(
+        &self,
+        company_id: i32,
+    ) -> StoreResult<Option<NaiveDateTime>> {
+        bank_verification_until(self.0, company_id).await
+    }
+}
+
+/// `BillingStore::bank_verification_until` on a pool.
+pub async fn bank_verification_until(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> StoreResult<Option<NaiveDateTime>> {
+    let until: Option<Option<NaiveDateTime>> = sqlx::query_scalar(
+        "SELECT bank_verification_until FROM signup_intents
+          WHERE company_id = ? AND status = 'awaiting_bank_verification'
+            AND bank_verification_until IS NOT NULL
+          LIMIT 1",
+    )
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(until.flatten())
 }

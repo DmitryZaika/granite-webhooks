@@ -34,7 +34,14 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// legacy plan it replaces (`current_plan`), when the link expires, and the
 /// checkboxes to tick (`consents`, rendered by the server: show `text`
 /// verbatim and send `kind`, `version` and `sha256` back to
-/// `accept_plan_invite`). `status` `accepting` means an acceptance is being
+/// `accept_plan_invite`; of card_authorization and ach_authorization show
+/// only the one whose `payment_method_type` matches the method). How the
+/// payment method is collected: `payment_mode` `stripe` (the Payment
+/// Element with `publishable_key`; a SetupIntent from
+/// `POST /v1/billing/payment-setup` with purpose `plan_invite`), `test`
+/// (attached on acceptance) or `unavailable`. `payment_method` is the
+/// method already set up for the invite (`ready`, or a bank account
+/// `verifying`: accept once verified). `status` `accepting` means an acceptance is being
 /// finished (call `accept_plan_invite` again to resume); `accepted` means
 /// the company is on the plan (go to `redirect_url`). Only a Manager of the
 /// invited company, whatever company the session acts in: 403
@@ -71,8 +78,16 @@ pub async fn get_plan_invite(
 /// Body of `POST /v1/plan-invites/{token}/acceptance`.
 #[derive(Deserialize, ToSchema)]
 pub struct AcceptanceBody {
-    /// Every checkbox the Manager ticked, as `get_plan_invite` showed it.
+    /// Every checkbox the Manager ticked, as `get_plan_invite` showed it:
+    /// the base ones and the payment one matching the method.
     pub consents: Vec<ConsentAcceptance>,
+    /// The SetupIntent the Payment Element confirmed (from
+    /// `POST /v1/billing/payment-setup`, purpose `plan_invite`), in `stripe`
+    /// payment mode. Omitted: the one saved on the invite (`payment_method`
+    /// of `get_plan_invite`); sent: it must be that one. Ignored in `test`
+    /// mode.
+    #[serde(default)]
+    pub setup_intent_id: Option<String>,
 }
 
 /// Answer of `POST /v1/plan-invites/{token}/acceptance`.
@@ -89,7 +104,12 @@ pub struct AcceptanceDone {
 /// Sends the checkboxes the Manager ticked (`kind`, `version`,
 /// `text_sha256` as `get_plan_invite` returned them); the server renders
 /// them again and refuses with 409 `consents_changed` when anything differs
-/// (read the invite again). Then it sets up the payment method, makes the
+/// (read the invite again). In `stripe` payment mode the invite's saved
+/// SetupIntent is used (`setup_intent_id`, when sent, must be it: 409
+/// `setup_intent_mismatch`) and must have succeeded: a bank account still waiting for micro-deposits is 409
+/// `bank_verification_pending` (come back once verified), any other state
+/// 409 `payment_not_ready`; 503 `payments_unavailable` when Stripe cannot be
+/// read. Then it sets up the payment method, makes the
 /// company's Stripe subscription with nothing charged before the first
 /// charge, ends a legacy subscription at its period end, and only then moves
 /// the company onto the plan (its add-ons follow the plan from now on). Safe
@@ -116,10 +136,10 @@ pub struct AcceptanceDone {
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Not a Manager of the invited company (code not_invited)", body = CodedErrorBody),
         (status = 404, description = "Unknown link (code invite_not_found)", body = CodedErrorBody),
-        (status = 409, description = "Texts changed, the first charge is under 8 days away or the company's billing changed, the company owes money, or the invite's subscription was cancelled in Stripe (codes consents_changed, invite_needs_new_date, legacy_overdue, invite_subscription_ended)", body = CodedErrorBody),
+        (status = 409, description = "Texts changed, the first charge is under 8 days away or the company's billing changed, the company owes money, the invite's subscription was cancelled in Stripe, the SetupIntent is not the invite's, the bank account is not verified yet, or the payment method is not confirmed (codes consents_changed, invite_needs_new_date, legacy_overdue, invite_subscription_ended, setup_intent_mismatch, bank_verification_pending, payment_not_ready)", body = CodedErrorBody),
         (status = 410, description = "The invite expired or was withdrawn (codes invite_expired, invite_revoked)", body = CodedErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
-        (status = 503, description = "Try again shortly, or payment methods are not available yet (codes acceptance_retry, payment_setup_unavailable)", body = CodedErrorBody),
+        (status = 503, description = "Try again shortly, Stripe cannot be read, or payment methods are not available yet (codes acceptance_retry, payments_unavailable, payment_setup_unavailable)", body = CodedErrorBody),
     ),
     security(("session_cookie" = []))
 )]
@@ -139,6 +159,7 @@ pub async fn accept_plan_invite(
         &token,
         caller,
         &body.consents,
+        body.setup_intent_id.as_deref(),
         &RequestMeta::from_headers(&headers),
     )
     .await?;

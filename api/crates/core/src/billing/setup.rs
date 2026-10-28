@@ -16,7 +16,7 @@ pub const WEBHOOK_PATH: &str = "/v1/webhooks/stripe";
 /// The Stripe events the webhook endpoint must send: the ones
 /// `normalize_event` acts on, and the self-serve subscription signals
 /// (02-architecture.md section 5).
-pub const REQUIRED_EVENTS: [&str; 9] = [
+pub const REQUIRED_EVENTS: [&str; 15] = [
     "checkout.session.completed",
     "customer.subscription.created",
     "customer.subscription.updated",
@@ -26,6 +26,13 @@ pub const REQUIRED_EVENTS: [&str; 9] = [
     "payment_method.updated",
     "customer.subscription.trial_will_end",
     "invoice.finalization_failed",
+    // Card and bank payment methods (`billing::methods`).
+    "setup_intent.succeeded",
+    "setup_intent.setup_failed",
+    "payment_intent.processing",
+    "charge.failed",
+    "charge.dispute.created",
+    "payment_method.automatically_updated",
 ];
 
 /// One line of the billing setup report.
@@ -671,6 +678,27 @@ mod tests {
             "Missing events: customer.subscription.trial_will_end"
         );
         assert!(REQUIRED_EVENTS.contains(&"invoice.finalization_failed"));
+    }
+
+    #[test]
+    fn the_payment_method_events_are_required() {
+        for event in crate::billing::methods::METHOD_EVENTS {
+            assert!(REQUIRED_EVENTS.contains(&event), "{event}");
+        }
+        let without_dispute: Vec<&str> = REQUIRED_EVENTS
+            .into_iter()
+            .filter(|e| *e != "charge.dispute.created")
+            .collect();
+        let list = [endpoint(
+            "https://x/v1/webhooks/stripe",
+            "enabled",
+            &without_dispute,
+            API_VERSION,
+        )];
+        assert_eq!(
+            by_key(&webhook_checks(Ok(&list)), "webhook_events").detail,
+            "Missing events: charge.dispute.created"
+        );
     }
 
     fn lookup_price(key: &str, cents: i64) -> Value {

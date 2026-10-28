@@ -1,6 +1,9 @@
 //! Accepting a plan invite, built like the signup's provisioning.
 //!
-//! `accept` checks the Manager, the consents and the payment method, freezes
+//! `create_setup` makes the SetupIntent the upgrade page confirms with the
+//! Payment Element (card or bank account; stored on the invite, so a bank
+//! account verified days later can still accept); `accept` checks the
+//! Manager, the consents and the payment method, freezes
 //! the terms and moves the invite to `accepting` with its consent records;
 //! `run` then makes the Stripe subscription and switches the company to it,
 //! resuming after whatever step a crash stopped it at. Every Stripe POST
@@ -32,9 +35,10 @@ use crate::error::{ApiError, ApiResult};
 use crate::openapi::ToSchema;
 use crate::signup::consent::{
     self, ConsentAcceptance, ConsentContext, ConsentFacts, ConsentOrigin, PaymentFacts,
-    RenderedConsent,
+    PaymentMethodType, RenderedConsent,
 };
-use crate::signup::{RequestMeta, notify, payment};
+use crate::signup::payment::{self, SavedMethod, Setup};
+use crate::signup::{RequestMeta, notify, payments_unavailable};
 use crate::state::AppState;
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
@@ -90,6 +94,59 @@ fn subscription_ended() -> ApiError {
 /// invite is given up, so it is neither retried nor counted as a failure.
 pub fn is_subscription_ended(err: &ApiError) -> bool {
     matches!(err, ApiError::Coded(coded) if coded.code == SUBSCRIPTION_ENDED)
+}
+
+/// 409 `bank_verification_pending`: the bank account still waits for its
+/// micro-deposits; the Manager accepts once it is verified.
+fn bank_verification_pending() -> ApiError {
+    coded(
+        StatusCode::CONFLICT,
+        "bank_verification_pending",
+        "Your bank account is not verified yet. Come back to this page once it is.",
+    )
+}
+
+/// 409 `payment_not_ready`: the payment method is not confirmed.
+fn payment_not_ready() -> ApiError {
+    coded(
+        StatusCode::CONFLICT,
+        "payment_not_ready",
+        "Your payment method is not confirmed yet.",
+    )
+}
+
+/// 409 `setup_intent_mismatch`: missing, or not the one set up for this
+/// invite.
+fn setup_intent_mismatch() -> ApiError {
+    coded(
+        StatusCode::CONFLICT,
+        "setup_intent_mismatch",
+        "This payment method was not set up for this invite. Add it again.",
+    )
+}
+
+/// 409 `invite_closed`: the invite is being accepted or was accepted.
+fn closed() -> ApiError {
+    coded(
+        StatusCode::CONFLICT,
+        "invite_closed",
+        "This invite is no longer open.",
+    )
+}
+
+/// Stripe down or unreachable: 503 `payments_unavailable`; its refusals:
+/// 502 with a generic message (never Stripe's).
+fn setup_failed(err: &StripeError, company_id: i32) -> ApiError {
+    tracing::warn!(
+        company_id,
+        stripe_code = err.code(),
+        "plan invite payment setup failed at Stripe"
+    );
+    if err.is_retryable() || matches!(err, StripeError::NotConfigured) {
+        payments_unavailable()
+    } else {
+        ApiError::Upstream("We could not set up payments. Try again in a moment.".into())
+    }
 }
 
 fn payment_setup_unavailable() -> ApiError {
@@ -298,9 +355,26 @@ impl From<Quote> for InviteQuote {
 pub enum InvitePaymentMode {
     /// The api attaches a test card itself on acceptance (sandbox).
     Test,
+    /// The Payment Element collects a card or bank account: `POST
+    /// /v1/billing/payment-setup` with purpose `plan_invite`, then accept
+    /// with its `setup_intent_id`.
+    Stripe,
     /// No way to add a payment method yet: acceptance answers 503
     /// `payment_setup_unavailable`.
     Unavailable,
+}
+
+/// How invites collect a payment method now: the test seam (`sk_test_` key
+/// and `SIGNUP_TEST_PAYMENT_METHOD`), else the Payment Element when the
+/// publishable key is set.
+pub fn payment_mode(state: &AppState) -> InvitePaymentMode {
+    if payment::is_test_mode(state) {
+        InvitePaymentMode::Test
+    } else if state.signup.publishable_key.is_some() {
+        InvitePaymentMode::Stripe
+    } else {
+        InvitePaymentMode::Unavailable
+    }
 }
 
 /// `GET /v1/plan-invites/{token}`.
@@ -321,9 +395,18 @@ pub struct InviteOffer {
     /// When the link stops working (ISO 8601, UTC).
     pub expires_at: DateTime<Utc>,
     /// The checkboxes to tick, in order (terms, auto_renewal,
-    /// per_user_pricing); empty unless `status` is `open`.
+    /// per_user_pricing, then card_authorization and ach_authorization: show
+    /// only the one matching the method selected or saved, see
+    /// `payment_method_type`); empty unless `status` is `open`.
     pub consents: Vec<RenderedConsent>,
     pub payment_mode: InvitePaymentMode,
+    /// The Stripe publishable key for the Payment Element; only in `stripe`
+    /// mode, else null.
+    pub publishable_key: Option<String>,
+    /// The payment method already set up for this invite (`ready`, or a bank
+    /// account `verifying` its micro-deposits), read live from Stripe; null
+    /// when none, or when Stripe cannot be read right now.
+    pub payment_method: Option<SavedMethod>,
     /// Where to go once accepted (the main app's billing page).
     pub redirect_url: String,
 }
@@ -382,6 +465,23 @@ pub async fn offer(state: &AppState, token: &str, caller: Caller<'_>) -> ApiResu
     } else {
         Vec::new()
     };
+    let mode = payment_mode(state);
+    let payment_method = match invite.setup_intent_id.as_deref() {
+        Some(id) if invite.status == InviteStatus::Open => {
+            match state.stripe.setup_intent(id).await {
+                Ok(setup) => payment::saved_method(&setup),
+                Err(err) => {
+                    tracing::warn!(
+                        company_id = invite.company_id,
+                        stripe_code = err.code(),
+                        "plan invite SetupIntent read failed"
+                    );
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
     Ok(InviteOffer {
         status: invite.status,
         company_name,
@@ -391,12 +491,81 @@ pub async fn offer(state: &AppState, token: &str, caller: Caller<'_>) -> ApiResu
         current_plan: charge.current_plan,
         expires_at: invite.expires_at.and_utc(),
         consents,
-        payment_mode: if payment::is_test_mode(state) {
-            InvitePaymentMode::Test
-        } else {
-            InvitePaymentMode::Unavailable
-        },
+        payment_mode: mode,
+        publishable_key: state
+            .signup
+            .publishable_key
+            .as_deref()
+            .filter(|_| mode == InvitePaymentMode::Stripe)
+            .map(str::to_string),
+        payment_method,
         redirect_url: redirect_url(state),
+    })
+}
+
+/// `POST /v1/billing/payment-setup` with purpose `plan_invite`.
+///
+/// A new SetupIntent (card or bank account) for the invite's customer,
+/// stored on the invite (`plan-invite:<id>:si:<uuid>`). The invite must be open and
+/// not expired, the caller a Manager of its company. With the test seam
+/// nothing is made (`Setup::Test`: acceptance attaches a test card).
+pub async fn create_setup(state: &AppState, token: &str, caller: Caller<'_>) -> ApiResult<Setup> {
+    let (invite, company) = invite_for(state, token, caller).await?;
+    match invite.status {
+        InviteStatus::Revoked => return Err(revoked()),
+        InviteStatus::Open if invite.is_expired(billing::now()) => return Err(expired()),
+        InviteStatus::Open => {}
+        InviteStatus::Accepting | InviteStatus::Accepted => return Err(closed()),
+    }
+    let publishable_key = match payment_mode(state) {
+        InvitePaymentMode::Test => return Ok(Setup::Test),
+        InvitePaymentMode::Stripe => state.signup.publishable_key.clone(),
+        InvitePaymentMode::Unavailable => None,
+    };
+    let Some(publishable_key) = publishable_key else {
+        return Err(payments_unavailable());
+    };
+    let known = MySqlBillingStore(&state.pool)
+        .by_company(invite.company_id)
+        .await?
+        .and_then(|record| record.stripe_customer_id);
+    let customer = customer_id(state, &invite, &company.name, known, |err| {
+        setup_failed(err, invite.company_id)
+    })
+    .await?;
+    let created = state
+        .stripe
+        .create_company_setup_intent(
+            &customer,
+            invite.company_id,
+            "plan_invite",
+            Some(&invite.id),
+            &format!("plan-invite:{}:si:{}", invite.id, uuid::Uuid::new_v4()),
+        )
+        .await
+        .map_err(|err| setup_failed(&err, invite.company_id))?;
+    let (Some(setup_intent), Some(client_secret)) =
+        (stripe_id(&created["id"]), created["client_secret"].as_str())
+    else {
+        return Err(ApiError::Upstream(
+            "We could not set up payments. Try again.".into(),
+        ));
+    };
+    let stored = sqlx::query(
+        "UPDATE plan_invites SET setup_intent_id = ?, updated_at = ?
+          WHERE id = ? AND status = 'open'",
+    )
+    .bind(&setup_intent)
+    .bind(billing::now())
+    .bind(&invite.id)
+    .execute(&state.pool)
+    .await?;
+    if stored.rows_affected() != 1 {
+        return Err(closed());
+    }
+    Ok(Setup::Stripe {
+        client_secret: client_secret.to_string(),
+        publishable_key: publishable_key.to_string(),
     })
 }
 
@@ -412,6 +581,7 @@ pub async fn accept(
     token: &str,
     caller: Caller<'_>,
     accepted: &[ConsentAcceptance],
+    setup_intent_id: Option<&str>,
     meta: &RequestMeta,
 ) -> ApiResult<Accepted> {
     let done = Accepted {
@@ -428,7 +598,16 @@ pub async fn accept(
             InviteStatus::Open if invite.is_expired(billing::now()) => return Err(expired()),
             InviteStatus::Open if tries < 2 => {
                 tries += 1;
-                let begun = begin(state, &invite, &company, caller, accepted, meta).await;
+                let begun = begin(
+                    state,
+                    &invite,
+                    &company,
+                    caller,
+                    accepted,
+                    setup_intent_id,
+                    meta,
+                )
+                .await;
                 let current = load(&state.pool, &invite.id).await?.ok_or_else(not_found)?;
                 match begun {
                     Ok(true) => {
@@ -472,11 +651,24 @@ async fn begin(
     company: &CompanyPlan,
     caller: Caller<'_>,
     accepted: &[ConsentAcceptance],
+    setup_intent_id: Option<&str>,
     meta: &RequestMeta,
 ) -> ApiResult<bool> {
-    if !payment::is_test_mode(state) {
+    let mode = payment_mode(state);
+    if mode == InvitePaymentMode::Unavailable {
         return Err(payment_setup_unavailable());
     }
+    // The Payment Element's SetupIntent, read before anything is written;
+    // the test seam confirms a card later.
+    let confirmed = if mode == InvitePaymentMode::Stripe {
+        Some(confirmed_setup(state, invite, setup_intent_id).await?)
+    } else {
+        None
+    };
+    let method_type = confirmed
+        .as_ref()
+        .and_then(|facts| facts.method_type)
+        .unwrap_or(PaymentMethodType::Card);
     let catalog = load_catalog(&state.stripe).await.ok_or_else(retry)?;
     let charge = first_charge(state, invite, true).await?;
     let record = MySqlBillingStore(&state.pool)
@@ -529,7 +721,7 @@ async fn begin(
         charge.on,
     );
     let rendered = consent::render_for(ConsentContext::Invite, &facts, &state.app_url);
-    if !consent::all_accepted(&rendered, accepted) {
+    if !consent::all_accepted(&rendered, accepted, method_type) {
         return Err(coded(
             StatusCode::CONFLICT,
             "consents_changed",
@@ -537,8 +729,22 @@ async fn begin(
         ));
     }
     let known = record.and_then(|record| record.stripe_customer_id);
-    let customer = customer_id(state, invite, &company.name, known).await?;
-    let payment = payment_method(state, invite, &customer).await?;
+    let customer = customer_id(state, invite, &company.name, known, |err| {
+        tracing::warn!(
+            company_id = invite.company_id,
+            stripe_code = err.code(),
+            "plan invite customer not created"
+        );
+        retry()
+    })
+    .await?;
+    let payment = match confirmed {
+        Some(facts) => PaymentFacts {
+            stripe_customer_id: Some(customer.clone()),
+            ..facts
+        },
+        None => test_payment_method(state, invite, &customer).await?,
+    };
     let price_ids = serde_json::to_string(&catalog.subscription_price_ids(&invite.addons))
         .map_err(|err| ApiError::Internal(err.to_string()))?;
     let mut tx = state.pool.begin().await?;
@@ -600,6 +806,7 @@ async fn customer_id(
     invite: &Invite,
     company_name: &str,
     known: Option<String>,
+    failed: impl Fn(&StripeError) -> ApiError,
 ) -> ApiResult<String> {
     if let Some(id) = known.or_else(|| invite.stripe_customer_id.clone()) {
         return Ok(id);
@@ -617,14 +824,7 @@ async fn customer_id(
             email: first_manager.as_ref().map(|manager| manager.email.as_str()),
         })
         .await
-        .map_err(|err| {
-            tracing::warn!(
-                company_id = invite.company_id,
-                stripe_code = err.code(),
-                "plan invite customer not created"
-            );
-            retry()
-        })?;
+        .map_err(|err| failed(&err))?;
     let id = stripe_id(&created["id"]).ok_or_else(retry)?;
     sqlx::query(
         "UPDATE plan_invites SET stripe_customer_id = ?, updated_at = ?
@@ -638,12 +838,50 @@ async fn customer_id(
     Ok(id)
 }
 
-/// The payment method the plan is charged to.
+/// The Payment Element's SetupIntent of the invite (`stripe` mode).
 ///
-/// Until step 13 only the test seam exists: a test card confirmed
-/// server-side (`plan-invite:<id>:si`). Step 13 plugs the SetupIntent the
-/// Payment Element confirms in here.
-async fn payment_method(
+/// The one `create_setup` stored on the invite: `setup_intent_id` may be
+/// omitted (a page reloaded in a new tab), and when sent must be that one
+/// (409 `setup_intent_mismatch`). Read from Stripe, it must have succeeded:
+/// a bank account still waiting for micro-deposits is 409
+/// `bank_verification_pending`, anything else (or none stored) 409
+/// `payment_not_ready`. Its facts, without the customer.
+async fn confirmed_setup(
+    state: &AppState,
+    invite: &Invite,
+    setup_intent_id: Option<&str>,
+) -> ApiResult<PaymentFacts> {
+    let stored = invite.setup_intent_id.as_deref();
+    if setup_intent_id.is_some_and(|sent| stored != Some(sent)) {
+        return Err(setup_intent_mismatch());
+    }
+    let Some(id) = stored else {
+        return Err(payment_not_ready());
+    };
+    let setup = match state.stripe.setup_intent(id).await {
+        Ok(setup) => setup,
+        Err(StripeError::Missing(_) | StripeError::Api(_)) => return Err(payment_not_ready()),
+        Err(err) => {
+            tracing::warn!(
+                company_id = invite.company_id,
+                stripe_code = err.code(),
+                "plan invite SetupIntent read failed"
+            );
+            return Err(payments_unavailable());
+        }
+    };
+    if payment::is_verifying(&setup) {
+        return Err(bank_verification_pending());
+    }
+    if setup["status"] != "succeeded" {
+        return Err(payment_not_ready());
+    }
+    payment::payment_facts(None, &setup).ok_or_else(payment_not_ready)
+}
+
+/// The test seam's payment method: a test card confirmed server-side
+/// (`plan-invite:<id>:si`).
+async fn test_payment_method(
     state: &AppState,
     invite: &Invite,
     customer: &str,
@@ -695,8 +933,9 @@ async fn payment_method(
     Ok(PaymentFacts {
         stripe_customer_id: Some(customer.to_string()),
         payment_method_id: Some(method_id),
-        method_type,
+        method_type: method_type.as_deref().and_then(PaymentMethodType::parse),
         last4,
+        ..PaymentFacts::default()
     })
 }
 

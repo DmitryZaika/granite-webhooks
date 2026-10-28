@@ -24,6 +24,8 @@ pub struct Memory {
     pub self_serve: RefCell<HashSet<i32>>,
     /// Plan invites by id: (company id, status).
     pub plan_invites: RefCell<HashMap<String, (i32, String)>>,
+    /// `bank_verification_until` of an awaiting signup, by company.
+    pub bank_verification: RefCell<HashMap<i32, NaiveDateTime>>,
 }
 
 fn read_failed() -> sqlx::Error {
@@ -61,9 +63,19 @@ impl BillingStore for Memory {
             .cloned())
     }
     async fn save(&self, record: &CompanyBilling) -> StoreResult<()> {
-        self.records
-            .borrow_mut()
-            .insert(record.company_id, record.clone());
+        // Like MySQL: `save` never writes the payment method columns.
+        let mut records = self.records.borrow_mut();
+        let methods = records
+            .get(&record.company_id)
+            .map(|stored| stored.methods.clone())
+            .unwrap_or_default();
+        records.insert(
+            record.company_id,
+            CompanyBilling {
+                methods,
+                ..record.clone()
+            },
+        );
         Ok(())
     }
     async fn claim_event(&self, event_id: &str, _: &str) -> StoreResult<bool> {
@@ -142,6 +154,12 @@ impl BillingStore for Memory {
             .get(invite_id)
             .filter(|(company, _)| *company == company_id)
             .map(|(_, status)| status.clone()))
+    }
+    async fn bank_verification_until(
+        &self,
+        company_id: i32,
+    ) -> StoreResult<Option<NaiveDateTime>> {
+        Ok(self.bank_verification.borrow().get(&company_id).copied())
     }
 }
 

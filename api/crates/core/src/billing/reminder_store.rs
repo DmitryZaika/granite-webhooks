@@ -158,6 +158,9 @@ impl ReminderStore for MySqlReminderStore<'_> {
             required,
             required_since,
             record: MySqlBillingStore(self.0).by_company(company_id).await?,
+            awaiting_bank: super::store::bank_verification_until(self.0, company_id)
+                .await?
+                .is_some(),
         })
     }
 

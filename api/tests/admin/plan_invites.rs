@@ -94,6 +94,15 @@ impl Env {
     /// `seam`: the test payment method is configured (else acceptance
     /// cannot add a payment method).
     async fn with_seam(pool: &MySqlPool, seam: bool) -> Self {
+        Self::build(pool, seam, None).await
+    }
+
+    /// The Payment Element collects the method (a publishable key, no seam).
+    async fn stripe_mode(pool: &MySqlPool) -> Self {
+        Self::build(pool, false, Some("pk_test_fake")).await
+    }
+
+    async fn build(pool: &MySqlPool, seam: bool, publishable_key: Option<&str>) -> Self {
         sqlx::query("UPDATE users SET is_superuser = 1 WHERE id = 102")
             .execute(pool)
             .await
@@ -108,6 +117,7 @@ impl Env {
             .with_webhooks(webhooks)
             .with_signup(SignupConfig {
                 test_payment_method: seam.then(|| Arc::from("pm_card_visa")),
+                publishable_key: publishable_key.map(Arc::from),
                 notify_user_id: Some(STAFF_USER),
                 notify_email: Some(STAFF_EMAIL.into()),
                 ..Default::default()
@@ -874,7 +884,16 @@ async fn changed_consents_are_refused_before_anything_happens(pool: MySqlPool) {
         .iter()
         .map(|c| c["kind"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, ["terms", "auto_renewal", "per_user_pricing"]);
+    assert_eq!(
+        kinds,
+        [
+            "terms",
+            "auto_renewal",
+            "per_user_pricing",
+            "card_authorization",
+            "ach_authorization"
+        ]
+    );
     let consents = env.consents(&token, MANAGER).await;
     let mut stale = consents.clone();
     stale[1]["text_sha256"] = json!("0".repeat(64));
@@ -1048,7 +1067,8 @@ async fn accepting_moves_the_company_onto_the_plan_and_only_then(pool: MySqlPool
     .unwrap();
     assert_eq!(addons, [("quotes".to_string(), "subscription".to_string())]);
 
-    // The consents: terms (3 documents), auto_renewal, per_user_pricing.
+    // The consents: terms (3 documents), auto_renewal, per_user_pricing and
+    // the test card's card_authorization.
     type ConsentRow = (String, String, Option<i32>, Option<i32>, String);
     let records: Vec<ConsentRow> = sqlx::query_as(
         "SELECT kind, CAST(source AS CHAR), company_id, user_id, CAST(amounts_and_dates AS CHAR)
@@ -1066,7 +1086,8 @@ async fn accepting_moves_the_company_onto_the_plan_and_only_then(pool: MySqlPool
             "terms",
             "terms",
             "auto_renewal",
-            "per_user_pricing"
+            "per_user_pricing",
+            "card_authorization"
         ]
     );
     for (_, source, company, user, amounts) in &records {
@@ -1154,7 +1175,7 @@ async fn two_managers_accepting_at_once_make_one_subscription(pool: MySqlPool) {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(records, 5);
+    assert_eq!(records, 6);
     assert_eq!(env.emails(ACTIVE_SUBJECT).len(), 1);
 }
 
@@ -1903,7 +1924,7 @@ async fn the_seeded_dev_invite_opens_for_its_manager_only(pool: MySqlPool) {
     assert_eq!(offer["company_name"], "Legacy Move Stone");
     assert_eq!(offer["status"], "open");
     assert_eq!(offer["addons"], json!(["quotes"]));
-    assert_eq!(offer["consents"].as_array().unwrap().len(), 3);
+    assert_eq!(offer["consents"].as_array().unwrap().len(), 5);
     env.offer("sb11-dev-invite-token-0001", rob)
         .await
         .assert_status(StatusCode::FORBIDDEN);
@@ -2093,4 +2114,211 @@ async fn events_of_an_unaccepted_invites_subscription_leave_the_legacy_billing_a
         (subscription, status.as_str()),
         (Some(accepted), "past_due")
     );
+}
+
+/// The Payment Element's SetupIntent for the invite, as the upgrade page
+/// asks for it (`POST /v1/billing/payment-setup`, purpose `plan_invite`).
+async fn invite_setup(env: &Env, token: &str) -> String {
+    let response = env
+        .server
+        .post("/v1/billing/payment-setup")
+        .with_session(MANAGER)
+        .json(&json!({ "purpose": "plan_invite", "plan_invite_token": token }))
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["mode"], "stripe");
+    assert_eq!(body["publishable_key"], "pk_test_fake");
+    assert!(body["client_secret"].as_str().unwrap().contains("_secret_"));
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT setup_intent_id FROM plan_invites WHERE company_id = ? AND status = 'open'",
+    )
+    .bind(COMPANY)
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    stored.expect("the invite keeps its SetupIntent")
+}
+
+/// The checkboxes the upgrade page sends when paying with `method`.
+fn consents_for(consents: &Value, method: &str) -> Value {
+    Value::Array(
+        consents
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|consent| {
+                let kind = consent["kind"].as_str().unwrap();
+                match kind {
+                    "card_authorization" => method == "card",
+                    "ach_authorization" => method == "us_bank_account",
+                    _ => true,
+                }
+            })
+            .cloned()
+            .collect(),
+    )
+}
+
+async fn accept_stripe(
+    env: &Env,
+    token: &str,
+    consents: &Value,
+    setup: Option<&str>,
+) -> TestResponse {
+    env.server
+        .post(&format!("/v1/plan-invites/{token}/acceptance"))
+        .with_session(MANAGER)
+        .json(&json!({ "consents": consents, "setup_intent_id": setup }))
+        .await
+}
+
+#[test_db::test(seed)]
+async fn the_payment_element_s_card_accepts_the_plan(pool: MySqlPool) {
+    let env = Env::stripe_mode(&pool).await;
+    assert_eq!(env.plan_move(COMPANY).await["blocked"], Value::Null);
+    let created = env.create().await;
+    let id = created["invite"]["id"].as_str().unwrap().to_string();
+    let token = env.token_for("manager@acme.test");
+    let offer: Value = env.offer(&token, MANAGER).await.json();
+    assert_eq!(offer["payment_mode"], "stripe");
+    assert_eq!(offer["publishable_key"], "pk_test_fake");
+    assert_eq!(offer["payment_method"], Value::Null);
+
+    let setup = invite_setup(&env, &token).await;
+    let made = env.calls("POST", "/v1/setup_intents");
+    assert_eq!(made.len(), 1);
+    assert!(
+        made[0]
+            .idempotency_key
+            .as_deref()
+            .unwrap()
+            .starts_with(&format!("plan-invite:{id}:si:"))
+    );
+    assert_eq!(
+        made[0].field("metadata[purpose]").as_deref(),
+        Some("plan_invite")
+    );
+    assert_eq!(made[0].field("metadata[plan_invite_id]"), Some(id.clone()));
+    assert_eq!(made[0].field("confirm"), None);
+    env.stripe
+        .lock()
+        .unwrap()
+        .confirm_setup_intent(&setup, "pm_card_visa");
+    let offer: Value = env.offer(&token, MANAGER).await.json();
+    assert_eq!(offer["payment_method"]["status"], "ready");
+    assert_eq!(offer["payment_method"]["type"], "card");
+
+    let consents = consents_for(&env.consents(&token, MANAGER).await, "card");
+    // Reloaded in a new tab: the page sends no SetupIntent, the saved one is used.
+    let accepted = accept_stripe(&env, &token, &consents, None).await;
+    accepted.assert_status_ok();
+    assert_eq!(env.invite_row(&id).await.0, "accepted");
+    assert_eq!(env.plan_source(COMPANY).await, "subscription");
+    let creates = env.calls("POST", "/v1/subscriptions");
+    assert_eq!(creates.len(), 1);
+    assert_eq!(
+        creates[0].field("default_payment_method").as_deref(),
+        Some("pm_card_visa")
+    );
+    // No test card was confirmed server-side.
+    assert_eq!(env.calls("POST", "/v1/setup_intents").len(), 1);
+    let kinds: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT kind, payment_method_id FROM consent_records WHERE plan_invite_id = ? ORDER BY id",
+    )
+    .bind(&id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        kinds
+            .last()
+            .map(|(kind, method)| (kind.as_str(), method.as_deref())),
+        Some(("card_authorization", Some("pm_card_visa")))
+    );
+    assert_eq!(kinds.len(), 6);
+}
+
+#[test_db::test(seed)]
+async fn a_bank_account_still_verifying_cannot_accept_yet(pool: MySqlPool) {
+    let env = Env::stripe_mode(&pool).await;
+    let created = env.create().await;
+    let id = created["invite"]["id"].as_str().unwrap().to_string();
+    let token = env.token_for("manager@acme.test");
+    let setup = invite_setup(&env, &token).await;
+    {
+        let mut stripe = env.stripe.lock().unwrap();
+        stripe.payment_methods.insert(
+            "pm_bank_20710".into(),
+            fake_stripe::bank_account("pm_bank_20710", "STRIPE TEST BANK", "6789"),
+        );
+        stripe.pend_microdeposits(&setup, "pm_bank_20710");
+    }
+    let offer: Value = env.offer(&token, MANAGER).await.json();
+    assert_eq!(offer["payment_method"]["status"], "verifying");
+    assert_eq!(offer["payment_method"]["type"], "us_bank_account");
+    assert!(offer["payment_method"]["verify_url"].is_string());
+
+    let consents = consents_for(&env.consents(&token, MANAGER).await, "us_bank_account");
+    let refused = accept_stripe(&env, &token, &consents, Some(&setup)).await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&refused), "bank_verification_pending");
+    assert_eq!(env.invite_row(&id).await.0, "open");
+    assert!(env.calls("POST", "/v1/subscriptions").is_empty());
+    let records: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM consent_records WHERE plan_invite_id = ?")
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(records, 0);
+
+    // Verified days later: the Manager comes back and accepts.
+    env.stripe
+        .lock()
+        .unwrap()
+        .confirm_setup_intent(&setup, "pm_bank_20710");
+    accept_stripe(&env, &token, &consents, Some(&setup))
+        .await
+        .assert_status_ok();
+    assert_eq!(env.invite_row(&id).await.0, "accepted");
+    let ach: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM consent_records WHERE plan_invite_id = ? AND kind = 'ach_authorization'",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ach, 1);
+}
+
+#[test_db::test(seed)]
+async fn another_or_no_setup_intent_is_refused(pool: MySqlPool) {
+    let env = Env::stripe_mode(&pool).await;
+    let created = env.create().await;
+    let id = created["invite"]["id"].as_str().unwrap().to_string();
+    let token = env.token_for("manager@acme.test");
+    // Nothing set up yet.
+    let consents = consents_for(&env.consents(&token, MANAGER).await, "card");
+    let refused = accept_stripe(&env, &token, &consents, None).await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&refused), "payment_not_ready");
+    let setup = invite_setup(&env, &token).await;
+    env.stripe
+        .lock()
+        .unwrap()
+        .confirm_setup_intent(&setup, "pm_card_visa");
+    let refused = accept_stripe(&env, &token, &consents, Some("seti_someone_else")).await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&refused), "setup_intent_mismatch");
+    // A failed setup is not ready.
+    env.stripe
+        .lock()
+        .unwrap()
+        .fail_setup_intent(&setup, "setup_intent_authentication_failure");
+    let refused = accept_stripe(&env, &token, &consents, Some(&setup)).await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&refused), "payment_not_ready");
+    assert_eq!(env.invite_row(&id).await.0, "open");
+    assert!(env.calls("POST", "/v1/subscriptions").is_empty());
 }

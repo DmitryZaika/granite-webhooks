@@ -14,6 +14,7 @@ mod billing;
 mod billing_addons;
 mod billing_amount_notice;
 mod billing_cancellation;
+mod billing_methods;
 mod billing_reminders;
 mod billing_seats;
 mod billing_setup;

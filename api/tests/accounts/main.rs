@@ -19,6 +19,7 @@ mod me;
 mod me_account;
 mod onboarding;
 mod signup;
+mod signup_bank;
 mod signup_provisioning;
 mod teach_mode;
 mod todos;

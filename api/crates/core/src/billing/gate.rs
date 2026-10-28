@@ -8,6 +8,7 @@
 
 use super::lock::CompanyLock;
 use super::machine::restore_active;
+use super::methods::is_processing;
 use super::reactivation::{current_subscription, refresh_subscription};
 use super::store::{BillingStore, MySqlBillingStore, StoreResult};
 use super::stripe::{Stripe, StripeError};
@@ -45,6 +46,11 @@ pub enum BillingNoticeReason {
     /// Stripe payment was turned on for the company and it has not
     /// subscribed yet.
     SubscriptionRequired,
+    /// The saved payment method stopped working (a blocked bank account or
+    /// a dispute: a warning until `pauses_at`, then paused), or the signup's
+    /// bank account was not verified in time (paused). Saving a new payment
+    /// method on the account page ends it.
+    PaymentMethodRequired,
 }
 
 /// What a page shows about billing.
@@ -127,7 +133,9 @@ async fn settle_overdue_record<S: BillingStore, G: GateStripe>(
         return Ok(existing);
     }
     let mut current = stripe.refresh(existing).await;
+    // A bank payment on its way (D18): never paused meanwhile.
     if grace_ended(&current, now)
+        && !is_processing(&current.methods, now)
         && let Some(live) = stripe.live_state(&current).await
     {
         if stripe_confirms_non_payment(&live) {
@@ -312,6 +320,19 @@ pub async fn evaluate_gate<S: BillingStore, G: GateStripe>(
     }
     let mut existing = store.by_company(company_id).await?;
     if is_awaiting_first_payment(existing.as_ref()) {
+        // A signup whose bank account waits for micro-deposits (D1): open
+        // until its verification window ends, then paused.
+        if let Some(until) = store.bank_verification_until(company_id).await? {
+            return Ok(if now < until {
+                NO_BILLING_NOTICE
+            } else {
+                BillingNotice {
+                    restricted: true,
+                    reason: Some(BillingNoticeReason::PaymentMethodRequired),
+                    ..NO_BILLING_NOTICE
+                }
+            });
+        }
         match first_payment_notice(store, stripe, company_id, user_id, existing, now).await? {
             FirstPayment::Notice(notice) => return Ok(notice),
             FirstPayment::Paid(record) => existing = Some(*record),
@@ -331,13 +352,15 @@ pub async fn evaluate_gate<S: BillingStore, G: GateStripe>(
     } else {
         record
     };
-    match current.payment_status {
-        PaymentStatus::Suspended => Ok(BillingNotice {
-            restricted: true,
-            reason: Some(BillingNoticeReason::PaymentFailed),
-            ..NO_BILLING_NOTICE
-        }),
-        PaymentStatus::PastDue => Ok(BillingNotice {
+    let payment = match current.payment_status {
+        PaymentStatus::Suspended => {
+            return Ok(BillingNotice {
+                restricted: true,
+                reason: Some(BillingNoticeReason::PaymentFailed),
+                ..NO_BILLING_NOTICE
+            });
+        }
+        PaymentStatus::PastDue => Some(BillingNotice {
             show_warning: manager_sees_warning(store, company_id, user_id).await?,
             days_remaining: current
                 .grace_period_ends_at
@@ -346,8 +369,32 @@ pub async fn evaluate_gate<S: BillingStore, G: GateStripe>(
             reason: Some(BillingNoticeReason::PaymentFailed),
             pauses_at: current.grace_period_ends_at.map(|ends| ends.and_utc()),
         }),
-        PaymentStatus::Active | PaymentStatus::None => Ok(NO_BILLING_NOTICE),
-    }
+        PaymentStatus::Active | PaymentStatus::None => None,
+    };
+    let hold = match (current.methods.hold, current.methods.hold_until) {
+        (Some(_), Some(until)) if now >= until => {
+            return Ok(BillingNotice {
+                restricted: true,
+                reason: Some(BillingNoticeReason::PaymentMethodRequired),
+                ..NO_BILLING_NOTICE
+            });
+        }
+        (Some(_), Some(until)) => Some(BillingNotice {
+            show_warning: manager_sees_warning(store, company_id, user_id).await?,
+            days_remaining: days_remaining(until, now),
+            restricted: false,
+            reason: Some(BillingNoticeReason::PaymentMethodRequired),
+            pauses_at: Some(until.and_utc()),
+        }),
+        _ => None,
+    };
+    // Both run: the one that pauses first is shown.
+    Ok(match (payment, hold) {
+        (Some(payment), Some(hold)) if hold.pauses_at < payment.pauses_at => hold,
+        (Some(payment), _) => payment,
+        (None, Some(hold)) => hold,
+        (None, None) => NO_BILLING_NOTICE,
+    })
 }
 
 /// Stripe and the MySQL company lock for the gate, throttled per company.
@@ -556,7 +603,7 @@ async fn report_gate_error(err: &sqlx::Error, company_id: i32) {
 mod tests {
     use super::*;
     use crate::billing::test_store::{Memory, at};
-    use crate::billing::{FIRST_PAYMENT_DAYS, add_grace_days};
+    use crate::billing::{FIRST_PAYMENT_DAYS, MethodHold, MethodState, add_grace_days};
     use chrono::Duration;
     use std::cell::Cell;
 
@@ -974,6 +1021,148 @@ mod tests {
                 .unwrap();
         assert_eq!(settled.unwrap().payment_status, PaymentStatus::Suspended);
         assert_eq!(store.record(1).payment_status, PaymentStatus::Suspended);
+    }
+
+    // ---- payment methods (step 13)
+
+    #[tokio::test]
+    async fn a_signup_waiting_on_its_bank_is_open_until_its_window_ends() {
+        // Asked to pay 8 days ago: without the bank window it would be paused.
+        let store = asked_to_pay(Some(checkout_never_completed()));
+        let until = required_since() + Duration::days(10);
+        store.bank_verification.borrow_mut().insert(1, until);
+        store.users.borrow_mut().push((10, 1, true));
+        let stripe = FakeStripe::default();
+        let during = evaluate_gate(&store, &stripe, 1, 10, after_window())
+            .await
+            .unwrap();
+        assert_eq!(during, NO_BILLING_NOTICE);
+        let after = evaluate_gate(&store, &stripe, 1, 10, until).await.unwrap();
+        assert_eq!(
+            after,
+            BillingNotice {
+                restricted: true,
+                reason: Some(BillingNoticeReason::PaymentMethodRequired),
+                ..NO_BILLING_NOTICE
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(after).unwrap()["reason"],
+            "payment_method_required"
+        );
+        assert_eq!(stripe.locks.get(), 0);
+    }
+
+    fn held(hold: MethodHold, since: NaiveDateTime) -> CompanyBilling {
+        CompanyBilling {
+            methods: MethodState {
+                hold: Some(hold),
+                hold_at: Some(since),
+                hold_until: Some(crate::billing::methods::hold_until(since)),
+                ..MethodState::default()
+            },
+            ..paid(checkout_never_completed())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hold_warns_managers_then_pauses_after_seven_days() {
+        let since = at("2026-11-01 00:00:00");
+        let store = with_record(held(MethodHold::Blocked, since));
+        store
+            .users
+            .borrow_mut()
+            .extend([(10, 1, true), (11, 1, false)]);
+        let day_two = since + Duration::days(2);
+        let manager = evaluate_gate(&store, &FakeStripe::default(), 1, 10, day_two)
+            .await
+            .unwrap();
+        assert_eq!(
+            manager,
+            BillingNotice {
+                show_warning: true,
+                days_remaining: 5,
+                restricted: false,
+                reason: Some(BillingNoticeReason::PaymentMethodRequired),
+                pauses_at: Some(at("2026-11-08 00:00:00").and_utc()),
+            }
+        );
+        let rep = evaluate_gate(&store, &FakeStripe::default(), 1, 11, day_two)
+            .await
+            .unwrap();
+        assert!(!rep.show_warning && !rep.restricted);
+        let after = evaluate_gate(
+            &store,
+            &FakeStripe::default(),
+            1,
+            11,
+            since + Duration::days(7),
+        )
+        .await
+        .unwrap();
+        assert!(after.restricted);
+        assert_eq!(after.reason, Some(BillingNoticeReason::PaymentMethodRequired));
+    }
+
+    #[tokio::test]
+    async fn a_cleared_hold_and_a_save_never_touch_the_hold_columns() {
+        let since = at("2026-11-01 00:00:00");
+        let store = with_record(held(MethodHold::Disputed, since));
+        // `save` keeps the stored payment method columns, like MySQL.
+        store.save(&paid(checkout_never_completed())).await.unwrap();
+        assert_eq!(store.record(1).methods.hold, Some(MethodHold::Disputed));
+        store.records.borrow_mut().get_mut(&1).unwrap().methods = MethodState::default();
+        let notice = evaluate_gate(
+            &store,
+            &FakeStripe::default(),
+            1,
+            10,
+            since + Duration::days(30),
+        )
+        .await
+        .unwrap();
+        assert_eq!(notice, NO_BILLING_NOTICE);
+    }
+
+    #[tokio::test]
+    async fn a_bank_payment_on_its_way_is_never_paused_at_grace_end() {
+        let mut record = past_due();
+        record.methods.payment_processing_at = Some(failed_at() + Duration::days(5));
+        let store = with_record(record);
+        let notice = evaluate_gate(&store, &live("past_due", 4900), 1, 10, after_grace())
+            .await
+            .unwrap();
+        assert!(!notice.restricted);
+        assert_eq!(notice.reason, Some(BillingNoticeReason::PaymentFailed));
+        assert_eq!(store.record(1).payment_status, PaymentStatus::PastDue);
+        // Ten days after it started, the grace end applies again.
+        let late = failed_at() + Duration::days(15) + Duration::minutes(1);
+        let notice = evaluate_gate(&store, &live("past_due", 4900), 1, 10, late)
+            .await
+            .unwrap();
+        assert!(notice.restricted);
+    }
+
+    #[tokio::test]
+    async fn past_due_and_a_hold_show_the_earlier_pause() {
+        let mut record = past_due();
+        record.methods = held(MethodHold::Disputed, failed_at() - Duration::days(3)).methods;
+        let store = with_record(record);
+        store.users.borrow_mut().push((10, 1, true));
+        let notice = evaluate_gate(
+            &store,
+            &FakeStripe {
+                due: false,
+                ..FakeStripe::default()
+            },
+            1,
+            10,
+            failed_at() + Duration::days(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(notice.reason, Some(BillingNoticeReason::PaymentMethodRequired));
+        assert_eq!(notice.pauses_at, Some(at("2026-09-05 00:00:00").and_utc()));
     }
 
     // ---- billingGate.server.ts throttles

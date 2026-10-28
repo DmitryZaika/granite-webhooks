@@ -112,6 +112,9 @@ pub struct AppState {
     pub phone: PhoneConfig,
     /// Onboarding with Dima: Calendly and `ONBOARDING_FEE_CHARGING`.
     pub onboarding_call: crate::onboarding_call::Config,
+    /// `BILLING_ALERT_EMAIL`: where internal payment notices go (returned
+    /// bank debits, blocked accounts, disputes); unset, none are sent.
+    pub billing_alert_email: Option<Arc<str>>,
     /// State of the crates above this one, one value per type (see
     /// [`Extensions`]).
     pub extensions: Extensions,
@@ -239,6 +242,7 @@ impl AppState {
             push: Push::disabled(),
             phone: PhoneConfig::default(),
             onboarding_call: crate::onboarding_call::Config::disabled(),
+            billing_alert_email: None,
             extensions: Extensions::default(),
         }
     }
@@ -246,6 +250,14 @@ impl AppState {
     #[must_use]
     pub fn with_onboarding_call(mut self, config: crate::onboarding_call::Config) -> Self {
         self.onboarding_call = config;
+        self
+    }
+
+    /// `BILLING_ALERT_EMAIL`; blank leaves internal payment notices off.
+    #[must_use]
+    pub fn with_billing_alert_email(mut self, email: &str) -> Self {
+        let email = email.trim();
+        self.billing_alert_email = (!email.is_empty()).then(|| Arc::from(email));
         self
     }
 
@@ -497,6 +509,7 @@ impl AppState {
                 &std::env::var("SIGNATURE_SESSION_SECRET").unwrap_or_default(),
             )
             .with_onboarding_call(crate::onboarding_call::Config::from_env())
+            .with_billing_alert_email(&std::env::var("BILLING_ALERT_EMAIL").unwrap_or_default())
             .with_signup(crate::signup::SignupConfig::from_env()))
     }
 

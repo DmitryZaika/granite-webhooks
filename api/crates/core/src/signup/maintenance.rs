@@ -2,10 +2,11 @@
 //!
 //! Resumes stuck provisioning and plan invite acceptances, expires abandoned
 //! signups (deleting their Stripe customers) and, once a day, reconciles the
-//! extra-user quantity of every subscription company.
+//! extra-user quantity of every subscription company. A signup waiting on
+//! its bank account (`awaiting_bank_verification`) is never resumed nor
+//! expired here: its company exists, and Stripe's verification resumes it.
 
 use super::funnel;
-use super::intent::BANK_VERIFICATION_DAYS;
 use super::notify;
 use super::provision::{self, RunOutcome, record_failure};
 use crate::billing::invites::accept as invite_accept;
@@ -94,15 +95,18 @@ pub fn resume_wait(attempts: u8) -> Duration {
     Duration::minutes(doubled.min(MAX_RESUME_WAIT_MINUTES))
 }
 
-/// Provisioning signups accepted more than [`GIVE_UP_AFTER_HOURS`] ago stop
-/// being resumed: staff get one alert. Without a company the signup expires
+/// Provisioning signups accepted more than [`GIVE_UP_AFTER_HOURS`] ago (a
+/// bank account's: counted from its verification deadline, as it may have
+/// been verified days after the acceptance) stop being resumed: staff get
+/// one alert. Without a company the signup expires
 /// (its Stripe customer is deleted next); with one, staff finish it by hand.
 /// The password hash goes either way.
 async fn give_up(state: &AppState, outcome: &mut MaintenanceRun) -> sqlx::Result<()> {
     let now = billing::now();
     let stuck: Vec<(String, Option<i32>, Option<String>)> = sqlx::query_as(
         "SELECT id, company_id, last_error FROM signup_intents
-          WHERE status = 'provisioning' AND gave_up_at IS NULL AND accepted_at <= ?
+          WHERE status = 'provisioning' AND gave_up_at IS NULL
+            AND GREATEST(accepted_at, COALESCE(bank_verification_until, accepted_at)) <= ?
           ORDER BY accepted_at, id LIMIT ?",
     )
     .bind(now - Duration::hours(GIVE_UP_AFTER_HOURS))
@@ -157,8 +161,14 @@ async fn resume(
         }
         outcome.resumed += 1;
         match provision::run(state, &id).await {
-            Ok(RunOutcome::Completed { .. }) => outcome.completed += 1,
-            Ok(RunOutcome::AlreadyCompleted | RunOutcome::Refused) => {}
+            Ok(RunOutcome::Completed {
+                awaiting_bank: false,
+                ..
+            }) => outcome.completed += 1,
+            // Awaiting: the company exists, the bank account still verifies.
+            Ok(
+                RunOutcome::Completed { .. } | RunOutcome::AlreadyCompleted | RunOutcome::Refused,
+            ) => {}
             Err(err) => {
                 outcome.errors += 1;
                 let signup = funnel::distinct_id(&id);
@@ -249,7 +259,8 @@ async fn resume_invites(
 }
 
 /// Abandoned signups expire (password hash and code dropped); their Stripe
-/// customers are deleted by [`delete_customers`].
+/// customers are deleted by [`delete_customers`]. Signups waiting on their
+/// bank account are not abandoned.
 async fn expire(
     state: &AppState,
     started: Instant,
@@ -258,12 +269,10 @@ async fn expire(
     let now = billing::now();
     let abandoned: Vec<(String, String)> = sqlx::query_as(
         "SELECT id, CAST(status AS CHAR) AS status FROM signup_intents
-          WHERE (status IN ('started', 'verified', 'payment_ready') AND expires_at <= ?)
-             OR (status = 'awaiting_bank_verification' AND updated_at <= ?)
+          WHERE status IN ('started', 'verified', 'payment_ready') AND expires_at <= ?
           ORDER BY created_at, id LIMIT ?",
     )
     .bind(now)
-    .bind(now - Duration::days(BANK_VERIFICATION_DAYS))
     .bind(EXPIRE_BATCH)
     .fetch_all(&state.pool)
     .await?;

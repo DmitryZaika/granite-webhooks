@@ -376,6 +376,7 @@ mod tests {
             updated_at: at,
             expires_at: at,
             completed_at: Some(at),
+            bank_verification_until: None,
         }
     }
 

@@ -1,14 +1,22 @@
 //! Completion and provisioning (02-architecture.md section 10).
 //!
-//! `complete` accepts the consents (the SetupIntent succeeded, the hashes
-//! match), freezes the facts and moves the signup to `provisioning`; `run`
-//! then makes the company, owner, billing row and subscription, resuming
-//! after whatever step a crash stopped it at: every Stripe POST carries an
-//! idempotency key built from the signup id, every status change is guarded.
+//! `complete` accepts the consents (the SetupIntent succeeded, or its bank
+//! account waits for micro-deposits; the hashes match), freezes the facts and
+//! moves the signup to `provisioning`; `run` then makes the company, owner,
+//! billing row and subscription, resuming after whatever step a crash
+//! stopped it at: every Stripe POST carries an idempotency key built from the
+//! signup id, every status change is guarded.
+//!
+//! A bank account waiting for micro-deposits (`bank_verification_until`
+//! set) stops `run` after the company: the signup goes
+//! `awaiting_bank_verification`, the owner is signed in and welcomed, and
+//! [`resume_verified`] makes the subscription once Stripe verifies the
+//! account (or another method replaces it).
 
-use super::consent::{self, ConsentAcceptance, ConsentOrigin, PaymentFacts};
-use super::intent::{self, CompanyDetails, Intent, SignupStatus};
-use super::{RequestMeta, email_lock_name, funnel, notify, unavailable};
+use super::consent::{self, ConsentAcceptance, ConsentOrigin};
+use super::intent::{self, BANK_VERIFICATION_DAYS, CompanyDetails, Intent, SignupStatus};
+use super::payment::{self, saved_method};
+use super::{RequestMeta, email_lock_name, funnel, notify, payments_unavailable};
 use crate::billing::lock::{CompanyLock, LockError, NamedLock};
 use crate::billing::machine::apply_subscription_change;
 use crate::billing::store::MySqlBillingStore;
@@ -20,10 +28,12 @@ use crate::company_create::{
     CompanyInit, OwnerInit, PlanSource, create_company_tx, create_owner_tx,
 };
 use crate::error::{ApiError, ApiResult};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::http::StatusCode;
-use chrono::{Duration, NaiveDateTime, SubsecRound, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, SubsecRound, Utc};
 use lambda_http::tracing;
+use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{MySqlConnection, MySqlPool};
 
@@ -38,9 +48,41 @@ const IDEMPOTENCY_SAFE_HOURS: i64 = 23;
 pub struct CompletionOutcome {
     /// Where the browser goes next (`<APP_URL>/employee?welcome=1`).
     pub redirect_url: String,
-    /// Sign this user in: this request finished the signup. `None` when it
-    /// was already completed before (sign in with the password instead).
+    /// Sign this user in: this request finished the signup (or made its
+    /// company while the bank account verifies). `None` when that happened
+    /// before (sign in with the password instead).
     pub sign_in: Option<i32>,
+    /// The company exists but its bank account still waits for
+    /// micro-deposits; `None` once the signup is completed.
+    pub bank_verification: Option<BankVerification>,
+}
+
+/// A bank account the signup waits for (micro-deposits).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct BankVerification {
+    /// Stripe's page where the code of the test deposit is entered; null
+    /// when Stripe cannot be read right now.
+    pub verify_url: Option<String>,
+    /// Verify by then to keep access (ISO 8601, UTC).
+    pub verify_by: DateTime<Utc>,
+    /// The bank's name, or null.
+    pub bank_name: Option<String>,
+    /// The last 4 digits of the account number, or null.
+    pub last4: Option<String>,
+}
+
+/// What a verified (or re-pending) payment method did to a signup waiting
+/// on its bank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeOutcome {
+    /// The subscription exists and the signup is completed.
+    Completed,
+    /// Still waiting: the SetupIntent is not verified yet (a new one that is
+    /// pending replaced the stored one), or it failed and changed nothing.
+    StillVerifying,
+    /// The signup does not wait on its bank (unknown, completed, other
+    /// status): nothing to do.
+    NotAwaiting,
 }
 
 fn not_found() -> ApiError {
@@ -57,6 +99,14 @@ fn expired() -> ApiError {
 
 fn invalid_state(message: &str) -> ApiError {
     ApiError::coded(StatusCode::CONFLICT, "invalid_state", message)
+}
+
+fn setup_intent_mismatch() -> ApiError {
+    ApiError::coded(
+        StatusCode::CONFLICT,
+        "setup_intent_mismatch",
+        "This payment method belongs to another account.",
+    )
 }
 
 fn payment_not_ready() -> ApiError {
@@ -87,9 +137,10 @@ pub async fn complete(
     accepted: &[ConsentAcceptance],
     meta: &RequestMeta,
 ) -> ApiResult<CompletionOutcome> {
-    let outcome = |sign_in| CompletionOutcome {
+    let outcome = |sign_in, bank_verification| CompletionOutcome {
         redirect_url: format!("{}/employee?welcome=1", state.app_url),
         sign_in,
+        bank_verification,
     };
     let mut intent = intent::load(&state.pool, signup_id)
         .await?
@@ -101,7 +152,10 @@ pub async fn complete(
             return Err(expired());
         }
         match intent.status {
-            SignupStatus::Completed => return Ok(outcome(None)),
+            SignupStatus::Completed => return Ok(outcome(None, None)),
+            SignupStatus::AwaitingBankVerification => {
+                return Ok(outcome(None, bank_verification(state, &intent).await));
+            }
             SignupStatus::Provisioning => break,
             SignupStatus::PaymentReady if tries < 2 => {
                 if accept(state, &intent, accepted, meta).await? {
@@ -113,16 +167,31 @@ pub async fn complete(
                     .ok_or_else(not_found)?;
             }
             SignupStatus::PaymentReady => return Err(invalid_state("Try again in a minute.")),
-            SignupStatus::AwaitingBankVerification => {
-                return Err(invalid_state("Your bank account is still being verified."));
-            }
             _ => return Err(invalid_state("Add a payment method first.")),
         }
     }
     let signup_id = intent.id.as_str();
-    match run(state, signup_id).await {
-        Ok(RunOutcome::Completed { user_id, .. }) => Ok(outcome(Some(user_id))),
-        Ok(RunOutcome::AlreadyCompleted) => Ok(outcome(None)),
+    let ran = run(state, signup_id).await;
+    let awaiting = || async {
+        match intent::load(&state.pool, signup_id).await {
+            Ok(Some(current)) => bank_verification(state, &current).await,
+            _ => None,
+        }
+    };
+    match ran {
+        Ok(RunOutcome::Completed {
+            user_id,
+            awaiting_bank,
+            ..
+        }) => {
+            let bank = if awaiting_bank {
+                awaiting().await
+            } else {
+                None
+            };
+            Ok(outcome(Some(user_id), bank))
+        }
+        Ok(RunOutcome::AlreadyCompleted) => Ok(outcome(None, awaiting().await)),
         Ok(RunOutcome::Refused) => Err(ApiError::coded(
             StatusCode::CONFLICT,
             "email_taken",
@@ -163,24 +232,27 @@ async fn accept(
         Err(StripeError::Missing(_) | StripeError::Api(_)) => return Err(payment_not_ready()),
         Err(err) => {
             tracing::warn!(stripe_code = err.code(), "signup SetupIntent read failed");
-            return Err(unavailable());
+            return Err(payments_unavailable());
         }
     };
-    if setup["status"].as_str() != Some("succeeded") {
+    // D1: a bank account waiting for micro-deposits is accepted too; the
+    // subscription waits for it.
+    let verifying = payment::is_verifying(&setup);
+    if setup["status"].as_str() != Some("succeeded") && !verifying {
         return Err(payment_not_ready());
     }
-    let method = &setup["payment_method"];
-    let payment_method_id = stripe_id(method).ok_or_else(payment_not_ready)?;
-    let method_type = method["type"].as_str().map(str::to_string);
-    let last4 = method_type
-        .as_deref()
-        .and_then(|kind| method[kind]["last4"].as_str())
-        .map(str::to_string);
+    let payment = payment::payment_facts(intent.stripe_customer_id.clone(), &setup)
+        .ok_or_else(payment_not_ready)?;
+    let (Some(payment_method_id), Some(method_type)) =
+        (payment.payment_method_id.clone(), payment.method_type)
+    else {
+        return Err(payment_not_ready());
+    };
     let catalog = super::signup_catalog(&state.stripe).await?;
     let now = Utc::now().trunc_subsecs(0);
     let facts = consent::facts(&catalog, intent, now);
     let rendered = consent::render(&facts, &state.app_url);
-    if !consent::all_accepted(&rendered, accepted) {
+    if !consent::all_accepted(&rendered, accepted, method_type) {
         return Err(ApiError::coded(
             StatusCode::CONFLICT,
             "consents_changed",
@@ -188,6 +260,8 @@ async fn accept(
         ));
     }
     let accepted_at = now.naive_utc();
+    let bank_verification_until =
+        verifying.then(|| accepted_at + Duration::days(BANK_VERIFICATION_DAYS));
     let price_ids = catalog.subscription_price_ids(&intent.plan.addons);
     let price_ids =
         serde_json::to_string(&price_ids).map_err(|err| ApiError::Internal(err.to_string()))?;
@@ -198,7 +272,7 @@ async fn accept(
         "UPDATE signup_intents
             SET status = 'provisioning', payment_method_id = ?, accepted_at = ?, trial_end_at = ?,
                 fee_cents = ?, deadline_at = ?, price_ids = CAST(? AS JSON), last_error = NULL,
-                updated_at = ?
+                bank_verification_until = ?, updated_at = ?
           WHERE id = ? AND status = 'payment_ready' AND expires_at > ?
             AND plan = CAST(? AS JSON)",
     )
@@ -208,6 +282,7 @@ async fn accept(
     .bind(facts.quote.fee_cents)
     .bind(facts.deadline_at.map(|at| at.trunc_subsecs(0)))
     .bind(&price_ids)
+    .bind(bank_verification_until)
     .bind(accepted_at)
     .bind(&intent.id)
     // Fresh: the job deletes the customer of a signup past `expires_at`.
@@ -221,12 +296,6 @@ async fn accept(
         tx.rollback().await?;
         return Ok(false);
     }
-    let payment = PaymentFacts {
-        stripe_customer_id: intent.stripe_customer_id.clone(),
-        payment_method_id: Some(payment_method_id),
-        method_type,
-        last4,
-    };
     consent::insert_records(
         &mut tx,
         ConsentOrigin::Signup {
@@ -267,12 +336,23 @@ pub(super) async fn record_failure(
 /// What a provisioning run reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
-    /// This run completed the signup (it sends the notifications).
-    Completed { company_id: i32, user_id: i32 },
-    /// Someone else completed it first.
+    /// This run completed the signup, or made its company while the bank
+    /// account verifies (`awaiting_bank`): sign the owner in.
+    Completed {
+        company_id: i32,
+        user_id: i32,
+        awaiting_bank: bool,
+    },
+    /// Someone else completed it (or moved it to wait for the bank) first.
     AlreadyCompleted,
     /// Refused for good (e.g. the email got taken): the signup expired.
     Refused,
+}
+
+/// The welcome already went out when the signup first waited on its bank:
+/// that move drops the password hash (the owner exists by then).
+const fn welcomed(intent: &Intent) -> bool {
+    intent.bank_verification_until.is_some() && intent.password_hash.is_empty()
 }
 
 /// Provisions a `provisioning` signup from wherever it stopped.
@@ -280,7 +360,9 @@ pub async fn run(state: &AppState, signup_id: &str) -> ApiResult<RunOutcome> {
     let pool = &state.pool;
     let intent = intent::load(pool, signup_id).await?.ok_or_else(not_found)?;
     match intent.status {
-        SignupStatus::Completed => return Ok(RunOutcome::AlreadyCompleted),
+        SignupStatus::Completed | SignupStatus::AwaitingBankVerification => {
+            return Ok(RunOutcome::AlreadyCompleted);
+        }
         SignupStatus::Provisioning => {}
         _ => return Err(invalid_state("This signup is not being set up.")),
     }
@@ -305,9 +387,12 @@ pub async fn run(state: &AppState, signup_id: &str) -> ApiResult<RunOutcome> {
             "The signup has no payment method.".into(),
         ));
     };
+    if intent.bank_verification_until.is_some() && !bank_verified(state, &intent).await? {
+        return await_bank(state, &intent, company_id, user_id, customer).await;
+    }
     state
         .stripe
-        .link_signup_customer(customer, signup_id, company_id, payment_method)
+        .link_signup_customer(customer, signup_id, company_id, Some(payment_method))
         .await
         .map_err(|err| stripe_failure(&err))?;
     let subscription = subscription(state, &intent, company_id, customer, payment_method).await?;
@@ -328,20 +413,270 @@ pub async fn run(state: &AppState, signup_id: &str) -> ApiResult<RunOutcome> {
     if completed.rows_affected() != 1 {
         return Ok(RunOutcome::AlreadyCompleted);
     }
-    notify::after_signup(state, &intent, company_id, user_id).await;
+    if welcomed(&intent) {
+        funnel::capture(
+            state,
+            "signup_bank_verified",
+            signup_id,
+            json!({ "company_id": company_id }),
+        )
+        .await;
+    } else {
+        welcome(state, &intent, company_id, user_id, false).await;
+    }
+    Ok(RunOutcome::Completed {
+        company_id,
+        user_id,
+        awaiting_bank: false,
+    })
+}
+
+/// The welcome, staff notice and `signup_completed`, once per signup.
+async fn welcome(
+    state: &AppState,
+    intent: &Intent,
+    company_id: i32,
+    user_id: i32,
+    bank_verification: bool,
+) {
+    notify::after_signup(state, intent, company_id, user_id).await;
     let addons: Vec<&str> = intent.plan.addons.iter().map(|key| key.as_str()).collect();
     funnel::capture(
         state,
         "signup_completed",
-        signup_id,
-        json!({ "company_id": company_id, "users": intent.plan.users, "addons": addons }),
+        &intent.id,
+        json!({
+            "company_id": company_id, "users": intent.plan.users, "addons": addons,
+            "bank_verification": bank_verification,
+        }),
     )
     .await;
-    funnel::alias(state, signup_id, user_id).await;
+    funnel::alias(state, &intent.id, user_id).await;
+}
+
+/// The stored SetupIntent has succeeded (a Stripe failure is an error: the
+/// run is retried).
+async fn bank_verified(state: &AppState, intent: &Intent) -> ApiResult<bool> {
+    let Some(id) = intent.setup_intent_id.as_deref() else {
+        return Err(ApiError::Internal("The signup has no SetupIntent.".into()));
+    };
+    let setup = state
+        .stripe
+        .setup_intent(id)
+        .await
+        .map_err(|err| stripe_failure(&err))?;
+    Ok(setup["status"] == "succeeded")
+}
+
+/// The company exists but its bank account still waits for micro-deposits:
+/// the customer is linked to the company without a default method, the
+/// signup waits (`provisioning` to `awaiting_bank_verification`, dropping the
+/// password hash) and the owner is welcomed once.
+async fn await_bank(
+    state: &AppState,
+    intent: &Intent,
+    company_id: i32,
+    user_id: i32,
+    customer: &str,
+) -> ApiResult<RunOutcome> {
+    state
+        .stripe
+        .link_signup_customer(customer, &intent.id, company_id, None)
+        .await
+        .map_err(|err| stripe_failure(&err))?;
+    let moved = sqlx::query(
+        "UPDATE signup_intents
+            SET status = 'awaiting_bank_verification', password_hash = '', last_error = NULL,
+                updated_at = ?
+          WHERE id = ? AND status = 'provisioning'",
+    )
+    .bind(billing::now())
+    .bind(&intent.id)
+    .execute(&state.pool)
+    .await?;
+    if moved.rows_affected() != 1 {
+        return Ok(RunOutcome::AlreadyCompleted);
+    }
+    if !welcomed(intent) {
+        welcome(state, intent, company_id, user_id, true).await;
+    }
     Ok(RunOutcome::Completed {
         company_id,
         user_id,
+        awaiting_bank: true,
     })
+}
+
+/// What the done page shows for a signup waiting on its bank account: the
+/// stored SetupIntent read live (verify link, bank, last 4; null fields when
+/// Stripe cannot be read). `None` unless the signup waits.
+async fn bank_verification(state: &AppState, intent: &Intent) -> Option<BankVerification> {
+    if intent.status != SignupStatus::AwaitingBankVerification {
+        return None;
+    }
+    let verify_by = intent.bank_verification_until?.and_utc();
+    let saved = match intent.setup_intent_id.as_deref() {
+        Some(id) => match state.stripe.setup_intent(id).await {
+            Ok(setup) => saved_method(&setup),
+            Err(err) => {
+                tracing::warn!(stripe_code = err.code(), "signup SetupIntent read failed");
+                None
+            }
+        },
+        None => None,
+    };
+    Some(BankVerification {
+        verify_url: saved.as_ref().and_then(|saved| saved.verify_url.clone()),
+        verify_by,
+        bank_name: saved.as_ref().and_then(|saved| saved.brand.clone()),
+        last4: saved.and_then(|saved| saved.last4),
+    })
+}
+
+/// The company's signup waiting on its bank account, if any.
+pub async fn awaiting_signup(pool: &MySqlPool, company_id: i32) -> sqlx::Result<Option<Intent>> {
+    let id: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM signup_intents
+          WHERE company_id = ? AND status = 'awaiting_bank_verification'
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    match id {
+        Some(id) => intent::load(pool, &id).await,
+        None => Ok(None),
+    }
+}
+
+/// Resumes a signup waiting on its bank account with `setup_intent`.
+///
+/// `setup_intent` is as `Stripe::setup_intent` returns it (payment method
+/// expanded), from the `setup_intent.succeeded` webhook or a method added on
+/// the account page.
+/// The SetupIntent must belong to the signup's customer (409
+/// `setup_intent_mismatch` otherwise). A different one that succeeded or
+/// waits for micro-deposits replaces the stored one (the old one is
+/// cancelled, best effort); a failed one changes nothing. Once it
+/// succeeded the signup goes `provisioning` and [`run`] makes the
+/// subscription (no second welcome). A run that fails is left to the
+/// maintenance job. Must be called WITHOUT the company lock held.
+pub async fn resume_verified(
+    state: &AppState,
+    signup_id: &str,
+    setup_intent: &Value,
+) -> ApiResult<ResumeOutcome> {
+    let Some(intent) = intent::load(&state.pool, signup_id).await? else {
+        return Ok(ResumeOutcome::NotAwaiting);
+    };
+    let signup_id = intent.id.as_str();
+    match intent.status {
+        SignupStatus::AwaitingBankVerification => {}
+        // A resume that stopped after the move: finish it.
+        SignupStatus::Provisioning if intent.bank_verification_until.is_some() => {
+            return resumed_run(state, signup_id).await;
+        }
+        _ => return Ok(ResumeOutcome::NotAwaiting),
+    }
+    let customer = stripe_id(&setup_intent["customer"]);
+    let (Some(new_id), true) = (
+        stripe_id(setup_intent),
+        customer.is_some() && customer == intent.stripe_customer_id,
+    ) else {
+        tracing::warn!(
+            signup = %funnel::distinct_id(signup_id),
+            "a SetupIntent of another customer was offered to a signup"
+        );
+        return Err(setup_intent_mismatch());
+    };
+    let succeeded = setup_intent["status"] == "succeeded";
+    if !succeeded && !payment::is_verifying(setup_intent) {
+        return Ok(ResumeOutcome::StillVerifying);
+    }
+    let Some(payment_method) =
+        payment::payment_facts(None, setup_intent).and_then(|facts| facts.payment_method_id)
+    else {
+        return Ok(ResumeOutcome::StillVerifying);
+    };
+    let old = intent.setup_intent_id.clone().filter(|old| *old != new_id);
+    if !succeeded && old.is_none() {
+        return Ok(ResumeOutcome::StillVerifying);
+    }
+    let next = if succeeded {
+        "provisioning"
+    } else {
+        "awaiting_bank_verification"
+    };
+    let moved = sqlx::query(
+        "UPDATE signup_intents
+            SET status = ?, setup_intent_id = ?, payment_method_id = ?, provision_attempts = 0,
+                last_error = NULL, updated_at = ?
+          WHERE id = ? AND status = 'awaiting_bank_verification' AND setup_intent_id <=> ?",
+    )
+    .bind(next)
+    .bind(&new_id)
+    .bind(&payment_method)
+    .bind(billing::now())
+    .bind(signup_id)
+    .bind(&intent.setup_intent_id)
+    .execute(&state.pool)
+    .await?;
+    if moved.rows_affected() != 1 {
+        // Another resume moved it first: handle what it left.
+        let current = intent::load(&state.pool, signup_id).await?;
+        return match current.map(|current| current.status) {
+            Some(SignupStatus::Provisioning) => resumed_run(state, signup_id).await,
+            Some(SignupStatus::AwaitingBankVerification) => Ok(ResumeOutcome::StillVerifying),
+            _ => Ok(ResumeOutcome::NotAwaiting),
+        };
+    }
+    if let Some(old) = old
+        && let Err(err) = state
+            .stripe
+            .cancel_setup_intent(&old, &format!("signup:{signup_id}:si-cancel:{old}"))
+            .await
+    {
+        tracing::warn!(
+            signup = %funnel::distinct_id(signup_id),
+            stripe_code = err.code(),
+            "replaced signup SetupIntent not cancelled"
+        );
+    }
+    if !succeeded {
+        return Ok(ResumeOutcome::StillVerifying);
+    }
+    resumed_run(state, signup_id).await
+}
+
+/// [`run`] for a signup whose bank account (or replacement) was verified; a
+/// failure is recorded for the maintenance job.
+async fn resumed_run(state: &AppState, signup_id: &str) -> ApiResult<ResumeOutcome> {
+    match run(state, signup_id).await {
+        Ok(RunOutcome::Completed {
+            awaiting_bank: false,
+            ..
+        }) => Ok(ResumeOutcome::Completed),
+        Ok(RunOutcome::Completed { .. }) => Ok(ResumeOutcome::StillVerifying),
+        Ok(RunOutcome::AlreadyCompleted | RunOutcome::Refused) => {
+            let current = intent::load(&state.pool, signup_id).await?;
+            Ok(match current.map(|current| current.status) {
+                Some(SignupStatus::Completed) => ResumeOutcome::Completed,
+                Some(SignupStatus::AwaitingBankVerification) => ResumeOutcome::StillVerifying,
+                _ => ResumeOutcome::NotAwaiting,
+            })
+        }
+        Err(err) => {
+            tracing::warn!(
+                signup = %funnel::distinct_id(signup_id),
+                error = %err,
+                "verified signup provisioning failed"
+            );
+            if let Err(record) = record_failure(&state.pool, signup_id, &err).await {
+                tracing::warn!(error = %record, "signup provisioning failure not recorded");
+            }
+            Err(err)
+        }
+    }
 }
 
 enum Created {
@@ -410,7 +745,14 @@ async fn create_company_locked(state: &AppState, signup_id: &str) -> ApiResult<C
     )
     .bind(company_id)
     .bind(&intent.stripe_customer_id)
-    .bind(&intent.payment_method_id)
+    // A bank account still verifying is no default yet: the subscription
+    // brings it once verified.
+    .bind(
+        intent
+            .payment_method_id
+            .as_deref()
+            .filter(|_| intent.bank_verification_until.is_none()),
+    )
     .bind(trial_end_at)
     .execute(&mut *tx)
     .await?;
@@ -535,7 +877,7 @@ async fn subscription(
                 customer,
                 payment_method,
                 price_ids,
-                trial_end: trial_end_at.and_utc().timestamp(),
+                trial_end: trial_end(trial_end_at, Utc::now()),
                 automatic_tax: state.signup.automatic_tax,
             })
             .await
@@ -575,6 +917,12 @@ async fn subscription(
         }
         _ => Ok(created),
     }
+}
+
+/// D21: the frozen end of the free period, or `now` once it has passed (a
+/// bank account verified after the first charge day: Stripe bills at once).
+pub fn trial_end(frozen: NaiveDateTime, now: DateTime<Utc>) -> i64 {
+    frozen.and_utc().timestamp().max(now.timestamp())
 }
 
 /// Stripe forgets idempotency keys after 24 hours: a late resume first looks

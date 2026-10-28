@@ -13,7 +13,7 @@ use crate::error::{ApiError, ApiResult, CodedErrorBody, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::routes::auth::{start_session, with_cookies};
 use crate::signup::intent::{self, Intent, NewIntent, SignupStatus};
-use crate::signup::payment::{self, Setup};
+use crate::signup::payment::{self, SavedMethod, SavedMethodStatus, Setup};
 use crate::signup::{
     RequestMeta, consent, email_lock_name, emails, ensure_enabled, funnel, provision,
 };
@@ -24,6 +24,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
+use lambda_http::tracing;
 use serde_json::json;
 use sha2::Sha256;
 
@@ -84,6 +85,7 @@ fn resend_in(intent: &Intent, now: NaiveDateTime) -> i64 {
 }
 
 fn view(state: &AppState, intent: &Intent, catalog: &Catalog, now: DateTime<Utc>) -> Signup {
+    let test = payment::is_test_mode(state);
     Signup {
         id: intent.id.clone(),
         status: intent.status,
@@ -91,18 +93,56 @@ fn view(state: &AppState, intent: &Intent, catalog: &Catalog, now: DateTime<Utc>
         company_name: intent.company.name.clone(),
         plan: intent.plan.clone(),
         quote: catalog.quote(&intent.plan, signup_day(now)),
-        payment_mode: if payment::is_test_mode(state) {
+        payment_mode: if test {
             PaymentMode::Test
         } else {
             PaymentMode::Stripe
         },
+        publishable_key: state
+            .signup
+            .publishable_key
+            .as_deref()
+            .filter(|_| !test)
+            .map(str::to_string),
+        payment_method: None,
         resend_in_seconds: resend_in(intent, now.naive_utc()),
     }
 }
 
+/// The stored SetupIntent's method, read live (`payment_ready` and
+/// `awaiting_bank_verification` only); `None` when Stripe cannot be read.
+async fn saved_method(state: &AppState, intent: &Intent) -> Option<SavedMethod> {
+    if !matches!(
+        intent.status,
+        SignupStatus::PaymentReady | SignupStatus::AwaitingBankVerification
+    ) {
+        return None;
+    }
+    let setup = match state
+        .stripe
+        .setup_intent(intent.setup_intent_id.as_deref()?)
+        .await
+    {
+        Ok(setup) => setup,
+        Err(err) => {
+            tracing::warn!(stripe_code = err.code(), "signup SetupIntent read failed");
+            return None;
+        }
+    };
+    let mut saved = payment::saved_method(&setup)?;
+    if saved.status == SavedMethodStatus::Verifying
+        && let Some(until) = intent.bank_verification_until
+    {
+        saved.verify_by = Some(until.and_utc());
+    }
+    Some(saved)
+}
+
 async fn signup_view(state: &AppState, intent: &Intent) -> ApiResult<Json<Signup>> {
     let catalog = catalog(state).await?;
-    Ok(Json(view(state, intent, &catalog, Utc::now())))
+    let mut signup = view(state, intent, &catalog, Utc::now());
+    signup.payment_method = saved_method(state, intent).await;
+    Ok(Json(signup))
 }
 
 /// A uniform 6-digit code (rejection sampling, no modulo bias).
@@ -182,7 +222,7 @@ const fn addon_description(key: AddonKey) -> &'static str {
     responses(
         (status = 200, description = "The catalog and the quote", body = PlansResponse),
         (status = 400, description = "Malformed query string", body = ErrorBody),
-        (status = 503, description = "Prices are unavailable (code signup_unavailable)", body = CodedErrorBody),
+        (status = 503, description = "Prices are unavailable (code payments_unavailable)", body = CodedErrorBody),
     )
 )]
 pub async fn plans(
@@ -227,11 +267,7 @@ pub async fn plans(
 
 fn lock_error(err: LockError) -> ApiError {
     match err {
-        LockError::Busy => coded(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "signup_unavailable",
-            "Signup is busy. Try again in a moment.",
-        ),
+        LockError::Busy => crate::signup::busy(),
         LockError::Database(err) => ApiError::Database(err),
     }
 }
@@ -274,7 +310,7 @@ async fn email_conflict(state: &AppState, email: &str) -> ApiResult<Option<ApiEr
         (status = 400, description = "A field is missing or invalid; the message names it", body = ErrorBody),
         (status = 409, description = "An account already uses the email (code email_taken)", body = CodedErrorBody),
         (status = 502, description = "The code email could not be sent; the signup was dropped", body = ErrorBody),
-        (status = 503, description = "Signups are switched off, busy, or prices unavailable (code signup_unavailable)", body = CodedErrorBody),
+        (status = 503, description = "Signups are switched off (code signup_unavailable), another request for this email is running: try again in a moment (code signup_busy), or prices are unavailable (code payments_unavailable)", body = CodedErrorBody),
     )
 )]
 pub async fn create(
@@ -345,9 +381,14 @@ pub async fn create(
 /// Read a signup
 ///
 /// The state of a signup: status, masked email, company name, plan, today's
-/// quote, how payment will be collected (`payment_mode`) and seconds until
-/// another code can be sent. Never returns the full email. 404 for an unknown
-/// id, 410 once expired (both code `signup_expired`: start again).
+/// quote, how payment will be collected (`payment_mode`, with the Stripe
+/// `publishable_key` in `stripe` mode), the payment method already set up
+/// (`payment_method`, read live from Stripe while `payment_ready` or
+/// `awaiting_bank_verification`: `ready`, or a bank account `verifying` with
+/// its `verify_url`) and seconds until another code can be sent. Never
+/// returns the full email. 404 for an unknown id, 410 once expired (both
+/// code `signup_expired`: start again). A signup waiting on its bank
+/// account never expires.
 #[crate::openapi::path(
     get,
     path = "/v1/public/signups/{id}",
@@ -358,7 +399,7 @@ pub async fn create(
         (status = 200, description = "The signup", body = Signup),
         (status = 404, description = "Unknown signup (code signup_expired)", body = CodedErrorBody),
         (status = 410, description = "Expired signup (code signup_expired)", body = CodedErrorBody),
-        (status = 503, description = "Signups are switched off or prices unavailable (code signup_unavailable)", body = CodedErrorBody),
+        (status = 503, description = "Signups are switched off (code signup_unavailable), or prices or Stripe are unavailable (code payments_unavailable)", body = CodedErrorBody),
     )
 )]
 pub async fn get_signup(
@@ -390,7 +431,7 @@ pub async fn get_signup(
         (status = 404, description = "Unknown signup (code signup_expired)", body = CodedErrorBody),
         (status = 409, description = "The signup can no longer change plan (code invalid_state)", body = CodedErrorBody),
         (status = 410, description = "Expired signup (code signup_expired)", body = CodedErrorBody),
-        (status = 503, description = "Signups are switched off or prices unavailable (code signup_unavailable)", body = CodedErrorBody),
+        (status = 503, description = "Signups are switched off (code signup_unavailable), or prices or Stripe are unavailable (code payments_unavailable)", body = CodedErrorBody),
     )
 )]
 pub async fn update_plan(
@@ -520,7 +561,7 @@ fn too_many_attempts() -> ApiError {
         (status = 410, description = "Expired signup (code signup_expired)", body = CodedErrorBody),
         (status = 422, description = "Wrong or old code (codes invalid_code with attempts_left, code_expired)", body = CodedErrorBody),
         (status = 429, description = "Five wrong codes (code too_many_attempts)", body = CodedErrorBody),
-        (status = 503, description = "Signups are switched off or prices unavailable (code signup_unavailable)", body = CodedErrorBody),
+        (status = 503, description = "Signups are switched off (code signup_unavailable), or prices or Stripe are unavailable (code payments_unavailable)", body = CodedErrorBody),
     )
 )]
 pub async fn verify_code(
@@ -598,10 +639,14 @@ pub async fn verify_code(
 
 /// Read the consent texts
 ///
-/// The four checkboxes (terms, auto_renewal, per_user_pricing, onboarding_fee)
-/// rendered by the server for this signup's plan and dates, in the order to
-/// show them. The page shows `text` verbatim and sends `kind`, `version` and
-/// `sha256` back as `text_sha256` to `complete_signup`. Texts change when the
+/// The checkboxes rendered by the server for this signup's plan and dates,
+/// in the order to show them: terms, auto_renewal, per_user_pricing,
+/// onboarding_fee (`payment_method_type` null: always shown), then
+/// card_authorization (`card`) and ach_authorization (`us_bank_account`):
+/// show only the one matching the method selected in the Payment Element
+/// (or the saved `payment_method`). The page shows `text` verbatim and sends
+/// `kind`, `version` and `sha256` back as `text_sha256` to
+/// `complete_signup`. Texts change when the
 /// plan or the prices do: fetch them again after `update_signup_plan`. Only
 /// after the email is verified (409 `invalid_state` before).
 #[crate::openapi::path(
@@ -615,7 +660,7 @@ pub async fn verify_code(
         (status = 404, description = "Unknown signup (code signup_expired)", body = CodedErrorBody),
         (status = 409, description = "The email is not verified yet (code invalid_state)", body = CodedErrorBody),
         (status = 410, description = "Expired signup (code signup_expired)", body = CodedErrorBody),
-        (status = 503, description = "Signups are switched off or prices unavailable (code signup_unavailable)", body = CodedErrorBody),
+        (status = 503, description = "Signups are switched off (code signup_unavailable), or prices or Stripe are unavailable (code payments_unavailable)", body = CodedErrorBody),
     )
 )]
 pub async fn consents(
@@ -643,8 +688,10 @@ pub async fn consents(
 /// the signup to `payment_ready`. Answers `{"mode": "test"}` when the api
 /// attached a sandbox payment method itself, or `{"mode": "stripe",
 /// "client_secret", "publishable_key"}` for the page to confirm with Stripe's
-/// Payment Element. Call again after a failed confirmation: at most 5 setups
-/// per signup (429 `setup_limited`). Only for verified signups.
+/// Payment Element (card or US bank account). Call again after a failed
+/// confirmation: at most 5 setups per signup (429 `setup_limited`). Only for
+/// verified signups. 503 `payments_unavailable`: Stripe cannot be reached
+/// right now (nothing was charged; try again).
 #[crate::openapi::path(
     post,
     path = "/v1/public/signups/{id}/payment-setup",
@@ -657,8 +704,8 @@ pub async fn consents(
         (status = 409, description = "The email is not verified yet (code invalid_state)", body = CodedErrorBody),
         (status = 410, description = "Expired signup (code signup_expired)", body = CodedErrorBody),
         (status = 429, description = "Five setups used (code setup_limited)", body = CodedErrorBody),
-        (status = 502, description = "Stripe failed; try again", body = ErrorBody),
-        (status = 503, description = "Signups or card payments are not available (code signup_unavailable)", body = CodedErrorBody),
+        (status = 502, description = "Stripe refused the setup; try again", body = ErrorBody),
+        (status = 503, description = "Signups are switched off (code signup_unavailable), or Stripe is down, throttled or unreachable, or no publishable key is set (code payments_unavailable)", body = CodedErrorBody),
     )
 )]
 pub async fn payment_setup(
@@ -702,14 +749,20 @@ pub async fn payment_setup(
 /// Complete the signup
 ///
 /// Final step. Sends the checkboxes the buyer ticked (`kind`, `version`,
-/// `text_sha256` as `get_signup_consents` returned them); the server renders
-/// them again and refuses with 409 `consents_changed` when anything differs
-/// (fetch the texts again). Then creates the company, the owner account and the
-/// subscription with a free period, signs the owner in (the session cookie is
-/// set on this response) and returns where to go next. Safe to retry: one
-/// signup never makes two companies. 409 codes: `consents_changed`,
-/// `invalid_state`, `email_taken`, `payment_not_ready`; 503 `provisioning_retry`
-/// means call again shortly.
+/// `text_sha256` as `get_signup_consents` returned them): the base ones and
+/// the payment one matching the SetupIntent's method (card_authorization or
+/// ach_authorization). The server renders them again and refuses with 409
+/// `consents_changed` when anything differs (fetch the texts again). Then
+/// creates the company, the owner account and the subscription with a free
+/// period, signs the owner in (the session cookie is set on this response)
+/// and returns where to go next. A bank account still waiting for
+/// micro-deposits makes the company and signs the owner in, but the
+/// subscription waits for the verification (`bank_verification` set, status
+/// `awaiting_bank_verification`; calling again answers the same without a
+/// new session). Safe to retry: one signup never makes two companies. 409
+/// codes: `consents_changed`, `invalid_state`, `email_taken`,
+/// `payment_not_ready`; 503 `payments_unavailable` (Stripe unreadable) and
+/// `provisioning_retry` mean call again shortly.
 #[crate::openapi::path(
     post,
     path = "/v1/public/signups/{id}/completion",
@@ -718,13 +771,13 @@ pub async fn payment_setup(
     params(("id" = String, Path, description = "Signup id from `create_signup`")),
     request_body = CompletionBody,
     responses(
-        (status = 200, description = "The company exists; Set-Cookie signs the owner in unless the signup was already completed", body = Completion),
+        (status = 200, description = "The company exists; Set-Cookie signs the owner in unless that happened before. `bank_verification` is set while the bank account waits for micro-deposits", body = Completion),
         (status = 400, description = "Malformed body", body = ErrorBody),
         (status = 404, description = "Unknown signup (code signup_expired)", body = CodedErrorBody),
         (status = 409, description = "Texts changed, wrong state, email taken or payment not ready (codes consents_changed, invalid_state, email_taken, payment_not_ready)", body = CodedErrorBody),
         (status = 410, description = "Expired signup (code signup_expired)", body = CodedErrorBody),
         (status = 502, description = "Stripe failed; try again", body = ErrorBody),
-        (status = 503, description = "Switched off or still provisioning (codes signup_unavailable, provisioning_retry)", body = CodedErrorBody),
+        (status = 503, description = "Switched off (code signup_unavailable), Stripe or prices unavailable (code payments_unavailable), or still provisioning: call again shortly (code provisioning_retry)", body = CodedErrorBody),
     )
 )]
 pub async fn complete(
@@ -743,6 +796,7 @@ pub async fn complete(
     .await?;
     let response = Json(Completion {
         redirect_url: outcome.redirect_url,
+        bank_verification: outcome.bank_verification,
     })
     .into_response();
     match outcome.sign_in {

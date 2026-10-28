@@ -5,6 +5,8 @@ use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::users::manage::checked_email;
 use crate::signup::consent::{ConsentAcceptance, RenderedConsent};
 use crate::signup::intent::{CompanyDetails, SignupStatus};
+use crate::signup::payment::SavedMethod;
+use crate::signup::provision::BankVerification;
 use serde::{Deserialize, Serialize};
 
 /// Query of `GET /v1/public/plans`.
@@ -129,6 +131,13 @@ pub struct Signup {
     /// The price of `plan` today.
     pub quote: Quote,
     pub payment_mode: PaymentMode,
+    /// The Stripe publishable key for the Payment Element; only in `stripe`
+    /// mode, else null.
+    pub publishable_key: Option<String>,
+    /// The payment method already set up, read live from Stripe: only while
+    /// `payment_ready` or `awaiting_bank_verification`. Null when nothing
+    /// usable is saved or Stripe cannot be read right now.
+    pub payment_method: Option<SavedMethod>,
     /// Seconds until another code can be requested (0 = now).
     pub resend_in_seconds: i64,
 }
@@ -167,6 +176,10 @@ pub struct CompletionBody {
 pub struct Completion {
     /// Where the browser goes next.
     pub redirect_url: String,
+    /// Set while the company waits for its bank account's micro-deposits to
+    /// be verified (status `awaiting_bank_verification`): show the verify
+    /// panel. Null once the signup is completed.
+    pub bank_verification: Option<BankVerification>,
 }
 
 /// A request that passed validation.

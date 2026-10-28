@@ -30,7 +30,6 @@ use crate::error::{ApiError, ApiResult};
 use crate::onboarding_call::commitment::end_of_local_day;
 use crate::openapi::ToSchema;
 use crate::signup::consent::{long_date, sha256_hex};
-use crate::signup::payment;
 use crate::state::AppState;
 use axum::http::StatusCode;
 use base64::Engine as _;
@@ -129,6 +128,9 @@ pub struct Invite {
     pub stripe_customer_id: Option<String>,
     pub payment_method_id: Option<String>,
     pub stripe_subscription_id: Option<String>,
+    /// The SetupIntent the upgrade page confirms (`stripe` payment mode),
+    /// kept so a bank account verified days later can still accept.
+    pub setup_intent_id: Option<String>,
     pub provision_attempts: u8,
     /// Why the last run failed (codes only).
     pub last_error: Option<String>,
@@ -169,7 +171,8 @@ fn columns(p: &str) -> String {
          {p}first_charge_at, {p}legacy_subscription_id, {p}expires_at,
          CAST({p}status AS CHAR) AS status, {p}accepted_by, {p}accepting_at, {p}trial_end_at,
          CAST({p}price_ids AS CHAR) AS price_ids, {p}stripe_customer_id, {p}payment_method_id,
-         {p}stripe_subscription_id, {p}provision_attempts, {p}last_error, {p}gave_up_at,
+         {p}stripe_subscription_id, {p}setup_intent_id, {p}provision_attempts, {p}last_error,
+         {p}gave_up_at,
          {p}accepted_at, {p}revoked_at, {p}created_at"
     )
 }
@@ -192,6 +195,7 @@ struct Row {
     stripe_customer_id: Option<String>,
     payment_method_id: Option<String>,
     stripe_subscription_id: Option<String>,
+    setup_intent_id: Option<String>,
     provision_attempts: u8,
     last_error: Option<String>,
     gave_up_at: Option<NaiveDateTime>,
@@ -235,6 +239,7 @@ impl TryFrom<Row> for Invite {
             stripe_customer_id: row.stripe_customer_id,
             payment_method_id: row.payment_method_id,
             stripe_subscription_id: row.stripe_subscription_id,
+            setup_intent_id: row.setup_intent_id,
             provision_attempts: row.provision_attempts,
             last_error: row.last_error,
             gave_up_at: row.gave_up_at,
@@ -649,7 +654,7 @@ impl MoveFacts {
         } else if self.accepting {
             fixed("invite_accepting", INVITE_ACCEPTING)
         } else if !self.payment_ready {
-            // Step 13 removes this guard once the Payment Element collects payment.
+            // Neither the Payment Element (publishable key) nor the test seam.
             fixed("payment_unavailable", PAYMENT_UNAVAILABLE)
         } else if self.managers.is_empty() {
             fixed("no_managers", NO_MANAGERS)
@@ -730,7 +735,7 @@ pub async fn move_facts(state: &AppState, company_id: i32) -> ApiResult<MoveFact
         subscription_ended,
         onboarding_open: onboarding_open != 0,
         accepting: accepting != 0,
-        payment_ready: payment::is_test_mode(state),
+        payment_ready: accept::payment_mode(state) != accept::InvitePaymentMode::Unavailable,
         catalog: if on_plan && !subscription_ended {
             None
         } else {
@@ -974,6 +979,7 @@ fn new_invite(
         stripe_customer_id: None,
         payment_method_id: None,
         stripe_subscription_id: None,
+        setup_intent_id: None,
         provision_attempts: 0,
         last_error: None,
         gave_up_at: None,

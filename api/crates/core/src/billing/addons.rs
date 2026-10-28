@@ -22,9 +22,10 @@ use super::seats;
 use super::store::{BillingStore, MySqlBillingStore};
 use super::stripe::{Stripe, StripeError, subscription_snapshot};
 use super::{
-    CompanyBilling, ItemSnapshot, SubscriptionSnapshot, is_ended_subscription_status, is_overdue,
-    with_grace_expiry,
+    CompanyBilling, ItemSnapshot, MethodHold, MethodState, SubscriptionSnapshot,
+    is_ended_subscription_status, is_overdue, outstanding_balance_cents, with_grace_expiry,
 };
+use crate::signup::payment::{SavedMethod, saved_method};
 use super::{account, cancellation};
 use crate::entitlements::{ACTIVE_ADDON, AddonKey};
 use crate::openapi::ToSchema;
@@ -116,6 +117,72 @@ pub struct AccountSubscription {
     /// running subscription (`trialing`, `active` or `past_due`), even while
     /// Stripe or its prices cannot be read.
     pub can_cancel: bool,
+    /// The Stripe publishable key for the Payment Element
+    /// (`POST /v1/billing/payment-setup`); null when not configured.
+    pub publishable_key: Option<String>,
+    /// A bank account added here that waits for its micro-deposits, else the
+    /// one the signup is waiting on; null when none (or Stripe cannot be
+    /// read). `verifying` shows `verify_url` and `verify_by`.
+    pub pending_payment_method: Option<SavedMethod>,
+    /// Why access will pause (or paused) until a new payment method is
+    /// saved; null when nothing is on hold.
+    pub payment_hold: Option<PaymentHold>,
+    /// What the open subscription invoices still owe, in cents (0 when
+    /// nothing is due); `POST /v1/billing/invoice-payment` pays it.
+    pub amount_due_cents: i64,
+    /// A bank payment is on its way (up to 4 business days): access stays
+    /// on meanwhile.
+    pub payment_processing: bool,
+}
+
+/// Why the payment method must be replaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaymentHoldReason {
+    /// The bank blocked debits from the saved account.
+    Blocked,
+    /// A payment was disputed.
+    Disputed,
+    /// The signup's bank account was not verified in time.
+    BankUnverified,
+}
+
+/// A hold on the company's payment method: save a new one with
+/// `POST /v1/billing/payment-setup` (`purpose: "update"`) to end it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct PaymentHold {
+    pub reason: PaymentHoldReason,
+    /// When access pauses (or paused), ISO 8601 UTC; null when unknown.
+    pub pauses_at: Option<DateTime<Utc>>,
+    /// Access is paused now.
+    pub paused: bool,
+}
+
+/// The hold the account page shows: a method hold, else a signup bank
+/// account whose verification window ended.
+pub fn payment_hold(
+    methods: Option<&MethodState>,
+    bank_verification_until: Option<NaiveDateTime>,
+    now: NaiveDateTime,
+) -> Option<PaymentHold> {
+    if let Some(hold) = methods.and_then(|methods| methods.hold) {
+        let until = methods.and_then(|methods| methods.hold_until);
+        return Some(PaymentHold {
+            reason: match hold {
+                MethodHold::Blocked => PaymentHoldReason::Blocked,
+                MethodHold::Disputed => PaymentHoldReason::Disputed,
+            },
+            pauses_at: utc(until),
+            paused: until.is_some_and(|until| now >= until),
+        });
+    }
+    bank_verification_until
+        .filter(|until| now >= *until)
+        .map(|until| PaymentHold {
+            reason: PaymentHoldReason::BankUnverified,
+            pauses_at: utc(Some(until)),
+            paused: true,
+        })
 }
 
 impl AccountSubscription {
@@ -139,6 +206,11 @@ impl AccountSubscription {
             invoices: Vec::new(),
             can_change: false,
             can_cancel: false,
+            publishable_key: None,
+            pending_payment_method: None,
+            payment_hold: None,
+            amount_due_cents: 0,
+            payment_processing: false,
         }
     }
 }
@@ -770,6 +842,15 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
         .is_some_and(|r| r.stripe_subscription_id.is_some());
     let can_cancel = has_subscription && is_running(&timeline.status);
     let can_change = stripe.is_enabled() && catalog.is_some() && can_cancel;
+    let methods = record.as_ref().map(|r| &r.methods);
+    let bank_until = super::store::bank_verification_until(pool, company_id).await?;
+    let pending_payment_method = if reachable && stripe.is_enabled() {
+        pending_method(&stripe, pool, company_id, methods).await?
+    } else {
+        None
+    };
+    let amount_due_cents =
+        outstanding_balance_cents(&MySqlBillingStore(pool).invoices(company_id).await?);
 
     Ok(AccountSubscription {
         company_name,
@@ -780,7 +861,12 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
                 with_grace_expiry(r, now).payment_status.as_str()
             })
             .into(),
-        status: timeline.status,
+        // No subscription yet (a signup waiting on its bank): `none`.
+        status: if has_subscription || snapshot.is_some() {
+            timeline.status
+        } else {
+            "none".into()
+        },
         trial_end_at: utc(timeline.trial_end),
         current_period_end: utc(timeline.period_end),
         next_charge_at: utc(timeline.next_charge_at),
@@ -807,7 +893,45 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
         invoices,
         can_change,
         can_cancel,
+        publishable_key: state.signup.publishable_key.as_deref().map(str::to_string),
+        pending_payment_method,
+        payment_hold: payment_hold(methods, bank_until, now),
+        amount_due_cents,
+        payment_processing: methods.is_some_and(|methods| super::methods::is_processing(methods, now)),
     })
+}
+
+/// The bank account waiting for micro-deposits: the company's pending
+/// SetupIntent, else its awaiting signup's; read live (`None` when Stripe
+/// cannot say).
+async fn pending_method(
+    stripe: &Stripe,
+    pool: &MySqlPool,
+    company_id: i32,
+    methods: Option<&MethodState>,
+) -> sqlx::Result<Option<SavedMethod>> {
+    let pending = methods.and_then(|methods| methods.pending_setup_intent_id.clone());
+    let setup_id = match pending {
+        Some(id) => Some(id),
+        None => sqlx::query_scalar::<_, Option<String>>(
+            "SELECT setup_intent_id FROM signup_intents
+              WHERE company_id = ? AND status = 'awaiting_bank_verification' LIMIT 1",
+        )
+        .bind(company_id)
+        .fetch_optional(pool)
+        .await?
+        .flatten(),
+    };
+    let Some(setup_id) = setup_id else {
+        return Ok(None);
+    };
+    match stripe.setup_intent(&setup_id).await {
+        Ok(setup_intent) => Ok(saved_method(&setup_intent)),
+        Err(err) => {
+            tracing::warn!(company_id, error = err.code(), "account page: pending method unread");
+            Ok(None)
+        }
+    }
 }
 
 #[derive(Debug, sqlx::FromRow)]

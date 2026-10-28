@@ -11676,7 +11676,7 @@
             }
           },
           "503": {
-            "description": "Prices are unavailable (code signup_unavailable)",
+            "description": "Prices are unavailable (code payments_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11748,7 +11748,7 @@
             }
           },
           "503": {
-            "description": "Signups are switched off, busy, or prices unavailable (code signup_unavailable)",
+            "description": "Signups are switched off (code signup_unavailable), another request for this email is running: try again in a moment (code signup_busy), or prices are unavailable (code payments_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11766,7 +11766,7 @@
           "signup"
         ],
         "summary": "Read a signup",
-        "description": "The state of a signup: status, masked email, company name, plan, today's\nquote, how payment will be collected (`payment_mode`) and seconds until\nanother code can be sent. Never returns the full email. 404 for an unknown\nid, 410 once expired (both code `signup_expired`: start again).",
+        "description": "The state of a signup: status, masked email, company name, plan, today's\nquote, how payment will be collected (`payment_mode`, with the Stripe\n`publishable_key` in `stripe` mode), the payment method already set up\n(`payment_method`, read live from Stripe while `payment_ready` or\n`awaiting_bank_verification`: `ready`, or a bank account `verifying` with\nits `verify_url`) and seconds until another code can be sent. Never\nreturns the full email. 404 for an unknown id, 410 once expired (both\ncode `signup_expired`: start again). A signup waiting on its bank\naccount never expires.",
         "operationId": "get_signup",
         "parameters": [
           {
@@ -11811,7 +11811,7 @@
             }
           },
           "503": {
-            "description": "Signups are switched off or prices unavailable (code signup_unavailable)",
+            "description": "Signups are switched off (code signup_unavailable), or prices or Stripe are unavailable (code payments_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11904,7 +11904,7 @@
             }
           },
           "503": {
-            "description": "Signups are switched off or prices unavailable (code signup_unavailable)",
+            "description": "Signups are switched off (code signup_unavailable), or prices or Stripe are unavailable (code payments_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12110,7 +12110,7 @@
             }
           },
           "503": {
-            "description": "Signups are switched off or prices unavailable (code signup_unavailable)",
+            "description": "Signups are switched off (code signup_unavailable), or prices or Stripe are unavailable (code payments_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12128,7 +12128,7 @@
           "signup"
         ],
         "summary": "Read the consent texts",
-        "description": "The four checkboxes (terms, auto_renewal, per_user_pricing, onboarding_fee)\nrendered by the server for this signup's plan and dates, in the order to\nshow them. The page shows `text` verbatim and sends `kind`, `version` and\n`sha256` back as `text_sha256` to `complete_signup`. Texts change when the\nplan or the prices do: fetch them again after `update_signup_plan`. Only\nafter the email is verified (409 `invalid_state` before).",
+        "description": "The checkboxes rendered by the server for this signup's plan and dates,\nin the order to show them: terms, auto_renewal, per_user_pricing,\nonboarding_fee (`payment_method_type` null: always shown), then\ncard_authorization (`card`) and ach_authorization (`us_bank_account`):\nshow only the one matching the method selected in the Payment Element\n(or the saved `payment_method`). The page shows `text` verbatim and sends\n`kind`, `version` and `sha256` back as `text_sha256` to\n`complete_signup`. Texts change when the\nplan or the prices do: fetch them again after `update_signup_plan`. Only\nafter the email is verified (409 `invalid_state` before).",
         "operationId": "get_signup_consents",
         "parameters": [
           {
@@ -12183,7 +12183,7 @@
             }
           },
           "503": {
-            "description": "Signups are switched off or prices unavailable (code signup_unavailable)",
+            "description": "Signups are switched off (code signup_unavailable), or prices or Stripe are unavailable (code payments_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12201,7 +12201,7 @@
           "signup"
         ],
         "summary": "Set up payment",
-        "description": "Creates the signup's Stripe customer (once) and a new SetupIntent, and moves\nthe signup to `payment_ready`. Answers `{\"mode\": \"test\"}` when the api\nattached a sandbox payment method itself, or `{\"mode\": \"stripe\",\n\"client_secret\", \"publishable_key\"}` for the page to confirm with Stripe's\nPayment Element. Call again after a failed confirmation: at most 5 setups\nper signup (429 `setup_limited`). Only for verified signups.",
+        "description": "Creates the signup's Stripe customer (once) and a new SetupIntent, and moves\nthe signup to `payment_ready`. Answers `{\"mode\": \"test\"}` when the api\nattached a sandbox payment method itself, or `{\"mode\": \"stripe\",\n\"client_secret\", \"publishable_key\"}` for the page to confirm with Stripe's\nPayment Element (card or US bank account). Call again after a failed\nconfirmation: at most 5 setups per signup (429 `setup_limited`). Only for\nverified signups. 503 `payments_unavailable`: Stripe cannot be reached\nright now (nothing was charged; try again).",
         "operationId": "create_signup_payment_setup",
         "parameters": [
           {
@@ -12266,7 +12266,7 @@
             }
           },
           "502": {
-            "description": "Stripe failed; try again",
+            "description": "Stripe refused the setup; try again",
             "content": {
               "application/json": {
                 "schema": {
@@ -12276,7 +12276,7 @@
             }
           },
           "503": {
-            "description": "Signups or card payments are not available (code signup_unavailable)",
+            "description": "Signups are switched off (code signup_unavailable), or Stripe is down, throttled or unreachable, or no publishable key is set (code payments_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12294,7 +12294,7 @@
           "signup"
         ],
         "summary": "Complete the signup",
-        "description": "Final step. Sends the checkboxes the buyer ticked (`kind`, `version`,\n`text_sha256` as `get_signup_consents` returned them); the server renders\nthem again and refuses with 409 `consents_changed` when anything differs\n(fetch the texts again). Then creates the company, the owner account and the\nsubscription with a free period, signs the owner in (the session cookie is\nset on this response) and returns where to go next. Safe to retry: one\nsignup never makes two companies. 409 codes: `consents_changed`,\n`invalid_state`, `email_taken`, `payment_not_ready`; 503 `provisioning_retry`\nmeans call again shortly.",
+        "description": "Final step. Sends the checkboxes the buyer ticked (`kind`, `version`,\n`text_sha256` as `get_signup_consents` returned them): the base ones and\nthe payment one matching the SetupIntent's method (card_authorization or\nach_authorization). The server renders them again and refuses with 409\n`consents_changed` when anything differs (fetch the texts again). Then\ncreates the company, the owner account and the subscription with a free\nperiod, signs the owner in (the session cookie is set on this response)\nand returns where to go next. A bank account still waiting for\nmicro-deposits makes the company and signs the owner in, but the\nsubscription waits for the verification (`bank_verification` set, status\n`awaiting_bank_verification`; calling again answers the same without a\nnew session). Safe to retry: one signup never makes two companies. 409\ncodes: `consents_changed`, `invalid_state`, `email_taken`,\n`payment_not_ready`; 503 `payments_unavailable` (Stripe unreadable) and\n`provisioning_retry` mean call again shortly.",
         "operationId": "complete_signup",
         "parameters": [
           {
@@ -12319,7 +12319,7 @@
         },
         "responses": {
           "200": {
-            "description": "The company exists; Set-Cookie signs the owner in unless the signup was already completed",
+            "description": "The company exists; Set-Cookie signs the owner in unless that happened before. `bank_verification` is set while the bank account waits for micro-deposits",
             "content": {
               "application/json": {
                 "schema": {
@@ -12379,7 +12379,7 @@
             }
           },
           "503": {
-            "description": "Switched off or still provisioning (codes signup_unavailable, provisioning_retry)",
+            "description": "Switched off (code signup_unavailable), Stripe or prices unavailable (code payments_unavailable), or still provisioning: call again shortly (code provisioning_retry)",
             "content": {
               "application/json": {
                 "schema": {
@@ -46618,7 +46618,7 @@
           "billing"
         ],
         "summary": "Receive a Stripe event",
-        "description": "Stripe's webhook endpoint: checkout, subscription, invoice and payment\nmethod events update the company's billing (each event once); a plan\ninvite's subscription (`metadata.plan_invite_id`) only once the invite\nis accepted. Events of\nthe onboarding fee invoice (`metadata.kind = onboarding_fee`) only move\nthe company's onboarding commitment. Needs a valid `Stripe-Signature` for\n`STRIPE_WEBHOOK_SECRET`; no session.",
+        "description": "Stripe's webhook endpoint: checkout, subscription, invoice and payment\nmethod events update the company's billing (each event once); a plan\ninvite's subscription (`metadata.plan_invite_id`) only once the invite\nis accepted. Card and bank account events (`setup_intent.succeeded`,\n`setup_intent.setup_failed`, `payment_intent.processing`,\n`charge.failed`, `charge.dispute.created`,\n`payment_method.automatically_updated`) are re-read from Stripe: a\nverified bank account becomes the default (or completes the signup\nwaiting on it), a failed one is reported to the Managers, a bank payment\nin flight keeps access on, a blocked account or a dispute starts a 7-day\nhold. Events of\nthe onboarding fee invoice (`metadata.kind = onboarding_fee`) only move\nthe company's onboarding commitment. Needs a valid `Stripe-Signature` for\n`STRIPE_WEBHOOK_SECRET`; no session.",
         "operationId": "receive_stripe_webhook",
         "parameters": [
           {
@@ -46676,13 +46676,344 @@
         }
       }
     },
+    "/v1/billing/payment-setup": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Set up a card or bank account",
+        "description": "Creates a SetupIntent (card or US bank account, saved for later charges)\non the company's Stripe customer and answers `{\"mode\": \"stripe\",\n\"client_secret\", \"publishable_key\"}` for Stripe's Payment Element; after\n`stripe.confirmSetup` call `apply_billing_payment_method` with the\nSetupIntent id. In the sandbox seam (a test key with a test payment\nmethod configured) `update` and `pay` save a test card here and answer\n`{\"mode\": \"test\"}`. `plan_invite` sets up the method of the open plan\ninvite behind `plan_invite_token` (the caller must be a Manager of the\ninvited company). `update` and `pay` need a Manager of the company the\nsession acts in. Nothing is charged.",
+        "operationId": "create_billing_payment_setup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentSetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How to collect the payment method",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentSetup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown purpose, or `plan_invite` without a token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager of the company (or of the invited company: code not_invited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or closed plan invite (code invite_not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The company has no Stripe customer (code no_customer)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stripe refused the setup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Stripe cannot be reached or payments are not configured (code payments_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/payment-method": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Apply a confirmed payment method",
+        "description": "Reads the SetupIntent from Stripe (the browser's word is never trusted):\nit must be the company's (its `metadata.company_id` and customer), else\n404 `setup_not_found`. `succeeded`: it becomes the company's payment\nmethod (the customer's and the subscription's default), the old one is\nremoved and a hold on the old method ends (`saved`); a company whose\nsignup waits for its bank account gets its subscription now.\nMicro-deposits pending: kept until Stripe verifies the account\n(`verifying`, the current method stays). Anything else: `failed`.\nCalling it again with the same SetupIntent gives the same answer. Then\ncall `pay_billing_open_invoice` on the pay page.",
+        "operationId": "apply_billing_payment_method",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyPaymentMethod"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved, verifying or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentMethodApplied"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a SetupIntent id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a SetupIntent of the company (code setup_not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stripe refused a change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Stripe cannot be reached (code payments_unavailable), or billing is busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/invoice-payment": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Pay the open invoice",
+        "description": "Pays the company's oldest open subscription invoice (never the onboarding\nfee) with its saved payment method. Never restores access by itself:\nStripe's confirmation does (`GET /v1/billing/gate` shows it moments\nlater for a card, after up to 4 business days for a bank account, which\nkeeps access on meanwhile). `attempt_id` makes a retry of the same press\nsafe. 409 `no_payment_method` when none is saved: set one up first with\n`create_billing_payment_setup` (`purpose: \"pay\"`).",
+        "operationId": "pay_billing_open_invoice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoicePaymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Paid, processing, needs 3D Secure, declined, or nothing due",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoicePaymentResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "attempt_id is not a UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No payment method saved (code no_payment_method)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stripe refused the payment for another reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Stripe cannot be reached (code payments_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/billing/gate": {
       "get": {
         "tags": [
           "billing"
         ],
         "summary": "Get the billing gate",
-        "description": "Whether the company's access is paused (`restricted`: other routes answer\n402 `payment_required`, only billing, sign-in, the app shell, `GET /v1/me`\nand notifications work) and whether managers see a warning with the days\nleft. `reason` says why: `payment_failed` (a payment failed, 7 days of\ngrace) or `subscription_required` (payment was turned on and the company\nhas not subscribed, 7 days to do so); `pauses_at` is when access pauses.\nChecks Stripe now and then (throttled); errors keep access.",
+        "description": "Whether the company's access is paused (`restricted`: other routes answer\n402 `payment_required`, only billing, sign-in, the app shell, `GET /v1/me`\nand notifications work) and whether managers see a warning with the days\nleft. `reason` says why: `payment_failed` (a payment failed, 7 days of\ngrace), `subscription_required` (payment was turned on and the company\nhas not subscribed, 7 days to do so) or `payment_method_required` (the\nsaved method stopped working: a blocked bank account or a dispute, 7\ndays to save a new one; or the signup's bank account was not verified in\ntime); `pauses_at` is when access pauses.\nChecks Stripe now and then (throttled); errors keep access.",
         "operationId": "get_billing_gate",
         "responses": {
           "200": {
@@ -46998,7 +47329,7 @@
           "billing"
         ],
         "summary": "Get the subscription for the account page",
-        "description": "The company's self-serve subscription as the payments app's account page\nshows it: status and free period, the base plan, billable users, each\nadd-on (`active`, `available`, or `included` free by Granite Manager) with\nthe prorated estimate of changing it now, the monthly total, Stripe's\ndraft of the next invoice, the payment method on file (brand or bank and\nlast four digits only), a scheduled cancellation and the latest 12\ninvoices. Read live from Stripe, each read within 5 seconds; when Stripe\ncannot be reached the stored subscription and add-ons are shown,\n`next_invoice` and `payment_method` are null, and prices Stripe alone\nknows are null (`can_cancel` still holds). A legacy company (`plan_source`\n`legacy`, billed by Granite Manager) gets only its name and plan source:\nit manages billing on `/admin/billing` (`GET /v1/billing`). Change an\nadd-on with `PUT /v1/billing/addons/{key}`; open the card form with\n`POST /v1/billing/portal` (`return_to: \"account\"`). Managers only.",
+        "description": "The company's self-serve subscription as the payments app's account page\nshows it: status and free period, the base plan, billable users, each\nadd-on (`active`, `available`, or `included` free by Granite Manager) with\nthe prorated estimate of changing it now, the monthly total, Stripe's\ndraft of the next invoice, the payment method on file (brand or bank and\nlast four digits only), a bank account waiting for micro-deposits\n(`pending_payment_method`), a hold on the payment method\n(`payment_hold`), what is due now (`amount_due_cents`), whether a bank\npayment is on its way (`payment_processing`), a scheduled cancellation and\nthe latest 12 invoices. Read live from Stripe, each read within 5\nseconds; when Stripe cannot be reached the stored subscription and\nadd-ons are shown, `next_invoice`, `payment_method` and\n`pending_payment_method` are null, and prices Stripe alone knows are null\n(`can_cancel` still holds). A company whose signup waits for its bank\naccount has no subscription yet: `status` `none`. A legacy company\n(`plan_source` `legacy`, billed by Granite Manager) gets only its name\nand plan source: it manages billing on `/admin/billing`\n(`GET /v1/billing`). Change an add-on with `PUT /v1/billing/addons/{key}`;\nadd or replace the card or bank account with\n`POST /v1/billing/payment-setup` (the Payment Element, with\n`publishable_key`), then `POST /v1/billing/payment-method`. Managers only.",
         "operationId": "get_billing_subscription",
         "responses": {
           "200": {
@@ -49840,7 +50171,7 @@
           "billing"
         ],
         "summary": "Read a plan invite",
-        "description": "The plan Granite Manager set up for the caller's company: the add-ons,\nthe price for its active users now (`quote`), the first charge, the\nlegacy plan it replaces (`current_plan`), when the link expires, and the\ncheckboxes to tick (`consents`, rendered by the server: show `text`\nverbatim and send `kind`, `version` and `sha256` back to\n`accept_plan_invite`). `status` `accepting` means an acceptance is being\nfinished (call `accept_plan_invite` again to resume); `accepted` means\nthe company is on the plan (go to `redirect_url`). Only a Manager of the\ninvited company, whatever company the session acts in: 403\n`not_invited` otherwise.",
+        "description": "The plan Granite Manager set up for the caller's company: the add-ons,\nthe price for its active users now (`quote`), the first charge, the\nlegacy plan it replaces (`current_plan`), when the link expires, and the\ncheckboxes to tick (`consents`, rendered by the server: show `text`\nverbatim and send `kind`, `version` and `sha256` back to\n`accept_plan_invite`; of card_authorization and ach_authorization show\nonly the one whose `payment_method_type` matches the method). How the\npayment method is collected: `payment_mode` `stripe` (the Payment\nElement with `publishable_key`; a SetupIntent from\n`POST /v1/billing/payment-setup` with purpose `plan_invite`), `test`\n(attached on acceptance) or `unavailable`. `payment_method` is the\nmethod already set up for the invite (`ready`, or a bank account\n`verifying`: accept once verified). `status` `accepting` means an acceptance is being\nfinished (call `accept_plan_invite` again to resume); `accepted` means\nthe company is on the plan (go to `redirect_url`). Only a Manager of the\ninvited company, whatever company the session acts in: 403\n`not_invited` otherwise.",
         "operationId": "get_plan_invite",
         "parameters": [
           {
@@ -49938,7 +50269,7 @@
           "billing"
         ],
         "summary": "Accept a plan invite",
-        "description": "Sends the checkboxes the Manager ticked (`kind`, `version`,\n`text_sha256` as `get_plan_invite` returned them); the server renders\nthem again and refuses with 409 `consents_changed` when anything differs\n(read the invite again). Then it sets up the payment method, makes the\ncompany's Stripe subscription with nothing charged before the first\ncharge, ends a legacy subscription at its period end, and only then moves\nthe company onto the plan (its add-ons follow the plan from now on). Safe\nto retry: one invite never makes two subscriptions, and an accepted\ninvite answers 200 again. 503 `acceptance_retry`: nothing was charged,\ncall again shortly. 503 `payment_setup_unavailable`: payment methods\ncannot be added yet (nothing changed). 409 `invite_needs_new_date`: the\nfirst charge is less than 8 days away, or the company's billing changed\nsince the invite was sent (ask for a new invite). 409 `legacy_overdue`:\nthe company has an overdue payment or a balance due. 409\n`invite_subscription_ended`: the invite's subscription was cancelled in\nStripe, so the switch stopped and the company stays on its current plan\n(ask Granite Manager to withdraw the invite and send a new one).",
+        "description": "Sends the checkboxes the Manager ticked (`kind`, `version`,\n`text_sha256` as `get_plan_invite` returned them); the server renders\nthem again and refuses with 409 `consents_changed` when anything differs\n(read the invite again). In `stripe` payment mode the invite's saved\nSetupIntent is used (`setup_intent_id`, when sent, must be it: 409\n`setup_intent_mismatch`) and must have succeeded: a bank account still waiting for micro-deposits is 409\n`bank_verification_pending` (come back once verified), any other state\n409 `payment_not_ready`; 503 `payments_unavailable` when Stripe cannot be\nread. Then it sets up the payment method, makes the\ncompany's Stripe subscription with nothing charged before the first\ncharge, ends a legacy subscription at its period end, and only then moves\nthe company onto the plan (its add-ons follow the plan from now on). Safe\nto retry: one invite never makes two subscriptions, and an accepted\ninvite answers 200 again. 503 `acceptance_retry`: nothing was charged,\ncall again shortly. 503 `payment_setup_unavailable`: payment methods\ncannot be added yet (nothing changed). 409 `invite_needs_new_date`: the\nfirst charge is less than 8 days away, or the company's billing changed\nsince the invite was sent (ask for a new invite). 409 `legacy_overdue`:\nthe company has an overdue payment or a balance due. 409\n`invite_subscription_ended`: the invite's subscription was cancelled in\nStripe, so the switch stopped and the company stays on its current plan\n(ask Granite Manager to withdraw the invite and send a new one).",
         "operationId": "accept_plan_invite",
         "parameters": [
           {
@@ -50013,7 +50344,7 @@
             }
           },
           "409": {
-            "description": "Texts changed, the first charge is under 8 days away or the company's billing changed, the company owes money, or the invite's subscription was cancelled in Stripe (codes consents_changed, invite_needs_new_date, legacy_overdue, invite_subscription_ended)",
+            "description": "Texts changed, the first charge is under 8 days away or the company's billing changed, the company owes money, the invite's subscription was cancelled in Stripe, the SetupIntent is not the invite's, the bank account is not verified yet, or the payment method is not confirmed (codes consents_changed, invite_needs_new_date, legacy_overdue, invite_subscription_ended, setup_intent_mismatch, bank_verification_pending, payment_not_ready)",
             "content": {
               "application/json": {
                 "schema": {
@@ -50043,7 +50374,7 @@
             }
           },
           "503": {
-            "description": "Try again shortly, or payment methods are not available yet (codes acceptance_retry, payment_setup_unavailable)",
+            "description": "Try again shortly, Stripe cannot be read, or payment methods are not available yet (codes acceptance_retry, payments_unavailable, payment_setup_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -61431,7 +61762,14 @@
             "items": {
               "$ref": "#/components/schemas/ConsentAcceptance"
             },
-            "description": "Every checkbox the Manager ticked, as `get_plan_invite` showed it."
+            "description": "Every checkbox the Manager ticked, as `get_plan_invite` showed it:\nthe base ones and the payment one matching the method."
+          },
+          "setup_intent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SetupIntent the Payment Element confirmed (from\n`POST /v1/billing/payment-setup`, purpose `plan_invite`), in `stripe`\npayment mode. Omitted: the one saved on the invite (`payment_method`\nof `get_plan_invite`); sent: it must be that one. Ignored in `test`\nmode."
           }
         }
       },
@@ -61852,7 +62190,9 @@
           "payment_method_known",
           "invoices",
           "can_change",
-          "can_cancel"
+          "can_cancel",
+          "amount_due_cents",
+          "payment_processing"
         ],
         "properties": {
           "company_name": {
@@ -61983,6 +62323,44 @@
           "can_cancel": {
             "type": "boolean",
             "description": "The subscription can be cancelled here\n(`POST /v1/billing/cancellation-request`): a self-serve company with a\nrunning subscription (`trialing`, `active` or `past_due`), even while\nStripe or its prices cannot be read."
+          },
+          "publishable_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Stripe publishable key for the Payment Element\n(`POST /v1/billing/payment-setup`); null when not configured."
+          },
+          "pending_payment_method": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SavedMethod",
+                "description": "A bank account added here that waits for its micro-deposits, else the\none the signup is waiting on; null when none (or Stripe cannot be\nread). `verifying` shows `verify_url` and `verify_by`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payment_hold": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentHold",
+                "description": "Why access will pause (or paused) until a new payment method is\nsaved; null when nothing is on hold."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount_due_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What the open subscription invoices still owe, in cents (0 when\nnothing is due); `POST /v1/billing/invoice-payment` pays it."
+          },
+          "payment_processing": {
+            "type": "boolean",
+            "description": "A bank payment is on its way (up to 4 business days): access stays\non meanwhile."
           }
         }
       },
@@ -63673,6 +64051,28 @@
           }
         }
       },
+      "AppliedStatus": {
+        "type": "string",
+        "description": "What became of the payment method.",
+        "enum": [
+          "saved",
+          "verifying",
+          "failed"
+        ]
+      },
+      "ApplyPaymentMethod": {
+        "type": "object",
+        "description": "Body of `POST /v1/billing/payment-method`.",
+        "required": [
+          "setup_intent_id"
+        ],
+        "properties": {
+          "setup_intent_id": {
+            "type": "string",
+            "description": "The SetupIntent the Payment Element confirmed (`seti_...`)."
+          }
+        }
+      },
       "AreaNameSuggestion": {
         "type": "object",
         "description": "An area name used on earlier quotes.",
@@ -64099,6 +64499,41 @@
           "OutsideHours"
         ]
       },
+      "BankVerification": {
+        "type": "object",
+        "description": "A bank account the signup waits for (micro-deposits).",
+        "required": [
+          "verify_by"
+        ],
+        "properties": {
+          "verify_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe's page where the code of the test deposit is entered; null\nwhen Stripe cannot be read right now."
+          },
+          "verify_by": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Verify by then to keep access (ISO 8601, UTC)."
+          },
+          "bank_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The bank's name, or null."
+          },
+          "last4": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last 4 digits of the account number, or null."
+          }
+        }
+      },
       "BasePlan": {
         "type": "object",
         "description": "The base plan.",
@@ -64192,7 +64627,8 @@
         "description": "Why a billing notice is shown.",
         "enum": [
           "payment_failed",
-          "subscription_required"
+          "subscription_required",
+          "payment_method_required"
         ]
       },
       "BillingOverview": {
@@ -68044,6 +68480,17 @@
           "redirect_url": {
             "type": "string",
             "description": "Where the browser goes next."
+          },
+          "bank_verification": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BankVerification",
+                "description": "Set while the company waits for its bank account's micro-deposits to\nbe verified (status `awaiting_bank_verification`): show the verify\npanel. Null once the signup is completed."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -76547,10 +76994,28 @@
             "items": {
               "$ref": "#/components/schemas/RenderedConsent"
             },
-            "description": "The checkboxes to tick, in order (terms, auto_renewal,\nper_user_pricing); empty unless `status` is `open`."
+            "description": "The checkboxes to tick, in order (terms, auto_renewal,\nper_user_pricing, then card_authorization and ach_authorization: show\nonly the one matching the method selected or saved, see\n`payment_method_type`); empty unless `status` is `open`."
           },
           "payment_mode": {
             "$ref": "#/components/schemas/InvitePaymentMode"
+          },
+          "publishable_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Stripe publishable key for the Payment Element; only in `stripe`\nmode, else null."
+          },
+          "payment_method": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SavedMethod",
+                "description": "The payment method already set up for this invite (`ready`, or a bank\naccount `verifying` its micro-deposits), read live from Stripe; null\nwhen none, or when Stripe cannot be read right now."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "redirect_url": {
             "type": "string",
@@ -76563,6 +77028,7 @@
         "description": "How the payment method is collected.",
         "enum": [
           "test",
+          "stripe",
           "unavailable"
         ]
       },
@@ -76797,6 +77263,64 @@
             "description": "What could not be made into a rule, and why."
           }
         }
+      },
+      "InvoicePaymentRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/billing/invoice-payment`.",
+        "required": [
+          "attempt_id"
+        ],
+        "properties": {
+          "attempt_id": {
+            "type": "string",
+            "description": "A UUID the page makes once per \"Pay\" press: a retry of the same press\nnever charges twice."
+          }
+        }
+      },
+      "InvoicePaymentResult": {
+        "type": "object",
+        "description": "Answer of `POST /v1/billing/invoice-payment`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/InvoicePaymentStatus"
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The invoice's confirmation secret; only for `requires_action`."
+          },
+          "decline_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe's decline message, to show as is; only for `declined`."
+          },
+          "amount_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The amount of the invoice paid (or tried), in cents; null for\n`nothing_due`."
+          }
+        }
+      },
+      "InvoicePaymentStatus": {
+        "type": "string",
+        "description": "How the payment went.",
+        "enum": [
+          "paid",
+          "processing",
+          "requires_action",
+          "declined",
+          "nothing_due"
+        ]
       },
       "InvoiceSummary": {
         "type": "object",
@@ -81882,6 +82406,86 @@
           }
         }
       },
+      "PaymentHold": {
+        "type": "object",
+        "description": "A hold on the company's payment method: save a new one with\n`POST /v1/billing/payment-setup` (`purpose: \"update\"`) to end it.",
+        "required": [
+          "reason",
+          "paused"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/PaymentHoldReason"
+          },
+          "pauses_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When access pauses (or paused), ISO 8601 UTC; null when unknown."
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Access is paused now."
+          }
+        }
+      },
+      "PaymentHoldReason": {
+        "type": "string",
+        "description": "Why the payment method must be replaced.",
+        "enum": [
+          "blocked",
+          "disputed",
+          "bank_unverified"
+        ]
+      },
+      "PaymentMethodApplied": {
+        "type": "object",
+        "description": "Answer of `POST /v1/billing/payment-method`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/AppliedStatus"
+          },
+          "payment_method": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountPaymentMethod",
+                "description": "The card or bank account (brand or bank and last four digits); null\nwhen `failed` or Stripe did not say."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verify_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe's page to enter the micro-deposit code; only while `verifying`."
+          },
+          "verify_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The bank account must be verified by then (ISO 8601 UTC); only while\n`verifying`."
+          }
+        }
+      },
+      "PaymentMethodType": {
+        "type": "string",
+        "description": "How a payment method pays.",
+        "enum": [
+          "card",
+          "us_bank_account"
+        ]
+      },
       "PaymentMode": {
         "type": "string",
         "description": "Where the card or bank account is collected.",
@@ -81914,6 +82518,26 @@
               "null"
             ],
             "description": "The Stripe publishable key; only in `stripe` mode."
+          }
+        }
+      },
+      "PaymentSetupRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/billing/payment-setup`.",
+        "required": [
+          "purpose"
+        ],
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "description": "`update` (the account page: replace the saved method), `pay` (the pay\npage: a method to pay an overdue invoice with) or `plan_invite` (the\nupgrade page, with `plan_invite_token`)."
+          },
+          "plan_invite_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The token of the `/upgrade/<token>` link; only for `plan_invite`."
           }
         }
       },
@@ -87820,6 +88444,17 @@
               "$ref": "#/components/schemas/DocumentLink"
             },
             "description": "Documents the text refers to, linked under it."
+          },
+          "payment_method_type": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentMethodType",
+                "description": "The payment method this checkbox is for (`card` or\n`us_bank_account`): show it only while that kind of method is\nselected or saved. Null: shown for every method."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -89423,6 +90058,60 @@
             "description": "True when escalated."
           }
         }
+      },
+      "SavedMethod": {
+        "type": "object",
+        "description": "A payment method saved on a SetupIntent, as the pages show it (read live\nfrom Stripe).",
+        "required": [
+          "status",
+          "type"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/SavedMethodStatus"
+          },
+          "type": {
+            "$ref": "#/components/schemas/PaymentMethodType",
+            "description": "`card` or `us_bank_account`."
+          },
+          "brand": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The card brand (e.g. `visa`) or the bank's name; null when Stripe\ndoes not say."
+          },
+          "last4": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last 4 digits of the card or account number; null when unknown."
+          },
+          "verify_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe's page where the code of the test deposit is entered; only\nwhile `verifying`."
+          },
+          "verify_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The bank account must be verified by then (ISO 8601, UTC); only while\n`verifying`."
+          }
+        }
+      },
+      "SavedMethodStatus": {
+        "type": "string",
+        "description": "Where a saved payment method is.",
+        "enum": [
+          "ready",
+          "verifying"
+        ]
       },
       "SavedPriceList": {
         "type": "object",
@@ -91270,6 +91959,24 @@
           },
           "payment_mode": {
             "$ref": "#/components/schemas/PaymentMode"
+          },
+          "publishable_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Stripe publishable key for the Payment Element; only in `stripe`\nmode, else null."
+          },
+          "payment_method": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SavedMethod",
+                "description": "The payment method already set up, read live from Stripe: only while\n`payment_ready` or `awaiting_bank_verification`. Null when nothing\nusable is saved or Stripe cannot be read right now."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "resend_in_seconds": {
             "type": "integer",

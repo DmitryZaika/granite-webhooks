@@ -63,8 +63,11 @@ pub struct BillingGate {
 /// 402 `payment_required`, only billing, sign-in, the app shell, `GET /v1/me`
 /// and notifications work) and whether managers see a warning with the days
 /// left. `reason` says why: `payment_failed` (a payment failed, 7 days of
-/// grace) or `subscription_required` (payment was turned on and the company
-/// has not subscribed, 7 days to do so); `pauses_at` is when access pauses.
+/// grace), `subscription_required` (payment was turned on and the company
+/// has not subscribed, 7 days to do so) or `payment_method_required` (the
+/// saved method stopped working: a blocked bank account or a dispute, 7
+/// days to save a new one; or the signup's bank account was not verified in
+/// time); `pauses_at` is when access pauses.
 /// Checks Stripe now and then (throttled); errors keep access.
 #[crate::openapi::path(
     get,

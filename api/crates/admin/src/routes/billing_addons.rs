@@ -29,15 +29,22 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// add-on (`active`, `available`, or `included` free by Granite Manager) with
 /// the prorated estimate of changing it now, the monthly total, Stripe's
 /// draft of the next invoice, the payment method on file (brand or bank and
-/// last four digits only), a scheduled cancellation and the latest 12
-/// invoices. Read live from Stripe, each read within 5 seconds; when Stripe
-/// cannot be reached the stored subscription and add-ons are shown,
-/// `next_invoice` and `payment_method` are null, and prices Stripe alone
-/// knows are null (`can_cancel` still holds). A legacy company (`plan_source`
-/// `legacy`, billed by Granite Manager) gets only its name and plan source:
-/// it manages billing on `/admin/billing` (`GET /v1/billing`). Change an
-/// add-on with `PUT /v1/billing/addons/{key}`; open the card form with
-/// `POST /v1/billing/portal` (`return_to: "account"`). Managers only.
+/// last four digits only), a bank account waiting for micro-deposits
+/// (`pending_payment_method`), a hold on the payment method
+/// (`payment_hold`), what is due now (`amount_due_cents`), whether a bank
+/// payment is on its way (`payment_processing`), a scheduled cancellation and
+/// the latest 12 invoices. Read live from Stripe, each read within 5
+/// seconds; when Stripe cannot be reached the stored subscription and
+/// add-ons are shown, `next_invoice`, `payment_method` and
+/// `pending_payment_method` are null, and prices Stripe alone knows are null
+/// (`can_cancel` still holds). A company whose signup waits for its bank
+/// account has no subscription yet: `status` `none`. A legacy company
+/// (`plan_source` `legacy`, billed by Granite Manager) gets only its name
+/// and plan source: it manages billing on `/admin/billing`
+/// (`GET /v1/billing`). Change an add-on with `PUT /v1/billing/addons/{key}`;
+/// add or replace the card or bank account with
+/// `POST /v1/billing/payment-setup` (the Payment Element, with
+/// `publishable_key`), then `POST /v1/billing/payment-method`. Managers only.
 #[crate::openapi::path(
     get,
     path = "/v1/billing/subscription",

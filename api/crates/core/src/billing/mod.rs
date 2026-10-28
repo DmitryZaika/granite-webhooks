@@ -21,6 +21,8 @@ pub mod invites;
 pub mod items;
 pub mod lock;
 pub mod machine;
+pub mod method_emails;
+pub mod methods;
 pub mod reactivation;
 pub mod reminder_emails;
 pub mod reminder_store;
@@ -108,6 +110,49 @@ pub struct CompanyBilling {
     pub billable_users: Option<i64>,
     /// When the subscription is scheduled to end (a cancellation request).
     pub cancel_at: Option<NaiveDateTime>,
+    /// The payment method columns: read with the row, written only by
+    /// `billing::methods` (never by `BillingStore::save`).
+    pub methods: MethodState,
+}
+
+/// Why the saved payment method stopped working (`company_billing.method_hold`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodHold {
+    /// The bank blocked debits from the account (D10).
+    Blocked,
+    /// A payment was disputed (D11).
+    Disputed,
+}
+
+impl MethodHold {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Blocked => "blocked",
+            Self::Disputed => "disputed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "blocked" => Some(Self::Blocked),
+            "disputed" => Some(Self::Disputed),
+            _ => None,
+        }
+    }
+}
+
+/// A company's payment method state (step 13).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MethodState {
+    /// A bank account a Manager added that waits for micro-deposits.
+    pub pending_setup_intent_id: Option<String>,
+    /// The saved method stopped working; access pauses at `hold_until`
+    /// unless a new method is saved.
+    pub hold: Option<MethodHold>,
+    pub hold_at: Option<NaiveDateTime>,
+    pub hold_until: Option<NaiveDateTime>,
+    /// A bank payment is on its way (`payment_intent.processing`).
+    pub payment_processing_at: Option<NaiveDateTime>,
 }
 
 impl CompanyBilling {
@@ -137,6 +182,7 @@ impl CompanyBilling {
             extra_user_item_id: None,
             billable_users: None,
             cancel_at: None,
+            methods: MethodState::default(),
         }
     }
 }

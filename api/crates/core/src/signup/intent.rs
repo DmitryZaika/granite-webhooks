@@ -10,8 +10,10 @@ use sqlx::MySqlPool;
 
 /// Signups expire this long after they start (unless provisioning).
 pub const EXPIRES_HOURS: i64 = 24;
-/// An `awaiting_bank_verification` signup expires this long after it got there.
-pub const BANK_VERIFICATION_DAYS: i64 = 11;
+/// How long a bank account waiting for micro-deposits has to be verified
+/// (Stripe's micro-deposit timeout): `bank_verification_until` is the
+/// acceptance plus this.
+pub const BANK_VERIFICATION_DAYS: i64 = 10;
 
 /// Where a signup is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -23,7 +25,8 @@ pub enum SignupStatus {
     Verified,
     /// A payment method setup exists (SetupIntent).
     PaymentReady,
-    /// Reserved: an ACH bank account waits for micro-deposits (step 13).
+    /// The company exists and the owner is signed in; the subscription
+    /// waits for Stripe to verify the bank account (micro-deposits).
     AwaitingBankVerification,
     /// Consents accepted; the company and subscription are being made.
     Provisioning,
@@ -119,17 +122,21 @@ pub struct Intent {
     pub updated_at: NaiveDateTime,
     pub expires_at: NaiveDateTime,
     pub completed_at: Option<NaiveDateTime>,
+    /// Set when completion accepted a bank account still waiting for
+    /// micro-deposits (acceptance + [`BANK_VERIFICATION_DAYS`]); stays set
+    /// once verified.
+    pub bank_verification_until: Option<NaiveDateTime>,
 }
 
 impl Intent {
-    /// Past its time and not being provisioned or done.
+    /// Past its time and not being provisioned or done. A signup waiting on
+    /// its bank account never expires: its company exists.
     pub fn is_expired(&self, now: NaiveDateTime) -> bool {
         match self.status {
             SignupStatus::Expired => true,
-            SignupStatus::Provisioning | SignupStatus::Completed => false,
-            SignupStatus::AwaitingBankVerification => {
-                now >= self.updated_at + chrono::Duration::days(BANK_VERIFICATION_DAYS)
-            }
+            SignupStatus::Provisioning
+            | SignupStatus::Completed
+            | SignupStatus::AwaitingBankVerification => false,
             _ => now >= self.expires_at,
         }
     }
@@ -142,7 +149,7 @@ const COLUMNS: &str = "id, CAST(status AS CHAR) AS status, email, code_hash, cod
     setup_attempts, payment_method_id, accepted_at, trial_end_at, fee_cents, deadline_at,
     CAST(price_ids AS CHAR) AS price_ids, stripe_subscription_id, provision_attempts,
     last_error, company_id, user_id, ip, user_agent, created_at, updated_at, expires_at,
-    completed_at";
+    completed_at, bank_verification_until";
 
 #[derive(sqlx::FromRow)]
 struct Row {
@@ -179,6 +186,7 @@ struct Row {
     updated_at: NaiveDateTime,
     expires_at: NaiveDateTime,
     completed_at: Option<NaiveDateTime>,
+    bank_verification_until: Option<NaiveDateTime>,
 }
 
 fn corrupt(column: &str) -> sqlx::Error {
@@ -233,6 +241,7 @@ impl TryFrom<Row> for Intent {
             updated_at: row.updated_at,
             expires_at: row.expires_at,
             completed_at: row.completed_at,
+            bank_verification_until: row.bank_verification_until,
         })
     }
 }

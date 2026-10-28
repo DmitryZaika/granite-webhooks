@@ -175,6 +175,10 @@ pub struct CompanyBillingSnapshot {
     /// When Stripe payment was last turned on (`company.billing_required_at`).
     pub required_since: Option<NaiveDateTime>,
     pub record: Option<CompanyBilling>,
+    /// The company's signup waits for its bank account (micro-deposits):
+    /// the bank verification emails speak for it, never the first-payment
+    /// countdown.
+    pub awaiting_bank: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -472,6 +476,9 @@ pub fn due_reminder(snapshot: &CompanyBillingSnapshot, now: NaiveDateTime) -> Op
     let record = snapshot.record.as_ref();
     let required_since = snapshot.required_since;
     if is_awaiting_first_payment(record) {
+        if snapshot.awaiting_bank {
+            return None;
+        }
         return required_since.and_then(|since| first_payment_reminder(since, now));
     }
     let record = record?;
@@ -1309,6 +1316,7 @@ mod tests {
                     .get(&company_id)
                     .copied(),
                 record: self.billing.records.borrow().get(&company_id).cloned(),
+                awaiting_bank: self.billing.bank_verification.borrow().contains_key(&company_id),
             })
         }
         async fn managers(&self, company_id: i32) -> StoreResult<Vec<i32>> {
@@ -2079,6 +2087,21 @@ mod tests {
         .unwrap();
 
         fake.tick(t(0, 60)).await;
+
+        assert_eq!(fake.sent_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_signup_waiting_on_its_bank_gets_no_first_payment_emails() {
+        let fake = first_payment();
+        fake.billing
+            .bank_verification
+            .borrow_mut()
+            .insert(1, failed_at() + Duration::days(10));
+
+        fake.tick(t(0, 60)).await;
+        fake.tick(t(4, 0)).await;
+        fake.tick(t(7, 60)).await;
 
         assert_eq!(fake.sent_count(), 0);
     }
