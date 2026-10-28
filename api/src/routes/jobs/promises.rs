@@ -21,17 +21,23 @@ pub struct PromisesRun {
     pub processed: usize,
     /// Calls, texts and emails newly queued to read.
     pub queued: u64,
-    /// Promises saved.
+    /// Promises and quote changes saved.
     pub promises: usize,
+    /// Due promises the reps were reminded of.
+    pub reminded: usize,
+    /// Morning lists sent.
+    pub digests: usize,
 }
 
 /// Read reps' calls and messages for promises
 ///
-/// For the reps AI promises is on for: queues their calls, texts and emails
-/// of the last 3 days not read yet, then reads up to 4 (a call is
-/// transcribed first), saves what the rep promised the customer and by when,
-/// and writes the text or email that keeps each promise a message can keep,
-/// in the rep's own style.
+/// For the reps AI promises is on for: reminds them of promises that came
+/// due, sends their morning list (once a day from 8 AM their time), queues
+/// their calls, texts and emails of the last 3 days not read yet, then reads
+/// up to 4 (a call is transcribed first): saves what the rep promised the
+/// customer and by when, closes the open promises it keeps, saves the quote
+/// changes the customer asked for, and writes the text or email that keeps
+/// each promise a message can keep, in the rep's own style.
 #[crate::openapi::path(
     post,
     path = "/v1/jobs/promises",
@@ -50,5 +56,7 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
         processed: run.read,
         queued: run.queued,
         promises: run.promises,
+        reminded: run.reminded,
+        digests: run.digests,
     }))
 }

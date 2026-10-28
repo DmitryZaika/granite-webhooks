@@ -1,7 +1,9 @@
 //! The rep's AI promises (`crate::promises`), for the CRM:
 //!
-//! - `GET   /v1/ai/promises` → the caller's open promises; with a customer,
-//!   phone or email, only that customer's
+//! - `GET   /v1/ai/promises` → the caller's open promises and the quote
+//!   changes their customers asked for, each appointment checked against the
+//!   schedule, and the customers whose text waits for their reply; with a
+//!   customer, phone or email, only that customer's promises
 //! - `PATCH /v1/ai/promises/{id}` → kept (`done`), not wanted (`dismissed`)
 //!   or open again
 //!
@@ -12,6 +14,7 @@ use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
+use crate::promises::waiting_customers;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -32,13 +35,24 @@ pub struct PromisesQuery {
     pub customer_email: Option<String>,
 }
 
-/// A promise the rep made a customer.
+/// Something on the schedule at a time.
+#[derive(Debug, Clone, Serialize, ToSchema, sqlx::FromRow)]
+pub struct ScheduleEvent {
+    pub title: String,
+    pub start: DateTime<Utc>,
+}
+
+/// A promise the rep made a customer, or a change a customer asked for in
+/// their quote.
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 pub struct AiPromise {
     pub id: u64,
-    /// Where the rep said it: `call`, `sms` or `email`.
+    /// `promise`: the rep's; `quote`: a change the customer asked for in
+    /// their quote.
+    pub kind: String,
+    /// Where it was said: `call`, `sms` or `email`.
     pub source: String,
-    /// When the rep said it.
+    /// When it was said.
     pub promised_at: DateTime<Utc>,
     pub customer_id: Option<i32>,
     pub customer_name: Option<String>,
@@ -46,16 +60,40 @@ pub struct AiPromise {
     pub customer_digits: Option<String>,
     /// The customer's email, for an email.
     pub customer_email: Option<String>,
+    /// A quote change's quote: the customer's newest.
+    pub quote_id: Option<i32>,
     /// What to do, e.g. "Send the inventory link".
     pub title: String,
-    /// The rep's words.
+    /// The words that made it (the customer's, for a quote change).
     pub said: String,
     /// When it was promised for.
     pub due_at: Option<DateTime<Utc>>,
+    /// An appointment at a set time (a visit, measuring, a showroom meeting).
+    pub is_appointment: bool,
     /// `sms` or `email` when a message keeps it.
     pub channel: Option<String>,
     /// That message, ready to send (null when the AI could not write it).
     pub draft: Option<String>,
+    /// An appointment's event for the customer within 12 hours of it (null:
+    /// not on the schedule, or not an appointment).
+    #[sqlx(skip)]
+    pub scheduled: Option<ScheduleEvent>,
+    /// Another appointment within the hour: one the rep promised someone
+    /// else, or an event assigned to them.
+    #[sqlx(skip)]
+    pub clash: Option<ScheduleEvent>,
+}
+
+/// A customer whose text waits for the caller's reply.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WaitingCustomer {
+    /// 10 digits.
+    pub phone_digits: String,
+    pub customer_id: Option<i32>,
+    pub customer_name: Option<String>,
+    /// Their last text.
+    pub text: String,
+    pub at: DateTime<Utc>,
 }
 
 /// Open promises.
@@ -63,6 +101,79 @@ pub struct AiPromise {
 pub struct AiPromises {
     /// Newest first.
     pub promises: Vec<AiPromise>,
+    /// Oldest wait first; only without a customer, phone or email.
+    pub waiting: Vec<WaitingCustomer>,
+}
+
+/// An hour either side of an appointment is the same time.
+const CLASH_MINUTES: i64 = 60;
+
+/// Each appointment's event on the schedule, and what it clashes with.
+async fn check_schedule(
+    state: &AppState,
+    user_id: i32,
+    promises: &mut [AiPromise],
+) -> sqlx::Result<()> {
+    let appointments: Vec<(u64, DateTime<Utc>, String)> = promises
+        .iter()
+        .filter(|p| p.kind == "promise" && p.is_appointment)
+        .filter_map(|p| {
+            let title = match p.customer_name.as_deref().map(str::trim) {
+                Some(name) if !name.is_empty() => format!("{} — {name}", p.title),
+                _ => p.title.clone(),
+            };
+            Some((p.id, p.due_at?, title))
+        })
+        .collect();
+    for promise in promises.iter_mut() {
+        let (true, Some(due)) = (
+            promise.kind == "promise" && promise.is_appointment,
+            promise.due_at,
+        ) else {
+            continue;
+        };
+        let at = due.naive_utc();
+        if let Some(customer_id) = promise.customer_id {
+            promise.scheduled = sqlx::query_as(
+                "SELECT COALESCE(title, '') AS title, start_date AS start FROM events
+                  WHERE customer_id = ? AND deleted_date IS NULL
+                    AND start_date BETWEEN ? - INTERVAL 12 HOUR AND ? + INTERVAL 12 HOUR
+                  ORDER BY ABS(TIMESTAMPDIFF(MINUTE, start_date, ?)) LIMIT 1",
+            )
+            .bind(customer_id)
+            .bind(at)
+            .bind(at)
+            .bind(at)
+            .fetch_optional(&state.pool)
+            .await?;
+        }
+        promise.clash = appointments
+            .iter()
+            .find(|(id, other, _)| {
+                *id != promise.id && (*other - due).num_minutes().abs() < CLASH_MINUTES
+            })
+            .map(|(_, other, title)| ScheduleEvent {
+                title: title.clone(),
+                start: *other,
+            });
+        if promise.clash.is_none() {
+            promise.clash = sqlx::query_as(
+                "SELECT COALESCE(title, '') AS title, start_date AS start FROM events
+                  WHERE assigned_user_id = ? AND deleted_date IS NULL
+                    AND start_date < ? + INTERVAL 1 HOUR
+                    AND COALESCE(end_date, start_date + INTERVAL 1 HOUR) > ?
+                    AND (customer_id IS NULL OR customer_id <> COALESCE(?, 0))
+                  ORDER BY start_date LIMIT 1",
+            )
+            .bind(user_id)
+            .bind(at)
+            .bind(at)
+            .bind(promise.customer_id)
+            .fetch_optional(&state.pool)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// Body of `PATCH /v1/ai/promises/{id}`.
@@ -89,8 +200,11 @@ async fn require_enabled(state: &AppState, user: &SessionUser) -> ApiResult<()> 
 /// List the caller's open promises
 ///
 /// What the caller promised customers on calls, texts and emails and has not
-/// done yet, newest first, each with the message that keeps it when a text
-/// or email can. With a customer, phone or email: only that customer's.
+/// done yet, and the changes customers asked for in their quotes, newest
+/// first: each promise with the message that keeps it when a text or email
+/// can, each appointment with its event on the schedule and what it clashes
+/// with. With a customer, phone or email: only that customer's; without,
+/// also the customers whose text waits for the caller's reply.
 #[crate::openapi::path(
     get,
     path = "/v1/ai/promises",
@@ -125,10 +239,11 @@ pub async fn list(
         .filter(|email| email.contains('@'));
     let customer_id = query.customer_id.filter(|id| *id > 0);
     let filtered = customer_id.is_some() || digits.is_some() || email.is_some();
-    let promises: Vec<AiPromise> = sqlx::query_as(
-        "SELECT p.id, CAST(p.source AS CHAR) AS source, p.promised_at, p.customer_id,
-                c.name AS customer_name, p.customer_digits, p.customer_email, p.title, p.said,
-                p.due_at, CAST(p.channel AS CHAR) AS channel, p.draft
+    let mut promises: Vec<AiPromise> = sqlx::query_as(
+        "SELECT p.id, CAST(p.kind AS CHAR) AS kind, CAST(p.source AS CHAR) AS source,
+                p.promised_at, p.customer_id, c.name AS customer_name, p.customer_digits,
+                p.customer_email, p.quote_id, p.title, p.said, p.due_at, p.is_appointment,
+                CAST(p.channel AS CHAR) AS channel, p.draft
            FROM ai_promises p
            LEFT JOIN customers c ON c.id = p.customer_id AND c.deleted_at IS NULL
           WHERE p.user_id = ? AND p.company_id = ? AND p.status = 'open'
@@ -144,7 +259,23 @@ pub async fn list(
     .bind(email)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(AiPromises { promises }))
+    check_schedule(&state, user.id, &mut promises).await?;
+    let waiting = if filtered {
+        Vec::new()
+    } else {
+        waiting_customers(&state.pool, user.company_id, user.id)
+            .await?
+            .into_iter()
+            .map(|customer| WaitingCustomer {
+                phone_digits: customer.phone_digits,
+                customer_id: customer.customer_id,
+                customer_name: customer.customer_name,
+                text: customer.text,
+                at: customer.at.and_utc(),
+            })
+            .collect()
+    };
+    Ok(Json(AiPromises { promises, waiting }))
 }
 
 /// Close or reopen a promise
