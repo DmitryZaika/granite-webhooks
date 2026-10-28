@@ -317,9 +317,15 @@ async fn the_model_picks_and_answers(pool: MySqlPool) {
         results.extend(
             join_all(chunk.iter().map(|case| async move {
                 let started = std::time::Instant::now();
-                let picked =
-                    crm_manual::sections_for(shared, caller, &case.question, &[], &case.question)
-                        .await;
+                let picked = crm_manual::sections_for(
+                    shared,
+                    caller,
+                    &case.question,
+                    &[],
+                    &case.question,
+                    None,
+                )
+                .await;
                 (*case, picked, started.elapsed())
             }))
             .await,
@@ -472,9 +478,23 @@ fn asker(role: Option<&str>) -> &'static str {
     }
 }
 
-/// The large model's grade of `answer` (`verdict`, `problem`, `invented`).
-async fn grade(state: &AppState, caller: Caller<'_>, case: &Case, answer: &str) -> Value {
-    let reference = crm_manual::content_with(&state.pool, &case.sections).await;
+/// The large model's grade of `answer` (`verdict`, `problem`, `invented`)
+/// against the sections that hold it and the ones picked for it.
+async fn grade(
+    state: &AppState,
+    caller: Caller<'_>,
+    case: &Case,
+    picked: &[String],
+    answer: &str,
+) -> Value {
+    let mut ids = case.sections.clone();
+    ids.extend(
+        picked
+            .iter()
+            .filter(|id| !case.sections.contains(id))
+            .cloned(),
+    );
+    let reference = crm_manual::content_with(&state.pool, &ids).await;
     let mut chat = Chat::new(LARGE_MODEL)
         .message("system", GRADE_RULES)
         .message(
@@ -541,22 +561,23 @@ async fn answers_a_lot_of_questions(pool: MySqlPool) {
     let (server, state) = (&server, &state);
     let results: Vec<Value> = stream::iter(&cases)
         .map(|case| async move {
+            let picked =
+                crm_manual::sections_for(state, caller, &case.question, &[], &case.question, None)
+                    .await;
             let started = Instant::now();
             let answer = ask(server, session(case.role.as_deref()), &case.question, true).await;
             let took = started.elapsed().as_secs_f64();
             let graded = if answer.choices.is_empty() {
-                grade(state, caller, case, &answer.text).await
+                let ids = picked.clone().ok().flatten().unwrap_or_default();
+                grade(state, caller, case, &ids, &answer.text).await
             } else {
                 let verdict = if case.clarify { "asked_ok" } else { "asked" };
                 json!({ "verdict": verdict })
             };
-            let picked =
-                match crm_manual::sections_for(state, caller, &case.question, &[], &case.question)
-                    .await
-                {
-                    Ok(ids) => json!(ids),
-                    Err(asked) => json!({ "asked": asked.question }),
-                };
+            let picked = match picked {
+                Ok(ids) => json!(ids),
+                Err(asked) => json!({ "asked": asked.question }),
+            };
             let result = json!({
                 "question": case.question,
                 "role": case.role,

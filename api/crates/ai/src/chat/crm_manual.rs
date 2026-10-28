@@ -580,6 +580,7 @@ Reply with a JSON object only, in one of these forms:
 1. {"sections": ["id", "id"]}: the 1 to 3 sections whose text answers the question, best first. Prefer the section of the page or screen where the task is done.
 2. {"clarify": {"question": "...", "choices": [{"label": "...", "sections": ["id"]}]}}: rarely; only when the question fits two or more different features of the app about equally well, their steps differ, and nothing in the question or the earlier questions says which ("how do I add a template": an email, SMS or quote email template). Never ask about parts of one tool, or when one meaning is the usual one in a countertop shop. The question is one short sentence that names the choices; 2 to 5 choices, each label a few words naming the feature as the app names it, with the sections that answer it.
 3. {"sections": []}: the question is not about using Granite Manager (the company's own prices, policies or process, or small talk).
+4. {"records": true}: the question asks about the company's own records, not how to use the app: a customer, deal, quote or message by name, or counts and lists of them ("find John Smith", "how many deals did we win this month", "which quotes did Rita send"), or asks the chat to do something with them ("draft a follow-up to John"). How to do something in the app is never this, even when it names records ("mark deal won", "add a customer that is a company", "filter customers by sales rep").
 
 Users type fast: read typos and run-together words as the closest app words ("specail" is special, "aquote" is a quote, "deal bord" is the deal board). A follow-up ("and how do I undo it?") is about the same feature as the earlier questions.
 
@@ -593,6 +594,8 @@ pub enum Picked {
     Sections(Vec<String>),
     /// It fits several features: ask which.
     Ask(Clarification),
+    /// It asks about the company's records (the assistant's), not the app.
+    Records,
 }
 
 fn known_section(id: &str) -> bool {
@@ -620,6 +623,9 @@ fn section_list(value: &Value, most: usize) -> Vec<String> {
 /// back only with 2 to 6 choices that each have a label and a section.
 pub fn parse_pick(reply: &str) -> Option<Picked> {
     let value: Value = serde_json::from_str(trim(reply)).ok()?;
+    if value.get("records").and_then(Value::as_bool) == Some(true) {
+        return Some(Picked::Records);
+    }
     if let Some(clarify) = value.get("clarify").filter(|c| c.is_object()) {
         let question = clarify["question"].as_str().map(trim).unwrap_or_default();
         let choices: Vec<Feature> = clarify["choices"]
@@ -698,13 +704,15 @@ pub async fn pick(
 /// model's pick (or question back, for a feature the topic table doesn't
 /// name) with the best section of the manual's own words in case it missed
 /// one, else the manual's own words alone. `None`: the model finds the
-/// question is not about using the app.
+/// question is not about using the app. `picked`: the model's pick when it
+/// was already asked.
 pub async fn sections_for(
     state: &AppState,
     caller: Caller<'_>,
     question: &str,
     earlier: &[String],
     search: &str,
+    picked: Option<Picked>,
 ) -> Result<Option<Vec<String>>, Clarification> {
     match features(question) {
         Some(Features::Ask(clarification)) => return Err(clarification),
@@ -719,7 +727,11 @@ pub async fn sections_for(
             .cloned()
             .collect()
     };
-    match pick(state, caller, question, earlier).await {
+    let picked = match picked {
+        Some(picked) => Some(picked),
+        None => pick(state, caller, question, earlier).await,
+    };
+    match picked {
         // A feature the topic table names is not one to ask about ("how to
         // make a layout" is the quote's slab layout): the manual's own words.
         Some(Picked::Ask(_)) if matches_topic(question) => Ok(Some(own_words())),
@@ -734,7 +746,7 @@ pub async fn sections_for(
             Ok(Some(ids))
         }
         // The model finds it is not about using the app.
-        Some(Picked::Sections(_)) => Ok(None),
+        Some(Picked::Sections(_) | Picked::Records) => Ok(None),
         None => Ok(Some(own_words())),
     }
 }
@@ -1155,13 +1167,18 @@ fn asks_inventory_link(normalized: &str) -> bool {
         || re!(r"\b(?:customer (?:inventory|stones?)|showroom) page\b").is_match(normalized)
 }
 
-/// Asks for the company's customer quote link ("customer quote link", "link to the online quote").
+/// Asks for the company's customer quote link ("customer quote link", "link to the online quote"),
+/// not how to text a quote or why the link in its email stopped working: the manual's.
 fn asks_quote_link(normalized: &str) -> bool {
-    re!(r"\bquote(?: page)? (?:link|url)\b").is_match(normalized)
+    let link = re!(r"\bquote(?: page)? (?:link|url)\b").is_match(normalized)
         || re!(r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:customer |online )?quote\b")
             .is_match(normalized)
         // Not a bare "quote page": that is also the quote page inside the app.
-        || re!(r"\b(?:customer|online) quote page\b").is_match(normalized)
+        || re!(r"\b(?:customer|online) quote page\b").is_match(normalized);
+    link && !re!(
+        r"\b(?:text|texting|sms|e-?mail|emailed|no longer|not working|doesn'?t work|expired?|(?:de)?activated?)\b"
+    )
+    .is_match(normalized)
 }
 
 /// Asks for the inventory or the customer quote link.
@@ -1397,6 +1414,8 @@ mod tests {
             "how do I link a quote to a deal",
             "how many stones are in inventory",
             "how do I open the quote page",
+            "how to text the quote link",
+            "customer says the quote link is no longer active",
         ] {
             assert_eq!(customer_link_answer(other, 7, domain), None, "{other}");
         }
@@ -1598,6 +1617,8 @@ mod tests {
             Some(Picked::Sections(vec!["invoices".into()]))
         );
         assert_eq!(parse_pick("Open the quote."), None);
+        // About the company's records: the assistant's.
+        assert_eq!(parse_pick(r#"{"records": true}"#), Some(Picked::Records));
     }
 
     #[test]
