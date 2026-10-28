@@ -25,7 +25,7 @@
 //! installers' and template makers' own schedule), on [`DEVICE_READ_ROUTES`]
 //! with `GET` (what the phone's composers, schedule, Text tab and More
 //! screens read: calendars, deals and their stages, customers, stones,
-//! suppliers, sales, images, documents, email and text templates, my texts
+//! suppliers, sales, quotes, images, documents, email and text templates, my texts
 //! over every provider, a pushed CRM notification), on
 //! `/v1/sms/{provider}/messages` with `POST`
 //! (sending those texts), on [`DEVICE_ACTIONS`] with `POST` (an
@@ -82,11 +82,11 @@ pub const DEVICE_ROUTES: [&str; 4] = [
 /// email and text composers' From Stones, From Images, From Documents and
 /// Use Template lists, the suggestions under an email's To, Cc and Bcc, the
 /// schedule's calendars, and the More screens: Deals, Customers, Stones,
-/// Suppliers, Images (with its folders) and Transactions; and the CRM
+/// Suppliers, Images (with its folders), Transactions and Quotes; and the CRM
 /// notification a push names).
 /// These prefixes and everything under them; writes there still need the CRM
 /// session.
-pub const DEVICE_READ_ROUTES: [&str; 15] = [
+pub const DEVICE_READ_ROUTES: [&str; 16] = [
     "/v1/sms/mine",
     "/v1/calendars",
     "/v1/stones",
@@ -101,6 +101,7 @@ pub const DEVICE_READ_ROUTES: [&str; 15] = [
     "/v1/deal-lists",
     "/v1/suppliers",
     "/v1/transactions",
+    "/v1/quotes",
     "/v1/notifications",
 ];
 
@@ -627,6 +628,7 @@ mod tests {
             "/v1/suppliers/directory",
             "/v1/transactions",
             "/v1/transactions/7",
+            "/v1/quotes",
             "/v1/notifications/7",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
@@ -644,6 +646,7 @@ mod tests {
             "/v1/customersx",
             "/v1/dealsx",
             "/v1/transactionsx/1",
+            "/v1/quotesx",
         ] {
             assert!(!device_route(&Method::GET, path), "{path}");
         }

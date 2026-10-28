@@ -122,6 +122,9 @@ pub struct AppShell {
     /// May send documents for signature: the user's own flag, or any user of
     /// a subscription company whose plan has the Signatures add-on.
     pub user_signature_access: bool,
+    /// AI promises is on for the user (`users.ai_promises`): the promise list
+    /// and the promised messages in the composers.
+    pub user_ai_promises: bool,
     /// The acting company's switches, with the plan's add-ons applied.
     pub company_features: ShellFeatures,
     /// The acting company's plan.
@@ -266,6 +269,16 @@ pub async fn shell(
             "false" | "0" | "no" | "off"
         )
     });
+    // Best effort: off where the column is missing (before its migration),
+    // so the frame never fails on it.
+    let user_ai_promises =
+        sqlx::query_scalar::<_, bool>("SELECT ai_promises FROM users WHERE id = ?")
+            .bind(user.id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false);
     Ok(Json(AppShell {
         user_is_super_admin,
         superadmin_companies,
@@ -291,6 +304,7 @@ pub async fn shell(
         is_template_maker: here(TEMPLATE_MAKER),
         user_signature_access: user.is_signature_available
             || (user.plan.subscription && user.plan.has(AddonKey::Signatures)),
+        user_ai_promises,
         company_features: ShellFeatures {
             quickbooks: features.quickbooks_enabled,
             signature: features.e_signature,

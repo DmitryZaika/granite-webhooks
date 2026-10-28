@@ -74,12 +74,9 @@ impl IssueWriter for PostHogWriter<'_> {
             return Err("write-back is not configured".into());
         };
         let (url, body) = assign_request(self.config, issue_id, assignee);
-        let response = self
-            .http
-            .patch(url)
-            .bearer_auth(key)
-            .json(&body)
-            .send()
+        // Assigning the same reviewer again changes nothing: safe to resend.
+        let request = self.http.patch(url).bearer_auth(key).json(&body);
+        let response = common::http::send_retrying(request)
             .await
             .map_err(|error| format!("PostHog unreachable: {}", error.without_url()))?;
         let status = response.status();

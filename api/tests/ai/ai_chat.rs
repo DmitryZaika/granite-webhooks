@@ -292,6 +292,8 @@ async fn the_assistant_looks_up_a_customer_and_drafts_an_email(pool: MySqlPool) 
     let (server, ai) = setup(
         &pool,
         vec![
+            // The model finds it asks about the records, not the app.
+            Reply::Text(json!({ "records": true }).to_string()),
             Reply::Tools(vec![("lookup_customer".into(), json!({ "query": "Alice" }))]),
             Reply::Tools(vec![
                 ("get_customer_deals".into(), json!({ "customer_id": 1000 })),
@@ -318,7 +320,9 @@ async fn the_assistant_looks_up_a_customer_and_drafts_an_email(pool: MySqlPool) 
     );
 
     let requests = ai.requests.lock().unwrap().clone();
-    let first = &requests[0];
+    let pick = requests[0]["messages"][0]["content"].as_str().unwrap();
+    assert!(pick.starts_with("You find where the Granite Manager user manual answers"));
+    let first = &requests[1];
     assert_eq!(first["reasoning_effort"], "none");
     let system = first["messages"][0]["content"].as_str().unwrap();
     assert!(system.starts_with("You are the AI assistant inside Granite Manager"));
@@ -344,11 +348,11 @@ async fn the_assistant_looks_up_a_customer_and_drafts_an_email(pool: MySqlPool) 
     );
     // The skills' results went back to the model.
     let lookup: Value =
-        serde_json::from_str(requests[1]["messages"][3]["content"].as_str().unwrap()).unwrap();
+        serde_json::from_str(requests[2]["messages"][3]["content"].as_str().unwrap()).unwrap();
     assert_eq!(lookup["selected"]["name"], "Alice Lead");
     assert_eq!(lookup["selected"]["assigned_to_you"], true);
     let deals: Value =
-        serde_json::from_str(requests[2]["messages"][5]["content"].as_str().unwrap()).unwrap();
+        serde_json::from_str(requests[3]["messages"][5]["content"].as_str().unwrap()).unwrap();
     assert_eq!(deals["customer_id"], 1000);
     assert!(
         deals["deals"]
@@ -667,8 +671,8 @@ async fn the_model_picks_the_manual_s_sections_for_the_answer(pool: MySqlPool) {
     assert!(!manual.contains("## Employee portal (`/employee`) — feature map"));
     // Short steps, with room to write them: reasoning took the 1024 tokens.
     let answering = &requests[1];
-    assert_eq!(answering["reasoning_effort"], "low");
-    assert_eq!(answering["max_completion_tokens"], 2000);
+    assert_eq!(answering["reasoning_effort"], "medium");
+    assert_eq!(answering["max_completion_tokens"], 4000);
     assert!(contents(answering).last().unwrap().starts_with(
         "Answer how to do this in Granite Manager from the CRM user manual: short numbered steps"
     ));
@@ -854,6 +858,22 @@ async fn a_how_to_about_records_is_answered_from_the_manual(pool: MySqlPool) {
         contents(&requests[1])
             .iter()
             .any(|c| c.contains("### Deleting a deal"))
+    );
+    // Kept for good, as asked, in chat_log.
+    let logged: (i32, Option<i32>, String, String, bool) =
+        sqlx::query_as("SELECT user_id, company_id, question, answer, from_manual FROM chat_log")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        logged,
+        (
+            100,
+            Some(100),
+            "can i delete a deal?".into(),
+            reply.into(),
+            true
+        )
     );
 }
 

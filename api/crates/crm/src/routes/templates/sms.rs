@@ -336,8 +336,7 @@ async fn drip_taken(
         .any(|other| super::reps::overlap(&drip.reps, &super::reps::ids_of(other.as_deref())))
     {
         return Err(ApiError::BadRequest(
-            "Another SMS template already uses this list and delay for the same sales reps."
-                .into(),
+            "Another SMS template already uses this list and delay for the same sales reps.".into(),
         ));
     }
     Ok(())
@@ -605,8 +604,7 @@ pub async fn update(
     if company && (drip.list.is_none() || drip.hours.is_none()) {
         cancel_scheduled(pool, id, "Template deleted").await?;
     } else if company {
-        super::reps::cancel_for_other_reps(pool, super::reps::Queue::Sms, id, &drip.reps)
-            .await?;
+        super::reps::cancel_for_other_reps(pool, super::reps::Queue::Sms, id, &drip.reps).await?;
     }
     let after = automation_notice::sms_template(pool, user.company_id, id).await;
     automation_notice::notify(&state, &user, &before, &after).await;

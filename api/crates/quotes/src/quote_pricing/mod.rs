@@ -25,8 +25,9 @@ pub mod price_list;
 pub mod pricing;
 pub mod takeoff;
 
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::routes::events::history::{History, record};
+use crate::routes::schedule::board::sole_template_maker;
 use doc::QuoteDoc;
 use price_list::{Stock, StockSink, StockStone};
 use pricing::{PriceOptions, price_quote};
@@ -634,14 +635,27 @@ async fn create_won_deal(
     Ok(Some(deal_id))
 }
 
+/// Which deal a sale marks won.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SaleDeal {
+    /// The quote's own deal, else the customer's open or won deal.
+    Auto,
+    /// This deal of the quote's customer, picked by the user.
+    Existing(i64),
+    /// A new won deal, even when the customer has others.
+    New,
+}
+
 /// `markQuoteSold`: the quote is sold with option `option_index` (none: not
-/// known yet, the deal is still won) and its deal is won with that total.
+/// known yet, the deal is still won) and the deal `sale_deal` names is won
+/// with that total.
 pub async fn mark_quote_sold(
     pool: &MySqlPool,
     quote_id: i32,
     company_id: i32,
     option_index: Option<i32>,
     user_id: Option<i32>,
+    sale_deal: SaleDeal,
 ) -> ApiResult<Option<QuoteSale>> {
     let Some(quote) = load_company_quote(pool, quote_id, company_id).await? else {
         return Ok(None);
@@ -650,19 +664,40 @@ pub async fn mark_quote_sold(
         Some(i) => option_total(pool, &quote, i).await?,
         None => None,
     };
-    // The quote's own deal, else the customer's open or won deal.
-    let deal: Option<(i64, Option<i64>)> = sqlx::query_as(
-        "SELECT CAST(d.id AS SIGNED), CAST(d.is_won AS SIGNED) FROM deals d
-          WHERE d.deleted_at IS NULL
-            AND (d.id = ? OR (d.customer_id = ? AND (d.is_won IS NULL OR d.is_won = 1)))
-          ORDER BY d.id = ? DESC, d.updated_at DESC, d.id DESC
-          LIMIT 1",
-    )
-    .bind(quote.deal_id.unwrap_or(0))
-    .bind(quote.customer_id)
-    .bind(quote.deal_id.unwrap_or(0))
-    .fetch_optional(pool)
-    .await?;
+    let deal: Option<(i64, Option<i64>)> = match sale_deal {
+        SaleDeal::Auto => {
+            sqlx::query_as(
+                "SELECT CAST(d.id AS SIGNED), CAST(d.is_won AS SIGNED) FROM deals d
+                  WHERE d.deleted_at IS NULL
+                    AND (d.id = ? OR (d.customer_id = ? AND (d.is_won IS NULL OR d.is_won = 1)))
+                  ORDER BY d.id = ? DESC, d.updated_at DESC, d.id DESC
+                  LIMIT 1",
+            )
+            .bind(quote.deal_id.unwrap_or(0))
+            .bind(quote.customer_id)
+            .bind(quote.deal_id.unwrap_or(0))
+            .fetch_optional(pool)
+            .await?
+        }
+        SaleDeal::Existing(id) => {
+            let found = sqlx::query_as(
+                "SELECT CAST(d.id AS SIGNED), CAST(d.is_won AS SIGNED) FROM deals d
+                  WHERE d.id = ? AND d.customer_id = ? AND d.deleted_at IS NULL",
+            )
+            .bind(id)
+            .bind(quote.customer_id)
+            .fetch_optional(pool)
+            .await?;
+            if found.is_none() {
+                return Err(ApiError::BadRequest(
+                    "That deal was deleted or belongs to another customer. Pick another deal."
+                        .into(),
+                ));
+            }
+            found
+        }
+        SaleDeal::New => None,
+    };
     let deal_id = match deal {
         Some((id, Some(1))) => {
             // Already won (e.g. on the deals board): only the amount changes.
@@ -761,14 +796,16 @@ async fn add_waiting_jobs(
         .take(255)
         .collect();
     for calendar_id in calendars {
+        let assignee = sole_template_maker(pool, calendar_id).await?;
         let id = sqlx::query(
             "INSERT INTO events (title, location, start_date, end_date, all_day, unscheduled,
-                color, status, created_user_id, customer_id, calendar_id, quote_id)
-             VALUES (?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', 'not_ready', ?, ?, ?, ?)",
+                color, status, created_user_id, assigned_user_id, customer_id, calendar_id, quote_id)
+             VALUES (?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', 'not_ready', ?, ?, ?, ?, ?)",
         )
         .bind(&title)
         .bind(address.as_deref())
         .bind(creator)
+        .bind(assignee)
         .bind(quote.customer_id)
         .bind(calendar_id)
         .bind(quote.id)
@@ -865,7 +902,15 @@ pub async fn sell_quote_for_signed_contract(
         .color_options
         .len();
     let option_index = quote.2.or_else(|| (options == 1).then_some(0));
-    mark_quote_sold(pool, quote.0, company_id, option_index, None).await?;
+    mark_quote_sold(
+        pool,
+        quote.0,
+        company_id,
+        option_index,
+        None,
+        SaleDeal::Auto,
+    )
+    .await?;
     Ok(())
 }
 

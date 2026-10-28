@@ -26,6 +26,8 @@
 //!   tolling, completion, the fee notice and the fee invoice
 //! - `POST /v1/jobs/tendlc-checks` → the AI check of a 10DLC texting
 //!   registration marked ready
+//! - `POST /v1/jobs/promises` → what reps promised customers on calls, texts
+//!   and emails, with the message that keeps each
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
@@ -38,6 +40,7 @@ pub mod maintenance_reminders;
 pub mod onboarding_commitments;
 pub mod phone;
 pub mod posthog_autofix;
+pub mod promises;
 pub mod signature_reminders;
 pub mod sms_followups;
 pub mod subscription_maintenance;
@@ -65,4 +68,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(billing_reminders::run))
         .routes(routes!(subscription_maintenance::run))
         .routes(routes!(onboarding_commitments::run))
+        .routes(routes!(promises::run))
 }

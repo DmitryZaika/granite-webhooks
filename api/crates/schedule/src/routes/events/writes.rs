@@ -7,7 +7,7 @@ use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
-use crate::routes::schedule::notifications;
+use crate::routes::schedule::{board, notifications};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -449,6 +449,10 @@ pub async fn create(
     let event = check(&input)?;
     check_calendar(pool, user.company_id, event.calendar_id).await?;
     let customer = check_customer(pool, user.company_id, &input).await?;
+    let assignee = match input.assigned_user_id.filter(|id| *id > 0) {
+        Some(id) => Some(id),
+        None => board::sole_template_maker(pool, event.calendar_id).await?,
+    };
     let id = sqlx::query(
         "INSERT INTO events (title, description, location, start_date, end_date, all_day,
             unscheduled, color, status, notes, created_user_id, assigned_user_id, sale_id,
@@ -466,7 +470,7 @@ pub async fn create(
     .bind(event.status)
     .bind(event.notes)
     .bind(user.id)
-    .bind(input.assigned_user_id.filter(|id| *id > 0))
+    .bind(assignee)
     .bind(input.sale_id.filter(|id| *id > 0))
     .bind(customer.flatten())
     .bind(event.calendar_id)

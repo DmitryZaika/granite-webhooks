@@ -437,6 +437,27 @@ pub async fn people(
     Ok(Json(people))
 }
 
+/// The template maker a new event on a templates calendar goes to when no
+/// one is picked: the company's only template maker, else none.
+pub async fn sole_template_maker(
+    pool: &sqlx::MySqlPool,
+    calendar_id: i32,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT MIN(u.id)
+           FROM calendars cal
+           JOIN users_positions up ON up.company_id = cal.company_id AND up.position_id = ?
+           JOIN users u ON u.id = up.user_id AND u.is_deleted = 0
+          WHERE cal.id = ? AND cal.slug = 'templates'
+         HAVING COUNT(DISTINCT u.id) = 1",
+    )
+    .bind(TEMPLATE)
+    .bind(calendar_id)
+    .fetch_optional(pool)
+    .await
+    .map(Option::flatten)
+}
+
 /// Body of `PUT /v1/schedule/people/{user_id}/color`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct PersonColor {

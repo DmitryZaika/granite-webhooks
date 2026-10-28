@@ -10,6 +10,8 @@
 //! - `GET /v1/events/search` → find events
 //! - `GET /v1/events/{id}/details` → comments, files, attachments, history
 //! - `/v1/events/{id}/comments`, `/photos`, `/attachments` → add and remove
+//! - `GET /v1/events/{id}/sale` → the sale its project view shows
+//! - `/v1/events/{id}/project-notes` → notes on the event's sold project
 //!
 //! Replaces the Remix `api.events`, `api.events.search`,
 //! `api.event-details`, `api.event-attachments` and `api.event-images` routes.
@@ -18,6 +20,7 @@ pub mod details;
 pub mod estimate;
 pub mod history;
 pub mod notify;
+pub mod project_notes;
 pub mod reminders;
 pub mod writes;
 
@@ -39,4 +42,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(details::delete_photo))
         .routes(routes!(details::add_attachments))
         .routes(routes!(details::delete_attachment))
+        .routes(routes!(project_notes::list, project_notes::add))
+        .routes(routes!(project_notes::sale))
+        .routes(routes!(project_notes::delete))
 }

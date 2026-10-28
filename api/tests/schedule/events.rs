@@ -122,6 +122,57 @@ async fn events_are_added_edited_and_deleted(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_new_template_goes_to_the_only_template_maker(pool: MySqlPool) {
+    sqlx::raw_sql(SETUP).execute(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO calendars (id, company_id, name, color, slug) VALUES
+           (8803, 100, 'Templates', 'green', 'templates');
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+           (104, 11, 100), (105, 11, 100);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    let assignee = |body: Value| {
+        let request = server
+            .post("/v1/events")
+            .with_session(sessions::REP)
+            .json(&body);
+        let pool = pool.clone();
+        async move {
+            let res = request.await;
+            res.assert_status(StatusCode::CREATED);
+            let id = res.json::<Value>()["id"].as_i64().unwrap();
+            sqlx::query_scalar::<_, Option<i32>>("SELECT assigned_user_id FROM events WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let template = body(8803, "2026-11-02 15:00:00", "2026-11-02 16:00:00");
+    // 105 is deleted, so 104 is the only one.
+    assert_eq!(assignee(template.clone()).await, Some(104));
+    // A pick wins; other calendars get no one.
+    let mut picked = template.clone();
+    picked["assigned_user_id"] = json!(101);
+    assert_eq!(assignee(picked).await, Some(101));
+    assert_eq!(
+        assignee(body(8800, "2026-11-02 15:00:00", "2026-11-02 16:00:00")).await,
+        None
+    );
+    // Two template makers: no one is guessed.
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 11, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(assignee(template).await, None);
+}
+
+#[test_db::test(seed)]
 async fn events_link_a_customer_apart_from_their_title(pool: MySqlPool) {
     sqlx::raw_sql(SETUP).execute(&pool).await.unwrap();
     let server = server(pool.clone());

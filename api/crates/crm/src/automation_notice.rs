@@ -672,16 +672,22 @@ async fn load_sms_template(
     id: i32,
 ) -> Result<Option<Template>, sqlx::Error> {
     #[allow(clippy::type_complexity)]
-    let row: Option<(String, String, Option<i32>, Option<i32>, i32, Option<String>)> =
-        sqlx::query_as(
-            "SELECT name, body, lead_list_id, hour_delay, minute_delay, CAST(sales_rep_ids AS CHAR)
+    let row: Option<(
+        String,
+        String,
+        Option<i32>,
+        Option<i32>,
+        i32,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT name, body, lead_list_id, hour_delay, minute_delay, CAST(sales_rep_ids AS CHAR)
                FROM cloudtalk_sms_templates
               WHERE id = ? AND company_id = ? AND user_id IS NULL AND deleted_at IS NULL",
-        )
-        .bind(id)
-        .bind(company_id)
-        .fetch_optional(pool)
-        .await?;
+    )
+    .bind(id)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
     let Some((name, body, list, hours, minutes, reps)) = row else {
         return Ok(None);
     };
@@ -1026,9 +1032,11 @@ mod tests {
         let before = Some(sms(contacted(2), "Hi"));
         let after = Some(sms(limited, "Hi"));
         let notice = notice(before.clone(), after.clone()).unwrap();
-        assert!(notice.html.contains(
-            "Now for deals of <b>Masha, Dasha</b> (was every sales rep)."
-        ));
+        assert!(
+            notice
+                .html
+                .contains("Now for deals of <b>Masha, Dasha</b> (was every sales rep).")
+        );
         assert!(notice.html.contains(", for deals of <b>Masha, Dasha</b>"));
         assert!(matches!(
             reach(&Snapshot::Template(after)),

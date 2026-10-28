@@ -370,9 +370,18 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "e911_alert" => "Emergency Call",
         TENDLC_READY | TENDLC_STATUS => "Texting Registration",
         PHONE_PORT => "Number Port",
+        PROMISE_DUE => "Promise Reminder",
+        PROMISE_DIGEST => "Morning List",
         _ => return None,
     })
 }
+
+/// AI promises' notifications (`crate::promises`): a promise came due, and
+/// the morning list. They may name a customer but no deal, and open the rep's
+/// promise list.
+const PROMISE_DUE: &str = "ai_promise_due";
+const PROMISE_DIGEST: &str = "ai_promise_digest";
+const PROMISES_HREF: &str = "/employee/promises";
 
 /// `notifications.notification_type` of a 911 alert (`phone::alerts`): it
 /// names no deal or customer.
@@ -520,11 +529,11 @@ async fn activity(
            LEFT JOIN deals d ON d.id = n.deal_id AND d.deleted_at IS NULL
            LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, n.customer_id)
           WHERE n.user_id = ? AND n.is_done = 0 AND (? IS NULL OR n.id = ?)
-            -- On a live deal, except 911 alerts, the texting registration's
-            -- and number ports' (they name no deal).
+            -- On a live deal, except 911 alerts, the texting registration's,
+            -- number ports' and AI promises' (they name no deal).
             AND ((d.id IS NOT NULL AND c.id IS NOT NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
-                                            'phone_port'))
+                                            'phone_port', 'ai_promise_due', 'ai_promise_digest'))
             -- Signature status is emailed to the sender, so it is not listed here.
             AND (n.notification_type IS NULL OR n.notification_type NOT IN
                  ('signature_viewed', 'signature_signed', 'signature_declined'))
@@ -551,9 +560,11 @@ async fn activity(
             let alert = kind == Some(E911_ALERT);
             let texting = matches!(kind, Some(TENDLC_READY | TENDLC_STATUS));
             let port = kind == Some(PHONE_PORT);
+            let promise = matches!(kind, Some(PROMISE_DUE | PROMISE_DIGEST));
             let customer = row.customer_name.unwrap_or_default();
             let href = match (row.deal_id, row.customer_id) {
                 _ if alert => E911_ALERT_HREF.to_string(),
+                _ if promise => PROMISES_HREF.to_string(),
                 _ if kind == Some(TENDLC_READY) => TENDLC_READY_HREF.to_string(),
                 _ if texting || port => E911_ALERT_HREF.to_string(),
                 (Some(deal), _) => format!("/employee/deals/edit/{deal}/project"),
@@ -568,6 +579,10 @@ async fn activity(
                     "Texting registration".to_string()
                 } else if port {
                     "Number port".to_string()
+                } else if kind == Some(PROMISE_DIGEST) {
+                    "Morning list".to_string()
+                } else if promise && customer.is_empty() {
+                    "Promise".to_string()
                 } else {
                     customer.clone()
                 },
