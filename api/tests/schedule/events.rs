@@ -240,6 +240,73 @@ async fn events_link_a_customer_apart_from_their_title(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn events_keep_their_own_phone_and_email(pool: MySqlPool) {
+    sqlx::raw_sql(SETUP).execute(&pool).await.unwrap();
+    let server = server(pool.clone());
+    let mut event = body(8801, "2026-11-02 15:00:00", "2026-11-02 16:00:00");
+    event["customer_id"] = json!(1000);
+    event["contact_phone"] = json!(" (317) 555-0199 ");
+    event["contact_email"] = json!("wife@example.com");
+    let id = server
+        .post("/v1/events")
+        .with_session(sessions::REP)
+        .json(&event)
+        .await
+        .json::<Value>()["id"]
+        .as_i64()
+        .unwrap();
+    let contact = || async {
+        let row: (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT contact_phone, contact_email FROM events WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        row
+    };
+    assert_eq!(
+        contact().await,
+        (
+            Some("(317) 555-0199".into()),
+            Some("wife@example.com".into())
+        )
+    );
+    let listed = server
+        .get("/v1/schedule/events?start=2026-11-01T00:00:00Z&end=2026-11-30T00:00:00Z")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    assert_eq!(listed["events"][0]["contact_phone"], "(317) 555-0199");
+    assert_eq!(listed["events"][0]["contact_email"], "wife@example.com");
+    let customer_phone: Option<String> =
+        sqlx::query_scalar("SELECT phone FROM customers WHERE id = 1000")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_ne!(customer_phone.as_deref(), Some("(317) 555-0199"));
+
+    // Left out, they stay; empty goes back to the customer's.
+    let save = |body: Value| {
+        let request = server
+            .put(&format!("/v1/events/{id}"))
+            .with_session(sessions::REP)
+            .json(&body);
+        async move {
+            request.await.assert_status(StatusCode::NO_CONTENT);
+        }
+    };
+    let object = event.as_object_mut().unwrap();
+    object.remove("contact_phone");
+    object.remove("contact_email");
+    save(event.clone()).await;
+    assert_eq!(contact().await.1.as_deref(), Some("wife@example.com"));
+    event["contact_phone"] = json!("");
+    event["contact_email"] = Value::Null;
+    save(event).await;
+    assert_eq!(contact().await, (None, None));
+}
+
+#[test_db::test(seed)]
 async fn a_copy_takes_comments_files_and_chosen_attachments(pool: MySqlPool) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "{SETUP}
