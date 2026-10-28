@@ -136,7 +136,7 @@ async fn check_schedule(
         if let Some(customer_id) = promise.customer_id {
             promise.scheduled = sqlx::query_as(
                 "SELECT COALESCE(title, '') AS title, start_date AS start FROM events
-                  WHERE customer_id = ? AND deleted_date IS NULL
+                  WHERE customer_id = ? AND deleted_date IS NULL AND COALESCE(unscheduled, 0) = 0
                     AND start_date BETWEEN ? - INTERVAL 12 HOUR AND ? + INTERVAL 12 HOUR
                   ORDER BY ABS(TIMESTAMPDIFF(MINUTE, start_date, ?)) LIMIT 1",
             )
@@ -159,7 +159,7 @@ async fn check_schedule(
         if promise.clash.is_none() {
             promise.clash = sqlx::query_as(
                 "SELECT COALESCE(title, '') AS title, start_date AS start FROM events
-                  WHERE assigned_user_id = ? AND deleted_date IS NULL
+                  WHERE assigned_user_id = ? AND deleted_date IS NULL AND COALESCE(unscheduled, 0) = 0
                     AND start_date < ? + INTERVAL 1 HOUR
                     AND COALESCE(end_date, start_date + INTERVAL 1 HOUR) > ?
                     AND (customer_id IS NULL OR customer_id <> COALESCE(?, 0))

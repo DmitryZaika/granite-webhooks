@@ -50,8 +50,10 @@ pub const FEATURE: &str = "ai_promises";
 pub const LOOKBACK_DAYS: i64 = 3;
 /// Shorter calls are attempts and voicemail greetings.
 pub const MIN_CALL_SECONDS: i64 = 30;
-/// Calls and messages read per run, all at once.
+/// Calls and messages read per run, all at once (each of another customer).
 pub const SCANS_PER_RUN: i64 = 4;
+/// Waiting scans looked at to find those of different customers.
+const CANDIDATES_PER_RUN: i64 = 50;
 /// A claimed scan is another run's after this long.
 pub const CLAIM_TTL_MINUTES: i64 = 15;
 pub const MAX_ATTEMPTS: i64 = 3;
@@ -75,7 +77,7 @@ const DUE: &str = "status = 'pending' AND attempts < ?
 
 pub const PROMISES_SYSTEM_PROMPT: &str = r#"You read what a countertop sales rep said to a customer: a phone call transcript, a text the rep sent (with the texts before it), or an email the rep sent (with the messages it quotes). Answer three things.
 1. "promises": every promise the rep made to the customer: something the rep said THEY would do later ("I'll text you our inventory link", "I'll send you the price tonight", "I'll call you back Tuesday", "Let me check if that slab is in stock", "I'll come measure Friday at 10").
-Only the rep's own promises to this customer. Not what the customer will do, not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages.
+Only the rep's own promises to this customer. Not what the customer will do, not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages under AFTER THE CALL THE REP SENT are context only: a promise from the call that they already keep is not listed.
 2. "kept": the numbers (#) of OPEN PROMISES this call or message keeps: the rep did it here (sent the link or the price, called back, answered, came by). Only ones clearly done.
 3. "quote_changes": changes the CUSTOMER asked for in their countertop quote, anywhere in what you read: a different sink, color or stone, edge, backsplash, sizes, adding or removing a piece or a cutout. Not questions about the price, and nothing already in OPEN QUOTE CHANGES.
 In a transcript the speakers are labeled A, B...; the rep is the one from the countertop company.
@@ -250,6 +252,29 @@ pub fn parse_reading(raw: &str, open: &[OpenItem]) -> Reading {
     }
 }
 
+/// Drops what is already open, and what is listed twice (titles compared
+/// without case).
+pub fn without_repeats(reading: &mut Reading, open: &[OpenItem]) {
+    let mut seen: Vec<String> = open
+        .iter()
+        .map(|item| format!("{}:{}", item.kind, item.title.to_lowercase()))
+        .collect();
+    let mut first = |key: String| {
+        if seen.contains(&key) {
+            false
+        } else {
+            seen.push(key);
+            true
+        }
+    };
+    reading
+        .promises
+        .retain(|promise| first(format!("promise:{}", promise.title.to_lowercase())));
+    reading
+        .quote_changes
+        .retain(|change| first(format!("quote:{}", change.change.to_lowercase())));
+}
+
 fn parse_promises(items: &[Value]) -> Vec<Found> {
     items
         .iter()
@@ -406,6 +431,19 @@ struct Scan {
     transcript: Option<String>,
 }
 
+impl Scan {
+    /// Whose call or message it is, as `<user>:<phone, else email, else its
+    /// own key>` (the `busy` query in [`run_job`] builds the same).
+    fn customer_key(&self) -> String {
+        let customer = self
+            .customer_digits
+            .as_deref()
+            .or(self.customer_email.as_deref())
+            .unwrap_or(&self.source_key);
+        format!("{}:{customer}", self.user_id)
+    }
+}
+
 /// How one scan went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
@@ -450,7 +488,7 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
     .bind(CLAIM_TTL_MINUTES)
     .execute(pool)
     .await?;
-    let due: Vec<Scan> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    let waiting: Vec<Scan> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT id, company_id, user_id, CAST(source AS CHAR) AS source, source_key, happened_at,
                 customer_digits, customer_email, recording_link, transcript
            FROM ai_promise_scans
@@ -460,9 +498,27 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
     )))
     .bind(MAX_ATTEMPTS)
     .bind(CLAIM_TTL_MINUTES)
-    .bind(SCANS_PER_RUN)
+    .bind(CANDIDATES_PER_RUN)
     .fetch_all(pool)
     .await?;
+    // One customer's calls and messages are read one at a time, oldest
+    // first, so each sees the promises the one before it saved or kept: a
+    // customer with a scan held by a run (or waiting out a failed attempt)
+    // waits too.
+    let busy: Vec<String> = sqlx::query_scalar(
+        "SELECT CONCAT(user_id, ':', COALESCE(customer_digits, customer_email, source_key))
+           FROM ai_promise_scans
+          WHERE status = 'pending' AND claimed_at >= UTC_TIMESTAMP() - INTERVAL ? MINUTE",
+    )
+    .bind(CLAIM_TTL_MINUTES)
+    .fetch_all(pool)
+    .await?;
+    let mut taken: std::collections::HashSet<String> = busy.into_iter().collect();
+    let due: Vec<Scan> = waiting
+        .into_iter()
+        .filter(|scan| taken.insert(scan.customer_key()))
+        .take(usize::try_from(SCANS_PER_RUN).unwrap_or(4))
+        .collect();
     let tasks: Vec<_> = due
         .into_iter()
         .map(|scan| {
@@ -470,6 +526,9 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
             tokio::spawn(async move { scan_one(&state, &scan).await })
         })
         .collect();
+    // Every scan finishes before the run answers (the Lambda freezes after),
+    // even when one failed.
+    let mut failed = None;
     for task in tasks {
         match task.await {
             Ok(Ok(Outcome::Read(saved))) => {
@@ -477,11 +536,13 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
                 run.promises += saved;
             }
             Ok(Ok(Outcome::Later)) => {}
-            Ok(Err(err)) => return Err(err),
+            Ok(Err(err)) => {
+                failed.get_or_insert(err);
+            }
             Err(err) => tracing::error!(error = %err, "promise scan task panicked"),
         }
     }
-    Ok(run)
+    failed.map_or(Ok(run), Err)
 }
 
 /// A due promise to remind the rep of.
@@ -489,8 +550,8 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
 struct DuePromise {
     id: u64,
     user_id: i32,
-    customer_id: Option<i32>,
     customer_name: Option<String>,
+    customer_digits: Option<String>,
     title: String,
     said: String,
     /// The rep gets activity reminders on Telegram.
@@ -501,10 +562,13 @@ struct DuePromise {
 /// (`ai_promise_due`) pushed to the rep's phones, else sent to their Telegram
 /// when they get activity reminders there (as deal activity reminders are).
 /// One more than a day past due when first seen (the job was off) is not.
+/// The notification names the customer in its text, not by `customer_id`: an
+/// open notification on a customer holds back the CRM's own reminders for
+/// them ("Please text …").
 pub async fn remind_due(state: &AppState) -> sqlx::Result<usize> {
     let pool = &state.pool;
     let due: Vec<DuePromise> = sqlx::query_as(
-        "SELECT p.id, p.user_id, p.customer_id, c.name AS customer_name, p.title, p.said,
+        "SELECT p.id, p.user_id, c.name AS customer_name, p.customer_digits, p.title, p.said,
                 COALESCE(u.telegram_activity_notifications, 0) <> 0 AS telegram
            FROM ai_promises p
            JOIN users u ON u.id = p.user_id AND u.ai_promises = 1 AND u.is_deleted = 0
@@ -527,23 +591,18 @@ pub async fn remind_due(state: &AppState) -> sqlx::Result<usize> {
         if claimed == 0 {
             continue;
         }
-        let message = clip(&format!("Promise due: {}", promise.title), 255);
+        let customer = who(
+            promise.customer_name.as_deref(),
+            promise.customer_digits.as_deref(),
+        );
+        let message = clip(&format!("Promise due: {} — {customer}", promise.title), 255);
         let mut text = format!("⏰ {message}");
-        if let Some(name) = promise
-            .customer_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-        {
-            text.push_str(&format!("\n{name}"));
-        }
         if !promise.said.is_empty() {
             text.push_str(&format!("\nYou said: \"{}\"", promise.said));
         }
         notify(
             state,
             promise.user_id,
-            promise.customer_id,
             "ai_promise_due",
             &message,
             &text,
@@ -560,18 +619,16 @@ pub async fn remind_due(state: &AppState) -> sqlx::Result<usize> {
 async fn notify(
     state: &AppState,
     user_id: i32,
-    customer_id: Option<i32>,
     kind: &str,
     message: &str,
     text: &str,
     telegram: bool,
 ) -> sqlx::Result<()> {
     let id = sqlx::query(
-        "INSERT INTO notifications (user_id, customer_id, message, notification_type, due_at, is_done, created_at)
-         VALUES (?, ?, ?, ?, NOW(), 0, NOW())",
+        "INSERT INTO notifications (user_id, message, notification_type, due_at, is_done, created_at)
+         VALUES (?, ?, ?, NOW(), 0, NOW())",
     )
     .bind(user_id)
-    .bind(customer_id)
     .bind(message)
     .bind(kind)
     .execute(&state.pool)
@@ -669,7 +726,6 @@ pub async fn send_digests(state: &AppState) -> sqlx::Result<usize> {
         notify(
             state,
             user_id,
-            None,
             "ai_promise_digest",
             &summary,
             &text,
@@ -834,9 +890,11 @@ pub fn is_closing(text: &str) -> bool {
 }
 
 /// The customers whose last text (in the last 3 days, over 30 minutes ago)
-/// waits for the rep's reply: threads the rep has texted in the last 60 days,
-/// oldest wait first, at most 10. A closing text ([`is_closing`]) waits for
-/// nothing.
+/// waits for the rep's reply, oldest wait first, at most 10: threads the rep
+/// has texted in the last 60 days whose last row (echoes aside, whichever
+/// rep's) is the customer's, sent to the rep or untagged — tagged with an
+/// agent id the rep's own texts carry, as their "Mine" texts show it. A
+/// closing text ([`is_closing`]) waits for nothing.
 pub async fn waiting_customers(
     pool: &MySqlPool,
     company_id: i32,
@@ -844,25 +902,42 @@ pub async fn waiting_customers(
 ) -> sqlx::Result<Vec<Waiting>> {
     let mut waiting = Vec::new();
     for table in SMS_TABLES {
-        let rows: Vec<(String, Option<String>, NaiveDateTime)> =
-            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        // Granite Phone texts carry no agent: a thread is its line's.
+        let to_rep = if table == "telnyx_sms" {
+            String::new()
+        } else {
+            format!(
+                "AND (COALESCE(m.agent, '') = ''
+                      OR m.agent IN (SELECT a.agent FROM {table} a
+                                      WHERE a.company_id = m.company_id AND a.sender_user_id = ?
+                                        AND a.agent IS NOT NULL
+                                        AND a.created_date > UTC_TIMESTAMP() - INTERVAL 60 DAY))"
+            )
+        };
+        let mut query = sqlx::query_as::<_, (String, Option<String>, NaiveDateTime)>(
+            sqlx::AssertSqlSafe(format!(
                 "SELECT COALESCE(RIGHT(m.phone_digits, 10), ''), m.text, CAST(m.created_date AS DATETIME)
                    FROM {table} m
                    JOIN (SELECT phone_digits, MAX(id) AS last_id FROM {table}
-                          WHERE company_id = ? AND created_date > UTC_TIMESTAMP() - INTERVAL 3 DAY
+                          WHERE company_id = ? AND COALESCE(is_echo, 0) = 0
+                            AND created_date > UTC_TIMESTAMP() - INTERVAL 3 DAY
                           GROUP BY phone_digits) last ON last.last_id = m.id
                   WHERE m.direction = 'inbound'
                     AND m.created_date < UTC_TIMESTAMP() - INTERVAL 30 MINUTE
+                    {to_rep}
                     AND EXISTS (SELECT 1 FROM {table} r
                                  WHERE r.company_id = m.company_id AND r.phone_digits = m.phone_digits
                                    AND r.sender_user_id = ? AND r.direction = 'outbound'
+                                   AND COALESCE(r.is_echo, 0) = 0
                                    AND r.created_date > UTC_TIMESTAMP() - INTERVAL 60 DAY)
-                  ORDER BY m.created_date LIMIT 10"
-            )))
-            .bind(company_id)
-            .bind(user_id)
-            .fetch_all(pool)
-            .await?;
+                  ORDER BY m.created_date LIMIT 40"
+            )),
+        )
+        .bind(company_id);
+        if !to_rep.is_empty() {
+            query = query.bind(user_id);
+        }
+        let rows = query.bind(user_id).fetch_all(pool).await?;
         for (digits, text, at) in rows {
             let text = text.unwrap_or_default();
             if digits.len() != 10
@@ -871,18 +946,7 @@ pub async fn waiting_customers(
             {
                 continue;
             }
-            let customer: Option<(i32, Option<String>)> = sqlx::query_as(
-                "SELECT id, name FROM customers
-                  WHERE company_id = ? AND deleted_at IS NULL
-                    AND (RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', ''), 10) = ?
-                      OR RIGHT(REGEXP_REPLACE(COALESCE(phone_2, ''), '[^0-9]', ''), 10) = ?)
-                  ORDER BY id DESC LIMIT 1",
-            )
-            .bind(company_id)
-            .bind(&digits)
-            .bind(&digits)
-            .fetch_optional(pool)
-            .await?;
+            let customer = customer_by_digits(pool, company_id, &digits).await?;
             waiting.push(Waiting {
                 phone_digits: digits,
                 customer_id: customer.as_ref().map(|(id, _)| *id),
@@ -897,15 +961,31 @@ pub async fn waiting_customers(
     Ok(waiting)
 }
 
-/// Step 1: the reps' calls, texts and emails not queued yet.
+/// A call or message to queue.
+#[derive(Debug, sqlx::FromRow)]
+struct Candidate {
+    company_id: i32,
+    user_id: i32,
+    source: String,
+    source_key: String,
+    happened_at: NaiveDateTime,
+    customer_digits: Option<String>,
+    customer_email: Option<String>,
+    recording_link: Option<String>,
+}
+
+/// Step 1: the reps' calls, texts and emails not queued yet. Plain reads
+/// first, then one insert: an `INSERT … SELECT` would hold shared locks on
+/// the calls and messages it reads, against their webhooks' writes.
 async fn queue(pool: &MySqlPool) -> sqlx::Result<u64> {
-    // INSERT IGNORE: a talk time that is not a number counts as 0 instead of
-    // failing the statement.
-    let mut queued = sqlx::query(
-        "INSERT IGNORE INTO ai_promise_scans
-                (company_id, user_id, source, source_key, happened_at, customer_digits, recording_link)
-         SELECT pc.company_id, u.id, 'call', CONCAT(pc.provider, ':', pc.call_id), pc.started_at,
-                pc.customer_digits, pc.item->>'$.Cdr.recording_link'
+    // `RingCentral`: the rep's extension; a call without one (an incoming
+    // call to their number) by the number, only when no one else has it.
+    // A talk time that is not a number counts as 0.
+    let mut found: Vec<Candidate> = sqlx::query_as(
+        "SELECT pc.company_id, u.id AS user_id, 'call' AS source,
+                CONCAT(pc.provider, ':', pc.call_id) AS source_key, pc.started_at AS happened_at,
+                pc.customer_digits, CAST(NULL AS CHAR) AS customer_email,
+                pc.item->>'$.Cdr.recording_link' AS recording_link
            FROM users u
            JOIN provider_calls pc ON pc.company_id = u.company_id
           WHERE u.ai_promises = 1 AND u.is_deleted = 0
@@ -915,72 +995,103 @@ async fn queue(pool: &MySqlPool) -> sqlx::Result<u64> {
             AND CAST(COALESCE(pc.item->>'$.Cdr.talking_time', '0') AS UNSIGNED) >= ?
             AND ((pc.provider = 'ringcentral'
                   AND (pc.item->>'$.Cdr.user_id' = u.ringcentral_extension_id
-                       OR RIGHT(pc.item->>'$.Cdr.public_internal', 10) = RIGHT(u.ringcentral_phone_number, 10)))
+                       OR (COALESCE(pc.item->>'$.Cdr.user_id', '') IN ('', '0', 'null')
+                           AND RIGHT(pc.item->>'$.Cdr.public_internal', 10) = RIGHT(u.ringcentral_phone_number, 10)
+                           AND (SELECT COUNT(*) FROM users o
+                                 WHERE o.company_id = u.company_id AND o.is_deleted = 0
+                                   AND RIGHT(o.ringcentral_phone_number, 10) = RIGHT(u.ringcentral_phone_number, 10)) = 1)))
               OR (pc.provider = 'cloudtalk' AND pc.item->>'$.Agent.id' = u.cloudtalk_agent_id))
             AND NOT EXISTS (SELECT 1 FROM ai_promise_scans s
                              WHERE s.user_id = u.id AND s.source_key = CONCAT(pc.provider, ':', pc.call_id))",
     )
     .bind(LOOKBACK_DAYS)
     .bind(MIN_CALL_SECONDS)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    queued += sqlx::query(
-        "INSERT IGNORE INTO ai_promise_scans
-                (company_id, user_id, source, source_key, happened_at, customer_digits, recording_link)
-         SELECT c.company_id, u.id, 'call', CONCAT('telnyx:', c.id), c.started_at,
-                RIGHT(REGEXP_REPLACE(c.other_number, '[^0-9]', ''), 10), CONCAT('tx_', c.id)
-           FROM users u
-           JOIN phone_calls c ON c.user_id = u.id AND c.company_id = u.company_id
-          WHERE u.ai_promises = 1 AND u.is_deleted = 0
-            AND c.started_at > UTC_TIMESTAMP() - INTERVAL ? DAY
-            AND c.duration_secs >= ? AND c.recording_key IS NOT NULL
-            AND NOT EXISTS (SELECT 1 FROM ai_promise_scans s
-                             WHERE s.user_id = u.id AND s.source_key = CONCAT('telnyx:', c.id))",
-    )
-    .bind(LOOKBACK_DAYS)
-    .bind(MIN_CALL_SECONDS)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    for table in SMS_TABLES {
-        queued += sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT IGNORE INTO ai_promise_scans
-                    (company_id, user_id, source, source_key, happened_at, customer_digits)
-             SELECT m.company_id, u.id, 'sms', CONCAT('{table}:', m.id), m.created_date,
-                    RIGHT(m.phone_digits, 10)
+    .fetch_all(pool)
+    .await?;
+    // Granite Phone: once its own job is not transcribing the call, whose
+    // transcript is then reused.
+    found.extend(
+        sqlx::query_as::<_, Candidate>(
+            "SELECT c.company_id, u.id AS user_id, 'call' AS source,
+                    CONCAT('telnyx:', c.id) AS source_key, CAST(c.started_at AS DATETIME) AS happened_at,
+                    RIGHT(REGEXP_REPLACE(c.other_number, '[^0-9]', ''), 10) AS customer_digits,
+                    CAST(NULL AS CHAR) AS customer_email, CONCAT('tx_', c.id) AS recording_link
                FROM users u
-               JOIN {table} m ON m.sender_user_id = u.id AND m.company_id = u.company_id
+               JOIN phone_calls c ON c.user_id = u.id AND c.company_id = u.company_id
               WHERE u.ai_promises = 1 AND u.is_deleted = 0
-                AND m.direction = 'outbound' AND COALESCE(m.is_automated, 0) = 0
-                AND COALESCE(m.is_echo, 0) = 0 AND m.status <> 'failed'
-                AND m.created_date > UTC_TIMESTAMP() - INTERVAL ? DAY
+                AND c.started_at > UTC_TIMESTAMP() - INTERVAL ? DAY
+                AND c.duration_secs >= ? AND c.recording_key IS NOT NULL
+                AND c.transcript_status NOT IN ('pending', 'processing')
                 AND NOT EXISTS (SELECT 1 FROM ai_promise_scans s
-                                 WHERE s.user_id = u.id AND s.source_key = CONCAT('{table}:', m.id))"
-        )))
+                                 WHERE s.user_id = u.id AND s.source_key = CONCAT('telnyx:', c.id))",
+        )
         .bind(LOOKBACK_DAYS)
-        .execute(pool)
-        .await?
-        .rows_affected();
+        .bind(MIN_CALL_SECONDS)
+        .fetch_all(pool)
+        .await?,
+    );
+    for table in SMS_TABLES {
+        found.extend(
+            sqlx::query_as::<_, Candidate>(sqlx::AssertSqlSafe(format!(
+                "SELECT m.company_id, u.id AS user_id, 'sms' AS source,
+                        CONCAT('{table}:', m.id) AS source_key,
+                        CAST(m.created_date AS DATETIME) AS happened_at,
+                        RIGHT(m.phone_digits, 10) AS customer_digits,
+                        CAST(NULL AS CHAR) AS customer_email, CAST(NULL AS CHAR) AS recording_link
+                   FROM users u
+                   JOIN {table} m ON m.sender_user_id = u.id AND m.company_id = u.company_id
+                  WHERE u.ai_promises = 1 AND u.is_deleted = 0
+                    AND m.direction = 'outbound' AND COALESCE(m.is_automated, 0) = 0
+                    AND COALESCE(m.is_echo, 0) = 0 AND m.status <> 'failed'
+                    AND m.created_date > UTC_TIMESTAMP() - INTERVAL ? DAY
+                    AND NOT EXISTS (SELECT 1 FROM ai_promise_scans s
+                                     WHERE s.user_id = u.id AND s.source_key = CONCAT('{table}:', m.id))"
+            )))
+            .bind(LOOKBACK_DAYS)
+            .fetch_all(pool)
+            .await?,
+        );
     }
-    queued += sqlx::query(
+    found.extend(
+        sqlx::query_as::<_, Candidate>(
+            "SELECT e.company_id, u.id AS user_id, 'email' AS source,
+                    CONCAT('email:', e.id) AS source_key, e.sent_at AS happened_at,
+                    CAST(NULL AS CHAR) AS customer_digits,
+                    LOWER(TRIM(e.receiver_email)) AS customer_email,
+                    CAST(NULL AS CHAR) AS recording_link
+               FROM users u
+               JOIN emails e ON e.sender_user_id = u.id AND e.company_id = u.company_id
+              WHERE u.ai_promises = 1 AND u.is_deleted = 0
+                AND COALESCE(e.is_draft, 0) = 0 AND COALESCE(e.is_automated, 0) = 0
+                AND e.deleted_at IS NULL AND e.sent_at > UTC_TIMESTAMP() - INTERVAL ? DAY
+                AND NOT EXISTS (SELECT 1 FROM ai_promise_scans s
+                                 WHERE s.user_id = u.id AND s.source_key = CONCAT('email:', e.id))",
+        )
+        .bind(LOOKBACK_DAYS)
+        .fetch_all(pool)
+        .await?,
+    );
+    if found.is_empty() {
+        return Ok(0);
+    }
+    // IGNORE: an overlapping run queued it first. A recording link or an
+    // address too long for its column is cut, not refused.
+    let mut insert = sqlx::QueryBuilder::new(
         "INSERT IGNORE INTO ai_promise_scans
-                (company_id, user_id, source, source_key, happened_at, customer_email)
-         SELECT e.company_id, u.id, 'email', CONCAT('email:', e.id), e.sent_at,
-                LOWER(TRIM(e.receiver_email))
-           FROM users u
-           JOIN emails e ON e.sender_user_id = u.id AND e.company_id = u.company_id
-          WHERE u.ai_promises = 1 AND u.is_deleted = 0
-            AND COALESCE(e.is_draft, 0) = 0 AND COALESCE(e.is_automated, 0) = 0
-            AND e.deleted_at IS NULL AND e.sent_at > UTC_TIMESTAMP() - INTERVAL ? DAY
-            AND NOT EXISTS (SELECT 1 FROM ai_promise_scans s
-                             WHERE s.user_id = u.id AND s.source_key = CONCAT('email:', e.id))",
-    )
-    .bind(LOOKBACK_DAYS)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(queued)
+                (company_id, user_id, source, source_key, happened_at, customer_digits,
+                 customer_email, recording_link) ",
+    );
+    insert.push_values(found, |mut row, call| {
+        row.push_bind(call.company_id)
+            .push_bind(call.user_id)
+            .push_bind(call.source)
+            .push_bind(call.source_key)
+            .push_bind(call.happened_at)
+            .push_bind(call.customer_digits)
+            .push_bind(call.customer_email)
+            .push_bind(call.recording_link);
+    });
+    Ok(insert.build().execute(pool).await?.rows_affected())
 }
 
 /// Claims, reads and saves one scan's promises.
@@ -1045,13 +1156,24 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
     .bind(scan.customer_email.as_deref())
     .fetch_all(pool)
     .await?;
+    let mut text = start_and_end(&text, MAX_SOURCE_CHARS);
+    // A call is often read after the text that kept what was promised on it.
+    if source == Source::Call {
+        let later = later_messages(pool, scan, customer_id, tz).await?;
+        if !later.is_empty() {
+            text.push_str(&format!(
+                "\n\nAFTER THE CALL THE REP SENT (a promise these already keep is done: don't list it):\n{}",
+                later.join("\n")
+            ));
+        }
+    }
     let prompt = extraction_prompt(
         source,
         user.name.as_deref().unwrap_or("the rep"),
         &when,
         &local_time(Utc::now().naive_utc(), tz),
         &open,
-        &start_and_end(&text, MAX_SOURCE_CHARS),
+        &text,
     );
     let raw = match extract(state, caller, &prompt).await {
         Ok(raw) => raw,
@@ -1064,7 +1186,8 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
             return Ok(Outcome::Later);
         }
     };
-    let reading = parse_reading(&raw, &open);
+    let mut reading = parse_reading(&raw, &open);
+    without_repeats(&mut reading, &open);
     let found = &reading.promises;
     let links = links(pool, scan.company_id).await?;
     let mut drafts = Vec::with_capacity(found.len());
@@ -1247,6 +1370,7 @@ async fn sms_text(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Text> {
            FROM {table} m
            JOIN {table} o ON o.company_id = m.company_id AND o.phone_digits = m.phone_digits
                          AND (o.created_date < m.created_date OR o.id = m.id)
+                         AND COALESCE(o.is_echo, 0) = 0
           WHERE m.id = ? AND m.company_id = ?
           ORDER BY o.created_date DESC, o.id DESC
           LIMIT ?"
@@ -1317,18 +1441,9 @@ async fn email_text(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Text> {
 /// The customer with the scan's phone or email.
 async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>> {
     if let Some(digits) = scan.customer_digits.as_deref().filter(|d| d.len() == 10) {
-        return sqlx::query_scalar(
-            "SELECT id FROM customers
-              WHERE company_id = ? AND deleted_at IS NULL
-                AND (RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', ''), 10) = ?
-                  OR RIGHT(REGEXP_REPLACE(COALESCE(phone_2, ''), '[^0-9]', ''), 10) = ?)
-              ORDER BY id DESC LIMIT 1",
-        )
-        .bind(scan.company_id)
-        .bind(digits)
-        .bind(digits)
-        .fetch_optional(pool)
-        .await;
+        return Ok(customer_by_digits(pool, scan.company_id, digits)
+            .await?
+            .map(|(id, _)| id));
     }
     if let Some(email) = scan.customer_email.as_deref().filter(|e| e.contains('@')) {
         return sqlx::query_scalar(
@@ -1343,6 +1458,119 @@ async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>>
         .await;
     }
     Ok(None)
+}
+
+/// The customer (id, name) with this phone's last 10 digits: through the
+/// phone index Granite Phone keeps (`customer_phone_index`), else, for a
+/// company it has not indexed yet, the customer records.
+pub async fn customer_by_digits(
+    pool: &MySqlPool,
+    company_id: i32,
+    digits: &str,
+) -> sqlx::Result<Option<(i32, Option<String>)>> {
+    let indexed: Option<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT c.id, c.name FROM customer_phone_index i
+           JOIN customers c ON c.id = i.customer_id AND c.deleted_at IS NULL
+          WHERE i.company_id = ? AND i.last10 = ?
+          ORDER BY c.id DESC LIMIT 1",
+    )
+    .bind(company_id)
+    .bind(digits)
+    .fetch_optional(pool)
+    .await?;
+    if indexed.is_some() {
+        return Ok(indexed);
+    }
+    let has_index: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM customer_phone_index WHERE company_id = ? LIMIT 1) i",
+    )
+    .bind(company_id)
+    .fetch_one(pool)
+    .await?;
+    if has_index > 0 {
+        return Ok(None);
+    }
+    sqlx::query_as(
+        "SELECT id, name FROM customers
+          WHERE company_id = ? AND deleted_at IS NULL
+            AND (RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', ''), 10) = ?
+              OR RIGHT(REGEXP_REPLACE(COALESCE(phone_2, ''), '[^0-9]', ''), 10) = ?)
+          ORDER BY id DESC LIMIT 1",
+    )
+    .bind(company_id)
+    .bind(digits)
+    .bind(digits)
+    .fetch_optional(pool)
+    .await
+}
+
+/// What the rep sent the customer after a call, oldest first: texts to their
+/// number and emails to their addresses (up to 5 of each), as
+/// `[2026-10-28 15:20 (Wed)] TEXT: …`.
+async fn later_messages(
+    pool: &MySqlPool,
+    scan: &Scan,
+    customer_id: Option<i32>,
+    tz: Tz,
+) -> sqlx::Result<Vec<String>> {
+    let mut sent: Vec<(NaiveDateTime, String)> = Vec::new();
+    if let Some(digits) = scan.customer_digits.as_deref() {
+        for table in SMS_TABLES {
+            let rows: Vec<(Option<String>, NaiveDateTime)> =
+                sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                    "SELECT text, CAST(created_date AS DATETIME) FROM {table}
+                      WHERE company_id = ? AND phone_digits IN (?, CONCAT('1', ?))
+                        AND sender_user_id = ? AND direction = 'outbound'
+                        AND COALESCE(is_echo, 0) = 0 AND created_date > ?
+                      ORDER BY created_date LIMIT 5"
+                )))
+                .bind(scan.company_id)
+                .bind(digits)
+                .bind(digits)
+                .bind(scan.user_id)
+                .bind(scan.happened_at)
+                .fetch_all(pool)
+                .await?;
+            for (text, at) in rows {
+                let text = text.unwrap_or_default();
+                if !text.trim().is_empty() {
+                    sent.push((
+                        at,
+                        format!("[{}] TEXT: {}", local_time(at, tz), clip(&text, 500)),
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(customer_id) = customer_id {
+        let rows: Vec<(Option<String>, Option<String>, NaiveDateTime)> = sqlx::query_as(
+            "SELECT e.subject, e.body, e.sent_at FROM emails e
+              WHERE e.company_id = ? AND e.sender_user_id = ? AND e.deleted_at IS NULL
+                AND COALESCE(e.is_draft, 0) = 0 AND e.sent_at > ?
+                AND LOWER(TRIM(e.receiver_email)) IN
+                    (SELECT LOWER(TRIM(ce.email)) FROM customers_emails ce WHERE ce.customer_id = ?)
+              ORDER BY e.sent_at LIMIT 5",
+        )
+        .bind(scan.company_id)
+        .bind(scan.user_id)
+        .bind(scan.happened_at)
+        .bind(customer_id)
+        .fetch_all(pool)
+        .await?;
+        for (subject, body, at) in rows {
+            sent.push((
+                at,
+                format!(
+                    "[{}] EMAIL: {}: {}",
+                    local_time(at, tz),
+                    subject.as_deref().map_or("", str::trim),
+                    clip(without_quoted(body.as_deref().unwrap_or("")), 500)
+                ),
+            ));
+        }
+    }
+    sent.sort_by_key(|(at, _)| *at);
+    Ok(sent.into_iter().map(|(_, line)| line).collect())
 }
 
 async fn links(pool: &MySqlPool, company_id: i32) -> sqlx::Result<Links> {
@@ -1560,6 +1788,39 @@ mod tests {
             local_time(at("2026-10-28 19:06"), tz),
             "2026-10-28 15:06 (Wed)"
         );
+    }
+
+    #[test]
+    fn what_is_open_or_listed_twice_is_dropped() {
+        let promise = |title: &str| Found {
+            title: title.into(),
+            said: String::new(),
+            due: None,
+            visit: false,
+            channel: None,
+            link: None,
+        };
+        let mut reading = Reading {
+            promises: vec![
+                promise("Send the price"),
+                promise("send the PRICE"),
+                promise("Call back"),
+            ],
+            kept: Vec::new(),
+            quote_changes: vec![QuoteChange {
+                change: "Swap the sink".into(),
+                said: String::new(),
+            }],
+        };
+        without_repeats(
+            &mut reading,
+            &[
+                open(1, "promise", "Call back"),
+                open(2, "quote", "swap the sink"),
+            ],
+        );
+        assert_eq!(reading.promises, vec![promise("Send the price")]);
+        assert!(reading.quote_changes.is_empty());
     }
 
     #[test]
