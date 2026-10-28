@@ -7,7 +7,7 @@
 
 use crate::common;
 
-use api::ai::{Ai, Caller};
+use api::ai::{Ai, Caller, Chat, LARGE_MODEL, MINI_MODEL};
 use api::app;
 use api::chat::crm_manual::{self, Features};
 use api::chat::{Mode, mode_for};
@@ -15,9 +15,11 @@ use api::state::AppState;
 use axum_test::TestServer;
 use common::{ALLOWED_ORIGIN, SECRET, WithSession, sessions};
 use futures_util::future::join_all;
+use futures_util::stream::{self, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
+use std::time::{Duration, Instant};
 
 #[derive(Deserialize)]
 struct Case {
@@ -447,4 +449,153 @@ async fn the_model_picks_and_answers(pool: MySqlPool) {
         false,
     )
     .await;
+}
+
+/// How the large model grades a manual answer.
+const GRADE_RULES: &str = r#"You check the answers of a help chat for Granite Manager, a CRM for countertop and stone shops. The chat answers "how do I..." questions from the app's user manual. You get the manual text that holds the answer (REFERENCE), who asked, the question, and the chat's answer.
+
+Grade the answer against the REFERENCE only:
+- "correct": it does what was asked with places, steps and labels the REFERENCE supports. Other words for the same thing, and optional details left out, are fine.
+- "partial": the right feature, but it misses a step the user needs, gets a label, place or role wrong, or buries the answer in things not asked.
+- "wrong": the wrong feature or page, steps the REFERENCE contradicts, or buttons, fields, pages or settings the REFERENCE does not have.
+- "unanswered": it says it can't confirm, there is no such feature, or asks a question back, while the REFERENCE answers the question.
+- "no_reference": the REFERENCE does not answer the question (judge nothing else).
+When the REFERENCE says the asker's role can't do it (an admin page asked by a sales rep), a correct answer says who can.
+
+Reply with a JSON object only: {"verdict": "...", "problem": "what is wrong, in one short sentence; empty when correct", "invented": ["labels in the answer that the REFERENCE does not have"]}"#;
+
+fn asker(role: Option<&str>) -> &'static str {
+    match role {
+        Some("superuser") => "a platform superuser",
+        Some("admin" | "manager") => "an admin with the Manager position (no Employee access)",
+        _ => "a Sales Rep (Employee access, no Admin)",
+    }
+}
+
+/// The large model's grade of `answer` (`verdict`, `problem`, `invented`).
+async fn grade(state: &AppState, caller: Caller<'_>, case: &Case, answer: &str) -> Value {
+    let reference = crm_manual::content_with(&state.pool, &case.sections).await;
+    let mut chat = Chat::new(LARGE_MODEL)
+        .message("system", GRADE_RULES)
+        .message(
+            "user",
+            &format!(
+                "REFERENCE:\n\n{reference}\n\nASKED BY: {}\n\nQUESTION: {}\n\nANSWER:\n{answer}",
+                asker(case.role.as_deref()),
+                case.question
+            ),
+        )
+        .max_tokens(Some(4000));
+    chat.json = true;
+    chat.reasoning_effort = Some("low");
+    chat.timeout = Duration::from_secs(180);
+    let reply = match state.ai.chat(&state.pool, caller, &chat).await {
+        Err(err) if err.is_model_permission() => {
+            chat.model = MINI_MODEL;
+            chat.reasoning_effort = Some("medium");
+            state.ai.chat(&state.pool, caller, &chat).await
+        }
+        other => other,
+    };
+    match reply {
+        Ok(text) => serde_json::from_str(&text)
+            .unwrap_or_else(|_| json!({ "verdict": "error", "problem": text })),
+        Err(err) => json!({ "verdict": "error", "problem": err.to_string() }),
+    }
+}
+
+/// Every app question of both fixtures asked as a new chat and graded, one
+/// `EVAL {json}` line each, then the totals (`OPEN_AI_SECRET_KEY`):
+///
+/// `gh workflow run "API tests" --ref <branch> -f cargo_args="-p api --test ai crm_manual_eval::answers_a_lot_of_questions -- --ignored --nocapture"`
+#[test_db::test(seed)]
+#[ignore = "asks the real model about 550 questions"]
+#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+async fn answers_a_lot_of_questions(pool: MySqlPool) {
+    if std::env::var("OPEN_AI_SECRET_KEY").map_or(true, |k| k.trim().is_empty()) {
+        println!("OPEN_AI_SECRET_KEY is not set: no model eval");
+        return;
+    }
+    sqlx::raw_sql(
+        "UPDATE users SET is_superuser = 1 WHERE id = 103;
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (102, 5, 100);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(COMPANY_ONE).execute(&pool).await.unwrap();
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN).with_ai(Ai::from_env());
+    let caller = Caller {
+        feature: "chat",
+        user_id: Some(100),
+        company_id: Some(100),
+    };
+    let more: Vec<Case> =
+        serde_json::from_str(include_str!("../fixtures/crm_manual_questions.json"))
+            .expect("valid questions");
+    let cases: Vec<Case> = more
+        .into_iter()
+        .chain(cases().into_iter().filter(|c| c.app))
+        .collect();
+    let server = TestServer::new(app(state.clone()));
+    let (server, state) = (&server, &state);
+    let results: Vec<Value> = stream::iter(&cases)
+        .map(|case| async move {
+            let started = Instant::now();
+            let answer = ask(server, session(case.role.as_deref()), &case.question, true).await;
+            let took = started.elapsed().as_secs_f64();
+            let graded = if answer.choices.is_empty() {
+                grade(state, caller, case, &answer.text).await
+            } else {
+                let verdict = if case.clarify { "asked_ok" } else { "asked" };
+                json!({ "verdict": verdict })
+            };
+            let picked =
+                match crm_manual::sections_for(state, caller, &case.question, &[], &case.question)
+                    .await
+                {
+                    Ok(ids) => json!(ids),
+                    Err(asked) => json!({ "asked": asked.question }),
+                };
+            let result = json!({
+                "question": case.question,
+                "role": case.role,
+                "expected": case.sections,
+                "picked": picked,
+                "verdict": graded["verdict"],
+                "problem": graded["problem"],
+                "invented": graded["invented"],
+                "manual": answer.manual,
+                "choices": answer.choices,
+                "sources": answer.sources,
+                "words": answer.text.split_whitespace().count(),
+                "seconds": (took * 10.0).round() / 10.0,
+                "answer": answer.text,
+            });
+            println!("EVAL {result}");
+            result
+        })
+        .buffer_unordered(12)
+        .collect()
+        .await;
+
+    let n = results.len();
+    let mut verdicts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for result in &results {
+        *verdicts
+            .entry(result["verdict"].as_str().unwrap_or("error").to_string())
+            .or_default() += 1;
+    }
+    let words: usize = results
+        .iter()
+        .filter_map(|r| r["words"].as_u64())
+        .map(|w| usize::try_from(w).unwrap_or_default())
+        .sum();
+    let good = verdicts.get("correct").copied().unwrap_or(0)
+        + verdicts.get("asked_ok").copied().unwrap_or(0);
+    println!(
+        "TOTAL {n} questions: {:.1}% correct; {verdicts:?}; {:.0} words per answer",
+        percent(good, n),
+        words as f64 / n.max(1) as f64
+    );
 }
