@@ -27,6 +27,7 @@ pub mod takeoff;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::events::history::{History, record};
+use crate::routes::schedule::board::sole_template_maker;
 use doc::QuoteDoc;
 use price_list::{Stock, StockSink, StockStone};
 use pricing::{PriceOptions, price_quote};
@@ -795,14 +796,16 @@ async fn add_waiting_jobs(
         .take(255)
         .collect();
     for calendar_id in calendars {
+        let assignee = sole_template_maker(pool, calendar_id).await?;
         let id = sqlx::query(
             "INSERT INTO events (title, location, start_date, end_date, all_day, unscheduled,
-                color, status, created_user_id, customer_id, calendar_id, quote_id)
-             VALUES (?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', 'not_ready', ?, ?, ?, ?)",
+                color, status, created_user_id, assigned_user_id, customer_id, calendar_id, quote_id)
+             VALUES (?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', 'not_ready', ?, ?, ?, ?, ?)",
         )
         .bind(&title)
         .bind(address.as_deref())
         .bind(creator)
+        .bind(assignee)
         .bind(quote.customer_id)
         .bind(calendar_id)
         .bind(quote.id)
