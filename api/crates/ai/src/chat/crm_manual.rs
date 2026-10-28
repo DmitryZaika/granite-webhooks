@@ -577,7 +577,7 @@ static CONTENTS: LazyLock<String> = LazyLock::new(|| {
 const PICK_RULES: &str = r#"You find where the Granite Manager user manual answers a question. Granite Manager is a CRM for countertop and stone shops: customers, deals, quotes with a drawing tool, stone inventory, emails, SMS, calls, schedule, admin settings.
 
 Reply with a JSON object only, in one of these forms:
-1. {"sections": ["id", "id"]}: the 1 to 3 sections whose text answers the question, best first. Prefer the section of the page or screen where the task is done.
+1. {"sections": ["id", "id"]}: the 1 to 3 sections whose text answers the question, best first. Prefer the section of the page or screen where the task is done; when both an employee page and an admin page do it, the one the asker can open.
 2. {"clarify": {"question": "...", "choices": [{"label": "...", "sections": ["id"]}]}}: rarely; only when the question fits two or more different features of the app about equally well, their steps differ, and nothing in the question or the earlier questions says which ("how do I add a template": an email, SMS or quote email template). Never ask about parts of one tool, or when one meaning is the usual one in a countertop shop. The question is one short sentence that names the choices; 2 to 5 choices, each label a few words naming the feature as the app names it, with the sections that answer it.
 3. {"sections": []}: the question is not about using Granite Manager (the company's own prices, policies or process, or small talk).
 4. {"records": true}: the question asks about the company's own records, not how to use the app: a customer, deal, quote or message by name, or counts and lists of them ("find John Smith", "how many deals did we win this month", "which quotes did Rita send"), or asks the chat to do something with them ("draft a follow-up to John"). How to do something in the app is never this, even when it names records ("mark deal won", "add a customer that is a company", "filter customers by sales rep").
@@ -655,13 +655,27 @@ pub fn parse_pick(reply: &str) -> Option<Picked> {
         .map(|sections| Picked::Sections(section_list(sections, 3)))
 }
 
+/// Who asks, as [`pick`] reads it: an admin page answers an admin, the
+/// employee one an employee.
+pub const fn asker(is_employee: bool, is_admin: bool, is_superuser: bool) -> &'static str {
+    match (is_superuser, is_admin, is_employee) {
+        (true, _, _) => "a platform superuser",
+        (false, true, true) => "an admin with Employee access",
+        (false, true, false) => "an admin (no Employee access)",
+        (false, false, true) => "an employee such as a sales rep (no Admin access)",
+        (false, false, false) => "a user with no Employee or Admin access",
+    }
+}
+
 /// The model's pick of the sections that answer `question` (`earlier`: the
-/// user's questions before it, newest last), or `None` when it fails.
+/// user's questions before it, newest last; `asker`: [`asker`]), or `None`
+/// when it fails.
 pub async fn pick(
     state: &AppState,
     caller: Caller<'_>,
     question: &str,
     earlier: &[String],
+    asker: &str,
 ) -> Option<Picked> {
     let earlier: Vec<String> = earlier
         .iter()
@@ -671,10 +685,10 @@ pub async fn pick(
         .map(|q| format!("- {}", trim(q)))
         .collect();
     let asked = if earlier.is_empty() {
-        format!("Question: {}", trim(question))
+        format!("Asked by {asker}.\n\nQuestion: {}", trim(question))
     } else {
         format!(
-            "Earlier questions:\n{}\n\nQuestion: {}",
+            "Asked by {asker}.\n\nEarlier questions:\n{}\n\nQuestion: {}",
             earlier.join("\n"),
             trim(question)
         )
@@ -711,6 +725,7 @@ pub async fn sections_for(
     caller: Caller<'_>,
     question: &str,
     earlier: &[String],
+    asker: &str,
     search: &str,
     picked: Option<Picked>,
 ) -> Result<Option<Vec<String>>, Clarification> {
@@ -729,7 +744,7 @@ pub async fn sections_for(
     };
     let picked = match picked {
         Some(picked) => Some(picked),
-        None => pick(state, caller, question, earlier).await,
+        None => pick(state, caller, question, earlier, asker).await,
     };
     match picked {
         // A feature the topic table names is not one to ask about ("how to
@@ -858,6 +873,8 @@ pub fn asks_how_to(query: &str) -> bool {
         re!(r"\bno longer\b"),
         re!(r"\b(?:turn|switch) (?:on|off)\b"),
         re!(r"\b(?:stop|disable|enable|mute|unmute)\b"),
+        // "How" and "where" in Spanish, Russian and Polish.
+        re!(r"\b(?:cómo|como|dónde|donde|как|где|jak|gdzie)\b"),
     ]
     .iter()
     .any(|p| p.is_match(&normalized))
@@ -985,13 +1002,15 @@ pub const CLARIFY_CHOICES: [Choice; 2] = [
 
 /// Whether to ask before answering: a question asking for help that the
 /// how-to rules leave to the company instructions, while a specific manual
-/// topic covers it too and so does one of the company's instructions.
+/// topic covers it too and so does one of the company's instructions. Not
+/// where a page is ("where is my schedule"): only the app has pages.
 pub fn should_clarify(query: &str, how_to: bool, company_instruction: bool) -> bool {
     let normalized = normalize(query);
     !how_to
         && company_instruction
         && !is_price_query(&normalized)
         && is_help_seeking(&normalized)
+        && !re!(r"^where (?:is|are) (?:my|the)\b").is_match(&normalized)
         && matches_topic(query)
 }
 
@@ -1032,6 +1051,8 @@ pub fn asks_cloudtalk_phone(normalized: &str) -> bool {
         && ["phone", "number", "line", "sms sender", "outbound"]
             .iter()
             .any(|w| normalized.contains(w))
+        // Suppliers' numbers sync to CloudTalk contacts: the manual's.
+        && !["supplier", "contact"].iter().any(|w| normalized.contains(w))
 }
 
 fn can_edit_admin_users(access: Option<&Access>) -> bool {
@@ -1167,11 +1188,12 @@ fn asks_inventory_link(normalized: &str) -> bool {
         || re!(r"\b(?:customer (?:inventory|stones?)|showroom) page\b").is_match(normalized)
 }
 
-/// Asks for the company's customer quote link ("customer quote link", "link to the online quote"),
-/// not how to text a quote or why the link in its email stopped working: the manual's.
+/// Asks for the company's customer quote page ("customer quote link", "link to the online quote"),
+/// not for one quote's link (only its email has it), how to text a quote or why the link
+/// stopped working: the manual's.
 fn asks_quote_link(normalized: &str) -> bool {
-    let link = re!(r"\bquote(?: page)? (?:link|url)\b").is_match(normalized)
-        || re!(r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:customer |online )?quote\b")
+    let link = re!(r"\b(?:customer|online|our) quote(?: page)? (?:link|url)\b").is_match(normalized)
+        || re!(r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:customer|online) quote\b")
             .is_match(normalized)
         // Not a bare "quote page": that is also the quote page inside the app.
         || re!(r"\b(?:customer|online) quote page\b").is_match(normalized);
@@ -1280,6 +1302,8 @@ mod tests {
         // A how-to by the rules goes to the manual.
         let app = "how to make a special order in quote";
         assert!(!should_clarify(app, looks_like_how_to(app), true));
+        // Where a page is: only the app has pages.
+        assert!(!should_clarify("where is my schedule", false, true));
     }
 
     #[test]
@@ -1396,7 +1420,6 @@ mod tests {
         for asked in [
             "customer quote link?",
             "Link to the online quote please",
-            "what's the quote url",
             "what's the customer quote page",
             "send me the online quote page",
         ] {
@@ -1414,6 +1437,9 @@ mod tests {
             "how do I link a quote to a deal",
             "how many stones are in inventory",
             "how do I open the quote page",
+            // One quote's link: only its email has it.
+            "what's the quote url",
+            "what does the customer see when i send them the quote link",
             "how to text the quote link",
             "customer says the quote link is no longer active",
         ] {

@@ -118,7 +118,7 @@
   { "question": "whats the special order calculator", "sections": ["samples-special-order"] },
   { "question": "how to restart a tour", "sections": ["header-onboarding-bug-report"] },
   { "question": "where do i find the invocies", "sections": ["invoices"] },
-  { "question": "is there a way to export customers to excel", "sections": ["employee-customers-customer-management", "statistics-reports"] },
+  { "question": "is there a way to export customers to excel", "sections": ["employee-customers-customer-management", "statistics-reports"], "absent": true },
   { "question": "turn off email notifications", "sections": ["notifications"], "clarify": true },
 
   { "question": "what is our fabrication price for quartz", "sections": [], "app": false },

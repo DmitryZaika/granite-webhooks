@@ -39,6 +39,9 @@ struct Case {
     /// One of the questions users reported.
     #[serde(default)]
     example: bool,
+    /// The app has no such feature: the answer says so.
+    #[serde(default)]
+    absent: bool,
 }
 
 const fn yes() -> bool {
@@ -158,6 +161,15 @@ fn retrieval_and_routing_report() {
     }
 }
 
+/// Who the session of `role` is, as the section pick reads it.
+fn role_asker(role: Option<&str>) -> &'static str {
+    match role {
+        Some("superuser") => crm_manual::asker(false, false, true),
+        Some("admin" | "manager") => crm_manual::asker(false, true, false),
+        _ => crm_manual::asker(true, false, false),
+    }
+}
+
 fn session(role: Option<&str>) -> &'static str {
     match role {
         Some("superuser") => sessions::SUPER_ADMIN,
@@ -192,6 +204,8 @@ struct Answer {
     sources: Vec<String>,
     images: Vec<String>,
     manual: bool,
+    /// The assistant's look-ups (its `trace` event).
+    trace: bool,
 }
 
 async fn ask(server: &TestServer, session: &str, query: &str, new: bool) -> Answer {
@@ -228,6 +242,7 @@ async fn ask(server: &TestServer, session: &str, query: &str, new: bool) -> Answ
             .filter_map(|u| u.as_str().map(String::from))
             .collect(),
         manual: events.iter().any(|(e, _)| e == "crmManual"),
+        trace: events.iter().any(|(e, _)| e == "trace"),
     }
 }
 
@@ -322,6 +337,7 @@ async fn the_model_picks_and_answers(pool: MySqlPool) {
                     caller,
                     &case.question,
                     &[],
+                    role_asker(case.role.as_deref()),
                     &case.question,
                     None,
                 )
@@ -495,19 +511,26 @@ async fn grade(
             .cloned(),
     );
     let reference = crm_manual::content_with(&state.pool, &ids).await;
+    // The app has no such feature: the answer says so, inventing nothing.
+    let absent = if case.absent {
+        "\n\nNOTE: the app has no such feature. A correct answer says so (or that it can't confirm one) and invents nothing; grade it like that, not no_reference."
+    } else {
+        ""
+    };
     let mut chat = Chat::new(LARGE_MODEL)
         .message("system", GRADE_RULES)
         .message(
             "user",
             &format!(
-                "REFERENCE:\n\n{reference}\n\nASKED BY: {}\n\nQUESTION: {}\n\nANSWER:\n{answer}",
+                "REFERENCE:\n\n{reference}\n\nASKED BY: {}\n\nQUESTION: {}{absent}\n\nANSWER:\n{answer}",
                 asker(case.role.as_deref()),
                 case.question
             ),
         )
-        .max_tokens(Some(4000));
+        .max_tokens(Some(6000));
     chat.json = true;
-    chat.reasoning_effort = Some("low");
+    // Low effort graded the same answer differently from run to run.
+    chat.reasoning_effort = Some("medium");
     chat.timeout = Duration::from_secs(180);
     let reply = match state.ai.chat(&state.pool, caller, &chat).await {
         Err(err) if err.is_model_permission() => {
@@ -553,21 +576,33 @@ async fn answers_a_lot_of_questions(pool: MySqlPool) {
     let more: Vec<Case> =
         serde_json::from_str(include_str!("../fixtures/crm_manual_questions.json"))
             .expect("valid questions");
-    let cases: Vec<Case> = more
-        .into_iter()
-        .chain(cases().into_iter().filter(|c| c.app))
-        .collect();
+    let cases: Vec<Case> = more.into_iter().chain(cases()).collect();
     let server = TestServer::new(app(state.clone()));
     let (server, state) = (&server, &state);
     let results: Vec<Value> = stream::iter(&cases)
         .map(|case| async move {
-            let picked =
-                crm_manual::sections_for(state, caller, &case.question, &[], &case.question, None)
-                    .await;
+            let picked = crm_manual::sections_for(
+                state,
+                caller,
+                &case.question,
+                &[],
+                role_asker(case.role.as_deref()),
+                &case.question,
+                None,
+            )
+            .await;
             let started = Instant::now();
             let answer = ask(server, session(case.role.as_deref()), &case.question, true).await;
             let took = started.elapsed().as_secs_f64();
-            let graded = if answer.choices.is_empty() {
+            let graded = if !case.app {
+                // About the company's records or process: never the manual.
+                let verdict = if answer.manual {
+                    "misrouted"
+                } else {
+                    "routed_ok"
+                };
+                json!({ "verdict": verdict })
+            } else if answer.choices.is_empty() {
                 let ids = picked.clone().ok().flatten().unwrap_or_default();
                 grade(state, caller, case, &ids, &answer.text).await
             } else {
@@ -587,6 +622,7 @@ async fn answers_a_lot_of_questions(pool: MySqlPool) {
                 "problem": graded["problem"],
                 "invented": graded["invented"],
                 "manual": answer.manual,
+                "assistant": answer.trace,
                 "choices": answer.choices,
                 "sources": answer.sources,
                 "words": answer.text.split_whitespace().count(),
@@ -613,7 +649,8 @@ async fn answers_a_lot_of_questions(pool: MySqlPool) {
         .map(|w| usize::try_from(w).unwrap_or_default())
         .sum();
     let good = verdicts.get("correct").copied().unwrap_or(0)
-        + verdicts.get("asked_ok").copied().unwrap_or(0);
+        + verdicts.get("asked_ok").copied().unwrap_or(0)
+        + verdicts.get("routed_ok").copied().unwrap_or(0);
     println!(
         "TOTAL {n} questions: {:.1}% correct; {verdicts:?}; {:.0} words per answer",
         percent(good, n),

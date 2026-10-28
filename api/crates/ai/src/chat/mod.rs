@@ -440,9 +440,10 @@ fn earlier_questions(messages: &[Message]) -> Vec<String> {
 
 /// `completeChatAnswer`: the answer streamed as it is written, holding back
 /// the last 64 characters so a marker is never shown half-written.
-/// `manual`: a how-to answered from the CRM manual, where the model's own
-/// reasoning used up the 1024 tokens and left step lists cut off or empty
-/// (the manual eval, `api/tests/crm_manual_eval.rs`).
+/// `manual`: a how-to answered from the CRM manual, with room and time to
+/// reason: on low effort its 1024 tokens left step lists cut off or empty,
+/// and it skipped steps and mixed up who may open a page (the manual eval,
+/// `api/tests/crm_manual_eval.rs`).
 async fn complete(
     state: &AppState,
     user: &SessionUser,
@@ -474,11 +475,11 @@ async fn complete(
         }
     };
     let run = async {
-        let mut chat = Chat::new(MINI_MODEL).max_tokens(Some(if manual { 2000 } else { 1024 }));
+        let mut chat = Chat::new(MINI_MODEL).max_tokens(Some(if manual { 4000 } else { 1024 }));
         chat.messages = request_messages(messages);
         chat.timeout = Duration::from_secs(120);
         if manual {
-            chat.reasoning_effort = Some("low");
+            chat.reasoning_effort = Some("medium");
         }
         let first = state.ai.chat_stream(&state.pool, caller, &chat, |t| {
             let _ = tx.send(t.to_string());
@@ -516,12 +517,13 @@ pub async fn answer(state: AppState, user: SessionUser, request: Request, tx: mp
     );
     // The rules send any question that names the company's records to the
     // assistant; the model tells how to do it in the app ("mark deal won")
-    // from a question about the records ("which deals did we win"). A
-    // customer asked for by name or contact is the records'.
+    // from a question about the records ("which deals did we win", "did
+    // the customer open my quote?" is the app's). A typed email or phone
+    // number is the records'.
     let mut app_pick = None;
     if mode == Mode::Assistant
         && request.mode.as_deref() != Some("assistant")
-        && !prompts::looks_like_customer_lookup(&request.query)
+        && !prompts::lookup_kind_is_contact(&request.query)
     {
         app_pick = app_question(&state, &user, &request).await;
         if app_pick.is_some() {
@@ -560,7 +562,8 @@ async fn app_question(
         user_id: Some(user.id),
         company_id: Some(user.company_id),
     };
-    match crm_manual::pick(state, caller, &request.query, &earlier).await? {
+    let asker = crm_manual::asker(user.is_employee, user.is_admin, user.is_superuser);
+    match crm_manual::pick(state, caller, &request.query, &earlier, asker).await? {
         crm_manual::Picked::Sections(ids) if ids.is_empty() => None,
         crm_manual::Picked::Records => None,
         picked => Some(picked),
@@ -812,7 +815,13 @@ async fn run(
                     company_id: Some(company_id),
                 };
                 match crm_manual::sections_for(
-                    state, caller, &question, &earlier, &search, app_pick,
+                    state,
+                    caller,
+                    &question,
+                    &earlier,
+                    crm_manual::asker(user.is_employee, user.is_admin, user.is_superuser),
+                    &search,
+                    app_pick,
                 )
                 .await
                 {
