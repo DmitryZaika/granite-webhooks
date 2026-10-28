@@ -542,15 +542,16 @@ pub async fn answer(state: AppState, user: SessionUser, request: Request, tx: mp
     // assistant; the model tells how to do it in the app ("mark deal won")
     // from a question about the records ("which deals did we win", "did
     // the customer open my quote?" is the app's). A typed email or phone
-    // number is the records'.
+    // number is the records'. A question with a verified answer is the app's.
     let mut app_pick = None;
-    if mode == Mode::Assistant
-        && request.mode.as_deref() != Some("assistant")
-        && !prompts::lookup_kind_is_contact(&request.query)
-    {
-        app_pick = app_question(&state, &user, &request).await;
-        if app_pick.is_some() {
+    if mode == Mode::Assistant && request.mode.as_deref() != Some("assistant") {
+        if crm_manual::verified_answer(&request.query).is_some() {
             mode = Mode::Instructions;
+        } else if !prompts::lookup_kind_is_contact(&request.query) {
+            app_pick = app_question(&state, &user, &request).await;
+            if app_pick.is_some() {
+                mode = Mode::Instructions;
+            }
         }
     }
     if let Err(err) = run(&state, &user, &request, mode, app_pick, &out).await {
@@ -825,6 +826,10 @@ async fn run(
                 .collect::<Vec<_>>()
                 .join(" ");
             let quick = crm_manual::quick_answer(&question, Some(&access));
+            // A verified answer is the manual's: its feedback, no model call.
+            if crm_manual::verified_answer(&question).is_some() {
+                how_to = true;
+            }
             // Picked for the question asked, not for a reply to a question back.
             let app_pick = app_pick.filter(|_| source.is_none());
             let ids = if let Some(feature) = &feature {

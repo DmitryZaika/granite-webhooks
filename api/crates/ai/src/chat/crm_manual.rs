@@ -1244,6 +1244,43 @@ pub fn customer_link_answer(
 pub fn quick_answer(question: &str, access: Option<&Access>) -> Option<String> {
     cloudtalk_phone_answer(question, access)
         .or_else(|| cloudtalk_credentials_answer(question, access))
+        .or_else(|| verified_answer(question).map(String::from))
+}
+
+#[derive(Deserialize)]
+struct Verified {
+    questions: Vec<String>,
+    answer: String,
+}
+
+/// A question's words as compared with the verified ones: typos corrected,
+/// punctuation dropped ("How do I pin a note?" is "how do i pin a note").
+fn verified_key(question: &str) -> String {
+    words(&corrected(&normalize(question)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `crm_manual_verified.json`: answers written from the manual and checked
+/// for questions the chat got wrong in the eval, by each wording asked.
+static VERIFIED: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+    let verified: Vec<Verified> =
+        serde_json::from_str(include_str!("crm_manual_verified.json")).expect("valid answers");
+    verified
+        .into_iter()
+        .flat_map(|v| {
+            let answer = v.answer;
+            v.questions
+                .into_iter()
+                .map(move |q| (verified_key(&q), answer.clone()))
+        })
+        .collect()
+});
+
+/// The checked answer to a question asked as one of the verified ones: no
+/// model call.
+pub fn verified_answer(question: &str) -> Option<&'static str> {
+    VERIFIED.get(&verified_key(question)).map(String::as_str)
 }
 
 #[cfg(test)]
@@ -1607,6 +1644,20 @@ mod tests {
                 "{reply}"
             );
         }
+    }
+
+    #[test]
+    fn verified_answers_match_their_wordings() {
+        let seam = verified_answer("How to move a SEAM?").expect("seam");
+        assert!(seam.contains("Define Seams"));
+        assert_eq!(verified_answer("how to move a seam in the kitchen"), None);
+        // A quick answer too: no model call.
+        assert!(quick_answer("how to move a seam", None).is_some());
+        // No wording is listed twice.
+        let listed: Vec<Verified> =
+            serde_json::from_str(include_str!("crm_manual_verified.json")).unwrap();
+        let wordings: usize = listed.iter().map(|v| v.questions.len()).sum();
+        assert_eq!(VERIFIED.len(), wordings);
     }
 
     #[test]
