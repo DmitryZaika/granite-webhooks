@@ -1124,6 +1124,18 @@ struct Candidate {
     recording_link: Option<String>,
 }
 
+/// SQL condition: text `m` in `table` was sent by user `u`. A text sent in
+/// the RingCentral or `CloudTalk` app carries no `sender_user_id`, only the
+/// rep's agent.
+fn sent_by(table: &str) -> String {
+    let agent = match table {
+        "ringcentral_sms" => "u.ringcentral_extension_id",
+        "cloudtalk_sms" => "u.cloudtalk_agent_id",
+        _ => return "m.sender_user_id = u.id".to_owned(),
+    };
+    format!("(m.sender_user_id = u.id OR (m.sender_user_id IS NULL AND m.agent = {agent}))")
+}
+
 /// Step 1: the reps' calls, texts and emails not queued yet. Plain reads
 /// first, then one insert: an `INSERT … SELECT` would hold shared locks on
 /// the calls and messages it reads, against their webhooks' writes.
@@ -1181,6 +1193,7 @@ async fn queue(pool: &MySqlPool) -> sqlx::Result<u64> {
         .await?,
     );
     for table in SMS_TABLES {
+        let sent_by = sent_by(table);
         found.extend(
             sqlx::query_as::<_, Candidate>(sqlx::AssertSqlSafe(format!(
                 "SELECT m.company_id, u.id AS user_id, 'sms' AS source,
@@ -1189,7 +1202,7 @@ async fn queue(pool: &MySqlPool) -> sqlx::Result<u64> {
                         RIGHT(m.phone_digits, 10) AS customer_digits,
                         CAST(NULL AS CHAR) AS customer_email, CAST(NULL AS CHAR) AS recording_link
                    FROM users u
-                   JOIN {table} m ON m.sender_user_id = u.id AND m.company_id = u.company_id
+                   JOIN {table} m ON {sent_by} AND m.company_id = u.company_id
                   WHERE u.ai_promises = 1 AND u.is_deleted = 0
                     AND m.direction = 'outbound' AND COALESCE(m.is_automated, 0) = 0
                     AND COALESCE(m.is_echo, 0) = 0 AND m.status <> 'failed'
@@ -1678,18 +1691,20 @@ async fn later_messages(
     let mut sent: Vec<(NaiveDateTime, String)> = Vec::new();
     if let Some(digits) = scan.customer_digits.as_deref() {
         for table in SMS_TABLES {
+            let sent_by = sent_by(table);
             let rows: Vec<(Option<String>, NaiveDateTime)> =
                 sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                    "SELECT text, CAST(created_date AS DATETIME) FROM {table}
-                      WHERE company_id = ? AND phone_digits IN (?, CONCAT('1', ?))
-                        AND sender_user_id = ? AND direction = 'outbound'
-                        AND COALESCE(is_echo, 0) = 0 AND created_date > ?
-                      ORDER BY created_date LIMIT 5"
+                    "SELECT m.text, CAST(m.created_date AS DATETIME) FROM {table} m
+                       JOIN users u ON u.id = ?
+                      WHERE m.company_id = ? AND m.phone_digits IN (?, CONCAT('1', ?))
+                        AND {sent_by} AND m.direction = 'outbound'
+                        AND COALESCE(m.is_echo, 0) = 0 AND m.created_date > ?
+                      ORDER BY m.created_date LIMIT 5"
                 )))
+                .bind(scan.user_id)
                 .bind(scan.company_id)
                 .bind(digits)
                 .bind(digits)
-                .bind(scan.user_id)
                 .bind(scan.happened_at)
                 .fetch_all(pool)
                 .await?;
