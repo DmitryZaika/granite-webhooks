@@ -1305,6 +1305,11 @@ struct Appointment {
     created_date: Option<DateTime<Utc>>,
     created_user_id: i32,
     customer_id: Option<i32>,
+    /// The event's own phone and email, used before the customer's.
+    #[sqlx(default)]
+    contact_phone: Option<String>,
+    #[sqlx(default)]
+    contact_email: Option<String>,
 }
 
 /// Records how the send went; `false` when another run already has it.
@@ -1401,8 +1406,13 @@ async fn render(
     Ok(Ok((subject, body)))
 }
 
-/// Sends one message for one appointment: the error code when it did not
-/// go out.
+/// The event's own phone or email, when it has one.
+fn own(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// Sends one message for one appointment (to the event's own phone or
+/// email, else the customer's): the error code when it did not go out.
 async fn deliver(
     state: &AppState,
     message: &Outgoing<'_>,
@@ -1460,8 +1470,11 @@ async fn deliver(
         let Some((provider, manager, seat)) = sender else {
             return Ok(Some("no_sms_sender"));
         };
-        let Some(phone_digits) = customer_phone(pool, company_id, customer_id)
-            .await?
+        let phone = match own(event.contact_phone.as_deref()) {
+            Some(phone) => Some(phone.to_string()),
+            None => customer_phone(pool, company_id, customer_id).await?,
+        };
+        let Some(phone_digits) = phone
             .map(|phone| phone10(&phone))
             .filter(|digits| digits.len() == 10)
         else {
@@ -1488,7 +1501,11 @@ async fn deliver(
             },
         );
     }
-    let Some(email) = customer_email(pool, customer_id).await? else {
+    let email = match own(event.contact_email.as_deref()) {
+        Some(email) => Some(email.to_string()),
+        None => customer_email(pool, customer_id).await?,
+    };
+    let Some(email) = email else {
         return Ok(Some("no_email"));
     };
     let (from_name, from_address) = sender_for(pool, company_id, customer_id, user_id).await?;
@@ -1562,7 +1579,8 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
         let events: Vec<Appointment> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT e.id, e.start_date, e.end_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
                     e.location, e.created_date, e.created_user_id,
-                    CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id
+                    CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id,
+                e.contact_phone, e.contact_email
                FROM schedule_notification_rules r
                JOIN schedule_notification_flows f ON f.id = r.flow_id
                JOIN events e ON {FLOW_APPLIES}
@@ -1730,7 +1748,8 @@ pub async fn send_confirmation(
     let event: Appointment = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT e.id, e.start_date, e.end_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
                 e.location, e.created_date, e.created_user_id,
-                CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id
+                CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id,
+                e.contact_phone, e.contact_email
            FROM events e
            JOIN users r ON r.id = e.created_user_id
            {EVENT_CUSTOMER}
