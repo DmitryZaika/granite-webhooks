@@ -77,9 +77,10 @@ const DUE: &str = "status = 'pending' AND attempts < ?
 
 pub const PROMISES_SYSTEM_PROMPT: &str = r#"You read what a countertop sales rep said to a customer: a phone call transcript, a text the rep sent (with the texts before it), or an email the rep sent (with the messages it quotes). Answer three things.
 1. "promises": every promise the rep made to the customer: something the rep said THEY would do later ("I'll text you our inventory link", "I'll send you the price tonight", "I'll call you back Tuesday", "Let me check if that slab is in stock", "I'll come measure Friday at 10").
-Only the rep's own promises to this customer. Not what the customer will do, not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages under AFTER THE CALL THE REP SENT are context only: a promise from the call that they already keep is not listed (an email to another address counts when it is clearly to this same customer). Combine promises about the same thing into one ("I'll text Andrew" and "I'll let you know his answer" are one: "Ask Andrew and get back to her").
+Only the rep's own promises to this customer. Not what the customer will do, not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages under AFTER THIS THE REP SENT are context only: a promise they already keep is not listed (an email to another address counts when it is clearly to this same customer, e.g. "Contract - Cedarbrook" after "I'll send you the contract").
+Only what THIS REP personally has to do. Not what another person or team will do ("our scheduling manager will call you", "the installers will…", "the office will send…"), and not the company's standard work that happens anyway as part of measuring, templating, fabrication or installation ("we will drill the faucet holes on site during installation", "we'll seal the stone", "we'll haul away the old tops"): those are how the job is done, not promises. Combine promises about the same thing into one ("I'll text Andrew" and "I'll let you know his answer" are one: "Ask Andrew and get back to her").
 2. "kept": the numbers (#) of OPEN PROMISES this call or message keeps: the rep did it here (sent the link or the price, called back, answered, came by). Only ones clearly done. OPEN PROMISES TO CALLERS NOT ON FILE are the rep's promises to people whose number matched no customer: count one kept only when this message clearly goes to that same person (their name, what was promised, the timing).
-3. "quote_changes": changes the CUSTOMER asked for in their countertop quote, anywhere in what you read: a different sink, color or stone, edge, backsplash, sizes, adding or removing a piece or a cutout. Not questions about the price, and nothing already in OPEN QUOTE CHANGES.
+3. "quote_changes": changes the CUSTOMER asked for in their countertop quote, anywhere in what you read: a different sink, color or stone, edge, backsplash, sizes, adding or removing a piece or a cutout. Not questions about the price, nothing already in OPEN QUOTE CHANGES, and not a change the rep says is already made ("updated as you requested", "attached is the revised quote").
 4. "customer_name": the name the customer goes by in what you read ("Donna"), or null.
 In a transcript the speakers are labeled A, B...; the rep is the one from the countertop company.
 Return JSON {"promises": [...], "kept": [numbers], "quote_changes": [...], "customer_name": ...}, with empty lists when there is nothing. Each promise:
@@ -495,6 +496,9 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
         tracing::error!(error = %err, "promise reminders failed; continuing");
         0
     });
+    if let Err(err) = check_quote_changes(state).await {
+        tracing::error!(error = %err, "quote change checks failed; continuing");
+    }
     let digests = send_digests(state).await.unwrap_or_else(|err| {
         tracing::error!(error = %err, "morning lists failed; continuing");
         0
@@ -569,6 +573,126 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
         }
     }
     failed.map_or(Ok(run), Err)
+}
+
+pub const QUOTE_CHECK_SYSTEM_PROMPT: &str = r#"You check whether a countertop quote already includes a change the customer asked for. You get the change, the customer's words, and the quote's LATEST version with the version BEFORE it (drawings as JSON: counters with their runs, cutouts and sinks, splashes and edges, and line items with names and prices).
+Return JSON {"done": true} when the LATEST version clearly has the change (e.g. the backsplash on those sides is there, the sink is that model, the color is that one), else {"done": false}. When unsure, false."#;
+
+/// Drawing keys that only place things on the page.
+const LAYOUT_KEYS: [&str; 10] = [
+    "x",
+    "y",
+    "id",
+    "along",
+    "across",
+    "anchorCorner",
+    "areaId",
+    "layouts",
+    "pageBreaks",
+    "turn",
+];
+
+/// A quote drawing without what only places things on the page, cut to
+/// `max` characters.
+pub fn compact_drawing(json: &str, max: usize) -> String {
+    fn strip(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                map.retain(|key, _| !LAYOUT_KEYS.contains(&key.as_str()));
+                map.values_mut().for_each(strip);
+            }
+            Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let Ok(mut value) = serde_json::from_str::<Value>(json) else {
+        return clip(json, max);
+    };
+    strip(&mut value);
+    clip(&value.to_string(), max)
+}
+
+/// Open quote changes against their quote, once per new version of it: the
+/// AI compares the latest version (and the one before) with the change and
+/// closes it when the quote has it (it was made in the quote).
+pub async fn check_quote_changes(state: &AppState) -> sqlx::Result<usize> {
+    let pool = &state.pool;
+    let open: Vec<(u64, i32, i32, i32, String, String)> = sqlx::query_as(
+        "SELECT p.id, p.user_id, p.company_id, p.quote_id, p.title, p.said
+           FROM ai_promises p
+           JOIN users u ON u.id = p.user_id AND u.ai_promises = 1 AND u.is_deleted = 0
+          WHERE p.status = 'open' AND p.kind = 'quote' AND p.quote_id IS NOT NULL
+            AND EXISTS (SELECT 1 FROM quote_revisions r
+                         WHERE r.quote_id = p.quote_id
+                           AND (p.reminded_at IS NULL OR r.created_at > p.reminded_at))
+          ORDER BY p.id LIMIT 3",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut closed = 0;
+    for (id, user_id, company_id, quote_id, change, said) in open {
+        // Checked against what is there now; a newer version checks again.
+        sqlx::query("UPDATE ai_promises SET reminded_at = UTC_TIMESTAMP() WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        let versions: Vec<(Option<String>,)> = sqlx::query_as(
+            "SELECT CAST(drawing_json AS CHAR) FROM quote_revisions
+              WHERE quote_id = ? ORDER BY id DESC LIMIT 2",
+        )
+        .bind(quote_id)
+        .fetch_all(pool)
+        .await?;
+        let drawing = |at: usize| {
+            versions
+                .get(at)
+                .and_then(|(json,)| json.as_deref())
+                .map_or_else(
+                    || "(none)".to_string(),
+                    |json| compact_drawing(json, 15_000),
+                )
+        };
+        let prompt = format!(
+            "CHANGE ASKED FOR: {change}\nCUSTOMER'S WORDS: \"{said}\"\n\nLATEST VERSION:\n{}\n\nVERSION BEFORE:\n{}",
+            drawing(0),
+            drawing(1)
+        );
+        let caller = Caller {
+            feature: FEATURE,
+            user_id: Some(user_id),
+            company_id: Some(company_id),
+        };
+        let mut chat = Chat::new(MINI_MODEL)
+            .message("system", QUOTE_CHECK_SYSTEM_PROMPT)
+            .message("user", &prompt);
+        chat.json = true;
+        let done = match state.ai.chat(pool, caller, &chat).await {
+            Ok(raw) => serde_json::from_str::<Value>(raw.trim())
+                .ok()
+                .and_then(|value| value.get("done").and_then(Value::as_bool))
+                .unwrap_or(false),
+            Err(err) => {
+                tracing::warn!(promise_id = id, error = %err, "quote change not checked");
+                // Checked again next run.
+                sqlx::query("UPDATE ai_promises SET reminded_at = NULL WHERE id = ?")
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+                continue;
+            }
+        };
+        if done {
+            sqlx::query(
+                "UPDATE ai_promises SET status = 'done', closed_at = UTC_TIMESTAMP()
+                  WHERE id = ? AND status = 'open'",
+            )
+            .bind(id)
+            .execute(pool)
+            .await?;
+            closed += 1;
+        }
+    }
+    Ok(closed)
 }
 
 /// A due promise to remind the rep of.
@@ -1179,9 +1303,9 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
            FROM ai_promises
           WHERE user_id = ? AND status = 'open'
             AND ((customer_id = ? OR customer_digits = ? OR customer_email = ?)
-                 OR (customer_id IS NULL AND kind = 'promise'
-                     AND promised_at > UTC_TIMESTAMP() - INTERVAL 3 DAY))
-          ORDER BY id DESC LIMIT 30",
+                 OR (kind = 'promise' AND promised_at > UTC_TIMESTAMP() - INTERVAL 3 DAY
+                     AND (customer_id IS NULL OR ? IS NULL)))
+          ORDER BY id DESC LIMIT 40",
     )
     .bind(customer_id)
     .bind(scan.customer_digits.as_deref())
@@ -1190,18 +1314,18 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
     .bind(customer_id)
     .bind(scan.customer_digits.as_deref())
     .bind(scan.customer_email.as_deref())
+    .bind(customer_id)
     .fetch_all(pool)
     .await?;
     let mut text = start_and_end(&text, MAX_SOURCE_CHARS);
-    // A call is often read after the text that kept what was promised on it.
-    if source == Source::Call {
-        let later = later_messages(pool, scan, customer_id, tz).await?;
-        if !later.is_empty() {
-            text.push_str(&format!(
-                "\n\nAFTER THE CALL THE REP SENT (a promise these already keep is done: don't list it):\n{}",
-                later.join("\n")
-            ));
-        }
+    // What the rep did next is often read first (or never tied to this
+    // customer): a promise it already keeps is not listed.
+    let later = later_messages(pool, scan, customer_id, tz).await?;
+    if !later.is_empty() {
+        text.push_str(&format!(
+            "\n\nAFTER THIS THE REP SENT (a promise these already keep is done: don't list it):\n{}",
+            later.join("\n")
+        ));
     }
     let prompt = extraction_prompt(
         source,
@@ -1580,45 +1704,32 @@ async fn later_messages(
             }
         }
     }
-    // A caller whose number is on no customer may get the email under
-    // another address: then every email the rep sent in the 12 hours after,
-    // with whom it went to, for the AI to tell.
-    let rows: Vec<(
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        NaiveDateTime,
-    )> = if let Some(customer_id) = customer_id {
+    // Emails to the customer's addresses, and every email the rep wrote in
+    // the 12 hours after (a customer often gets it at another address, like
+    // their work one), with whom it went to, for the AI to tell.
+    let rows: Vec<(i64, Option<String>, Option<String>, Option<String>, NaiveDateTime)> =
         sqlx::query_as(
-                "SELECT e.receiver_email, e.subject, e.body, e.sent_at FROM emails e
-                  WHERE e.company_id = ? AND e.sender_user_id = ? AND e.deleted_at IS NULL
-                    AND COALESCE(e.is_draft, 0) = 0 AND e.sent_at > ?
-                    AND LOWER(TRIM(e.receiver_email)) IN
-                        (SELECT LOWER(TRIM(ce.email)) FROM customers_emails ce WHERE ce.customer_id = ?)
-                  ORDER BY e.sent_at LIMIT 5",
-            )
-            .bind(scan.company_id)
-            .bind(scan.user_id)
-            .bind(scan.happened_at)
-            .bind(customer_id)
-            .fetch_all(pool)
-            .await?
-    } else {
-        sqlx::query_as(
-            "SELECT e.receiver_email, e.subject, e.body, e.sent_at FROM emails e
-                  WHERE e.company_id = ? AND e.sender_user_id = ? AND e.deleted_at IS NULL
-                    AND COALESCE(e.is_draft, 0) = 0 AND COALESCE(e.is_automated, 0) = 0
-                    AND e.sent_at > ? AND e.sent_at < ? + INTERVAL 12 HOUR
-                  ORDER BY e.sent_at LIMIT 8",
+            "SELECT e.id, e.receiver_email, e.subject, e.body, e.sent_at FROM emails e
+              WHERE e.company_id = ? AND e.sender_user_id = ? AND e.deleted_at IS NULL
+                AND COALESCE(e.is_draft, 0) = 0 AND COALESCE(e.is_automated, 0) = 0
+                AND e.sent_at > ?
+                AND (e.sent_at < ? + INTERVAL 12 HOUR
+                     OR LOWER(TRIM(e.receiver_email)) IN
+                        (SELECT LOWER(TRIM(ce.email)) FROM customers_emails ce WHERE ce.customer_id = ?))
+              ORDER BY e.sent_at LIMIT 10",
         )
         .bind(scan.company_id)
         .bind(scan.user_id)
         .bind(scan.happened_at)
         .bind(scan.happened_at)
+        .bind(customer_id)
         .fetch_all(pool)
-        .await?
-    };
-    for (to, subject, body, at) in rows {
+        .await?;
+    for (id, to, subject, body, at) in rows {
+        // The scan's own email is what is being read.
+        if scan.source_key == format!("email:{id}") {
+            continue;
+        }
         sent.push((
             at,
             format!(
