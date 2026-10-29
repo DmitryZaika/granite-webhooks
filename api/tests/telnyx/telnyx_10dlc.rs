@@ -1849,3 +1849,138 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     assert_eq!(run_checks(&server).await["processed"], 0);
     assert_eq!(fake.requests().len(), 3);
 }
+
+/// The API with an AI on a stand-in that streams `pieces` as its answer;
+/// the AI requests it received.
+async fn helper_server(pool: &MySqlPool, pieces: &[&str]) -> (TestServer, Arc<Mutex<Vec<Value>>>) {
+    let asked: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let seen = asked.clone();
+    let body: String = pieces
+        .iter()
+        .map(|piece| {
+            let event = json!({ "choices": [{ "delta": { "content": piece } }] });
+            format!("data: {event}\n\n")
+        })
+        .chain(["data: [DONE]\n\n".to_string()])
+        .collect();
+    let router = Router::new().fallback(move |request: Request| {
+        let seen = seen.clone();
+        let body = body.clone();
+        async move {
+            let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            seen.lock()
+                .unwrap()
+                .push(serde_json::from_slice(&bytes).unwrap_or(Value::Null));
+            ([("content-type", "text/event-stream")], body).into_response()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN).with_ai(Ai::new(
+        Some("ai-key"),
+        &format!("http://{address}/openai/chat"),
+    ));
+    (TestServer::new(app(state)), asked)
+}
+
+fn question(text: &str, form: &Value) -> Value {
+    json!({
+        "messages": [
+            { "role": "user", "content": "Hi" },
+            { "role": "assistant", "content": "Hello! Ask me about the form." },
+            { "role": "user", "content": text }
+        ],
+        "draft": form,
+        "step": "business"
+    })
+}
+
+#[test_db::test(seed)]
+async fn the_helper_answers_from_the_form_on_screen(pool: MySqlPool) {
+    setup(&pool).await;
+    let (server, asked) = helper_server(&pool, &["Type your ", "EIN\nas 12-3456789."]).await;
+    let mut form = form();
+    form["brand"]["ein"] = json!("");
+
+    // Mark asks: the answer streams, then `done`.
+    let response = server
+        .post("/v1/phone/admin/tendlc/chat")
+        .with_session(sessions::MANAGER)
+        .json(&question("What goes in Tax id?", &form))
+        .await;
+    response.assert_status_ok();
+    let text = response.text();
+    assert!(text.contains("data: Type your "), "{text}");
+    assert!(text.contains("data: EIN\ndata: as 12-3456789."), "{text}");
+    assert!(text.contains("event: done"), "{text}");
+
+    // The AI read the rules, the company, the form on screen with what
+    // blocks it, and the conversation.
+    let request = asked.lock().unwrap()[0].clone();
+    assert_eq!(request["stream"], json!(true));
+    let messages = request["messages"].as_array().unwrap();
+    let rules = messages[0]["content"].as_str().unwrap();
+    assert!(rules.contains("a Manager of the company"));
+    assert!(rules.contains("Opt-in checkbox"));
+    let context = messages[1]["content"].as_str().unwrap();
+    assert!(context.contains("Acme Stone LLC"), "{context}");
+    assert!(context.contains("step 1. Business"), "{context}");
+    assert!(
+        context.contains("brand.ein: Enter the tax id (EIN)."),
+        "{context}"
+    );
+    assert!(context.contains("never saved"), "{context}");
+    let roles: Vec<&str> = messages[2..]
+        .iter()
+        .map(|message| message["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["user", "assistant", "user"]);
+    assert_eq!(messages[4]["content"], json!("What goes in Tax id?"));
+
+    // Sam reviews Acme's form: the superusers' helper.
+    server
+        .post("/v1/superuser/companies/100/tendlc/chat")
+        .with_session(sessions::SUPER_ADMIN)
+        .json(&question("Is it ready?", &form))
+        .await
+        .assert_status_ok();
+    let request = asked.lock().unwrap()[1].clone();
+    assert!(
+        request["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("superuser")
+    );
+
+    // No question: 400. Not a Manager, not a superuser, no such company.
+    let mut answered = question("x", &form);
+    answered["messages"] = json!([{ "role": "assistant", "content": "Hello" }]);
+    server
+        .post("/v1/phone/admin/tendlc/chat")
+        .with_session(sessions::MANAGER)
+        .json(&answered)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .post("/v1/phone/admin/tendlc/chat")
+        .with_session(sessions::ADMIN)
+        .json(&question("x", &form))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/v1/superuser/companies/100/tendlc/chat")
+        .with_session(sessions::MANAGER)
+        .json(&question("x", &form))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/v1/superuser/companies/999/tendlc/chat")
+        .with_session(sessions::SUPER_ADMIN)
+        .json(&question("x", &form))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(asked.lock().unwrap().len(), 2);
+}

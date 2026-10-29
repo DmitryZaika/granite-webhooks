@@ -23,6 +23,7 @@
 //! statuses and counts only). Telnyx's reasons come back with phone numbers
 //! masked.
 
+use crate::ai::Caller;
 use crate::auth::session::SessionUser;
 use crate::auth::{CompanyManager, CurrentUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -34,15 +35,24 @@ use crate::phone::tendlc::{
     self as form, Row, TenDlcDraft, TenDlcFeedback, TenDlcProblem, TenDlcStatus, UseCase, audit,
     locked_fields_changed, move_status,
 };
+use crate::phone::tendlc_chat::{self as chat, Asker, ChatRole, ChatTurn};
 use crate::phone::tendlc_check::{self as ai_check, TenDlcAiCheck};
 use crate::phone::tendlc_registry::{self as registry, APPEAL_CHARS, RegistryError};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::HeaderValue;
+use axum::response::sse::{self, Sse};
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
+use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::convert::Infallible;
+use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -55,6 +65,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(resend_company_tendlc))
         .routes(routes!(refresh_company_tendlc))
         .routes(routes!(assign_company_tendlc_numbers))
+        .routes(routes!(ask_tendlc_helper))
+        .routes(routes!(ask_company_tendlc_helper))
 }
 
 /// What the company's Managers may do with the registration now.
@@ -1083,4 +1095,140 @@ pub async fn assign_company_tendlc_numbers(
         skipped: run.skipped,
         review: review(&state, id).await?,
     }))
+}
+
+/// A question to the AI helper beside the form.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TenDlcChatInput {
+    /// The conversation so far, oldest first, ending with the question
+    /// (the latest [`chat::MAX_TURNS`] are read).
+    pub messages: Vec<ChatTurn>,
+    /// The form as it is on screen, unsaved edits included.
+    pub draft: TenDlcDraft,
+    /// The step on screen: `business`, `texting` or `review`.
+    #[serde(default)]
+    pub step: String,
+}
+
+/// The helper's answer as server-sent events: unnamed `message` pieces of
+/// the answer, then `done`, or `failure` with what to tell the user.
+async fn chat_answer(
+    state: AppState,
+    company_id: i32,
+    user_id: i32,
+    asker: Asker,
+    input: TenDlcChatInput,
+) -> ApiResult<Response> {
+    let asked = input
+        .messages
+        .last()
+        .is_some_and(|turn| turn.role == ChatRole::User && !turn.content.trim().is_empty());
+    if !asked {
+        return Err(ApiError::BadRequest("Ask a question".into()));
+    }
+    let messages = chat::messages(
+        &state.pool,
+        company_id,
+        asker,
+        &input.draft,
+        &input.step,
+        &input.messages,
+    )
+    .await?;
+    let (tx, rx) = mpsc::unbounded_channel::<sse::Event>();
+    tokio::spawn(async move {
+        let caller = Caller {
+            feature: "tendlc_chat",
+            user_id: Some(user_id),
+            company_id: Some(company_id),
+        };
+        let pieces = tx.clone();
+        let result = chat::answer(&state, caller, messages, |text| {
+            let _ = pieces.send(sse::Event::default().data(text.replace('\r', "")));
+        })
+        .await;
+        let end = match result {
+            Ok(_) => sse::Event::default().event("done").data("1"),
+            Err(err) => {
+                tracing::error!(error = %err, company = company_id, "10DLC helper did not answer");
+                sse::Event::default()
+                    .event("failure")
+                    .data("The AI could not answer. Try again.")
+            }
+        };
+        let _ = tx.send(end);
+    });
+    let stream = UnboundedReceiverStream::new(rx).map(Ok::<_, Infallible>);
+    let mut response = Sse::new(stream).into_response();
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    Ok(response)
+}
+
+/// Ask the texting registration (10DLC) helper
+///
+/// The AI helper beside the form answers a question about filling it in,
+/// streamed as server-sent events (unnamed `message` pieces, then `done`,
+/// or `failure` with what to tell the user). It reads the form as sent
+/// (what is on screen, unsaved edits included) and its step, what blocks
+/// marking it ready, the company (name, address, website, numbers), where
+/// the registration is (the carriers' reasons, the AI check's changes) and
+/// the carriers' rules. The conversation is the browser's; nothing is
+/// saved. 400 when the last message is not a question. The company's
+/// Managers only.
+#[crate::openapi::path(
+    post,
+    path = "/v1/phone/admin/tendlc/chat",
+    operation_id = "ask_tendlc_helper",
+    tag = "phone",
+    request_body = TenDlcChatInput,
+    responses(
+        (status = 200, description = "The answer as server-sent events", content_type = "text/event-stream", body = String),
+        (status = 400, description = "No question", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a Manager of the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn ask_tendlc_helper(
+    State(state): State<AppState>,
+    CompanyManager(user): CompanyManager,
+    JsonBody(input): JsonBody<TenDlcChatInput>,
+) -> ApiResult<Response> {
+    chat_answer(state, user.company_id, user.id, Asker::Manager, input).await
+}
+
+/// Ask the texting registration (10DLC) helper about a company's form
+///
+/// As `POST /v1/phone/admin/tendlc/chat`, for a superuser reviewing the
+/// company's registration. Superusers only.
+#[crate::openapi::path(
+    post,
+    path = "/v1/superuser/companies/{id}/tendlc/chat",
+    operation_id = "ask_company_tendlc_helper",
+    tag = "phone",
+    params(("id" = i32, Path, description = "Company id")),
+    request_body = TenDlcChatInput,
+    responses(
+        (status = 200, description = "The answer as server-sent events", content_type = "text/event-stream", body = String),
+        (status = 400, description = "No question", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a superuser", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn ask_company_tendlc_helper(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<TenDlcChatInput>,
+) -> ApiResult<Response> {
+    superuser(&user)?;
+    company_exists(&state, id).await?;
+    chat_answer(state, id, user.id, Asker::Superuser, input).await
 }
