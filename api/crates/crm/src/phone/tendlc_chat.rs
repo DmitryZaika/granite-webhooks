@@ -13,7 +13,7 @@ use super::tendlc::{
 };
 use super::tendlc_check::{self as ai_check, CHECKS};
 use super::tendlc_registry as registry;
-use crate::ai::{AiError, Caller, Chat, LARGE_MODEL, MINI_MODEL};
+use crate::ai::{AiError, Caller, Chat, LARGE_FALLBACK_MODEL, LARGE_MODEL};
 use crate::openapi::ToSchema;
 use crate::state::AppState;
 use serde::Deserialize;
@@ -282,7 +282,7 @@ pub async fn messages(
 }
 
 /// Streams the answer to `on_text`; the whole answer is returned. Falls
-/// back to the small model when the large one is not allowed.
+/// back to Terra when the key may not use Sol.
 pub async fn answer(
     state: &AppState,
     caller: Caller<'_>,
@@ -300,7 +300,7 @@ pub async fn answer(
         .await
     {
         Err(err) if err.is_model_permission() => {
-            chat.model = MINI_MODEL;
+            chat.model = LARGE_FALLBACK_MODEL;
             state
                 .ai
                 .chat_stream(&state.pool, caller, &chat, &mut on_text)
