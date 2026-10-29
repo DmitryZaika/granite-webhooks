@@ -1,8 +1,9 @@
 //! Admin > Schedule: the company's own texts and emails to customers before
 //! and after their appointments. Templates are the messages; a flow puts
-//! templates in a sequence for one calendar ("1 day before: disconnect the
-//! sink; 1 hour before: see you soon; 1 day after: care and maintenance").
-//! A step after the appointment counts from its end.
+//! reminder templates in a sequence for one calendar ("1 day before:
+//! disconnect the sink; 1 hour before: see you soon; 1 day after: care and
+//! maintenance"). A step after the appointment counts from its end.
+//! Confirmation templates are in no flow: employees send them by hand.
 //!
 //! - `GET /v1/schedule/notifications` → templates, flows, and whether texting is set up
 //! - `POST /v1/schedule/notifications/templates`, `PUT`/`DELETE …/templates/{id}`
@@ -79,6 +80,35 @@ impl Channel {
             Self::Sms
         } else {
             Self::Email
+        }
+    }
+}
+
+/// What a template is for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TemplateKind {
+    /// A reminder or follow-up: flows send it at a time before or after the
+    /// appointment.
+    #[default]
+    Reminder,
+    /// Sent by hand with `POST /v1/events/{id}/confirmation`; never in a flow.
+    Confirmation,
+}
+
+impl TemplateKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reminder => "reminder",
+            Self::Confirmation => "confirmation",
+        }
+    }
+
+    fn parse(text: &str) -> Self {
+        if text == "confirmation" {
+            Self::Confirmation
+        } else {
+            Self::Reminder
         }
     }
 }
@@ -161,6 +191,8 @@ pub struct NotificationTemplate {
     pub id: i32,
     /// What admins call it, e.g. "Disconnect the sink".
     pub name: String,
+    /// `reminder` (flows send it) or `confirmation` (sent by hand).
+    pub kind: TemplateKind,
     /// `sms` or `email`.
     pub channel: Channel,
     /// Email subject (null for texts); may hold `{{variables}}`.
@@ -220,6 +252,10 @@ pub struct NotificationSettings {
 pub struct NotificationTemplateInput {
     /// At most 100 characters.
     pub name: String,
+    /// `reminder` or `confirmation`. Left out: `reminder` for a new template,
+    /// unchanged on edit. A template a flow uses stays a reminder.
+    #[serde(default)]
+    pub kind: Option<TemplateKind>,
     /// `sms` needs `CloudTalk` or `RingCentral`.
     pub channel: Channel,
     /// Required for email (at most 255 characters).
@@ -235,7 +271,7 @@ pub struct FlowStepInput {
     /// The step being edited; leave out for a new one.
     #[serde(default)]
     pub id: Option<i32>,
-    /// A template of the company.
+    /// A reminder template of the company.
     pub template_id: i32,
     /// 1 to 30 days' worth of `offset_unit`.
     pub offset_value: i32,
@@ -280,6 +316,7 @@ pub struct Created {
 struct TemplateRow {
     id: i32,
     name: String,
+    kind: String,
     channel: String,
     subject: Option<String>,
     body: String,
@@ -290,6 +327,7 @@ impl From<TemplateRow> for NotificationTemplate {
         Self {
             id: row.id,
             name: row.name,
+            kind: TemplateKind::parse(&row.kind),
             channel: Channel::parse(&row.channel),
             subject: row.subject,
             body: row.body,
@@ -324,7 +362,8 @@ async fn load_templates(
     sms_enabled: bool,
 ) -> Result<Vec<NotificationTemplate>, sqlx::Error> {
     let rows: Vec<TemplateRow> = sqlx::query_as(
-        "SELECT id, name, CAST(channel AS CHAR) AS channel, subject, body
+        "SELECT id, name, CAST(kind AS CHAR) AS kind, CAST(channel AS CHAR) AS channel,
+                subject, body
            FROM schedule_notification_templates
           WHERE company_id = ? AND deleted_at IS NULL AND (? OR channel <> 'sms')
           ORDER BY id",
@@ -500,17 +539,22 @@ async fn check_step(
     sms_enabled: bool,
     input: &FlowStepInput,
 ) -> ApiResult<Option<String>> {
-    let channel: Option<String> = sqlx::query_scalar(
-        "SELECT CAST(channel AS CHAR) FROM schedule_notification_templates
+    let template: Option<(String, String)> = sqlx::query_as(
+        "SELECT CAST(channel AS CHAR), CAST(kind AS CHAR) FROM schedule_notification_templates
           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(input.template_id)
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-    let Some(channel) = channel else {
+    let Some((channel, kind)) = template else {
         return Err(bad("Template not found"));
     };
+    if TemplateKind::parse(&kind) == TemplateKind::Confirmation {
+        return Err(bad(
+            "A confirmation can't go in a flow; make the template a reminder first",
+        ));
+    }
     if Channel::parse(&channel) == Channel::Sms && !sms_enabled {
         return Err(bad("Texting is not set up for this company"));
     }
@@ -719,11 +763,12 @@ pub async fn create_template(
     let checked = check_template(&state.pool, user.company_id, &input).await?;
     let id = sqlx::query(
         "INSERT INTO schedule_notification_templates
-           (company_id, name, channel, subject, body, created_by)
-         VALUES (?, ?, ?, ?, ?, ?)",
+           (company_id, name, kind, channel, subject, body, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user.company_id)
     .bind(checked.name)
+    .bind(input.kind.unwrap_or_default().as_str())
     .bind(input.channel.as_str())
     .bind(checked.subject)
     .bind(checked.body)
@@ -736,7 +781,8 @@ pub async fn create_template(
 
 /// Edit a customer notification template
 ///
-/// The flows using it send the new text from then on.
+/// The flows using it send the new text from then on. It can't become a
+/// confirmation while a flow uses it.
 #[crate::openapi::path(
     put,
     path = "/v1/schedule/notifications/templates/{id}",
@@ -746,7 +792,7 @@ pub async fn create_template(
     request_body = NotificationTemplateInput,
     responses(
         (status = 204, description = "Saved"),
-        (status = 400, description = "Invalid field, or texting not set up", body = ErrorBody),
+        (status = 400, description = "Invalid field, texting not set up, or a confirmation a flow uses", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an admin", body = ErrorBody),
         (status = 404, description = "No such template in the caller's company", body = ErrorBody),
@@ -768,12 +814,22 @@ pub async fn update_template(
     )
     .await?;
     let checked = check_template(&state.pool, user.company_id, &input).await?;
+    if input.kind == Some(TemplateKind::Confirmation) {
+        let used_by = flows_using(&state.pool, id).await?;
+        if !used_by.is_empty() {
+            return Err(ApiError::BadRequest(format!(
+                "A confirmation can't go in a flow. Remove it from these flows first: {}",
+                used_by.join(", ")
+            )));
+        }
+    }
     sqlx::query(
         "UPDATE schedule_notification_templates
-            SET name = ?, channel = ?, subject = ?, body = ?
+            SET name = ?, kind = COALESCE(?, kind), channel = ?, subject = ?, body = ?
           WHERE id = ?",
     )
     .bind(checked.name)
+    .bind(input.kind.map(TemplateKind::as_str))
     .bind(input.channel.as_str())
     .bind(checked.subject)
     .bind(checked.body)
@@ -781,6 +837,19 @@ pub async fn update_template(
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The names of the flows that send the template.
+async fn flows_using(pool: &MySqlPool, template_id: i32) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT f.name FROM schedule_notification_rules r
+           JOIN schedule_notification_flows f ON f.id = r.flow_id AND f.deleted_at IS NULL
+          WHERE r.template_id = ? AND r.deleted_at IS NULL
+          ORDER BY f.name",
+    )
+    .bind(template_id)
+    .fetch_all(pool)
+    .await
 }
 
 /// Delete a customer notification template
@@ -814,15 +883,7 @@ pub async fn delete_template(
         id,
     )
     .await?;
-    let used_by: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT f.name FROM schedule_notification_rules r
-           JOIN schedule_notification_flows f ON f.id = r.flow_id AND f.deleted_at IS NULL
-          WHERE r.template_id = ? AND r.deleted_at IS NULL
-          ORDER BY f.name",
-    )
-    .bind(id)
-    .fetch_all(&state.pool)
-    .await?;
+    let used_by = flows_using(&state.pool, id).await?;
     if !used_by.is_empty() {
         return Err(ApiError::BadRequest(format!(
             "Remove it from these flows first: {}",
@@ -1710,6 +1771,7 @@ fn confirmation_failure(code: &str) -> ApiError {
 ///
 /// Sends one of the company's templates to the event's customer right
 /// away, whenever the appointment is, and notes it in the event's history.
+/// The event form offers the `confirmation` templates; any kind is accepted.
 #[crate::openapi::path(
     post,
     path = "/v1/events/{id}/confirmation",
@@ -1742,7 +1804,8 @@ pub async fn send_confirmation(
         return Err(bad("Put the event on the calendar before confirming it"));
     }
     let template: TemplateRow = sqlx::query_as(
-        "SELECT id, name, CAST(channel AS CHAR) AS channel, subject, body
+        "SELECT id, name, CAST(kind AS CHAR) AS kind, CAST(channel AS CHAR) AS channel,
+                subject, body
            FROM schedule_notification_templates
           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
