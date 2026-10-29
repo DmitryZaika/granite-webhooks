@@ -55,6 +55,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(job_time::job_time_for))
         .routes(routes!(job_time::auto_plan))
         .routes(routes!(notifications::list))
+        .routes(routes!(notifications::set_on_my_way))
         .routes(routes!(notifications::create_template))
         .routes(routes!(
             notifications::update_template,

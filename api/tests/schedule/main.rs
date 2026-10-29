@@ -6,6 +6,7 @@
 mod common;
 
 mod calendars;
+mod crew;
 mod estimates;
 mod events;
 mod job_time;
