@@ -1831,7 +1831,10 @@ async fn email_text(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Text> {
     )))
 }
 
-/// The customer with the scan's phone or email.
+/// The customer with the scan's phone or email. An email whose address is
+/// on no customer is the customer's of another recipient (To, then Cc, then
+/// Bcc): a reply to the customer's husband with the customer copied keeps
+/// her promises.
 async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>> {
     if let Some(digits) = scan.customer_digits.as_deref().filter(|d| d.len() == 10) {
         return Ok(customer_by_digits(pool, scan.company_id, digits)
@@ -1839,7 +1842,7 @@ async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>>
             .map(|(id, _)| id));
     }
     if let Some(email) = scan.customer_email.as_deref().filter(|e| e.contains('@')) {
-        return sqlx::query_scalar(
+        let found: Option<i32> = sqlx::query_scalar(
             "SELECT c.id FROM customers c
                JOIN customers_emails ce ON ce.customer_id = c.id
               WHERE c.company_id = ? AND c.deleted_at IS NULL AND LOWER(TRIM(ce.email)) = ?
@@ -1848,9 +1851,32 @@ async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>>
         .bind(scan.company_id)
         .bind(email)
         .fetch_optional(pool)
-        .await;
+        .await?;
+        if found.is_some() {
+            return Ok(found);
+        }
     }
-    Ok(None)
+    let Some(email_id) = scan
+        .source_key
+        .strip_prefix("email:")
+        .and_then(|id| id.parse::<i64>().ok())
+    else {
+        return Ok(None);
+    };
+    sqlx::query_scalar(
+        "SELECT c.id FROM email_participants ep
+           JOIN customers c ON c.company_id = ? AND c.deleted_at IS NULL
+                AND (c.id = ep.customer_id
+                     OR c.id IN (SELECT ce.customer_id FROM customers_emails ce
+                                  WHERE LOWER(TRIM(ce.email)) = LOWER(TRIM(ep.email))))
+          WHERE ep.email_id = ? AND ep.type IN ('to', 'cc', 'bcc')
+          ORDER BY FIELD(ep.type, 'to', 'cc', 'bcc'), ep.position, c.id DESC
+          LIMIT 1",
+    )
+    .bind(scan.company_id)
+    .bind(email_id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// The customer (id, name) with this phone's last 10 digits: through the
