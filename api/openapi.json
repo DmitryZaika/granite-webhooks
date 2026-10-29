@@ -60928,7 +60928,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "`promise`: the rep's; `quote`: a change the customer asked for in\ntheir quote."
+            "description": "`promise`: the rep's; `quote`: a change the customer asked for in\ntheir quote; `approval`: something the rep sent for the customer's\napproval (due a day later)."
           },
           "source": {
             "type": "string",
