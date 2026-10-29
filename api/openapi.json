@@ -47036,6 +47036,88 @@
         ]
       }
     },
+    "/v1/company/auto-unscheduled-jobs": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch a sold quote's jobs in Unscheduled",
+        "description": "Admin › Automations. When on, marking a quote sold adds a template and an\ninstallation event to the schedule's Unscheduled list\n(`auto_unscheduled_jobs` in `GET /v1/company/features`).",
+        "operationId": "save_company_auto_unscheduled_jobs",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoUnscheduledJobsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/company/api-token-email": {
       "post": {
         "tags": [
@@ -62410,6 +62492,20 @@
         },
         "additionalProperties": false
       },
+      "AutoUnscheduledJobsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/auto-unscheduled-jobs`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: marking a quote sold adds its template and installation to\nUnscheduled."
+          }
+        },
+        "additionalProperties": false
+      },
       "AutocompleteRequest": {
         "allOf": [
           {
@@ -65469,7 +65565,8 @@
           "ringcentral",
           "telnyx",
           "telnyx_sms",
-          "auto_sale"
+          "auto_sale",
+          "auto_unscheduled_jobs"
         ],
         "properties": {
           "quickbooks_enabled": {
@@ -65515,6 +65612,10 @@
           "auto_sale": {
             "type": "boolean",
             "description": "Marking a deal won or a quote sold opens the sale form, filled from\nthe quote (Admin › Automations, `PUT /v1/company/auto-sale`)."
+          },
+          "auto_unscheduled_jobs": {
+            "type": "boolean",
+            "description": "Marking a quote sold adds its template and installation to the\nschedule's Unscheduled list (Admin › Automations,\n`PUT /v1/company/auto-unscheduled-jobs`)."
           }
         }
       },

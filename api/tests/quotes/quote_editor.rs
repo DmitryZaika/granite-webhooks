@@ -712,3 +712,49 @@ async fn reps_keep_email_templates_of_their_own(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 }
+
+#[test_db::test(seed)]
+async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    sqlx::query(
+        "INSERT INTO calendars (company_id, name, color, slug) VALUES
+           (100, 'Templates', 'green', 'templates'),
+           (100, 'Installations', 'blue', 'installations')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut counts = Vec::new();
+    for on in [false, true] {
+        sqlx::query("UPDATE company SET auto_unscheduled_jobs = ? WHERE id = 100")
+            .bind(on)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let id = create(&server, json!({ "customer_id": 1004 })).await;
+        let path = format!("/v1/quotes/{id}");
+        server
+            .put(&format!("{path}/drawing"))
+            .with_session(sessions::REP)
+            .json(&json!({ "doc": doc("Ubatuba") }))
+            .await
+            .assert_status_ok();
+        server
+            .post(&format!("{path}/sale"))
+            .with_session(sessions::REP)
+            .json(&json!({ "option": 0 }))
+            .await
+            .assert_status_ok();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM events WHERE quote_id = ? AND unscheduled <> 0",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        counts.push(count);
+    }
+    // Off: nothing added; on: a template and an installation.
+    assert_eq!(counts, [0, 2]);
+}
