@@ -12,6 +12,7 @@
 //! yet installed: its square feet, and per room its waterfalls, backsplash,
 //! tear-out, cooktop and sinks.
 
+use super::MAX_ROUTE_STOPS;
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
