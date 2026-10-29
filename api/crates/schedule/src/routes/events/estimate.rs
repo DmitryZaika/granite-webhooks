@@ -202,6 +202,7 @@ pub async fn book(
             user_name: user.name.as_deref(),
             user_id: user.id,
             customer_email: typed_email,
+            customer_phone: None,
             start: event.start.and_utc(),
             end: event.end.and_utc(),
             location: event.location,

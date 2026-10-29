@@ -60,6 +60,42 @@ pub struct ChatInput {
     /// The special order the slabs and delivery in the question are for.
     #[serde(default)]
     pub special_order: Option<SpecialOrderInput>,
+    /// Pictures added to the question, as `data:image/…` URLs (at most
+    /// [`MAX_IMAGES`]).
+    #[serde(default)]
+    pub images: Vec<String>,
+    /// The page the user is on, when they share it.
+    #[serde(default)]
+    pub page: Option<PageInput>,
+}
+
+/// The page the user is looking at.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PageInput {
+    /// The page's address (path and query).
+    pub path: String,
+    /// The page's title.
+    #[serde(default)]
+    pub title: String,
+    /// The text the page shows.
+    pub text: String,
+}
+
+/// Pictures one question may carry.
+pub const MAX_IMAGES: usize = 3;
+/// Characters of a shared page's text the model reads.
+const MAX_PAGE_TEXT: usize = 12_000;
+/// A question with its pictures is more than axum's default 2 MB.
+pub const MAX_CHAT_BODY_BYTES: usize = 6 * 1024 * 1024;
+
+fn page(input: PageInput) -> chat::Page {
+    let clip = |text: &str, max: usize| text.chars().take(max).collect::<String>();
+    chat::Page {
+        path: clip(input.path.trim(), 500),
+        title: clip(input.title.trim(), 200),
+        text: clip(input.text.trim(), MAX_PAGE_TEXT),
+    }
 }
 
 /// `parseSpecialOrderParams`: a positive price, and a full slab size or none
@@ -126,17 +162,36 @@ pub async fn ask(
     CurrentUser(user): CurrentUser,
     JsonBody(input): JsonBody<ChatInput>,
 ) -> ApiResult<Response> {
-    if input.query.trim().is_empty() && input.special_order.is_none() {
+    if input.query.trim().is_empty() && input.special_order.is_none() && input.images.is_empty() {
         return Err(ApiError::BadRequest("Ask a question".into()));
     }
+    if input.images.len() > MAX_IMAGES {
+        return Err(ApiError::BadRequest(format!(
+            "Add at most {MAX_IMAGES} pictures"
+        )));
+    }
+    if input
+        .images
+        .iter()
+        .any(|url| !url.starts_with("data:image/"))
+    {
+        return Err(ApiError::BadRequest("A picture could not be read".into()));
+    }
+    let query = if input.query.trim().is_empty() && !input.images.is_empty() {
+        "What does this picture show?".to_string()
+    } else {
+        input.query
+    };
     if input.mode.as_deref() == Some("assistant") && !chat::may_use_assistant(&user) {
         return Err(ApiError::Forbidden);
     }
     let request = chat::Request {
-        query: input.query,
+        query,
         mode: input.mode,
         is_new: input.is_new,
         special_order: input.special_order.and_then(special_order),
+        images: input.images,
+        page: input.page.map(page),
     };
     let (tx, rx) = mpsc::channel(256);
     tokio::spawn(chat::answer(state, user, request, tx));

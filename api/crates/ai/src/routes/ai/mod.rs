@@ -71,7 +71,12 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(compose::learn))
         .routes(routes!(first_contact::first_contact_email))
         .routes(routes!(conversation_reply::conversation_reply))
-        .routes(routes!(chat::ask))
+        .merge(
+            // A question with pictures is more than axum's default 2 MB.
+            OpenApiRouter::new()
+                .routes(routes!(chat::ask))
+                .layer(DefaultBodyLimit::max(chat::MAX_CHAT_BODY_BYTES)),
+        )
         .routes(routes!(manual_feedback::feedback))
         .routes(routes!(promises::list))
         .routes(routes!(promises::update))

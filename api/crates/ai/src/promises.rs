@@ -26,7 +26,11 @@
 //!    notification pushed to their phones, else sent to their Telegram;
 //! 6. from 8 AM their time, once a day, sends the rep's morning list
 //!    ([`send_digests`]): due today, overdue, without a time, quote changes,
-//!    and the customers whose text waits for their reply.
+//!    what waits for the customer's approval, and the customers whose text
+//!    waits for their reply;
+//! 7. a day after the rep sent something for the customer's approval (kind
+//!    `approval`), closes it when the customer has replied since, else
+//!    reminds the rep once to check with them ([`check_approvals`]).
 
 use crate::ai::{AiError, Caller, Chat, MINI_FALLBACK_MODEL, MINI_MODEL};
 use crate::auth::session::{SessionUser, find_live_user};
@@ -69,21 +73,25 @@ const TITLE_MAX_CHARS: usize = 160;
 const SAID_MAX_CHARS: usize = 500;
 /// The text tables a scan's `source_key` may name.
 const SMS_TABLES: [&str; 3] = ["ringcentral_sms", "cloudtalk_sms", "telnyx_sms"];
+/// How long something sent for approval waits for the customer's reply
+/// before the rep is reminded.
+pub const APPROVAL_WAIT_HOURS: i64 = 24;
 
 /// SQL condition on `ai_promise_scans`: waiting, with attempts left, and no
 /// run holds it (binds: the most attempts, the claim's minutes).
 const DUE: &str = "status = 'pending' AND attempts < ?
      AND (claimed_at IS NULL OR claimed_at < UTC_TIMESTAMP() - INTERVAL ? MINUTE)";
 
-pub const PROMISES_SYSTEM_PROMPT: &str = r#"You read what a countertop sales rep said to a customer: a phone call transcript, a text the rep sent (with the texts before it), or an email the rep sent (with the messages it quotes). Answer three things.
+pub const PROMISES_SYSTEM_PROMPT: &str = r#"You read what a countertop sales rep said to a customer: a phone call transcript, a text the rep sent (with the texts before it), or an email the rep sent (with the messages it quotes). Answer these things.
 1. "promises": every promise the rep made to the customer: something the rep said THEY would do later ("I'll text you our inventory link", "I'll send you the price tonight", "I'll call you back Tuesday", "Let me check if that slab is in stock", "I'll come measure Friday at 10").
-Only the rep's own promises to this customer. Not what the customer will do, not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages under AFTER THIS THE REP SENT are context only: a promise they already keep is not listed (an email to another address counts when it is clearly to this same customer, e.g. "Contract - Cedarbrook" after "I'll send you the contract").
-Only what THIS REP personally has to do. Not what another person or team will do ("our scheduling manager will call you", "the installers will…", "the office will send…"), and not the company's standard work that happens anyway as part of measuring, templating, fabrication or installation ("we will drill the faucet holes on site during installation", "we'll seal the stone", "we'll haul away the old tops"): those are how the job is done, not promises. Combine promises about the same thing into one ("I'll text Andrew" and "I'll let you know his answer" are one: "Ask Andrew and get back to her").
-2. "kept": the numbers (#) of OPEN PROMISES this call or message keeps: the rep did it here (sent the link or the price, called back, answered, came by). Only ones clearly done. OPEN PROMISES TO CALLERS NOT ON FILE are the rep's promises to people whose number matched no customer: count one kept only when this message clearly goes to that same person (their name, what was promised, the timing).
+Only the rep's own promises to this customer. Not what the customer will do, and not something the rep only starts to say when the customer then takes the next step (the rep: "I can check it. I'll—", the customer: "I'll take a picture of the elevator and send it to you"): the rep waits for the customer, which is not a promise. Not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages and calls under AFTER THIS are context only: a promise they already keep is not listed (an email to another address counts when it is clearly to this same customer, e.g. "Contract - Cedarbrook" after "I'll send you the contract").
+Only what THIS REP personally has to do. Not what another person or team will do ("our scheduling manager will call you", "the installers will…", "the office will send…", "we'll let you know the exact day and time once we have it" when another person or team sets it), and not the company's standard work that happens anyway as part of measuring, templating, fabrication or installation ("we will drill the faucet holes on site during installation", "we'll seal the stone", "we'll haul away the old tops"): those are how the job is done, not promises. Combine promises about the same thing into one ("I'll text Andrew" and "I'll let you know his answer" are one: "Ask Andrew and get back to her").
+2. "kept": the numbers (#) of OPEN PROMISES this call or message keeps. A promise is there to solve the customer's issue, so judge by the outcome, not the exact step: it is kept when the rep did it here (sent the link or the price, called back, answered, came by), when the rep gives the result it was for (after "I'll call the shop manager about the cutout", telling what happened to the cutout; after "I'll try to expedite the installation", giving the installation date; after "I'll remind you next time", the reminder itself), or when the issue is settled another way (the customer approved what the rep was to remind them about). Not kept while the issue is still open. An OPEN APPROVAL is kept once the customer answered it (approved, signed, chose, or turned it down). OPEN PROMISES TO CALLERS NOT ON FILE are the rep's promises to people whose number matched no customer: count one kept only when this message clearly goes to that same person (their name, what was promised, the timing).
 3. "quote_changes": changes the CUSTOMER asked for in their countertop quote, anywhere in what you read: a different sink, color or stone, edge, backsplash, sizes, adding or removing a piece or a cutout. Not questions about the price, nothing already in OPEN QUOTE CHANGES, and not a change the rep says is already made ("updated as you requested", "attached is the revised quote").
-4. "customer_name": the name the customer goes by in what you read ("Donna"), or null.
+4. "approvals": what THIS call or message (the rep's part; in texts, the LAST text) sends or shows the customer for THEM to approve, sign or choose: a quote or a revised quote, a contract, a drawing or layout, slab photos to pick from, a deposit invoice. Only when it is sent here (attached, linked, "I just emailed you the quote") and waits on the customer's answer; not what the rep only promises to send later (that is a promise), not what the customer already answered in what you read, and nothing already in OPEN APPROVALS.
+5. "customer_name": the name the customer goes by in what you read ("Donna"), or null.
 In a transcript the speakers are labeled A, B...; the rep is the one from the countertop company.
-Return JSON {"promises": [...], "kept": [numbers], "quote_changes": [...], "customer_name": ...}, with empty lists when there is nothing. Each promise:
+Return JSON {"promises": [...], "kept": [numbers], "quote_changes": [...], "approvals": [...], "customer_name": ...}, with empty lists when there is nothing. Each promise:
 - "title": what the rep has to do, a short imperative of at most 8 words ("Send the inventory link", "Call back about the sink").
 - "said": the rep's words that made the promise, as said (at most 200 characters).
 - "due": when the rep promised it, "YYYY-MM-DD HH:MM" in the same local time as WHEN and NOW, or null when they named no time. "Tonight" is 19:00, "tomorrow" with no hour is 10:00, "this week" is Friday 17:00, "right after this call" or "in a minute" is 15 minutes after WHEN.
@@ -92,7 +100,10 @@ Return JSON {"promises": [...], "kept": [numbers], "quote_changes": [...], "cust
 - "link": "inventory" when the message is about our stones, colors or inventory; "quote" when it is about sending their measurements or the online quote form; else null.
 Each quote change:
 - "change": what to change in the quote, a short imperative of at most 12 words ("Replace the sink with a 33-inch undermount", "Switch the color to Calacatta Gold").
-- "said": the customer's words that asked for it (at most 200 characters)."#;
+- "said": the customer's words that asked for it (at most 200 characters).
+Each approval:
+- "title": what waits for the customer, at most 8 words ("Approve the revised kitchen quote", "Sign the contract").
+- "said": the rep's words that sent it (at most 200 characters)."#;
 
 /// Where a scan came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +185,8 @@ pub struct Reading {
     /// Open promises (their ids) this call or message keeps.
     pub kept: Vec<u64>,
     pub quote_changes: Vec<QuoteChange>,
+    /// What was sent for the customer's approval (`change` is its title).
+    pub approvals: Vec<QuoteChange>,
     /// The name the customer goes by in it.
     pub customer_name: Option<String>,
 }
@@ -234,29 +247,33 @@ pub fn parse_reading(raw: &str, open: &[OpenItem]) -> Reading {
         })
         .filter(|id| {
             open.iter()
-                .any(|item| item.id == *id && item.kind == "promise")
+                .any(|item| item.id == *id && item.kind != "quote")
         })
         .collect();
     kept.sort_unstable();
     kept.dedup();
-    let quote_changes = list("quote_changes")
-        .iter()
-        .filter_map(|item| {
-            let change = clip(item.get("change")?.as_str()?, TITLE_MAX_CHARS);
-            (!change.is_empty()).then(|| QuoteChange {
-                change,
-                said: clip(
-                    item.get("said").and_then(Value::as_str).unwrap_or(""),
-                    SAID_MAX_CHARS,
-                ),
+    // Quote changes and approvals: their text under `name`, and "said".
+    let changes = |key: &str, name: &str| -> Vec<QuoteChange> {
+        list(key)
+            .iter()
+            .filter_map(|item| {
+                let change = clip(item.get(name)?.as_str()?, TITLE_MAX_CHARS);
+                (!change.is_empty()).then(|| QuoteChange {
+                    change,
+                    said: clip(
+                        item.get("said").and_then(Value::as_str).unwrap_or(""),
+                        SAID_MAX_CHARS,
+                    ),
+                })
             })
-        })
-        .take(MAX_PROMISES)
-        .collect();
+            .take(MAX_PROMISES)
+            .collect()
+    };
     Reading {
         promises: parse_promises(&list("promises")),
         kept,
-        quote_changes,
+        quote_changes: changes("quote_changes", "change"),
+        approvals: changes("approvals", "title"),
         customer_name: value
             .get("customer_name")
             .and_then(Value::as_str)
@@ -287,6 +304,9 @@ pub fn without_repeats(reading: &mut Reading, open: &[OpenItem]) {
     reading
         .quote_changes
         .retain(|change| first(format!("quote:{}", change.change.to_lowercase())));
+    reading
+        .approvals
+        .retain(|approval| first(format!("approval:{}", approval.change.to_lowercase())));
 }
 
 fn parse_promises(items: &[Value]) -> Vec<Found> {
@@ -374,9 +394,10 @@ pub fn extraction_prompt(
         )
     };
     format!(
-        "SALES REP: {rep_name}\nWHEN: {when}\nNOW: {now}\nOPEN PROMISES (already on the rep's list):\n{}\nOPEN QUOTE CHANGES (already on the list):\n{}\n{not_on_file}\n{what}:\n{text}",
+        "SALES REP: {rep_name}\nWHEN: {when}\nNOW: {now}\nOPEN PROMISES (already on the rep's list):\n{}\nOPEN QUOTE CHANGES (already on the list):\n{}\nOPEN APPROVALS (sent, waiting for the customer's answer):\n{}\n{not_on_file}\n{what}:\n{text}",
         listed("promise"),
         listed("quote"),
+        listed("approval"),
     )
 }
 
@@ -438,7 +459,7 @@ pub struct JobRun {
     pub read: usize,
     /// Promises and quote changes saved.
     pub promises: usize,
-    /// Due promises the rep was reminded of.
+    /// Due promises, and approvals with no reply, the rep was reminded of.
     pub reminded: usize,
     /// Morning lists sent.
     pub digests: usize,
@@ -496,6 +517,11 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
         tracing::error!(error = %err, "promise reminders failed; continuing");
         0
     });
+    let reminded = reminded
+        + check_approvals(state).await.unwrap_or_else(|err| {
+            tracing::error!(error = %err, "approval checks failed; continuing");
+            0
+        });
     if let Err(err) = check_quote_changes(state).await {
         tracing::error!(error = %err, "quote change checks failed; continuing");
     }
@@ -764,6 +790,166 @@ pub async fn remind_due(state: &AppState) -> sqlx::Result<usize> {
     Ok(sent)
 }
 
+/// Something sent for the customer's approval whose wait is over.
+#[derive(Debug, sqlx::FromRow)]
+struct SentForApproval {
+    id: u64,
+    user_id: i32,
+    company_id: i32,
+    customer_id: Option<i32>,
+    customer_name: Option<String>,
+    customer_digits: Option<String>,
+    customer_email: Option<String>,
+    promised_at: NaiveDateTime,
+    title: String,
+    /// The rep gets activity reminders on Telegram.
+    telegram: bool,
+}
+
+/// Step 7: what was sent for the customer's approval [`APPROVAL_WAIT_HOURS`]
+/// ago, each once: closed when the customer has replied since (a text, an
+/// email, a call of [`MIN_CALL_SECONDS`] or more), else a bell notification
+/// (`ai_promise_approval`) reminds the rep to check with them, as
+/// [`remind_due`] does; it stays on the list until done or dismissed.
+pub async fn check_approvals(state: &AppState) -> sqlx::Result<usize> {
+    let pool = &state.pool;
+    let due: Vec<SentForApproval> = sqlx::query_as(
+        "SELECT p.id, p.user_id, p.company_id, p.customer_id, c.name AS customer_name,
+                p.customer_digits, p.customer_email, p.promised_at, p.title,
+                COALESCE(u.telegram_activity_notifications, 0) <> 0 AS telegram
+           FROM ai_promises p
+           JOIN users u ON u.id = p.user_id AND u.ai_promises = 1 AND u.is_deleted = 0
+           LEFT JOIN customers c ON c.id = p.customer_id
+          WHERE p.status = 'open' AND p.kind = 'approval' AND p.reminded_at IS NULL
+            AND p.due_at <= UTC_TIMESTAMP() AND p.due_at > UTC_TIMESTAMP() - INTERVAL 1 DAY
+          ORDER BY p.due_at LIMIT 20",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut sent = 0;
+    for approval in due {
+        let claimed = sqlx::query(
+            "UPDATE ai_promises SET reminded_at = UTC_TIMESTAMP() WHERE id = ? AND reminded_at IS NULL",
+        )
+        .bind(approval.id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        if claimed == 0 {
+            continue;
+        }
+        if customer_replied(pool, &approval).await? {
+            sqlx::query(
+                "UPDATE ai_promises SET status = 'done', closed_at = UTC_TIMESTAMP()
+                  WHERE id = ? AND status = 'open'",
+            )
+            .bind(approval.id)
+            .execute(pool)
+            .await?;
+            continue;
+        }
+        let customer = who(
+            approval.customer_name.as_deref(),
+            approval.customer_digits.as_deref(),
+        );
+        let message = clip(
+            &format!("No reply yet: {} — {customer}", approval.title),
+            255,
+        );
+        let text = format!("⏳ {message}\nSent a day ago. Check with them.");
+        notify(
+            state,
+            approval.user_id,
+            "ai_promise_approval",
+            &message,
+            &text,
+            approval.telegram,
+        )
+        .await?;
+        sent += 1;
+    }
+    Ok(sent)
+}
+
+/// The customer texted, emailed or talked on the phone with the company
+/// since the approval was sent: by its phone (else their customer's) and its
+/// email (and their customer's addresses).
+async fn customer_replied(pool: &MySqlPool, approval: &SentForApproval) -> sqlx::Result<bool> {
+    let digits = match approval.customer_digits.clone() {
+        Some(digits) => Some(digits),
+        None => match approval.customer_id {
+            Some(id) => sqlx::query_scalar::<_, Option<String>>(
+                "SELECT RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', ''), 10)
+                   FROM customers WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+            .flatten(),
+            None => None,
+        },
+    }
+    .filter(|digits| digits.len() == 10);
+    if let Some(digits) = digits.as_deref() {
+        for table in SMS_TABLES {
+            let texted: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT 1 FROM {table}
+                  WHERE company_id = ? AND phone_digits IN (?, CONCAT('1', ?))
+                    AND direction = 'inbound' AND COALESCE(is_echo, 0) = 0
+                    AND created_date > ? LIMIT 1"
+            )))
+            .bind(approval.company_id)
+            .bind(digits)
+            .bind(digits)
+            .bind(approval.promised_at)
+            .fetch_optional(pool)
+            .await?;
+            if texted.is_some() {
+                return Ok(true);
+            }
+        }
+        let called: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM provider_calls
+              WHERE company_id = ? AND customer_digits = ? AND started_at > ?
+                AND CAST(COALESCE(item->>'$.Cdr.talking_time', '0') AS UNSIGNED) >= ?
+             UNION ALL
+             SELECT 1 FROM phone_calls
+              WHERE company_id = ? AND RIGHT(REGEXP_REPLACE(other_number, '[^0-9]', ''), 10) = ?
+                AND started_at > ? AND duration_secs >= ?
+             LIMIT 1",
+        )
+        .bind(approval.company_id)
+        .bind(digits)
+        .bind(approval.promised_at)
+        .bind(MIN_CALL_SECONDS)
+        .bind(approval.company_id)
+        .bind(digits)
+        .bind(approval.promised_at)
+        .bind(MIN_CALL_SECONDS)
+        .fetch_optional(pool)
+        .await?;
+        if called.is_some() {
+            return Ok(true);
+        }
+    }
+    let emailed: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM emails e
+          WHERE e.company_id = ? AND e.sender_user_id IS NULL AND e.deleted_at IS NULL
+            AND COALESCE(e.is_draft, 0) = 0 AND e.sent_at > ?
+            AND (LOWER(TRIM(e.sender_email)) = ?
+                 OR LOWER(TRIM(e.sender_email)) IN
+                    (SELECT LOWER(TRIM(ce.email)) FROM customers_emails ce WHERE ce.customer_id = ?))
+          LIMIT 1",
+    )
+    .bind(approval.company_id)
+    .bind(approval.promised_at)
+    .bind(approval.customer_email.as_deref())
+    .bind(approval.customer_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(emailed.is_some())
+}
+
 /// A bell notification of `kind` pushed to the user's phones; when no phone
 /// took it, `text` goes to their Telegram if `telegram`.
 async fn notify(
@@ -915,6 +1101,7 @@ pub fn morning_list(
     let mut due_today = Vec::new();
     let mut undated = Vec::new();
     let mut quotes = Vec::new();
+    let mut approvals = Vec::new();
     for promise in promises {
         let line = format!(
             "{} — {}",
@@ -926,6 +1113,10 @@ pub fn morning_list(
         );
         if promise.kind == "quote" {
             quotes.push(line);
+            continue;
+        }
+        if promise.kind == "approval" {
+            approvals.push(line);
             continue;
         }
         match promise.due_at {
@@ -966,6 +1157,7 @@ pub fn morning_list(
         ("Due today", &due_today),
         ("No time set", &undated),
         ("Quote changes customers asked for", &quotes),
+        ("Waiting for the customer's approval", &approvals),
         ("Waiting for your reply", &waiting_lines),
     ];
     if sections.iter().all(|(_, lines)| lines.is_empty()) {
@@ -976,6 +1168,7 @@ pub fn morning_list(
         (due_today.len(), "due today"),
         (undated.len(), "without a time"),
         (quotes.len(), "quote changes"),
+        (approvals.len(), "waiting for approval"),
         (waiting_lines.len(), "waiting for your reply"),
     ]
     .iter()
@@ -1124,6 +1317,18 @@ struct Candidate {
     recording_link: Option<String>,
 }
 
+/// SQL condition: text `m` in `table` was sent by user `u`. A text sent in
+/// the RingCentral or `CloudTalk` app carries no `sender_user_id`, only the
+/// rep's agent.
+fn sent_by(table: &str) -> String {
+    let agent = match table {
+        "ringcentral_sms" => "u.ringcentral_extension_id",
+        "cloudtalk_sms" => "u.cloudtalk_agent_id",
+        _ => return "m.sender_user_id = u.id".to_owned(),
+    };
+    format!("(m.sender_user_id = u.id OR (m.sender_user_id IS NULL AND m.agent = {agent}))")
+}
+
 /// Step 1: the reps' calls, texts and emails not queued yet. Plain reads
 /// first, then one insert: an `INSERT … SELECT` would hold shared locks on
 /// the calls and messages it reads, against their webhooks' writes.
@@ -1181,6 +1386,7 @@ async fn queue(pool: &MySqlPool) -> sqlx::Result<u64> {
         .await?,
     );
     for table in SMS_TABLES {
+        let sent_by = sent_by(table);
         found.extend(
             sqlx::query_as::<_, Candidate>(sqlx::AssertSqlSafe(format!(
                 "SELECT m.company_id, u.id AS user_id, 'sms' AS source,
@@ -1189,7 +1395,7 @@ async fn queue(pool: &MySqlPool) -> sqlx::Result<u64> {
                         RIGHT(m.phone_digits, 10) AS customer_digits,
                         CAST(NULL AS CHAR) AS customer_email, CAST(NULL AS CHAR) AS recording_link
                    FROM users u
-                   JOIN {table} m ON m.sender_user_id = u.id AND m.company_id = u.company_id
+                   JOIN {table} m ON {sent_by} AND m.company_id = u.company_id
                   WHERE u.ai_promises = 1 AND u.is_deleted = 0
                     AND m.direction = 'outbound' AND COALESCE(m.is_automated, 0) = 0
                     AND COALESCE(m.is_echo, 0) = 0 AND m.status <> 'failed'
@@ -1323,7 +1529,7 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
     let later = later_messages(pool, scan, customer_id, tz).await?;
     if !later.is_empty() {
         text.push_str(&format!(
-            "\n\nAFTER THIS THE REP SENT (a promise these already keep is done: don't list it):\n{}",
+            "\n\nAFTER THIS (a promise these already keep is done: don't list it):\n{}",
             later.join("\n")
         ));
     }
@@ -1416,6 +1622,29 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         .execute(&mut *tx)
         .await?;
     }
+    for approval in &reading.approvals {
+        sqlx::query(
+            "INSERT INTO ai_promises
+                    (company_id, user_id, scan_id, source, kind, promised_at, customer_id,
+                     customer_digits, customer_email, customer_label, title, said, due_at)
+             VALUES (?, ?, ?, ?, 'approval', ?, ?, ?, ?, ?, ?, ?, ? + INTERVAL ? HOUR)",
+        )
+        .bind(scan.company_id)
+        .bind(user.id)
+        .bind(scan.id)
+        .bind(source.as_str())
+        .bind(scan.happened_at)
+        .bind(customer_id)
+        .bind(scan.customer_digits.as_deref())
+        .bind(scan.customer_email.as_deref())
+        .bind(reading.customer_name.as_deref())
+        .bind(&approval.change)
+        .bind(&approval.said)
+        .bind(scan.happened_at)
+        .bind(APPROVAL_WAIT_HOURS)
+        .execute(&mut *tx)
+        .await?;
+    }
     for id in &reading.kept {
         sqlx::query(
             "UPDATE ai_promises
@@ -1433,7 +1662,9 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok(Outcome::Read(found.len() + reading.quote_changes.len()))
+    Ok(Outcome::Read(
+        found.len() + reading.quote_changes.len() + reading.approvals.len(),
+    ))
 }
 
 /// The customer's newest quote, the one a change they asked for goes in.
@@ -1600,7 +1831,10 @@ async fn email_text(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Text> {
     )))
 }
 
-/// The customer with the scan's phone or email.
+/// The customer with the scan's phone or email. An email whose address is
+/// on no customer is the customer's of another recipient (To, then Cc, then
+/// Bcc): a reply to the customer's husband with the customer copied keeps
+/// her promises.
 async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>> {
     if let Some(digits) = scan.customer_digits.as_deref().filter(|d| d.len() == 10) {
         return Ok(customer_by_digits(pool, scan.company_id, digits)
@@ -1608,7 +1842,7 @@ async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>>
             .map(|(id, _)| id));
     }
     if let Some(email) = scan.customer_email.as_deref().filter(|e| e.contains('@')) {
-        return sqlx::query_scalar(
+        let found: Option<i32> = sqlx::query_scalar(
             "SELECT c.id FROM customers c
                JOIN customers_emails ce ON ce.customer_id = c.id
               WHERE c.company_id = ? AND c.deleted_at IS NULL AND LOWER(TRIM(ce.email)) = ?
@@ -1617,9 +1851,32 @@ async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>>
         .bind(scan.company_id)
         .bind(email)
         .fetch_optional(pool)
-        .await;
+        .await?;
+        if found.is_some() {
+            return Ok(found);
+        }
     }
-    Ok(None)
+    let Some(email_id) = scan
+        .source_key
+        .strip_prefix("email:")
+        .and_then(|id| id.parse::<i64>().ok())
+    else {
+        return Ok(None);
+    };
+    sqlx::query_scalar(
+        "SELECT c.id FROM email_participants ep
+           JOIN customers c ON c.company_id = ? AND c.deleted_at IS NULL
+                AND (c.id = ep.customer_id
+                     OR c.id IN (SELECT ce.customer_id FROM customers_emails ce
+                                  WHERE LOWER(TRIM(ce.email)) = LOWER(TRIM(ep.email))))
+          WHERE ep.email_id = ? AND ep.type IN ('to', 'cc', 'bcc')
+          ORDER BY FIELD(ep.type, 'to', 'cc', 'bcc'), ep.position, c.id DESC
+          LIMIT 1",
+    )
+    .bind(scan.company_id)
+    .bind(email_id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// The customer (id, name) with this phone's last 10 digits: through the
@@ -1667,7 +1924,8 @@ pub async fn customer_by_digits(
 }
 
 /// What the rep sent the customer after a call, oldest first: texts to their
-/// number and emails to their addresses (up to 5 of each), as
+/// number and emails to their addresses (up to 5 of each), and later calls
+/// with them (up to 3), as
 /// `[2026-10-28 15:20 (Wed)] TEXT: …`.
 async fn later_messages(
     pool: &MySqlPool,
@@ -1678,18 +1936,20 @@ async fn later_messages(
     let mut sent: Vec<(NaiveDateTime, String)> = Vec::new();
     if let Some(digits) = scan.customer_digits.as_deref() {
         for table in SMS_TABLES {
+            let sent_by = sent_by(table);
             let rows: Vec<(Option<String>, NaiveDateTime)> =
                 sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                    "SELECT text, CAST(created_date AS DATETIME) FROM {table}
-                      WHERE company_id = ? AND phone_digits IN (?, CONCAT('1', ?))
-                        AND sender_user_id = ? AND direction = 'outbound'
-                        AND COALESCE(is_echo, 0) = 0 AND created_date > ?
-                      ORDER BY created_date LIMIT 5"
+                    "SELECT m.text, CAST(m.created_date AS DATETIME) FROM {table} m
+                       JOIN users u ON u.id = ?
+                      WHERE m.company_id = ? AND m.phone_digits IN (?, CONCAT('1', ?))
+                        AND {sent_by} AND m.direction = 'outbound'
+                        AND COALESCE(m.is_echo, 0) = 0 AND m.created_date > ?
+                      ORDER BY m.created_date LIMIT 5"
                 )))
+                .bind(scan.user_id)
                 .bind(scan.company_id)
                 .bind(digits)
                 .bind(digits)
-                .bind(scan.user_id)
                 .bind(scan.happened_at)
                 .fetch_all(pool)
                 .await?;
@@ -1702,6 +1962,30 @@ async fn later_messages(
                     ));
                 }
             }
+        }
+        // Later calls with them, already transcribed (a text read late can
+        // be kept by a call read before it).
+        let calls: Vec<(String, NaiveDateTime)> = sqlx::query_as(
+            "SELECT transcript, happened_at FROM ai_promise_scans
+              WHERE company_id = ? AND user_id = ? AND source = 'call'
+                AND customer_digits = ? AND happened_at > ? AND transcript IS NOT NULL
+              ORDER BY happened_at LIMIT 3",
+        )
+        .bind(scan.company_id)
+        .bind(scan.user_id)
+        .bind(digits)
+        .bind(scan.happened_at)
+        .fetch_all(pool)
+        .await?;
+        for (transcript, at) in calls {
+            sent.push((
+                at,
+                format!(
+                    "[{}] CALL: {}",
+                    local_time(at, tz),
+                    start_and_end(&transcript, 2_000)
+                ),
+            ));
         }
     }
     // Emails to the customer's addresses, and every email the rep wrote in
@@ -1844,7 +2128,8 @@ mod tests {
                 {"title": "", "said": "nothing"}
             ],
             "kept": [7, "#7", 9, 12],
-            "quote_changes": [{"change": "Replace the sink with a 33-inch undermount", "said": "Can we do a bigger sink?"}, {"change": " "}]}"##,
+            "quote_changes": [{"change": "Replace the sink with a 33-inch undermount", "said": "Can we do a bigger sink?"}, {"change": " "}],
+            "approvals": [{"title": "Approve the revised quote", "said": "Here is the revised quote"}, {"title": ""}]}"##,
             &shown,
         );
         assert_eq!(
@@ -1877,6 +2162,22 @@ mod tests {
                 said: "Can we do a bigger sink?".into(),
             }]
         );
+        assert_eq!(
+            reading.approvals,
+            vec![QuoteChange {
+                change: "Approve the revised quote".into(),
+                said: "Here is the revised quote".into(),
+            }]
+        );
+        // An open approval the customer answered is kept too.
+        assert_eq!(
+            parse_reading(
+                r#"{"kept": [4]}"#,
+                &[open(4, "approval", "Sign the contract")]
+            )
+            .kept,
+            vec![4]
+        );
         assert_eq!(parse_reading("not json", &shown), Reading::default());
         assert!(
             parse_reading(r#"{"promises": "none"}"#, &shown)
@@ -1902,6 +2203,9 @@ mod tests {
             prompt.contains("OPEN PROMISES (already on the rep's list):\n- #7 Send the price\n")
         );
         assert!(prompt.contains("OPEN QUOTE CHANGES (already on the list):\n- #9 Swap the sink\n"));
+        assert!(
+            prompt.contains("OPEN APPROVALS (sent, waiting for the customer's answer):\n(none)\n")
+        );
     }
 
     #[test]
@@ -1923,6 +2227,7 @@ mod tests {
                 promise("promise", "Send photos", None),
                 promise("promise", "Visit next week", Some("2026-11-03 15:00")),
                 promise("quote", "Swap the sink", None),
+                promise("approval", "Sign the contract", Some("2026-10-28 20:00")),
             ],
             &[Waiting {
                 phone_digits: "3175550100".into(),
@@ -1937,7 +2242,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             summary,
-            "Morning list: 1 overdue, 1 due today, 1 without a time, 1 quote changes, 1 waiting for your reply"
+            "Morning list: 1 overdue, 1 due today, 1 without a time, 1 quote changes, 1 waiting for approval, 1 waiting for your reply"
+        );
+        assert!(
+            text.contains(
+                "Waiting for the customer's approval (1):\n• Sign the contract — Ann Lee"
+            )
         );
         assert!(text.starts_with("☀️ Good morning! Your list for Wed, Oct 28:"));
         assert!(text.contains("Overdue (1):\n• Send the price — Ann Lee (due Oct 27, 5:00 PM)"));
@@ -1985,6 +2295,7 @@ mod tests {
                 change: "Swap the sink".into(),
                 said: String::new(),
             }],
+            approvals: Vec::new(),
             customer_name: None,
         };
         without_repeats(

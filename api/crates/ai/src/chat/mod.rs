@@ -62,6 +62,19 @@ pub struct Request {
     pub mode: Option<String>,
     pub is_new: bool,
     pub special_order: Option<SpecialOrderOffer>,
+    /// Pictures the user added to the question (`data:image/…` URLs): the
+    /// model sees them, the saved history does not keep them.
+    pub images: Vec<String>,
+    /// The page the user is on, when they share it with the question.
+    pub page: Option<Page>,
+}
+
+/// The page the user is looking at: its address, title and visible text.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Page {
+    pub path: String,
+    pub title: String,
+    pub text: String,
 }
 
 /// One saved message of the conversation.
@@ -440,6 +453,41 @@ fn request_messages(messages: &[Message]) -> Vec<Value> {
         .collect()
 }
 
+/// The model's messages with what the user added to the last question: the
+/// page they are on and their pictures.
+fn with_attachments(mut messages: Vec<Value>, request: &Request) -> Vec<Value> {
+    if request.images.is_empty() && request.page.is_none() {
+        return messages;
+    }
+    let Some(last) = messages.iter_mut().rev().find(|m| m["role"] == "user") else {
+        return messages;
+    };
+    let mut text = last["content"].as_str().unwrap_or_default().to_string();
+    if let Some(page) = &request.page {
+        text.push_str(&format!(
+            "\n\nThe user shared the Granite Manager page they are looking at. Use it when the question is about what they see.\nAddress: {}\nTitle: {}\nWhat the page shows:\n{}",
+            page.path, page.title, page.text
+        ));
+    }
+    if request.images.is_empty() {
+        last["content"] = json!(text);
+    } else {
+        text.push_str(&format!(
+            "\n\nThe user added {} picture(s) to this question; look at them to answer.",
+            request.images.len()
+        ));
+        let mut parts = vec![json!({ "type": "text", "text": text })];
+        parts.extend(
+            request
+                .images
+                .iter()
+                .map(|url| json!({ "type": "image_url", "image_url": { "url": url } })),
+        );
+        last["content"] = Value::Array(parts);
+    }
+    messages
+}
+
 /// Whether the answer before the last question came from the CRM manual:
 /// that question went to the model as `prompts::manual_user_message`.
 fn last_answer_from_manual(messages: &[Message]) -> bool {
@@ -471,6 +519,7 @@ async fn complete(
     state: &AppState,
     user: &SessionUser,
     messages: &[Message],
+    request: &Request,
     out: &Sender,
     manual: bool,
 ) -> Result<String, AiError> {
@@ -499,7 +548,7 @@ async fn complete(
     };
     let run = async {
         let mut chat = Chat::new(MINI_MODEL).max_tokens(Some(if manual { 4000 } else { 1024 }));
-        chat.messages = request_messages(messages);
+        chat.messages = with_attachments(request_messages(messages), request);
         chat.timeout = Duration::from_secs(120);
         if manual {
             chat.reasoning_effort = Some("medium");
@@ -931,7 +980,12 @@ async fn run(
     out.send(Event::Status("answering")).await;
 
     if mode == Mode::Assistant {
-        let result = assistant::run(state, ctx(user), request_messages(&messages)).await?;
+        let result = assistant::run(
+            state,
+            ctx(user),
+            with_attachments(request_messages(&messages), request),
+        )
+        .await?;
         out.text_answer(&result.answer).await;
         if !result.actions.is_empty() {
             out.json("actions", &result.actions).await;
@@ -952,7 +1006,7 @@ async fn run(
     }
 
     let manual = mode == Mode::Instructions && how_to;
-    let mut answer = complete(state, user, &messages, out, manual).await?;
+    let mut answer = complete(state, user, &messages, request, out, manual).await?;
 
     if mode == Mode::Instructions
         && !how_to
@@ -972,7 +1026,7 @@ async fn run(
             out.send(Event::Replace).await;
             messages = with_instruction_context(messages, &leftover, &question);
             selected = leftover;
-            answer = complete(state, user, &messages, out, false).await?;
+            answer = complete(state, user, &messages, request, out, false).await?;
         }
     }
 

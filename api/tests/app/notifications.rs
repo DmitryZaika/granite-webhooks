@@ -173,6 +173,27 @@ async fn hidden_mail_stays_unread_until_a_newer_message(pool: MySqlPool) {
     assert_eq!(done_ids(&pool).await.1, Vec::<i64>::new());
 }
 
+/// Hiding everything on the Lambda's one-connection pool must not wait for a
+/// second connection while the transaction holds the only one.
+#[test_db::test(seed)]
+async fn hiding_all_mail_works_on_the_lambda_pool(pool: MySqlPool) {
+    sqlx::raw_sql(FIXTURES).execute(&pool).await.unwrap();
+    let lambda = api::db::lambda_pool((*pool.connect_options()).clone());
+    server(lambda)
+        .post("/v1/notifications/done")
+        .with_session(sessions::REP)
+        .json(&json!({ "hide_only": true, "clear_all": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let mut hidden: Vec<String> =
+        sqlx::query_scalar("SELECT thread_id FROM notification_email_hides WHERE user_id = 100")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    hidden.sort();
+    assert_eq!(hidden, ["t1", "t2"]);
+}
+
 #[test_db::test(seed)]
 async fn deadline_reminders_stay_until_dismissed(pool: MySqlPool) {
     sqlx::raw_sql(

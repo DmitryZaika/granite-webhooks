@@ -68,6 +68,8 @@ pub struct Booking<'a> {
     pub user_id: i32,
     /// An address typed in the booking form, else the customer's first one.
     pub customer_email: Option<&'a str>,
+    /// The event's own phone, else the customer's is looked up.
+    pub customer_phone: Option<&'a str>,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub location: Option<&'a str>,
@@ -401,8 +403,15 @@ pub async fn notify_booking(
     );
 
     if let Some((provider, manager, seat)) = &sender {
-        let digits = customer_phone(pool, booking.company_id, booking.customer_id)
-            .await?
+        let own = booking
+            .customer_phone
+            .map(str::trim)
+            .filter(|phone| !phone.is_empty());
+        let phone = match own {
+            Some(phone) => Some(phone.to_string()),
+            None => customer_phone(pool, booking.company_id, booking.customer_id).await?,
+        };
+        let digits = phone
             .map(|phone| phone10(&phone))
             .filter(|digits| digits.len() == 10);
         if let Some(phone_digits) = digits {

@@ -9341,6 +9341,98 @@
         ]
       }
     },
+    "/v1/sales/daily": {
+      "get": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "List a day's sales",
+        "description": "Returns the company's sales from `from` up to `to` (not cancelled),\nnewest first: customer, sales rep, stone colors, sinks, package, amount,\ndeposit and the signed contract.",
+        "operationId": "list_daily_sales",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First instant counted, e.g. the caller's local midnight in UTC\n(`2026-10-28T04:00:00Z`).",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the range, not counted (the next local midnight). At most 31\ndays after `from`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sales, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DailySale"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`to` is not after `from`, or more than 31 days after it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/suppliers": {
       "get": {
         "tags": [
@@ -28768,6 +28860,85 @@
         ]
       }
     },
+    "/v1/quotes/{id}/view-link": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get a link to look at the quote",
+        "description": "The page the customer gets, without Accept & Sign. A `GET` so the app's\ndevice token may ask; the customer link is made the first time, as the\n`POST` does.",
+        "operationId": "quote_view_link",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteViewLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quotes/{id}/prints": {
       "post": {
         "tags": [
@@ -34892,7 +35063,7 @@
           "schedule"
         ],
         "summary": "Send a confirmation now",
-        "description": "Sends one of the company's templates to the event's customer right\naway, whenever the appointment is, and notes it in the event's history.",
+        "description": "Sends one of the company's templates to the event's customer right\naway, whenever the appointment is, and notes it in the event's history.\nThe event form offers the `confirmation` templates; any kind is accepted.",
         "operationId": "send_event_confirmation",
         "parameters": [
           {
@@ -36830,7 +37001,7 @@
           "schedule"
         ],
         "summary": "Get the schedule settings",
-        "description": "The day the company's schedule starts its weeks on (Sunday unless an\nadmin picked Monday) and the calendar estimates are booked on.",
+        "description": "The day the caller's schedule starts its weeks on (their own choice, else\nthe company's: Sunday unless an admin picked Monday), whether they show\n24-hour times, and the calendar estimates are booked on.",
         "operationId": "get_schedule_settings",
         "responses": {
           "200": {
@@ -36913,6 +37084,364 @@
           },
           "403": {
             "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/settings/me": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Set my schedule settings",
+        "description": "Saves the day the caller's own schedule starts its weeks on and whether\nit shows 24-hour times. Only the caller sees them.",
+        "operationId": "set_my_schedule_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MyScheduleSettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not `sunday` or `monday`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/time-rules": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Get the job time rules",
+        "description": "How long the company's installations and templates take (per square\nfoot, waterfall, sink...) and the work day the Auto-plan fills. Unsaved\nkinds come back with no lengths, 9:00 to 17:00, Monday to Friday.",
+        "operationId": "get_schedule_time_rules",
+        "responses": {
+          "200": {
+            "description": "Rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyTimeRules"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Set the job time rules",
+        "description": "Saves how long one kind of job takes and the work day, for everyone.",
+        "operationId": "set_schedule_time_rules",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimeRulesInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "A length over a day, a work day ending before it starts, or no work days",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/job-time": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "A job's length",
+        "description": "How long an installation or template takes, from the company's job time\nrules and the sale (else the customer's latest sale not yet installed).\nNull when the calendar is not Installations or Templates, its rules set\nno lengths, or there is no sale.",
+        "operationId": "get_schedule_job_time",
+        "parameters": [
+          {
+            "name": "calendar_id",
+            "in": "query",
+            "description": "The event's calendar: Installations or Templates.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "sale_id",
+            "in": "query",
+            "description": "The event's sale.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "The event's customer: their latest sale is used without `sale_id`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Length, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/JobTime"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/auto-plan": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Auto-plan one person's unscheduled jobs",
+        "description": "Proposes a day and time for the unscheduled events of the Installations\nor Templates calendar with one of the statuses that are the person's or\nno one's, around the person's other events (on any calendar). Each job's\nlength comes from its sale and the job time rules (else the event's own\nlength). The person leaves the shop when the work day starts; a free day\nopens with the oldest job, then the nearest job by Google drive time goes\nnext, keeping the drive between stops. Nothing is saved: save the kept\nones with `PUT /v1/events/{id}`.",
+        "operationId": "auto_plan_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoPlanInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not the Installations or Templates calendar, days not 1 to 30, or no person of that role picked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -37079,7 +37608,7 @@
           "schedule"
         ],
         "summary": "Edit a customer notification template",
-        "description": "The flows using it send the new text from then on.",
+        "description": "The flows using it send the new text from then on. It can't become a\nconfirmation while a flow uses it.",
         "operationId": "update_schedule_notification_template",
         "parameters": [
           {
@@ -37108,7 +37637,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Invalid field, or texting not set up",
+            "description": "Invalid field, texting not set up, or a confirmation a flow uses",
             "content": {
               "application/json": {
                 "schema": {
@@ -46455,6 +46984,170 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/auto-sale": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch the sale form on a win",
+        "description": "Admin › Automations. When on, marking a deal won or a quote sold opens\nthe sale form, filled from the quote (`auto_sale` in\n`GET /v1/company/features`).",
+        "operationId": "save_company_auto_sale",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoSaleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/auto-unscheduled-jobs": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch a sold quote's jobs in Unscheduled",
+        "description": "Admin › Automations. When on, marking a quote sold adds a template and an\ninstallation event to the schedule's Unscheduled list\n(`auto_unscheduled_jobs` in `GET /v1/company/features`).",
+        "operationId": "save_company_auto_unscheduled_jobs",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoUnscheduledJobsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
           },
           "401": {
             "description": "No valid session",
@@ -59987,10 +60680,12 @@
             ],
             "properties": {
               "item_id": {
-                "type": "string"
+                "type": "string",
+                "description": "QuickBooks item id."
               },
               "item_name": {
-                "type": "string"
+                "type": "string",
+                "description": "Its name."
               },
               "type": {
                 "type": "string",
@@ -60010,10 +60705,12 @@
             ],
             "properties": {
               "item_id": {
-                "type": "string"
+                "type": "string",
+                "description": "QuickBooks item id."
               },
               "item_name": {
-                "type": "string"
+                "type": "string",
+                "description": "Its name."
               },
               "type": {
                 "type": "string",
@@ -60032,7 +60729,8 @@
             ],
             "properties": {
               "line": {
-                "type": "string"
+                "type": "string",
+                "description": "The phrase."
               },
               "type": {
                 "type": "string",
@@ -60052,10 +60750,12 @@
             ],
             "properties": {
               "line": {
-                "type": "string"
+                "type": "string",
+                "description": "The phrase."
               },
               "to": {
-                "type": "string"
+                "type": "string",
+                "description": "What it becomes."
               },
               "type": {
                 "type": "string",
@@ -60074,7 +60774,8 @@
             ],
             "properties": {
               "text": {
-                "type": "string"
+                "type": "string",
+                "description": "The line."
               },
               "type": {
                 "type": "string",
@@ -60093,7 +60794,8 @@
             ],
             "properties": {
               "name": {
-                "type": "string"
+                "type": "string",
+                "description": "The QuickBooks class name."
               },
               "type": {
                 "type": "string",
@@ -60112,7 +60814,8 @@
             ],
             "properties": {
               "email": {
-                "type": "string"
+                "type": "string",
+                "description": "The email address."
               },
               "type": {
                 "type": "string",
@@ -61238,11 +61941,12 @@
           "id": {
             "type": "integer",
             "format": "int64",
+            "description": "Promise id.",
             "minimum": 0
           },
           "kind": {
             "type": "string",
-            "description": "`promise`: the rep's; `quote`: a change the customer asked for in\ntheir quote."
+            "description": "`promise`: the rep's; `quote`: a change the customer asked for in\ntheir quote; `approval`: something the rep sent for the customer's\napproval (due a day later)."
           },
           "source": {
             "type": "string",
@@ -61258,13 +61962,15 @@
               "integer",
               "null"
             ],
-            "format": "int32"
+            "format": "int32",
+            "description": "The customer; null for a caller whose number is on no customer."
           },
           "customer_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "That customer's name."
           },
           "customer_digits": {
             "type": [
@@ -61332,7 +62038,7 @@
           "scheduled": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ScheduleEvent",
+                "$ref": "#/components/schemas/PromiseEvent",
                 "description": "An appointment's event for the customer within 12 hours of it (null:\nnot on the schedule, or not an appointment)."
               },
               {
@@ -61343,7 +62049,7 @@
           "clash": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ScheduleEvent",
+                "$ref": "#/components/schemas/PromiseEvent",
                 "description": "Another appointment within the hour: one the rep promised someone\nelse, or an event assigned to them."
               },
               {
@@ -62027,6 +62733,108 @@
             "description": "The provider's sign-in / consent page."
           }
         }
+      },
+      "AutoPlan": {
+        "type": "object",
+        "description": "`POST /v1/schedule/auto-plan`.",
+        "required": [
+          "placements",
+          "skipped"
+        ],
+        "properties": {
+          "placements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Placement"
+            },
+            "description": "The proposed times, by start."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Skipped"
+            },
+            "description": "The events left out."
+          },
+          "drive_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why some drives are the job time rules' drive time rather than\nGoogle's (no company address, no Google Maps, or too many stops);\nnull when every drive between addresses is Google's."
+          }
+        }
+      },
+      "AutoPlanInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/schedule/auto-plan`.",
+        "required": [
+          "calendar_id",
+          "start_date",
+          "days",
+          "statuses"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The Installations or Templates calendar."
+          },
+          "user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The installer (Installations) or template maker (Templates) to plan\nfor. Leave it out only when the company has no one in that role."
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date",
+            "description": "The first day to fill (shop time)."
+          },
+          "days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many work days to fill, 1 to 30.",
+            "minimum": 0
+          },
+          "statuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The waiting statuses to plan (`ready`, `called`, `not_ready`)."
+          }
+        }
+      },
+      "AutoSaleInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/auto-sale`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: marking a deal won or a quote sold opens the sale form."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AutoUnscheduledJobsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/auto-unscheduled-jobs`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: marking a quote sold adds its template and installation to\nUnscheduled."
+          }
+        },
+        "additionalProperties": false
       },
       "AutocompleteRequest": {
         "allOf": [
@@ -64077,6 +64885,24 @@
                 "type": "null"
               }
             ]
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pictures added to the question, as `data:image/…` URLs (at most\n[`MAX_IMAGES`])."
+          },
+          "page": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PageInput",
+                "description": "The page the user is on, when they share it."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -65068,7 +65894,9 @@
           "cloudtalk",
           "ringcentral",
           "telnyx",
-          "telnyx_sms"
+          "telnyx_sms",
+          "auto_sale",
+          "auto_unscheduled_jobs"
         ],
         "properties": {
           "quickbooks_enabled": {
@@ -65110,6 +65938,14 @@
           "telnyx_sms": {
             "type": "boolean",
             "description": "Texting through Telnyx is on: Granite Phone is on and the company's\nTelnyx messaging profile is set. Users with a Telnyx line text through\nit (`/v1/sms/telnyx/...`)."
+          },
+          "auto_sale": {
+            "type": "boolean",
+            "description": "Marking a deal won or a quote sold opens the sale form, filled from\nthe quote (Admin › Automations, `PUT /v1/company/auto-sale`)."
+          },
+          "auto_unscheduled_jobs": {
+            "type": "boolean",
+            "description": "Marking a quote sold adds its template and installation to the\nschedule's Unscheduled list (Admin › Automations,\n`PUT /v1/company/auto-unscheduled-jobs`)."
           }
         }
       },
@@ -65612,6 +66448,24 @@
           },
           "features": {
             "$ref": "#/components/schemas/Features"
+          }
+        }
+      },
+      "CompanyTimeRules": {
+        "type": "object",
+        "description": "`GET /v1/schedule/time-rules`.",
+        "required": [
+          "installations",
+          "templates"
+        ],
+        "properties": {
+          "installations": {
+            "$ref": "#/components/schemas/TimeRules",
+            "description": "The Installations calendar's jobs."
+          },
+          "templates": {
+            "$ref": "#/components/schemas/TimeRules",
+            "description": "The Templates calendar's jobs."
           }
         }
       },
@@ -66534,7 +67388,7 @@
               "string",
               "null"
             ],
-            "description": "What it is: a direct line's own label (null when it has none),\n`RingCentral`, `CloudTalk` or `Mobile` (their own phone)."
+            "description": "What it is: a direct line's own label (null when it has none),\n`Work` (their `RingCentral` number), `Office` (their `CloudTalk`\nnumber) or `Mobile` (their own phone). The app never names the provider."
           }
         }
       },
@@ -67521,7 +68375,8 @@
         "type": "object",
         "description": "A sale to the customer, as the customer view lists it.",
         "required": [
-          "id"
+          "id",
+          "cancelled"
         ],
         "properties": {
           "id": {
@@ -67550,6 +68405,18 @@
               "null"
             ],
             "description": "Seller's name."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The deal the sale is part of."
+          },
+          "cancelled": {
+            "type": "boolean",
+            "description": "Unsold (the slabs went back to stock)."
           }
         }
       },
@@ -68001,6 +68868,96 @@
           }
         }
       },
+      "DailySale": {
+        "type": "object",
+        "description": "One sale of the day.",
+        "required": [
+          "id",
+          "sale_date",
+          "stones",
+          "sinks"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id; its sales order is `GET /v1/sales/{id}/contract`."
+          },
+          "sale_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was sold."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Null for a sale without a customer."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's name."
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sales rep who sold it."
+          },
+          "stones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Stone colors of its slabs, by name."
+          },
+          "sinks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SinkCount"
+            },
+            "description": "Sinks sold with it, by model."
+          },
+          "package": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The price list of the deal's quote (the signed one, else the newest);\nnull when the sale's deal has no quote."
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sale amount, decimal string in USD."
+          },
+          "deposit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The deposit its sales order asks for: half of a price over $1,000,\nelse all of it. Decimal string in USD."
+          },
+          "signed_order": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SignedOrder",
+                "description": "The customer's signed contract (the one of the sale's deal first,\nelse the newest); null when nothing was signed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "DashboardLayout": {
         "type": "object",
         "description": "The signed-in user's dashboard layout in the company the request acts in.",
@@ -68032,7 +68989,9 @@
           "onboarding",
           "top-sold-colors",
           "emails-per-month",
-          "sms-per-month"
+          "sms-per-month",
+          "daily-sales",
+          "available-inventory"
         ]
       },
       "DayCut": {
@@ -71071,6 +72030,20 @@
             "format": "int32",
             "description": "The customer it is for, one of the company's; null unlinks them,\nleave out to keep them. The title stays the event's own name."
           },
+          "contact_phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone for this event only (a spouse, a homeowner on a contractor's\naccount), up to 50 characters; empty or null uses the customer's,\nleave out to keep it. Never changes the customer."
+          },
+          "contact_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email for this event only, up to 255 characters; like `contact_phone`."
+          },
           "qbo_invoice": {
             "oneOf": [
               {
@@ -72294,7 +73267,7 @@
           "template_id": {
             "type": "integer",
             "format": "int32",
-            "description": "A template of the company."
+            "description": "A reminder template of the company."
           },
           "offset_value": {
             "type": "integer",
@@ -72633,6 +73606,20 @@
               "null"
             ],
             "description": "That customer's name."
+          },
+          "contact_phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone for this event only; null uses the customer's."
+          },
+          "contact_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email for this event only; null uses the customer's."
           }
         }
       },
@@ -74336,6 +75323,68 @@
           }
         }
       },
+      "JobKind": {
+        "type": "string",
+        "description": "The two calendars whose jobs have a length rule.",
+        "enum": [
+          "installations",
+          "templates"
+        ]
+      },
+      "JobTime": {
+        "type": "object",
+        "description": "`GET /v1/schedule/job-time`.",
+        "required": [
+          "minutes",
+          "sale_id",
+          "summary",
+          "lines"
+        ],
+        "properties": {
+          "minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The job's length, rounded up to 15 minutes.",
+            "minimum": 0
+          },
+          "sale_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The sale it was sized from."
+          },
+          "summary": {
+            "type": "string",
+            "description": "What the sale holds, e.g. \"50 sq ft · 1 waterfall · 2 sinks\"."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobTimeLine"
+            },
+            "description": "How the length adds up."
+          }
+        }
+      },
+      "JobTimeLine": {
+        "type": "object",
+        "description": "A part of a job's length.",
+        "required": [
+          "label",
+          "minutes"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "What it is for, e.g. \"50 sq ft\"."
+          },
+          "minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its minutes.",
+            "minimum": 0
+          }
+        }
+      },
       "JoinInput": {
         "type": "object",
         "description": "Body of `POST /v1/auth/invite/{token}`.",
@@ -75955,6 +77004,30 @@
           }
         }
       },
+      "MyScheduleSettingsInput": {
+        "type": "object",
+        "description": "`PUT /v1/schedule/settings/me`: only the fields sent change.",
+        "properties": {
+          "week_starts_on": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WeekStart",
+                "description": "The day the caller's week and month views start their weeks on."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "time_24h": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Show times as 13:00 rather than 1:00 PM."
+          }
+        }
+      },
       "MyTemplateInput": {
         "type": "object",
         "description": "One of the caller's own templates.",
@@ -77122,6 +78195,7 @@
         "required": [
           "id",
           "name",
+          "kind",
           "channel",
           "body"
         ],
@@ -77134,6 +78208,10 @@
           "name": {
             "type": "string",
             "description": "What admins call it, e.g. \"Disconnect the sink\"."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TemplateKind",
+            "description": "`reminder` (flows send it) or `confirmation` (sent by hand)."
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -77164,6 +78242,17 @@
           "name": {
             "type": "string",
             "description": "At most 100 characters."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TemplateKind",
+                "description": "`reminder` or `confirmation`. Left out: `reminder` for a new template,\nunchanged on edit. A template a flow uses stays a reminder."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -78579,6 +79668,29 @@
           }
         }
       },
+      "PageInput": {
+        "type": "object",
+        "description": "The page the user is looking at.",
+        "required": [
+          "path",
+          "text"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The page's address (path and query)."
+          },
+          "title": {
+            "type": "string",
+            "description": "The page's title."
+          },
+          "text": {
+            "type": "string",
+            "description": "The text the page shows."
+          }
+        },
+        "additionalProperties": false
+      },
       "ParentInput": {
         "type": "object",
         "description": "Body of `PUT /v1/customers/{id}/parent`.",
@@ -79502,6 +80614,83 @@
               "null"
             ],
             "description": "Two-letter country."
+          }
+        }
+      },
+      "Placement": {
+        "type": "object",
+        "description": "A proposed time for an unscheduled event.",
+        "required": [
+          "event_id",
+          "title",
+          "start_date",
+          "end_date",
+          "minutes",
+          "drive_minutes",
+          "longer_than_day"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The event."
+          },
+          "title": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its customer's name."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its address."
+          },
+          "assigned_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The person planned for; null when the company has no one in the role."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Start (UTC, ISO 8601)."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End (UTC, ISO 8601)."
+          },
+          "minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The job's length.",
+            "minimum": 0
+          },
+          "drive_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes of driving to it from the stop before (or the shop).",
+            "minimum": 0
+          },
+          "job": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the sale holds when the length came from it; null when the\nevent's own length was used."
+          },
+          "longer_than_day": {
+            "type": "boolean",
+            "description": "The job is longer than a work day: it fills the day (check the sale)."
           }
         }
       },
@@ -81848,6 +83037,25 @@
           }
         }
       },
+      "PromiseEvent": {
+        "type": "object",
+        "description": "Something on the schedule at a time.",
+        "required": [
+          "title",
+          "start"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The event's name."
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it starts."
+          }
+        }
+      },
       "PromiseUpdate": {
         "type": "object",
         "description": "Body of `PATCH /v1/ai/promises/{id}`.",
@@ -83937,6 +85145,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "QuoteViewLink": {
+        "type": "object",
+        "description": "The quote's page to look at, for the app.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The customer's page with `?staff=1`: no Accept & Sign, not counted as a view."
+          }
+        }
       },
       "RateLimited": {
         "type": "object",
@@ -86289,6 +87510,20 @@
             ],
             "description": "That customer's name."
           },
+          "contact_phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone for this event only; null uses the customer's."
+          },
+          "contact_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email for this event only; null uses the customer's."
+          },
           "qbo_invoice": {
             "oneOf": [
               {
@@ -86356,12 +87591,22 @@
         "type": "object",
         "description": "`GET /v1/schedule/settings`.",
         "required": [
-          "week_starts_on"
+          "week_starts_on",
+          "company_week_starts_on",
+          "time_24h"
         ],
         "properties": {
           "week_starts_on": {
             "$ref": "#/components/schemas/WeekStart",
-            "description": "The day the week and month views start their weeks on."
+            "description": "The day the caller's week and month views start their weeks on: their\nown choice, else the company's."
+          },
+          "company_week_starts_on": {
+            "$ref": "#/components/schemas/WeekStart",
+            "description": "The day the company's weeks start on (Admin > Schedule)."
+          },
+          "time_24h": {
+            "type": "boolean",
+            "description": "The caller shows times as 13:00 rather than 1:00 PM."
           },
           "estimates_calendar_id": {
             "type": [
@@ -87645,6 +88890,30 @@
           }
         }
       },
+      "SignedOrder": {
+        "type": "object",
+        "description": "A signed contract.",
+        "required": [
+          "filename",
+          "signed_at",
+          "view_url"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "The file's name."
+          },
+          "signed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was signed."
+          },
+          "view_url": {
+            "type": "string",
+            "description": "Where to open it: an API path (`/v1/...`) to open on the API's host,\nelse the file's URL."
+          }
+        }
+      },
       "SignerErrorBody": {
         "type": "object",
         "description": "A refusal: `{\"error\", \"code\"}`.",
@@ -87897,6 +89166,25 @@
           }
         }
       },
+      "SinkCount": {
+        "type": "object",
+        "description": "Sinks of one model on a sale.",
+        "required": [
+          "name",
+          "count"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The sink model."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many of it were sold."
+          }
+        }
+      },
       "SinkTypeInUse": {
         "type": "object",
         "description": "409 body of `DELETE /v1/sink-types/{id}`: the type is still used.",
@@ -87915,6 +89203,30 @@
               "$ref": "#/components/schemas/StoneUsingType"
             },
             "description": "Live sink models of that type, by name; delete or retype them first."
+          }
+        }
+      },
+      "Skipped": {
+        "type": "object",
+        "description": "An unscheduled event the plan left out.",
+        "required": [
+          "event_id",
+          "title",
+          "reason"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The event."
+          },
+          "title": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why it was left out."
           }
         }
       },
@@ -91061,6 +92373,14 @@
         },
         "additionalProperties": false
       },
+      "TemplateKind": {
+        "type": "string",
+        "description": "What a template is for.",
+        "enum": [
+          "reminder",
+          "confirmation"
+        ]
+      },
       "TemplateOrder": {
         "type": "object",
         "description": "The caller's sorting of one picker.",
@@ -93126,6 +94446,118 @@
           }
         }
       },
+      "TimeRules": {
+        "type": "object",
+        "description": "How long one kind of job takes, and the work day it fits in.",
+        "required": [
+          "base_minutes",
+          "per_sqft_minutes",
+          "per_waterfall_minutes",
+          "per_sink_minutes",
+          "per_cooktop_minutes",
+          "per_backsplash_minutes",
+          "per_full_backsplash_minutes",
+          "per_tear_out_minutes",
+          "travel_minutes",
+          "day_start_minute",
+          "day_end_minute",
+          "work_days"
+        ],
+        "properties": {
+          "base_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes every job takes (setup, cleanup).",
+            "minimum": 0
+          },
+          "per_sqft_minutes": {
+            "type": "number",
+            "format": "double",
+            "description": "Minutes per square foot of the sale."
+          },
+          "per_waterfall_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes per waterfall.",
+            "minimum": 0
+          },
+          "per_sink_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes per sink.",
+            "minimum": 0
+          },
+          "per_cooktop_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes per room with a cooktop cutout.",
+            "minimum": 0
+          },
+          "per_backsplash_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes per room with a 4\" backsplash.",
+            "minimum": 0
+          },
+          "per_full_backsplash_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes per room with a full-height backsplash.",
+            "minimum": 0
+          },
+          "per_tear_out_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes per room with a tear-out.",
+            "minimum": 0
+          },
+          "travel_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes kept free between two jobs of one person (driving).",
+            "minimum": 0
+          },
+          "day_start_minute": {
+            "type": "integer",
+            "format": "int32",
+            "description": "When the work day starts, in minutes after midnight (shop time).",
+            "minimum": 0
+          },
+          "day_end_minute": {
+            "type": "integer",
+            "format": "int32",
+            "description": "When it ends, in minutes after midnight (shop time).",
+            "minimum": 0
+          },
+          "work_days": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Days people work: 0 Sunday ... 6 Saturday."
+          }
+        }
+      },
+      "TimeRulesInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/schedule/time-rules`.",
+        "required": [
+          "kind",
+          "rules"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/JobKind",
+            "description": "Which jobs these rules are for."
+          },
+          "rules": {
+            "$ref": "#/components/schemas/TimeRules",
+            "description": "The new rules."
+          }
+        }
+      },
       "TimelineMessage": {
         "type": "object",
         "description": "A message of the conversation.",
@@ -94315,13 +95747,15 @@
               "integer",
               "null"
             ],
-            "format": "int32"
+            "format": "int32",
+            "description": "The customer with that phone; null when it is on no customer."
           },
           "customer_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "That customer's name."
           },
           "text": {
             "type": "string",
@@ -94329,7 +95763,8 @@
           },
           "at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "When they sent it."
           }
         }
       },
