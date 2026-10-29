@@ -67859,7 +67859,9 @@
           "onboarding",
           "top-sold-colors",
           "emails-per-month",
-          "sms-per-month"
+          "sms-per-month",
+          "daily-sales",
+          "available-inventory"
         ]
       },
       "DayCut": {
