@@ -26,10 +26,10 @@ use std::time::Duration;
 pub const MAX_TURNS: usize = 20;
 /// Characters of one message the model reads.
 pub const MAX_MESSAGE_CHARS: usize = 4_000;
-/// One answer (the model reasons briefly first).
-const AI_TIMEOUT: Duration = Duration::from_secs(120);
-const REASONING_EFFORT: &str = "low";
-const MAX_COMPLETION_TOKENS: u32 = 8_000;
+/// One answer (6.1 Sol reasons at length first, as the AI check does).
+const AI_TIMEOUT: Duration = Duration::from_secs(210);
+const REASONING_EFFORT: &str = "high";
+const MAX_COMPLETION_TOKENS: u32 = 20_000;
 
 /// Who wrote a message of the conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
