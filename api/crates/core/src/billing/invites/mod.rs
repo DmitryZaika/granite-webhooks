@@ -419,8 +419,7 @@ const ALREADY_ON_PLAN: &str = "This company is already on a plan.";
 const NO_MANAGERS: &str = "This company has no Manager with an email. Add one first.";
 const LEGACY_OVERDUE: &str =
     "This company has an overdue payment. Settle it before moving them to a plan.";
-const ONBOARDING_FEE_OPEN: &str =
-    "This company's onboarding fee from its signup is still open. Try again once it is settled.";
+const ONBOARDING_ADVANCE_OPEN: &str = "This company's onboarding advance from its signup is still open. Try again once it is settled.";
 const INVITE_ACCEPTING: &str =
     "A Manager is accepting the current invite. Try again in a few minutes.";
 const INVITE_CLOSED: &str = "This invite is no longer open.";
@@ -662,7 +661,7 @@ impl MoveFacts {
             fixed("legacy_overdue", LEGACY_OVERDUE)
         } else if self.onboarding_open {
             // A moved company has no onboarding commitment.
-            fixed("onboarding_fee_open", ONBOARDING_FEE_OPEN)
+            fixed("onboarding_advance_open", ONBOARDING_ADVANCE_OPEN)
         } else if let Some(legacy) = legacy.filter(|legacy| !legacy.is_supported()) {
             Some((
                 "legacy_subscription_unsupported",
@@ -710,7 +709,9 @@ pub async fn move_facts(state: &AppState, company_id: i32) -> ApiResult<MoveFact
     let onboarding_open: i64 = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM company_onboarding_commitments
                         WHERE company_id = ?
-                          AND status NOT IN ('completed', 'waived', 'fee_paid', 'fee_skipped', 'void'))",
+                          AND (status NOT IN ('completed', 'waived', 'advance_paid',
+                                              'advance_skipped', 'void')
+                               OR (advance_item_id IS NOT NULL AND advance_credit_id IS NULL)))",
     )
     .bind(company_id)
     .fetch_one(pool)
@@ -1022,6 +1023,9 @@ pub async fn resend(state: &AppState, company_id: i32, invite_id: &str) -> ApiRe
 
 /// Withdraws an open invite (expired ones too), or a given-up acceptance
 /// while Stripe has no subscription for it that has not ended.
+///
+/// A legacy subscription it marked as replaced renews again, and the billing
+/// record names it again.
 pub async fn revoke(
     state: &AppState,
     company_id: i32,
@@ -1053,6 +1057,12 @@ async fn revoke_locked(
     if given_up && has_subscription(state, &invite).await? {
         return Err(conflict("invite_has_subscription", INVITE_HAS_SUBSCRIPTION));
     }
+    // A switch that replaced the legacy subscription but never committed:
+    // the company stays on it, so it must renew again.
+    if given_up {
+        accept::restore_legacy(state, &invite).await?;
+        accept::restore_legacy_record(state, &invite).await?;
+    }
     let now = super::now();
     let revoked = sqlx::query(
         "UPDATE plan_invites SET status = 'revoked', revoked_at = ?, revoked_by = ?, updated_at = ?
@@ -1077,6 +1087,67 @@ async fn revoke_locked(
         Some(InviteStatus::Accepting) => conflict("invite_accepting", INVITE_ACCEPTING),
         _ => conflict("invite_closed", INVITE_CLOSED),
     })
+}
+
+/// Releases an acceptance the job gave up.
+///
+/// The legacy subscription it replaced renews again, and the subscription it
+/// made, when the company does not bill through it (its switch never
+/// committed), is cancelled (key `plan-invite:<id>:give-up-cancel`), so the
+/// company is never billed twice and staff can withdraw the invite; the
+/// billing record names the legacy subscription again. Under the
+/// company lock; nothing happens when the acceptance finished meanwhile.
+pub async fn release_given_up(state: &AppState, invite_id: &str) -> ApiResult<()> {
+    let invite = load(&state.pool, invite_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let lock = CompanyLock::acquire(&state.pool, invite.company_id)
+        .await
+        .map_err(lock_failure)?;
+    let released = release_given_up_locked(state, invite_id).await;
+    lock.release().await;
+    released
+}
+
+async fn release_given_up_locked(state: &AppState, invite_id: &str) -> ApiResult<()> {
+    let invite = load(&state.pool, invite_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if invite.status != InviteStatus::Accepting || invite.gave_up_at.is_none() {
+        return Ok(());
+    }
+    accept::restore_legacy(state, &invite).await?;
+    let Some(made) = invite.stripe_subscription_id.as_deref() else {
+        return Ok(());
+    };
+    // The company bills through it once the switch committed.
+    let switched: Option<String> = sqlx::query_scalar(
+        "SELECT CAST(c.plan_source AS CHAR) FROM company c
+           JOIN company_billing cb ON cb.company_id = c.id
+          WHERE c.id = ? AND c.plan_source = 'subscription' AND cb.stripe_subscription_id = ?",
+    )
+    .bind(invite.company_id)
+    .bind(made)
+    .fetch_optional(&state.pool)
+    .await?;
+    if switched.is_some() {
+        return Ok(());
+    }
+    match state
+        .stripe
+        .cancel_subscription_keyed(made, &format!("plan-invite:{}:give-up-cancel", invite.id))
+        .await
+    {
+        Ok(_) | Err(StripeError::Missing(_)) => accept::restore_legacy_record(state, &invite).await,
+        Err(err) => {
+            tracing::warn!(
+                company_id = invite.company_id,
+                stripe_code = err.code(),
+                "given-up invite subscription not cancelled"
+            );
+            Err(ApiError::Unavailable(STRIPE_UNREADABLE.into()))
+        }
+    }
 }
 
 /// Stripe has a subscription for the invite that has not ended: the stored
@@ -1113,8 +1184,13 @@ async fn has_subscription(state: &AppState, invite: &Invite) -> ApiResult<bool> 
         .list_subscriptions(&customer)
         .await
         .map_err(|err| unreadable(&err))?;
+    // The legacy subscription the invite replaced carries its id too.
     Ok(subscriptions.iter().any(|subscription| {
         subscription["metadata"]["plan_invite_id"].as_str() == Some(invite.id.as_str())
+            && subscription["metadata"]["replaced_by"]
+                .as_str()
+                .is_none_or(str::is_empty)
+            && subscription["id"].as_str() != invite.legacy_subscription_id.as_deref()
             && !is_ended_subscription_status(subscription["status"].as_str().unwrap_or_default())
     }))
 }
@@ -1327,8 +1403,8 @@ pub struct MoveBlocked {
     /// `already_on_plan` (a self-serve company whose subscription has not
     /// ended), `invite_accepting`, `payment_unavailable` (payment collection
     /// is not live yet), `no_managers`, `legacy_overdue` (an overdue legacy
-    /// subscription, paused access or a balance due), `onboarding_fee_open`
-    /// (the signup's onboarding fee of an ended self-serve company is not
+    /// subscription, paused access or a balance due), `onboarding_advance_open`
+    /// (the signup's onboarding advance of an ended self-serve company is not
     /// settled yet), `legacy_subscription_unsupported` (its status is not
     /// active, trialing, past_due or unpaid), `legacy_period_too_close` (it
     /// renews in under 9 days: send the invite after it renews) or
@@ -1628,7 +1704,7 @@ mod tests {
             onboarding_open: true,
             ..self_serve(true)
         };
-        assert_eq!(blocked_code(&onboarding), Some("onboarding_fee_open"));
+        assert_eq!(blocked_code(&onboarding), Some("onboarding_advance_open"));
     }
 
     #[test]

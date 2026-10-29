@@ -12,7 +12,6 @@ use std::fmt::Write as _;
 
 pub const INVITE_SUBJECT: &str = "Your Granite Manager plan is ready to review";
 pub const ACCEPTED_SUBJECT: &str = "Your Granite Manager plan is active";
-const FROM_ADDRESS: &str = "noreply@granite-manager.com";
 const SUPPORT_EMAIL: &str = "support@granite-manager.com";
 
 fn escape(text: &str) -> String {
@@ -200,7 +199,7 @@ pub async fn send(
 ) -> Result<(), &'static str> {
     let email = OutgoingEmail {
         from_name: Some("Granite Manager".into()),
-        from_address: FROM_ADDRESS.into(),
+        from_address: crate::billing::from_address(),
         to: vec![to.to_string()],
         cc: Vec::new(),
         bcc: Vec::new(),

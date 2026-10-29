@@ -221,7 +221,7 @@ impl Fixture {
     ) -> Vec<(
         String,
         NaiveDateTime,
-        i32,
+        Option<i32>,
         Option<String>,
         Option<i32>,
         bool,
@@ -323,7 +323,7 @@ async fn a_request_in_the_free_period_ends_at_the_trial_end_and_emails_once(pool
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, "scheduled");
     assert_eq!(rows[0].1, naive(f.trial_end));
-    assert_eq!(rows[0].2, 20540);
+    assert_eq!(rows[0].2, Some(20540));
     assert_eq!(rows[0].3.as_deref(), Some("Too expensive"));
     assert_eq!(f.cancel_at().await, Some(naive(f.trial_end)));
 
@@ -796,22 +796,25 @@ async fn the_subscription_ending_completes_the_request(pool: MySqlPool) {
         .assert_status(StatusCode::CONFLICT);
 }
 
-/// Company 20540 in its onboarding notice week: the deadline passed two
-/// days ago, the fee notice went out a day ago and charges in 6 days.
+/// Company 20540 after its onboarding notice: the deadline passed two days
+/// ago, the advance notice went out a day ago and its charge is in 10 days.
 async fn in_the_notice_week(pool: &MySqlPool) {
     let now = naive(Utc::now().timestamp());
     sqlx::query(
         "INSERT INTO company_onboarding_commitments
-           (company_id, status, deadline_at, original_deadline_at, fee_cents, notice_sent_at,
-            notice_cycle_at, charge_after, created_at, updated_at)
-         VALUES (?, 'notice_sent', ?, ?, 60000, ?, ?, ?, ?, ?)",
+           (company_id, status, deadline_at, original_deadline_at, signup_advance_cents,
+            notice_sent_at, notice_cycle_at, advance_cents, charge_at, prepaid_from_at,
+            prepaid_until_at, created_at, updated_at)
+         VALUES (?, 'notice_sent', ?, ?, 30000, ?, ?, 30000, ?, ?, ?, ?, ?)",
     )
     .bind(COMPANY)
     .bind(now - Duration::days(2))
     .bind(now - Duration::days(2))
     .bind(now - Duration::days(1))
     .bind(now - Duration::days(1))
-    .bind(now + Duration::days(6))
+    .bind(now + Duration::days(10))
+    .bind(now + Duration::days(40))
+    .bind(now + Duration::days(70))
     .bind(now - Duration::days(32))
     .bind(now - Duration::days(1))
     .execute(pool)
@@ -820,7 +823,7 @@ async fn in_the_notice_week(pool: &MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn in_the_notice_week_the_emails_say_what_keeping_the_subscription_does_to_the_fee(
+async fn in_the_notice_week_the_emails_say_what_keeping_the_subscription_does_to_the_advance(
     pool: MySqlPool,
 ) {
     let f = fixture(pool.clone(), Plan::Active).await;
@@ -830,11 +833,11 @@ async fn in_the_notice_week_the_emails_say_what_keeping_the_subscription_does_to
         .await
         .assert_status(StatusCode::CREATED);
     let confirmation = text(&f.emails_to(MANAGER_ONE)[0]);
-    assert!(
-        confirmation
-            .contains("You requested cancellation before the charge date of the onboarding fee, ")
-    );
-    assert!(confirmation.contains("If you keep your subscription before "));
+    assert!(confirmation.contains("You requested cancellation before the charge on "));
+    assert!(confirmation.contains(
+        "that was to include the advance payment, so the advance payment is not charged."
+    ));
+    assert!(confirmation.contains("If you keep your subscription by "));
     assert!(confirmation.contains(
         "If you keep it later, we first send a new notice at least 7 days before any charge."
     ));
@@ -844,6 +847,177 @@ async fn in_the_notice_week_the_emails_say_what_keeping_the_subscription_does_to
         .assert_status(StatusCode::NO_CONTENT);
     let withdrawal = text(&f.emails_to(MANAGER_ONE)[1]);
     assert!(withdrawal.contains(
-        "You kept your subscription before the charge date in our onboarding fee notice, so the onboarding fee is charged on "
+        "You kept your subscription at least 7 days before the charge date in our advance payment notice, so the advance payment is charged with the charge on "
     ));
+}
+
+// ---- M5: Stripe written, the rows not (or the other way round)
+
+/// The fake subscription's scheduled end, as a request (or its withdrawal)
+/// whose save was lost left it.
+fn set_stripe_end(f: &Fixture, ends: bool) {
+    let mut fake = f.stripe.lock().unwrap();
+    let subscription = fake.subscriptions.get_mut(SUBSCRIPTION).unwrap();
+    subscription["cancel_at_period_end"] = json!(ends);
+    subscription["cancel_at"] = if ends {
+        json!(f.period_end)
+    } else {
+        Value::Null
+    };
+}
+
+#[test_db::test(seed)]
+async fn a_stripe_end_without_a_request_row_is_recorded_by_the_webhook_and_confirmed(
+    pool: MySqlPool,
+) {
+    let f = fixture(pool, Plan::Active).await;
+    set_stripe_end(&f, true);
+    f.post_event("evt_m5_1", "customer.subscription.updated")
+        .await;
+    let rows = f.rows().await;
+    assert_eq!(rows.len(), 1);
+    let (status, effective_at, requested_by, ..) = &rows[0];
+    assert_eq!(status, "scheduled");
+    assert_eq!(*effective_at, naive(f.period_end));
+    assert_eq!(*requested_by, None);
+    let channel: String = sqlx::query_scalar(
+        "SELECT CAST(channel AS CHAR) FROM billing_cancellation_requests WHERE company_id = ?",
+    )
+    .bind(COMPANY)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(channel, "stripe");
+    // A redelivery adds nothing; the confirmation goes out by the resend.
+    f.post_event("evt_m5_2", "customer.subscription.updated")
+        .await;
+    assert_eq!(f.rows().await.len(), 1);
+    let (requested_at, _) = f.confirmation().await;
+    assert_eq!(f.resend(requested_at + Duration::minutes(11)).await, 1);
+    assert_eq!(f.emails_to(MANAGER_ONE).len(), 1);
+    // A Manager's request now answers the recorded one.
+    f.request(MANAGER_SESSION, json!({}))
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[test_db::test(seed)]
+async fn a_scheduled_row_while_stripe_renews_is_withdrawn_by_the_webhook(pool: MySqlPool) {
+    let f = fixture(pool, Plan::Active).await;
+    f.request(MANAGER_SESSION, json!({}))
+        .await
+        .assert_status(StatusCode::CREATED);
+    // The withdrawal reached Stripe, its save did not.
+    set_stripe_end(&f, false);
+    f.post_event("evt_m5_3", "customer.subscription.updated")
+        .await;
+    let rows = f.rows().await;
+    assert_eq!(rows[0].0, "withdrawn");
+    assert_eq!(rows[0].4, None);
+    assert!(rows[0].5);
+    assert_eq!(f.cancel_at().await, None);
+    // Still renewing: nothing more happens.
+    f.post_event("evt_m5_4", "customer.subscription.updated")
+        .await;
+    assert_eq!(f.rows().await.len(), 1);
+}
+
+// ---- U16: no subscription yet, the bank account waits for micro-deposits
+
+const SIGNUP: &str = "aaaaaaaa-0000-4000-8000-0000000c0540";
+const BANK_SETUP: &str = "seti_bank_cancel";
+
+/// Company 20540's signup still waits for its bank account: no subscription.
+async fn awaiting_bank(f: &Fixture) -> NaiveDateTime {
+    let now = naive(Utc::now().timestamp());
+    let until = now + Duration::days(6);
+    sqlx::query(
+        "UPDATE company_billing SET stripe_subscription_id = NULL, subscription_status = 'incomplete',
+                payment_status = 'none'
+          WHERE company_id = ?",
+    )
+    .bind(COMPANY)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO signup_intents
+           (id, status, email, company, owner_name, password_hash, plan, stripe_customer_id,
+            setup_intent_id, company_id, bank_verification_until, created_at, updated_at,
+            expires_at)
+         VALUES (?, 'awaiting_bank_verification', 'dana@cancel.test',
+                 JSON_OBJECT('name', 'Cancel & Stone', 'phone', '3175550100', 'website', NULL,
+                             'street', '1 Main St', 'city', 'Indianapolis', 'state', 'IN',
+                             'zip', '46204'),
+                 'Dana', '', JSON_OBJECT('users', 5, 'addons', JSON_ARRAY()), 'cus_cancel',
+                 ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(SIGNUP)
+    .bind(BANK_SETUP)
+    .bind(COMPANY)
+    .bind(until)
+    .bind(now - Duration::days(1))
+    .bind(now)
+    .bind(until + Duration::days(1))
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    f.stripe.lock().unwrap().setup_intents.insert(
+        BANK_SETUP.into(),
+        json!({ "id": BANK_SETUP, "object": "setup_intent", "customer": "cus_cancel",
+                "status": "requires_action", "payment_method": "pm_bank",
+                "metadata": { "signup_id": SIGNUP } }),
+    );
+    until
+}
+
+#[test_db::test(seed)]
+async fn a_signup_waiting_for_its_bank_can_cancel_and_never_gets_a_subscription(pool: MySqlPool) {
+    let f = fixture(pool, Plan::Trialing).await;
+    let until = awaiting_bank(&f).await;
+    let res = f
+        .request(MANAGER_SESSION, json!({ "reason": "Changed plans" }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let body: Value = res.json();
+    assert_eq!(unix(&body["effective_at"]), until.and_utc().timestamp());
+    // The pending SetupIntent is cancelled, keyed; no subscription call.
+    {
+        let fake = f.stripe.lock().unwrap();
+        assert_eq!(fake.setup_intents[BANK_SETUP]["status"], "canceled");
+        assert_eq!(
+            fake.keys("POST", &format!("/v1/setup_intents/{BANK_SETUP}/cancel")),
+            ["cancellation:20540:1:setup-intent"]
+        );
+    }
+    assert!(f.subscription_calls().is_empty());
+    let signup: Option<String> = sqlx::query_scalar(
+        "SELECT signup_intent_id FROM billing_cancellation_requests WHERE company_id = ?",
+    )
+    .bind(COMPANY)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(signup.as_deref(), Some(SIGNUP));
+    assert_eq!(f.emails_to(MANAGER_ONE).len(), 1);
+    // A verification arriving later makes no subscription.
+    let verified = json!({ "id": "seti_new", "object": "setup_intent", "customer": "cus_cancel",
+        "status": "succeeded", "payment_method": { "id": "pm_new", "type": "us_bank_account" } });
+    let outcome = api::signup::provision::resume_verified(&f.state, SIGNUP, &verified)
+        .await
+        .unwrap();
+    assert_eq!(outcome, api::signup::provision::ResumeOutcome::NotAwaiting);
+    assert!(
+        f.stripe
+            .lock()
+            .unwrap()
+            .calls("POST", "/v1/subscriptions")
+            .is_empty()
+    );
+    // Withdrawn: no Stripe call; the signup may resume with a new method.
+    f.withdraw(MANAGER_SESSION)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(f.rows().await[0].0, "withdrawn");
+    assert!(f.subscription_calls().is_empty());
 }

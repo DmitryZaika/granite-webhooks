@@ -430,8 +430,8 @@ impl Env {
     async fn commitment(&self, status: &str) {
         sqlx::query(
             "INSERT INTO company_onboarding_commitments
-               (company_id, status, deadline_at, original_deadline_at, fee_cents, created_at, updated_at)
-             VALUES (100, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 60000, UTC_TIMESTAMP(), UTC_TIMESTAMP())
+               (company_id, status, deadline_at, original_deadline_at, signup_advance_cents, created_at, updated_at)
+             VALUES (100, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 30000, UTC_TIMESTAMP(), UTC_TIMESTAMP())
              ON DUPLICATE KEY UPDATE status = VALUES(status)",
         )
         .bind(status)
@@ -1100,7 +1100,7 @@ async fn accepting_moves_the_company_onto_the_plan_and_only_then(pool: MySqlPool
         assert_eq!(amounts["invited_by"], 102);
         assert_eq!(amounts["legacy_subscription_replaced"], false);
         assert_eq!(amounts["first_charge_on"], day_in(30));
-        assert!(amounts.get("onboarding_fee_cents").is_none());
+        assert!(amounts.get("onboarding_advance_cents").is_none());
     }
 
     // The Manager and staff are told.
@@ -1682,6 +1682,131 @@ async fn a_given_up_acceptance_is_withdrawn_only_while_stripe_has_no_subscriptio
     assert_eq!(made[0]["status"], "trialing");
 }
 
+/// A legacy-billed company 100 (`sub_legacy`, renewing in 20 days) with an
+/// `accepting` invite whose switch failed; answers the invite id.
+async fn failed_legacy_switch(env: &Env) -> String {
+    env.legacy_customer();
+    env.bill_legacy("active", Utc::now().timestamp() + 20 * 86_400)
+        .await;
+    let created = env.create().await;
+    let id = created["invite"]["id"].as_str().unwrap().to_string();
+    let token = env.token_for("manager@acme.test");
+    // The switch's own write fails, after Stripe made the subscription and
+    // marked the legacy one replaced.
+    sqlx::raw_sql(
+        "CREATE TRIGGER fail_invite_accept BEFORE UPDATE ON plan_invites FOR EACH ROW
+         BEGIN
+           IF NEW.status = 'accepted' THEN
+             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'switch failed';
+           END IF;
+         END",
+    )
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    let failed = env.accept(&token, MANAGER).await;
+    assert!(!failed.status_code().is_success());
+    sqlx::raw_sql("DROP TRIGGER fail_invite_accept")
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(env.invite_row(&id).await.0, "accepting");
+    id
+}
+
+#[test_db::test(seed)]
+async fn withdrawing_a_given_up_switch_makes_the_replaced_legacy_subscription_renew(
+    pool: MySqlPool,
+) {
+    let env = Env::new(&pool).await;
+    let id = failed_legacy_switch(&env).await;
+    let made = env.stored_subscription(&id).await.unwrap();
+    // The run marked the legacy subscription replaced before it failed.
+    let legacy = env.subscription("sub_legacy");
+    assert_eq!(legacy["cancel_at_period_end"], true);
+    assert_eq!(legacy["metadata"]["replaced_by"], made.as_str());
+    // The run wrote its subscription into the record before it failed.
+    assert_eq!(billing_row(&pool).await.0.as_deref(), Some(made.as_str()));
+    // Given up; staff cancel the invite's subscription, then withdraw it.
+    give_up(&pool, &id).await;
+    env.cancel_in_stripe(&made);
+
+    env.revoke(&id).await.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(env.invite_row(&id).await.0, "revoked");
+    assert_eq!(
+        billing_row(&pool).await,
+        (Some("sub_legacy".into()), "active".into(), None, None)
+    );
+    let restored: Vec<_> = env
+        .calls("POST", "/v1/subscriptions/sub_legacy")
+        .into_iter()
+        .filter(|seen| seen.field("cancel_at_period_end").as_deref() == Some("false"))
+        .collect();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(
+        restored[0].idempotency_key,
+        Some(format!("plan-invite:{id}:restore-legacy"))
+    );
+    let legacy = env.subscription("sub_legacy");
+    assert_eq!(legacy["cancel_at_period_end"], false);
+    assert_eq!(legacy["metadata"]["replaced_by"], "");
+    assert_eq!(legacy["metadata"]["plan_invite_id"], "");
+    assert_eq!(env.plan_source(COMPANY).await, "legacy");
+}
+
+#[test_db::test(seed)]
+async fn the_job_giving_up_a_switch_renews_the_legacy_subscription_and_cancels_the_new_one(
+    pool: MySqlPool,
+) {
+    let env = Env::new(&pool).await;
+    let id = failed_legacy_switch(&env).await;
+    let made = env.stored_subscription(&id).await.unwrap();
+    assert_eq!(env.subscription("sub_legacy")["cancel_at_period_end"], true);
+    assert_eq!(billing_row(&pool).await.0.as_deref(), Some(made.as_str()));
+    sqlx::query(
+        "UPDATE plan_invites SET accepting_at = accepting_at - INTERVAL 27 HOUR,
+                updated_at = updated_at - INTERVAL 27 HOUR WHERE id = ?",
+    )
+    .bind(&id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let job = env
+        .server
+        .post("/v1/jobs/subscription-maintenance")
+        .add_header("authorization", JOB_KEY)
+        .await;
+    job.assert_status_ok();
+    assert_eq!(job.json::<Value>()["invites_given_up"], 1);
+
+    let legacy = env.subscription("sub_legacy");
+    assert_eq!(legacy["cancel_at_period_end"], false);
+    assert_eq!(legacy["metadata"]["replaced_by"], "");
+    let restored = env
+        .calls("POST", "/v1/subscriptions/sub_legacy")
+        .into_iter()
+        .find(|seen| seen.field("cancel_at_period_end").as_deref() == Some("false"))
+        .unwrap();
+    assert_eq!(
+        restored.idempotency_key,
+        Some(format!("plan-invite:{id}:restore-legacy"))
+    );
+    assert_eq!(env.subscription(&made)["status"], "canceled");
+    let cancelled = env.calls("DELETE", &format!("/v1/subscriptions/{made}"));
+    assert_eq!(cancelled.len(), 1);
+    assert_eq!(
+        cancelled[0].idempotency_key,
+        Some(format!("plan-invite:{id}:give-up-cancel"))
+    );
+    assert_eq!(env.plan_source(COMPANY).await, "legacy");
+    assert_eq!(
+        billing_row(&pool).await,
+        (Some("sub_legacy".into()), "active".into(), None, None)
+    );
+    // Withdrawable straight away.
+    env.revoke(&id).await.assert_status(StatusCode::NO_CONTENT);
+}
+
 #[test_db::test(seed)]
 async fn a_given_up_acceptance_whose_stored_subscription_was_cancelled_is_withdrawn(
     pool: MySqlPool,
@@ -1942,12 +2067,12 @@ async fn a_self_serve_company_whose_subscription_ended_is_moved_onto_a_new_plan(
     refused.assert_status(StatusCode::CONFLICT);
     assert_eq!(code(&refused), "already_on_plan");
 
-    // Cancelled, its signup's onboarding fee not settled yet.
+    // Cancelled, its signup's onboarding advance not settled yet.
     env.end_self_serve().await;
     env.commitment("pending").await;
     let refused = env.create_response().await;
     refused.assert_status(StatusCode::CONFLICT);
-    assert_eq!(code(&refused), "onboarding_fee_open");
+    assert_eq!(code(&refused), "onboarding_advance_open");
     env.commitment("void").await;
     let moving = env.plan_move(COMPANY).await;
     assert_eq!(moving["plan_source"], "subscription");
@@ -2006,7 +2131,7 @@ async fn a_self_serve_company_whose_subscription_ended_is_moved_onto_a_new_plan(
     .unwrap();
     let amounts: Value = serde_json::from_str(&consent).unwrap();
     assert_eq!(amounts["legacy_subscription_replaced"], false);
-    assert!(amounts.get("onboarding_fee_cents").is_none());
+    assert!(amounts.get("onboarding_advance_cents").is_none());
 
     // Running again: on a plan.
     assert_eq!(

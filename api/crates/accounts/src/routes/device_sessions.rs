@@ -22,14 +22,14 @@ use crate::openapi::ToSchema;
 use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::revoke::{RevokeReason, revoke_device_session};
 use crate::routes::auth::{
-    client_ip, normalized_credentials, record_failed_login, too_many_failures, verify_login,
+    ClientIp, normalized_credentials, record_failed_login, too_many_failures, verify_login,
 };
 use crate::serde_helpers::{js_date, js_date_required};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::http::header::CACHE_CONTROL;
-use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Months, SubsecRound, Utc};
 use serde::{Deserialize, Serialize};
@@ -299,7 +299,7 @@ async fn signed_in_user(pool: &MySqlPool, user_id: i32) -> sqlx::Result<Option<S
 )]
 pub async fn sign_in(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     JsonBody(input): JsonBody<DeviceSignIn>,
 ) -> ApiResult<Response> {
     let Some((email, password)) = normalized_credentials(&input.email, &input.password) else {
@@ -315,7 +315,7 @@ pub async fn sign_in(
         Some(clip(input.app_version.trim(), APP_VERSION_CHARS)).filter(|v| !v.is_empty());
     let pool = &state.pool;
     let email_hash = sha256_hex(&email);
-    let ip_hash = sha256_hex(&client_ip(&headers));
+    let ip_hash = sha256_hex(&ip);
     if too_many_failures(pool, &email_hash, &ip_hash).await? {
         return Ok(refuse(StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
     }

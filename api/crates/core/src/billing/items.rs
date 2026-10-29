@@ -6,6 +6,8 @@
 //! (source `subscription`), ends the ones no longer there, keeps `comp`
 //! rows, and stores the extra-user item in `company_billing.extra_user_item_id`.
 //! A legacy single-price subscription has no known lookup key: nothing changes.
+//! A running subscription's scheduled end is also reconciled with the
+//! cancellation requests (`cancellation::reconcile_in`, M5).
 
 use super::catalog::PriceKind;
 use super::{SubscriptionSnapshot, is_ended_subscription_status};
@@ -113,5 +115,13 @@ pub async fn sync_items_in(
         .bind(company_id)
         .execute(&mut *tx)
         .await?;
+    let reconciled = super::cancellation::reconcile_in(tx, company_id, snapshot, now).await?;
+    if reconciled != super::cancellation::Reconciled::Nothing {
+        lambda_http::tracing::warn!(
+            company_id,
+            ?reconciled,
+            "cancellation request reconciled with Stripe"
+        );
+    }
     Ok(())
 }

@@ -15,7 +15,6 @@ use super::{
     BillingInvoice, BillingPlan, CompanyBilling, is_ended_subscription_status,
     outstanding_balance_cents,
 };
-use crate::onboarding_call::fee::is_fee_invoice_object;
 use chrono::{DateTime, NaiveDateTime};
 use lambda_http::tracing;
 use serde_json::Value;
@@ -28,8 +27,9 @@ use std::time::{Duration, Instant};
 pub const FLAT_QUANTITY: i64 = 1;
 /// How often a billing page load reads Stripe for one company.
 const PAGE_SYNC_INTERVAL: Duration = Duration::from_mins(5);
-const PORTAL_CONFIGURATION_TAG: &str = "granite-manager-no-cancel-v1";
-const PORTAL_CONFIGURATION_NAME: &str = "Granite Manager (no self-cancel)";
+/// `metadata[app]` of the portal configuration the api uses.
+pub const PORTAL_CONFIGURATION_TAG: &str = "granite-manager-no-cancel-v1";
+pub const PORTAL_CONFIGURATION_NAME: &str = "Granite Manager (no self-cancel)";
 
 /// When each company was last synced, per Stripe base (per Lambda container,
 /// as the CRM kept it per server process).
@@ -109,7 +109,7 @@ pub async fn sync_from_stripe(
     let synced = locked(
         &store,
         company_id,
-        sync_locked(stripe, &store, record.clone()),
+        Box::pin(sync_locked(stripe, &store, record.clone())),
     )
     .await;
     match synced {
@@ -135,13 +135,40 @@ async fn sync_locked(
     let Some(customer) = customer else {
         return Ok(());
     };
+    let stored_open: Vec<String> = store
+        .invoices(company_id)
+        .await?
+        .into_iter()
+        .filter(|stored| stored.status == "open")
+        .map(|stored| stored.stripe_invoice_id)
+        .collect();
     for invoice in stripe.list_invoices(&customer).await? {
-        // The onboarding fee has its own status: not the subscription's balance.
-        if is_fee_invoice_object(&invoice) {
+        let snapshot = invoice_snapshot(&invoice);
+        if snapshot.id.is_empty() {
             continue;
         }
-        let snapshot = invoice_snapshot(&invoice);
-        if snapshot.id.is_empty() || !matches!(snapshot.status.as_str(), "paid" | "open") {
+        // Voided or written off at Stripe while our copy was still open (a
+        // missed webhook): close it, so it no longer counts as owed. Closed
+        // invoices are never stored by this sync, nor reopened.
+        if matches!(snapshot.status.as_str(), "void" | "uncollectible") {
+            if stored_open.contains(&snapshot.id) {
+                store
+                    .upsert_invoice(&BillingInvoice {
+                        company_id,
+                        stripe_invoice_id: snapshot.id,
+                        amount_due_cents: snapshot.amount_due_cents,
+                        amount_paid_cents: snapshot.amount_paid_cents,
+                        currency: snapshot.currency,
+                        hosted_invoice_url: snapshot.hosted_invoice_url,
+                        invoice_pdf: snapshot.invoice_pdf,
+                        paid_at: None,
+                        status: snapshot.status,
+                    })
+                    .await?;
+            }
+            continue;
+        }
+        if !matches!(snapshot.status.as_str(), "paid" | "open") {
             continue;
         }
         let paid = snapshot.status == "paid";
@@ -301,6 +328,84 @@ pub async fn default_card(stripe: &Stripe, record: Option<&CompanyBilling>) -> O
         return None;
     }
     card(&customer["invoice_settings"]["default_payment_method"])
+}
+
+/// What a payment method is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, crate::openapi::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaymentMethodKind {
+    Card,
+    /// A US bank account (ACH debit).
+    Bank,
+}
+
+/// The payment method renewals are charged to, card or bank account.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, crate::openapi::ToSchema)]
+pub struct PaymentMethodSummary {
+    /// `card` or `bank`.
+    pub kind: PaymentMethodKind,
+    /// The card brand (`visa`, `mastercard`, ...) or the bank's name; empty
+    /// when Stripe does not say.
+    pub label: String,
+    /// Last four digits of the card or account number.
+    pub last4: String,
+    /// Card expiry month (1-12); null for a bank account.
+    pub exp_month: Option<i64>,
+    /// Card expiry year (e.g. 2030); null for a bank account.
+    pub exp_year: Option<i64>,
+}
+
+fn method_summary(method: &Value) -> Option<PaymentMethodSummary> {
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
+    match method["type"].as_str()? {
+        "card" => {
+            let card = &method["card"];
+            Some(PaymentMethodSummary {
+                kind: PaymentMethodKind::Card,
+                label: text(&card["brand"]),
+                last4: text(&card["last4"]),
+                exp_month: card["exp_month"].as_i64(),
+                exp_year: card["exp_year"].as_i64(),
+            })
+        }
+        "us_bank_account" => {
+            let bank = &method["us_bank_account"];
+            Some(PaymentMethodSummary {
+                kind: PaymentMethodKind::Bank,
+                label: text(&bank["bank_name"]),
+                last4: text(&bank["last4"]),
+                exp_month: None,
+                exp_year: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The card or bank account renewals are charged to: the company's stored
+/// method, else the customer's default. `None` when Stripe cannot say.
+pub async fn default_payment_method(
+    stripe: &Stripe,
+    record: Option<&CompanyBilling>,
+) -> Option<PaymentMethodSummary> {
+    let record = record?;
+    if !stripe.is_enabled() {
+        return None;
+    }
+    if let Some(id) = &record.stripe_payment_method_id
+        && let Ok(method) = stripe.payment_method(id).await
+        && let Some(summary) = method_summary(&method)
+    {
+        return Some(summary);
+    }
+    let customer = stripe
+        .customer_with_default_payment_method(record.stripe_customer_id.as_deref()?)
+        .await
+        .ok()?;
+    if customer["deleted"] == true {
+        return None;
+    }
+    method_summary(&customer["invoice_settings"]["default_payment_method"])
 }
 
 /// The customer's saved cards, the default one first.
@@ -498,7 +603,8 @@ async fn portal_configuration(stripe: &Stripe) -> Result<String, ReactivationErr
 }
 
 /// A billing portal link (no cancelling): the card form, or the whole
-/// subscription.
+/// subscription. Refused for a self-serve company: a method saved in the
+/// portal would skip the payments app's checks.
 pub async fn portal_url<S: BillingStore>(
     stripe: &Stripe,
     store: &S,
@@ -506,6 +612,9 @@ pub async fn portal_url<S: BillingStore>(
     billing_url: &str,
     payment_method_update: bool,
 ) -> Result<String, ReactivationError> {
+    if store.self_serve(company_id).await? {
+        return Err(ReactivationError::SelfServe);
+    }
     if !stripe.is_enabled() {
         return Err(refused(NOT_CONFIGURED));
     }
@@ -529,7 +638,8 @@ pub async fn portal_url<S: BillingStore>(
         .ok_or_else(|| refused("Stripe did not return a billing link"))
 }
 
-/// Moves the running subscription to another plan, under the company's lock.
+/// Moves the running (legacy) subscription to another plan, under the
+/// company's lock. Refused for a self-serve company.
 pub async fn update_plan<S: BillingStore + CompanyLocking>(
     stripe: &Stripe,
     store: &S,
@@ -537,6 +647,10 @@ pub async fn update_plan<S: BillingStore + CompanyLocking>(
     company_id: i32,
     price_id: &str,
 ) -> Result<(), ReactivationError> {
+    // The legacy price would replace a self-serve subscription's base item.
+    if store.self_serve(company_id).await? {
+        return Err(ReactivationError::SelfServe);
+    }
     check_plan(plans, price_id)?;
     if !stripe.is_enabled() {
         return Err(refused(NOT_CONFIGURED));
@@ -631,6 +745,36 @@ mod tests {
         assert!(!sync_due(Some(start), soon, false));
         assert!(sync_due(Some(start), soon, true));
         assert!(sync_due(Some(start), start + PAGE_SYNC_INTERVAL, false));
+    }
+
+    #[test]
+    fn cards_and_bank_accounts_are_summarized_alike() {
+        assert_eq!(
+            method_summary(&json!({ "id": "pm_1", "type": "card",
+                "card": { "brand": "visa", "last4": "4242", "exp_month": 4, "exp_year": 2030 } })),
+            Some(PaymentMethodSummary {
+                kind: PaymentMethodKind::Card,
+                label: "visa".into(),
+                last4: "4242".into(),
+                exp_month: Some(4),
+                exp_year: Some(2030),
+            })
+        );
+        assert_eq!(
+            method_summary(&json!({ "id": "pm_2", "type": "us_bank_account",
+                "us_bank_account": { "bank_name": "STRIPE TEST BANK", "last4": "6789" } })),
+            Some(PaymentMethodSummary {
+                kind: PaymentMethodKind::Bank,
+                label: "STRIPE TEST BANK".into(),
+                last4: "6789".into(),
+                exp_month: None,
+                exp_year: None,
+            })
+        );
+        assert_eq!(
+            method_summary(&json!({ "id": "pm_3", "type": "link" })),
+            None
+        );
     }
 
     #[test]

@@ -6,14 +6,19 @@
 //! changed request under a used key with Stripe's 400 `idempotency_error`), and
 //! can fail the next matching requests: before doing anything (an outage), or
 //! after doing the work (the answer was lost). Also: subscription updates
-//! (`cancel_at_period_end`, `default_payment_method`), invoice previews
+//! (`cancel_at_period_end`, `default_payment_method`), cancelling one
+//! (`DELETE /v1/subscriptions/{id}`), invoice previews
 //! (`POST /v1/invoices/create_preview`: the items' monthly sum, or 404 when the
 //! subscription ends at its period end), `GET /v1/invoices` from `invoices`,
 //! and `payment_methods`, which a customer's default expands into. Payment
 //! methods (step 13): SetupIntent cancel and micro-deposit states
 //! (`pend_microdeposits`, `fail_setup_intent`), payment method detach,
 //! `POST /v1/invoices/{id}/pay` (paid, a bank debit processing, a decline,
-//! 3D Secure), charges and PaymentIntents by id. Include it with
+//! 3D Secure), charges and PaymentIntents by id. The onboarding advance:
+//! invoice items (`POST`, `GET`, list with `pending`, `DELETE` while pending
+//! or on a draft), [`FakeStripe::sweep_items`] (the renewal invoice taking
+//! the pending items), customer balance transactions, and `cancel_at` on a
+//! subscription (an empty value removes it). Include it with
 //! `#[path = "../support/fake_stripe.rs"] mod fake_stripe;` in the area's `main.rs`.
 #![allow(dead_code)]
 
@@ -86,15 +91,27 @@ pub struct FakeStripe {
     pub payment_methods: HashMap<String, Value>,
     /// Tax added to each invoice preview, in cents.
     pub preview_tax: i64,
+    /// Automatic tax on each line [`FakeStripe::sweep_items`] makes, in
+    /// percent (dahlia's exclusive `taxes[]`); 0: no tax.
+    pub line_tax_percent: i64,
     /// Charge objects by id (`GET /v1/charges/{id}`).
     pub charges: HashMap<String, Value>,
     /// PaymentIntent objects by id (`GET /v1/payment_intents/{id}`).
     pub payment_intents: HashMap<String, Value>,
+    /// Invoice item objects (`/v1/invoiceitems`); a deleted one is removed.
+    pub invoice_items: Vec<Value>,
+    /// Customer balance transactions (`/v1/customers/{id}/balance_transactions`).
+    pub balance_transactions: Vec<Value>,
     /// The next `POST /v1/invoices/{id}/pay` is declined (402 `card_error`).
     pub decline_next_pay: bool,
     /// Invoices whose payment needs 3D Secure: paying answers 402
     /// `invoice_payment_intent_requires_action`.
     pub requires_action_invoices: Vec<String>,
+    /// Webhook endpoints, portal configurations and payment method
+    /// configurations (the setup script and the setup check).
+    pub webhook_endpoints: Vec<Value>,
+    pub portal_configurations: Vec<Value>,
+    pub payment_method_configurations: Vec<Value>,
     pub requests: Vec<Seen>,
     idempotent: HashMap<String, (String, String, StatusCode, Value)>,
     failures: Vec<Failure>,
@@ -113,7 +130,15 @@ pub fn catalog_prices() -> Vec<Value> {
         ("price_quickbooks", "addon_quickbooks_monthly_v1", 3_000),
     ]
     .into_iter()
-    .map(|(id, key, cents)| price(id, key, cents))
+    .map(|(id, key, cents)| {
+        let mut price = price(id, key, cents);
+        price["metadata"] = match key {
+            "granite_base_monthly_v1" => json!({ "kind": "base" }),
+            "granite_extra_user_monthly_v1" => json!({ "kind": "seat" }),
+            _ => json!({ "addon_key": key.split('_').nth(1) }),
+        };
+        price
+    })
     .collect()
 }
 
@@ -139,7 +164,8 @@ pub fn price(id: &str, lookup_key: &str, unit_amount: i64) -> Value {
         "id": id, "object": "price", "active": true, "currency": "usd",
         "lookup_key": lookup_key, "unit_amount": unit_amount, "billing_scheme": "per_unit",
         "type": "recurring", "recurring": { "interval": "month", "interval_count": 1 },
-        "livemode": false, "nickname": null,
+        "livemode": false, "nickname": null, "tax_behavior": "exclusive",
+        "metadata": {},
     })
 }
 
@@ -181,7 +207,10 @@ impl FakeStripe {
     /// Micro-deposits sent: the SetupIntent waits (`requires_action`,
     /// `verify_with_microdeposits`) with `payment_method` attached.
     pub fn pend_microdeposits(&mut self, setup_intent: &str, payment_method: &str) {
-        let intent = self.setup_intents.get_mut(setup_intent).expect("setup intent");
+        let intent = self
+            .setup_intents
+            .get_mut(setup_intent)
+            .expect("setup intent");
         intent["status"] = json!("requires_action");
         intent["payment_method"] = json!(payment_method);
         intent["next_action"] = json!({
@@ -196,7 +225,10 @@ impl FakeStripe {
 
     /// The SetupIntent failed (`requires_payment_method`, `last_setup_error.code`).
     pub fn fail_setup_intent(&mut self, setup_intent: &str, code: &str) {
-        let intent = self.setup_intents.get_mut(setup_intent).expect("setup intent");
+        let intent = self
+            .setup_intents
+            .get_mut(setup_intent)
+            .expect("setup intent");
         intent["status"] = json!("requires_payment_method");
         intent["next_action"] = Value::Null;
         intent["last_setup_error"] = json!({ "code": code, "message": "fake failure" });
@@ -204,9 +236,57 @@ impl FakeStripe {
 
     /// Stripe verified the micro-deposits: the SetupIntent succeeded.
     pub fn verify_microdeposits(&mut self, setup_intent: &str) {
-        let intent = self.setup_intents.get_mut(setup_intent).expect("setup intent");
+        let intent = self
+            .setup_intents
+            .get_mut(setup_intent)
+            .expect("setup intent");
         intent["status"] = json!("succeeded");
         intent["next_action"] = Value::Null;
+    }
+
+    /// Stripe's renewal of `subscription`: a new invoice `invoice_id` in
+    /// `status` with a line per pending item of it (dahlia's
+    /// `parent.invoice_item_details`, the item's metadata), the items then on
+    /// that invoice. Answers the invoice (also in `invoices`).
+    pub fn sweep_items(&mut self, subscription: &str, invoice_id: &str, status: &str) -> Value {
+        let mut lines = Vec::new();
+        let mut customer = Value::Null;
+        let mut tax = 0;
+        for item in &mut self.invoice_items {
+            if item["subscription"] == subscription && item["invoice"].is_null() {
+                item["invoice"] = json!(invoice_id);
+                customer = item["customer"].clone();
+                let mut line = json!({
+                    "id": format!("il_{}", item["id"].as_str().unwrap_or_default()),
+                    "object": "line_item", "amount": item["amount"],
+                    "description": item["description"], "metadata": item["metadata"],
+                    "parent": { "type": "invoice_item_details",
+                        "invoice_item_details": { "invoice_item": item["id"] } },
+                });
+                if self.line_tax_percent > 0 {
+                    let line_tax =
+                        item["amount"].as_i64().unwrap_or_default() * self.line_tax_percent / 100;
+                    tax += line_tax;
+                    line["taxes"] = json!([{ "amount": line_tax, "tax_behavior": "exclusive",
+                        "taxability_reason": "standard_rated", "type": "tax_rate_details" }]);
+                }
+                lines.push(line);
+            }
+        }
+        let total: i64 =
+            lines.iter().filter_map(|line| line["amount"].as_i64()).sum::<i64>() + tax;
+        let invoice = json!({
+            "id": invoice_id, "object": "invoice", "customer": customer, "status": status,
+            "amount_due": total, "amount_paid": if status == "paid" { total } else { 0 },
+            "currency": "usd",
+            "parent": { "type": "subscription_details",
+                "subscription_details": { "subscription": subscription,
+                    "metadata": self.subscriptions.get(subscription)
+                        .map_or(Value::Null, |sub| sub["metadata"].clone()) } },
+            "lines": { "object": "list", "data": lines, "has_more": false },
+        });
+        self.invoices.push(invoice.clone());
+        invoice
     }
 
     /// The idempotency keys of the requests (not replays) to `path`.
@@ -258,6 +338,9 @@ impl FakeStripe {
                 .map(|(_, value)| value.clone())
         };
         let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        if let Some(answer) = self.setup_route(method, &segments, &params) {
+            return answer;
+        }
         match (method.as_str(), segments.as_slice()) {
             ("GET", ["v1", "prices"]) => {
                 let keys: Vec<String> = params
@@ -370,10 +453,16 @@ impl FakeStripe {
                     return missing();
                 };
                 if let Some(method) = intent["payment_method"].as_str().map(str::to_string) {
-                    intent["payment_method"] = self.payment_methods.get(&method).cloned().unwrap_or_else(|| json!({
-                        "id": method, "object": "payment_method", "type": "card",
-                        "card": { "brand": "visa", "last4": "4242" },
-                    }));
+                    intent["payment_method"] = self
+                        .payment_methods
+                        .get(&method)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            json!({
+                                "id": method, "object": "payment_method", "type": "card",
+                                "card": { "brand": "visa", "last4": "4242" },
+                            })
+                        });
                 }
                 ok(intent)
             }
@@ -425,6 +514,13 @@ impl FakeStripe {
                 }
                 None => missing(),
             },
+            ("DELETE", ["v1", "subscriptions", id]) => match self.subscriptions.get_mut(*id) {
+                Some(subscription) => {
+                    subscription["status"] = json!("canceled");
+                    ok(subscription.clone())
+                }
+                None => missing(),
+            },
             ("POST", ["v1", "subscriptions", id]) => {
                 let Some(subscription) = self.subscriptions.get_mut(*id) else {
                     return missing();
@@ -443,6 +539,13 @@ impl FakeStripe {
                     subscription["cancel_at"] = if cancel { end } else { Value::Null };
                     subscription["cancellation_details"]["comment"] =
                         one("cancellation_details[comment]").map_or(Value::Null, |c| json!(c));
+                }
+                if let Some(at) = one("cancel_at") {
+                    subscription["cancel_at_period_end"] = json!(false);
+                    subscription["cancel_at"] = at.parse::<i64>().map_or(Value::Null, |at| json!(at));
+                    if let Some(comment) = one("cancellation_details[comment]") {
+                        subscription["cancellation_details"]["comment"] = json!(comment);
+                    }
                 }
                 if let Some(method) = one("default_payment_method") {
                     subscription["default_payment_method"] = json!(method);
@@ -513,6 +616,77 @@ impl FakeStripe {
                 Some(method) => ok(method.clone()),
                 None => missing(),
             },
+            ("POST", ["v1", "invoiceitems"]) => {
+                let id = self.id("ii");
+                let item = json!({
+                    "id": id, "object": "invoiceitem", "customer": one("customer"),
+                    "subscription": one("subscription"),
+                    "amount": one("amount").and_then(|a| a.parse::<i64>().ok()),
+                    "currency": one("currency"), "description": one("description"),
+                    "metadata": metadata(&params), "invoice": null,
+                });
+                self.invoice_items.push(item.clone());
+                ok(item)
+            }
+            ("GET", ["v1", "invoiceitems"]) => {
+                let customer = one("customer");
+                let pending = one("pending").as_deref() == Some("true");
+                let data: Vec<Value> = self
+                    .invoice_items
+                    .iter()
+                    .filter(|item| customer.as_deref().is_none_or(|c| item["customer"] == c))
+                    .filter(|item| !pending || item["invoice"].is_null())
+                    .cloned()
+                    .collect();
+                ok(json!({ "object": "list", "data": data, "has_more": false }))
+            }
+            ("GET", ["v1", "invoiceitems", id]) => {
+                match self.invoice_items.iter().find(|item| item["id"] == *id) {
+                    Some(item) => ok(item.clone()),
+                    None => missing(),
+                }
+            }
+            ("DELETE", ["v1", "invoiceitems", id]) => {
+                let Some(index) = self.invoice_items.iter().position(|item| item["id"] == *id)
+                else {
+                    return missing();
+                };
+                let on = self.invoice_items[index]["invoice"].as_str().map(str::to_string);
+                let draft = on.as_ref().is_none_or(|invoice| {
+                    self.invoices
+                        .iter()
+                        .any(|i| i["id"] == invoice.as_str() && i["status"] == "draft")
+                });
+                if !draft {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json!({ "error": { "type": "invalid_request_error",
+                            "message": "This invoice item is on a finalized invoice" } }),
+                    );
+                }
+                self.invoice_items.remove(index);
+                ok(json!({ "id": id, "object": "invoiceitem", "deleted": true }))
+            }
+            ("POST", ["v1", "customers", customer, "balance_transactions"]) => {
+                let id = self.id("cbtxn");
+                let txn = json!({
+                    "id": id, "object": "customer_balance_transaction", "customer": customer,
+                    "amount": one("amount").and_then(|a| a.parse::<i64>().ok()),
+                    "currency": one("currency"), "description": one("description"),
+                    "metadata": metadata(&params),
+                });
+                self.balance_transactions.push(txn.clone());
+                ok(txn)
+            }
+            ("GET", ["v1", "customers", customer, "balance_transactions"]) => {
+                let data: Vec<Value> = self
+                    .balance_transactions
+                    .iter()
+                    .filter(|txn| txn["customer"] == *customer)
+                    .cloned()
+                    .collect();
+                ok(json!({ "object": "list", "data": data, "has_more": false }))
+            }
             ("POST", ["v1", "subscription_items"]) => {
                 let subscription = one("subscription").unwrap_or_default();
                 if !self.subscriptions.contains_key(&subscription) {
@@ -589,9 +763,12 @@ impl FakeStripe {
                     "decline_code": "generic_decline", "message": "Your card was declined." } }),
             );
         }
-        if self.requires_action_invoices.iter().any(|invoice| invoice == id) {
-            self.invoices[index]["confirmation_secret"] =
-                json!({ "client_secret": format!("pi_{id}_secret_fake"), "type": "payment_intent" });
+        if self
+            .requires_action_invoices
+            .iter()
+            .any(|invoice| invoice == id)
+        {
+            self.invoices[index]["confirmation_secret"] = json!({ "client_secret": format!("pi_{id}_secret_fake"), "type": "payment_intent" });
             return (
                 StatusCode::PAYMENT_REQUIRED,
                 json!({ "error": { "type": "invalid_request_error",
@@ -677,6 +854,170 @@ impl FakeStripe {
             return outage();
         }
         (status, response)
+    }
+}
+
+/// Sets `a[b][]=x`, `a[b][0]=x` style form fields into a JSON object;
+/// `true`/`false` become booleans.
+fn set_path(target: &mut Value, key: &str, value: &str) {
+    let mut segments: Vec<String> = Vec::new();
+    for (index, part) in key.split('[').enumerate() {
+        segments.push(if index == 0 {
+            part.to_string()
+        } else {
+            part.trim_end_matches(']').to_string()
+        });
+    }
+    let value = match value {
+        "true" => json!(true),
+        "false" => json!(false),
+        other => json!(other),
+    };
+    let mut node = target;
+    for (position, segment) in segments.iter().enumerate() {
+        let last = position + 1 == segments.len();
+        let next_is_list = segments
+            .get(position + 1)
+            .is_some_and(|next| next.is_empty() || next.chars().all(|c| c.is_ascii_digit()));
+        if last {
+            if let Value::Array(list) = node {
+                list.push(value);
+            } else {
+                node[segment] = value;
+            }
+            return;
+        }
+        if segment.is_empty() || segment.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if node[segment].is_null() {
+            node[segment] = if next_is_list { json!([]) } else { json!({}) };
+        }
+        node = &mut node[segment];
+    }
+}
+
+impl FakeStripe {
+    /// The account setup endpoints: `GET /v1/balance`, products inline in
+    /// `POST /v1/prices`, portal configurations, webhook endpoints (the
+    /// signing secret is answered on creation only) and
+    /// `GET /v1/payment_method_configurations`.
+    fn setup_route(
+        &mut self,
+        method: &Method,
+        segments: &[&str],
+        params: &[(String, String)],
+    ) -> Option<(StatusCode, Value)> {
+        let list = |items: &[Value]| ok(json!({ "object": "list", "data": items }));
+        let events = || -> Vec<Value> {
+            params
+                .iter()
+                .filter(|(key, _)| key == "enabled_events[]")
+                .map(|(_, value)| json!(value))
+                .collect()
+        };
+        Some(match (method.as_str(), segments) {
+            ("GET", ["v1", "balance"]) => ok(json!({ "object": "balance", "livemode": false })),
+            ("GET", ["v1", "payment_method_configurations"]) => {
+                list(&self.payment_method_configurations)
+            }
+            ("GET", ["v1", "webhook_endpoints"]) => list(&self.webhook_endpoints),
+            ("GET", ["v1", "billing_portal", "configurations"]) => {
+                let active: Vec<Value> = self
+                    .portal_configurations
+                    .iter()
+                    .filter(|config| config["active"] != false)
+                    .cloned()
+                    .collect();
+                list(&active)
+            }
+            ("POST", ["v1", "prices"]) => {
+                let one = |name: &str| {
+                    params
+                        .iter()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, value)| value.clone())
+                };
+                let id = self.id("price");
+                let price = json!({
+                    "id": id, "object": "price", "active": true, "livemode": false,
+                    "currency": one("currency"), "lookup_key": one("lookup_key"),
+                    "unit_amount": one("unit_amount").and_then(|v| v.parse::<i64>().ok()),
+                    "billing_scheme": one("billing_scheme").unwrap_or_else(|| "per_unit".into()),
+                    "tax_behavior": one("tax_behavior").unwrap_or_else(|| "unspecified".into()),
+                    "type": "recurring",
+                    "recurring": { "interval": one("recurring[interval]"), "interval_count": 1 },
+                    "product": self.id("prod"),
+                    "metadata": metadata(params),
+                });
+                self.prices.push(price.clone());
+                ok(price)
+            }
+            ("POST", ["v1", "billing_portal", "configurations"]) => {
+                let id = self.id("bpc");
+                let mut config = json!({ "id": id, "object": "billing_portal.configuration",
+                    "active": true, "livemode": false });
+                for (key, value) in params {
+                    set_path(&mut config, key, value);
+                }
+                self.portal_configurations.push(config.clone());
+                ok(config)
+            }
+            ("POST", ["v1", "billing_portal", "configurations", id]) => {
+                let Some(config) = self
+                    .portal_configurations
+                    .iter_mut()
+                    .find(|config| config["id"] == *id)
+                else {
+                    return Some(missing());
+                };
+                let mut cleared: Vec<&str> = Vec::new();
+                for (key, value) in params {
+                    if let Some(base) = key.strip_suffix("[]")
+                        && !cleared.contains(&base)
+                    {
+                        cleared.push(base);
+                        let mut node = &mut *config;
+                        for part in base.split(['[', ']']).filter(|part| !part.is_empty()) {
+                            node = &mut node[part];
+                        }
+                        *node = json!([]);
+                    }
+                    set_path(config, key, value);
+                }
+                ok(config.clone())
+            }
+            ("POST", ["v1", "webhook_endpoints"]) => {
+                let id = self.id("we");
+                let url = params
+                    .iter()
+                    .find(|(key, _)| key == "url")
+                    .map(|(_, value)| value.clone());
+                let version = params
+                    .iter()
+                    .find(|(key, _)| key == "api_version")
+                    .map(|(_, value)| value.clone());
+                let endpoint = json!({ "id": id, "object": "webhook_endpoint", "url": url,
+                    "api_version": version, "status": "enabled", "enabled_events": events(),
+                    "livemode": false });
+                self.webhook_endpoints.push(endpoint.clone());
+                let mut created = endpoint;
+                created["secret"] = json!(format!("whsec_fake_secret_{id}"));
+                ok(created)
+            }
+            ("POST", ["v1", "webhook_endpoints", id]) => {
+                let Some(endpoint) = self
+                    .webhook_endpoints
+                    .iter_mut()
+                    .find(|endpoint| endpoint["id"] == *id)
+                else {
+                    return Some(missing());
+                };
+                endpoint["enabled_events"] = json!(events());
+                ok(endpoint.clone())
+            }
+            _ => return None,
+        })
     }
 }
 

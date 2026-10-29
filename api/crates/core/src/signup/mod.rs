@@ -47,6 +47,9 @@ pub struct SignupConfig {
     pub notify_email: Option<Arc<str>>,
     /// `STRIPE_AUTOMATIC_TAX=1`: subscriptions compute sales tax.
     pub automatic_tax: bool,
+    /// `SIGNUP_RATE_LIMITS=off`: with a `sk_test_` key only, the per-email
+    /// and per-IP signup limits are lifted (e2e runs from one address).
+    pub rate_limits_off: bool,
 }
 
 impl SignupConfig {
@@ -65,6 +68,7 @@ impl SignupConfig {
             notify_user_id: text("SIGNUP_NOTIFY_USER_ID").and_then(|id| id.parse().ok()),
             notify_email: text("SIGNUP_NOTIFY_EMAIL").map(Arc::from),
             automatic_tax: on("STRIPE_AUTOMATIC_TAX"),
+            rate_limits_off: text("SIGNUP_RATE_LIMITS").is_some_and(|value| value == "off"),
         }
     }
 }
@@ -80,7 +84,9 @@ pub struct RequestMeta {
 }
 
 impl RequestMeta {
-    pub fn from_headers(headers: &HeaderMap) -> Self {
+    /// `client_ip`: the trusted address ([`crate::auth::ClientIp`]); a
+    /// spoofed `X-Forwarded-For` entry is never the recorded one.
+    pub fn from_request(client_ip: &str, headers: &HeaderMap) -> Self {
         let header = |name: &str| {
             headers
                 .get(name)
@@ -88,7 +94,7 @@ impl RequestMeta {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
         };
-        let ip = crate::auth::client_ip(headers);
+        let ip = client_ip;
         Self {
             ip: (ip != "unknown").then(|| ip.chars().take(45).collect()),
             user_agent: header("user-agent").map(|agent| agent.chars().take(512).collect()),
@@ -177,4 +183,22 @@ pub async fn signup_catalog(
         return Err(payments_unavailable());
     }
     Ok(catalog)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RequestMeta;
+    use axum::http::HeaderMap;
+
+    #[test]
+    fn a_spoofed_forwarded_for_entry_is_not_the_recorded_address() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "6.6.6.6, 198.51.100.4".parse().unwrap());
+        let meta = RequestMeta::from_request("198.51.100.4", &headers);
+        assert_eq!(meta.ip.as_deref(), Some("198.51.100.4"));
+        // The trusted address wins over whatever the headers say.
+        let meta = RequestMeta::from_request("203.0.113.9", &headers);
+        assert_eq!(meta.ip.as_deref(), Some("203.0.113.9"));
+        assert_eq!(RequestMeta::from_request("unknown", &headers).ip, None);
+    }
 }

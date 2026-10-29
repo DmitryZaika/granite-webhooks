@@ -19,7 +19,8 @@
 //!
 //! Every extractor answers 402 `payment_required` when the company the request
 //! acts in has its access paused for billing, except on the paths in
-//! [`open_while_paused`].
+//! [`open_while_paused`]. `device::DeviceUser` and `device::PhoneCaller` are
+//! refused only on the phone admin setup ([`phone_admin_paused`]).
 //!
 //! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens, and the
 //! installers' and template makers' own schedule), on [`DEVICE_READ_ROUTES`]
@@ -224,7 +225,9 @@ async fn authenticate_with_positions(
         && let Some(token) = device::device_token(parts)
     {
         let device = device::authenticate_device(&token, state).await?;
-        if company_paused(state, device.user.company_id).await {
+        if !open_while_paused(&parts.method, parts.uri.path())
+            && company_paused(state, device.user.company_id).await
+        {
             return Err(ApiError::PaymentRequired);
         }
         let positions = user_positions(&state.pool, device.user.id).await?;
@@ -291,7 +294,8 @@ async fn company_paused(state: &AppState, company_id: i32) -> bool {
 /// Paths (and everything below them) that work while the company's access
 /// is paused for billing: paying, signing in and out, the app shell, the
 /// bell, superuser tools, the onboarding call / plan invites, and the phone
-/// (calls, texts and 911 must keep working; homeowners still call in).
+/// (calls, texts and 911 must keep working; homeowners still call in) but
+/// for its paid admin setup ([`phone_admin_paused`]).
 const OPEN_WHILE_PAUSED: [&str; 8] = [
     "/v1/billing",
     "/v1/auth",
@@ -310,13 +314,25 @@ fn is_path_or_child(path: &str, base: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
+/// The phone's admin setup, refused while paused (402): numbers (search,
+/// buy, import, edit), porting, 10DLC, connecting Telnyx, hours and call
+/// recording. The admins' device list and revoke stay open (a lost phone).
+const PHONE_ADMIN: &str = "/v1/phone/admin";
+const PHONE_ADMIN_OPEN: &str = "/v1/phone/admin/devices";
+
+/// A phone admin setup path, refused while the company is paused.
+pub fn phone_admin_paused(path: &str) -> bool {
+    is_path_or_child(path, PHONE_ADMIN) && !is_path_or_child(path, PHONE_ADMIN_OPEN)
+}
+
 /// Whether a request works while its company's access is paused. Reading
 /// `/v1/me` works too (the SPA needs who is signed in), but not its children.
 pub fn open_while_paused(method: &Method, path: &str) -> bool {
     (method == Method::GET && path == "/v1/me")
-        || OPEN_WHILE_PAUSED
+        || (OPEN_WHILE_PAUSED
             .iter()
             .any(|base| is_path_or_child(path, base))
+            && !phone_admin_paused(path))
 }
 
 pub struct CurrentUser(pub SessionUser);
@@ -484,23 +500,66 @@ impl FromRequestParts<AppState> for CompanyManager {
     }
 }
 
-/// The client address: the first `X-Forwarded-For` entry (API Gateway and
-/// CloudFront set it), else "unknown".
-pub fn client_ip(headers: &axum::http::HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
+/// The client address, for consent records and the login throttle.
+///
+/// The api runs behind CloudFront in front of its Lambda function URL.
+/// CloudFront appends the viewer's address to `X-Forwarded-For`, and the
+/// function URL may append its own caller, CloudFront (`source_ip`, the
+/// request context's `sourceIp`). Entries the client sent come first and are
+/// never trusted: the address is the right-most entry once trailing copies of
+/// `source_ip` are dropped, else `source_ip` (a direct call), else "unknown".
+pub fn client_ip_from(source_ip: Option<&str>, headers: &axum::http::HeaderMap) -> String {
+    let source = source_ip.map(str::trim).filter(|ip| !ip.is_empty());
+    let forwarded: Vec<&str> = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|value| value.to_str().ok())
-                .map(str::trim)
-        })
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    let mut hops = forwarded.as_slice();
+    while let Some((last, rest)) = hops.split_last()
+        && Some(*last) == source
+    {
+        hops = rest;
+    }
+    hops.last()
+        .copied()
+        .or(source)
         .unwrap_or("unknown")
         .to_string()
+}
+
+/// The `sourceIp` of the Lambda request context, when there is one.
+pub fn source_ip(extensions: &axum::http::Extensions) -> Option<String> {
+    match extensions.get::<lambda_http::request::RequestContext>()? {
+        lambda_http::request::RequestContext::ApiGatewayV2(context) => context.http.source_ip.clone(),
+        _ => None,
+    }
+}
+
+/// [`client_ip_from`] without the request context: the right-most
+/// `X-Forwarded-For` entry. Prefer [`ClientIp`], which also drops the
+/// function URL's own hop.
+pub fn client_ip(headers: &axum::http::HeaderMap) -> String {
+    client_ip_from(None, headers)
+}
+
+/// [`client_ip_from`] of a request: the client address, as a handler
+/// argument.
+pub struct ClientIp(pub String);
+
+impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
+    type Rejection = std::convert::Infallible;
+
+    #[allow(clippy::unused_async_trait_impl)] // the trait's signature
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(client_ip_from(
+            source_ip(&parts.extensions).as_deref(),
+            &parts.headers,
+        )))
+    }
 }
 
 /// Whether `a` and `b` are equal, in time that depends only on their length.
@@ -545,6 +604,10 @@ mod tests {
             "/v1/plan-invites/abc",
             "/v1/phone/calls",
             "/v1/phone/texts/index",
+            "/v1/phone/e911",
+            "/v1/phone/devices",
+            "/v1/phone/admin/devices",
+            "/v1/phone/admin/devices/7",
             "/v1/me",
         ] {
             assert!(open(path), "{path} should stay open");
@@ -558,6 +621,56 @@ mod tests {
         ] {
             assert!(!open(path), "{path} should be paused");
         }
+    }
+
+    #[test]
+    fn the_phones_paid_admin_setup_is_paused() {
+        for path in [
+            "/v1/phone/admin",
+            "/v1/phone/admin/numbers",
+            "/v1/phone/admin/numbers/buy",
+            "/v1/phone/admin/numbers/import",
+            "/v1/phone/admin/ports/7/submit",
+            "/v1/phone/admin/tendlc",
+            "/v1/phone/admin/tendlc/ready",
+            "/v1/phone/admin/hours",
+            "/v1/phone/admin/recording",
+            "/v1/phone/admin/connect",
+        ] {
+            assert!(phone_admin_paused(path), "{path}");
+            assert!(!open_while_paused(&Method::POST, path), "{path} should be paused");
+        }
+        assert!(!phone_admin_paused("/v1/phone/adminx"));
+        assert!(phone_admin_paused("/v1/phone/admin/devicesx"));
+    }
+
+    #[test]
+    fn the_client_address_is_the_hop_cloudfront_added() {
+        let headers = |forwarded: &str| {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert("x-forwarded-for", forwarded.parse().unwrap());
+            headers
+        };
+        let cloudfront = Some("130.176.1.1");
+        // The client's own entry is skipped; the function URL's hop dropped.
+        assert_eq!(
+            client_ip_from(cloudfront, &headers("6.6.6.6, 203.0.113.9, 130.176.1.1")),
+            "203.0.113.9"
+        );
+        assert_eq!(
+            client_ip_from(cloudfront, &headers("6.6.6.6, 203.0.113.9")),
+            "203.0.113.9"
+        );
+        assert_eq!(client_ip_from(None, &headers("6.6.6.6, 203.0.113.9")), "203.0.113.9");
+        // A direct call: its source address.
+        assert_eq!(
+            client_ip_from(Some("198.51.100.4"), &axum::http::HeaderMap::new()),
+            "198.51.100.4"
+        );
+        assert_eq!(client_ip_from(None, &axum::http::HeaderMap::new()), "unknown");
+        let mut real_ip = axum::http::HeaderMap::new();
+        real_ip.insert("x-real-ip", "6.6.6.6".parse().unwrap());
+        assert_eq!(client_ip_from(None, &real_ip), "unknown");
     }
 
     #[test]

@@ -3,9 +3,12 @@
 //! - `GET /v1/superuser/billing/setup` → env variables, webhook endpoint and plan prices
 
 use crate::auth::CurrentUser;
+use crate::billing::account::PORTAL_CONFIGURATION_TAG;
 use crate::billing::catalog::{BASE_LOOKUP_KEY, Catalog, EXTRA_USER_LOOKUP_KEY};
 use crate::billing::setup::{
-    EnvFacts, SetupCheck, catalog_checks, env_checks, key_mode, price_check, webhook_checks,
+    EnvFacts, ReleaseFacts, SetupCheck, catalog_checks, env_checks, key_mode,
+    payment_method_checks, portal_checks, price_check, release_checks, startup_check,
+    webhook_checks,
 };
 use crate::entitlements::AddonKey;
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -51,12 +54,16 @@ pub struct BillingSetup {
 /// email sending and the scheduled jobs key, then what Stripe itself reports
 /// for the webhook endpoint (exactly one enabled endpoint for
 /// `/v1/webhooks/stripe`, with every handled event and the api's Stripe API
-/// version) and for each configured plan price (active, monthly, USD, same
+/// version), for the default payment method configuration (card and bank
+/// debit enabled), for the customer portal configuration the api uses (it
+/// exists, cancelling and plan changes off), the billing alert email,
+/// payments app URL, signup notification target, Calendly token, onboarding
+/// advance charging and the signup switch with what it depends on, and for each configured plan price (active, monthly, USD, same
 /// mode as the key), each self-serve price by lookup key (same checks, per
 /// unit) and whether those prices still match what the signup consent texts
 /// state (signup refuses with 503 when not). A Stripe call that fails becomes
-/// a failed check, not an error. Stripe checks are skipped without `STRIPE_SECRET_KEY`. The report
-/// is cached for 5 minutes. Super admins only.
+/// a failed check, not an error. Stripe checks are skipped without `STRIPE_SECRET_KEY`.
+/// The report is cached for 5 minutes. Super admins only.
 #[crate::openapi::path(
     get,
     path = "/v1/superuser/billing/setup",
@@ -119,6 +126,10 @@ fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_default()
 }
 
+fn env_on(name: &str) -> bool {
+    matches!(env(name).trim(), "1" | "true")
+}
+
 async fn build(state: &AppState) -> BillingSetup {
     let secret_key = env("STRIPE_SECRET_KEY");
     let webhook_secret = state.stripe_webhook_secret.as_deref().unwrap_or_default();
@@ -132,11 +143,38 @@ async fn build(state: &AppState) -> BillingSetup {
         webhooks_key: &env("WEBHOOKS_KEY"),
         job_key_set: state.job_key.is_some(),
     });
+    checks.push(startup_check(&crate::env_check::config_problems(
+        &crate::env_check::EnvSnapshot::from_process(),
+    )));
+    checks.extend(release_checks(&ReleaseFacts {
+        billing_alert_email_set: state.billing_alert_email.is_some(),
+        payments_app_url: &crate::billing::payments_app_url(),
+        signup_enabled: state.signup.enabled,
+        publishable_key_set: state.signup.publishable_key.is_some(),
+        webhook_secret_set: !webhook_secret.trim().is_empty(),
+        signup_notify_user_set: state.signup.notify_user_id.is_some(),
+        signup_notify_email_set: state.signup.notify_email.is_some(),
+        onboarding_advance_charging: env_on("ONBOARDING_ADVANCE_CHARGING"),
+        calendly_token_set: state.onboarding_call.calendly.is_enabled(),
+    }));
     if state.stripe.is_enabled() {
         let mode = key_mode(&secret_key, &["sk_", "rk_"]);
         match state.stripe.webhook_endpoints().await {
             Ok(endpoints) => checks.extend(webhook_checks(Ok(&endpoints))),
             Err(err) => checks.extend(webhook_checks(Err(&err.to_string()))),
+        }
+        match state.stripe.payment_method_configurations().await {
+            Ok(configurations) => checks.extend(payment_method_checks(Ok(&configurations))),
+            Err(err) => checks.extend(payment_method_checks(Err(&err.to_string()))),
+        }
+        match state.stripe.list_portal_configurations().await {
+            Ok(configurations) => {
+                checks.extend(portal_checks(Ok(&configurations), PORTAL_CONFIGURATION_TAG));
+            }
+            Err(err) => checks.extend(portal_checks(
+                Err(&err.to_string()),
+                PORTAL_CONFIGURATION_TAG,
+            )),
         }
         for plan in state.billing_plans.iter() {
             let price = state.stripe.price(&plan.price_id).await;

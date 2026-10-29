@@ -21,10 +21,20 @@ const UPDATE_LABEL: &str = "Update payment method";
 const ADD_LABEL: &str = "Add a payment method";
 const ACCOUNT_LABEL: &str = "Open your account page";
 
+/// The disputed payment behind a dispute hold, when Stripe gave it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisputedPayment {
+    pub amount_cents: i64,
+    /// When the payment was made.
+    pub paid_at: NaiveDateTime,
+}
+
 /// One Manager's copy of a hold notice.
 #[derive(Debug, Clone, Copy)]
 pub struct HoldInput<'a> {
     pub hold: MethodHold,
+    /// The disputed payment (a dispute hold only).
+    pub disputed: Option<DisputedPayment>,
     pub company_name: &'a str,
     pub user_name: Option<&'a str>,
     /// When access pauses unless a new method is saved.
@@ -61,12 +71,44 @@ pub enum InternalEvent<'a> {
         amount_cents: Option<i64>,
     },
     /// The saved bank account was blocked: Stripe's reason.
-    Blocked { reason: Option<&'a str> },
+    Blocked {
+        reason: Option<&'a str>,
+        hold: HoldOutcome,
+    },
     /// A payment was disputed: Stripe's reason.
     Dispute {
         reason: Option<&'a str>,
         amount_cents: Option<i64>,
+        hold: HoldOutcome,
     },
+    /// A dispute was closed (`won`, `lost`, `warning_closed`).
+    DisputeClosed {
+        status: Option<&'a str>,
+        amount_cents: Option<i64>,
+        /// Its hold was lifted (a dispute the company won).
+        hold_cleared: bool,
+    },
+}
+
+/// What an event did to the company's access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldOutcome {
+    /// A new hold: access pauses in `HOLD_DAYS` unless a new method is saved.
+    Set,
+    /// A hold runs already, or the method was replaced since.
+    Unchanged,
+    /// A legacy company: never held, staff follow up.
+    Legacy,
+}
+
+impl HoldOutcome {
+    const fn access(self) -> &'static str {
+        match self {
+            Self::Set => "pauses in 7 days unless a new method is saved",
+            Self::Unchanged => "unchanged (a hold runs already, or the method was replaced)",
+            Self::Legacy => "not paused (legacy plan): follow up with the company",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,12 +153,27 @@ pub fn render_hold(input: &HoldInput<'_>) -> RenderedEmail {
                 "Your bank blocked payments from this account. Add another payment method by {date} to keep access."
             )],
         ),
-        MethodHold::Disputed => (
-            DISPUTED_SUBJECT,
-            vec![format!(
-                "Add a payment method by {date} to keep access, or email {SUPPORT_EMAIL}."
-            )],
-        ),
+        MethodHold::Disputed => {
+            let what = input.disputed.map_or_else(
+                || "A payment was disputed with your card issuer or bank.".to_string(),
+                |payment| {
+                    format!(
+                        "Your payment of {} on {} was disputed with your card issuer or bank.",
+                        format_money(payment.amount_cents),
+                        format_local_date(payment.paid_at)
+                    )
+                },
+            );
+            (
+                DISPUTED_SUBJECT,
+                vec![
+                    what,
+                    format!(
+                        "Add a payment method by {date} to keep access, or email {SUPPORT_EMAIL}."
+                    ),
+                ],
+            )
+        }
     };
     render(
         subject,
@@ -163,6 +220,7 @@ impl InternalNotice<'_> {
             InternalEvent::AchReturn { .. } => "Bank debit returned",
             InternalEvent::Blocked { .. } => "Bank account blocked",
             InternalEvent::Dispute { .. } => "Payment disputed",
+            InternalEvent::DisputeClosed { .. } => "Dispute closed",
         }
     }
 
@@ -184,16 +242,32 @@ impl InternalNotice<'_> {
                 rows.push(("Failure code", failure_code.unwrap_or("none").to_string()));
                 rows.push(("Amount", money(amount_cents)));
             }
-            InternalEvent::Blocked { reason } => {
+            InternalEvent::Blocked { reason, hold } => {
                 rows.push(("Reason", reason.unwrap_or("none given").to_string()));
-                rows.push(("Access", "pauses in 7 days unless a new method is saved".into()));
+                rows.push(("Access", hold.access().into()));
             }
             InternalEvent::Dispute {
                 reason,
                 amount_cents,
+                hold,
             } => {
                 rows.push(("Reason", reason.unwrap_or("none given").to_string()));
                 rows.push(("Amount", money(amount_cents)));
+                rows.push(("Access", hold.access().into()));
+            }
+            InternalEvent::DisputeClosed {
+                status,
+                amount_cents,
+                hold_cleared,
+            } => {
+                rows.push(("Outcome", status.unwrap_or("unknown").to_string()));
+                rows.push(("Amount", money(amount_cents)));
+                let access = if hold_cleared {
+                    "its hold was lifted"
+                } else {
+                    "unchanged"
+                };
+                rows.push(("Access", access.into()));
             }
         }
         rows
@@ -235,6 +309,7 @@ mod tests {
     fn hold_emails_say_why_and_until_when() {
         let blocked = render_hold(&HoldInput {
             hold: MethodHold::Blocked,
+            disputed: None,
             company_name: "Acme <Stone>",
             user_name: Some("Dana"),
             pauses_at: at("2026-11-05 15:00:00"),
@@ -244,19 +319,33 @@ mod tests {
         assert!(blocked.text.contains("Your bank blocked payments from this account. Add another payment method by November 5, 2026 to keep access."));
         assert!(blocked.text.contains("Update payment method: https://payments.example.com/account"));
         assert!(blocked.html.contains("Acme &lt;Stone&gt;"));
-        let disputed = render_hold(&HoldInput {
+        let unknown = HoldInput {
             hold: MethodHold::Disputed,
-            ..HoldInput {
-                hold: MethodHold::Blocked,
-                company_name: "Acme",
-                user_name: None,
-                pauses_at: at("2026-11-05 15:00:00"),
-                account_url: ACCOUNT,
-            }
+            disputed: None,
+            company_name: "Acme",
+            user_name: None,
+            pauses_at: at("2026-11-05 15:00:00"),
+            account_url: ACCOUNT,
+        };
+        let disputed = render_hold(&HoldInput {
+            disputed: Some(DisputedPayment {
+                amount_cents: 37_500,
+                paid_at: at("2026-10-01 15:00:00"),
+            }),
+            ..unknown
         });
         assert_eq!(disputed.subject, DISPUTED_SUBJECT);
-        assert!(disputed.text.contains("or email support@granite-manager.com."));
-        for email in [&blocked, &disputed] {
+        assert_eq!(
+            disputed.text,
+            "Hello,\n\nYour payment of $375.00 on October 1, 2026 was disputed with your card issuer or bank.\n\n\
+             Add a payment method by November 5, 2026 to keep access, or email support@granite-manager.com.\n\n\
+             Update payment method: https://payments.example.com/account\n\n"
+                .to_string()
+                + &footer("Acme")
+        );
+        let without = render_hold(&unknown);
+        assert!(without.text.contains("A payment was disputed with your card issuer or bank."));
+        for email in [&blocked, &disputed, &without] {
             assert!(!email.text.contains('\u{2014}') && !email.html.contains('\u{2014}'));
         }
     }
@@ -294,11 +383,24 @@ mod tests {
             event: InternalEvent::Dispute {
                 reason: Some("fraudulent"),
                 amount_cents: None,
+                hold: HoldOutcome::Legacy,
             },
             company_id: 1,
             company_name: "",
         });
         assert!(dispute.text.contains("Reason: fraudulent"));
         assert!(dispute.text.contains("your company (id 1)"));
+        assert!(dispute.text.contains("Access: not paused (legacy plan)"));
+        let closed = render_internal_notice(&InternalNotice {
+            event: InternalEvent::DisputeClosed {
+                status: Some("won"),
+                amount_cents: Some(37_500),
+                hold_cleared: true,
+            },
+            company_id: 1,
+            company_name: "Acme",
+        });
+        assert_eq!(closed.subject, "Billing alert: Dispute closed: Acme");
+        assert!(closed.text.contains("Outcome: won") && closed.text.contains("its hold was lifted"));
     }
 }

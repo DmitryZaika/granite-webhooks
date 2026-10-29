@@ -1,19 +1,19 @@
 //! The billing page (`/admin/billing`) and the access gate.
 //!
 //! - `GET  /v1/billing/gate`         → past-due warning / paused access, for every page
-//! - `GET  /v1/billing`              → the subscription, card, plans and invoices (managers)
+//! - `GET  /v1/billing`              → the subscription, payment method, plans and invoices (managers)
 //! - `POST /v1/billing/checkout`     → refused: plans come through a plan invite (managers)
 //! - `POST /v1/billing/plan-invite/link` → the caller's link to the open plan invite (managers)
-//! - `POST /v1/billing/portal`       → a Stripe billing portal link (managers)
-//! - `PUT  /v1/billing/subscription` → change the plan (managers)
+//! - `POST /v1/billing/portal`       → a Stripe billing portal link (legacy managers)
+//! - `PUT  /v1/billing/subscription` → change the plan (legacy managers)
 //! - `GET  /v1/billing/reactivation` → what restoring a suspended company costs (managers)
 //!
 //! Replaces the Remix `/admin/billing` and `/admin/billing/pay` loaders and
 //! action, and the root loader's billing gate.
 
 use crate::auth::{BillingManager, CurrentUser};
-use crate::billing::account::{self, Card, SyncOptions};
-use crate::billing::gate::{self, BillingNotice};
+use crate::billing::account::{self, Card, PaymentMethodSummary, SyncOptions};
+use crate::billing::gate::{self, BillingNotice, BillingNoticeReason};
 use crate::billing::invites;
 use crate::billing::reactivation::{load_billing_plans, reactivation_plan};
 use crate::billing::store::{BillingStore, MySqlBillingStore};
@@ -171,8 +171,20 @@ pub struct BillingOverview {
     /// The subscription, or null when the company never had one.
     pub subscription: Option<Subscription>,
     /// The card renewals are charged to (the subscription's, else the
-    /// customer's default), or null.
+    /// customer's default), or null; null too when they are charged to a
+    /// bank account (see `payment_method`).
     pub card: Option<Card>,
+    /// The card or bank account renewals are charged to (the company's
+    /// stored method, else the customer's default); null when there is none
+    /// or Stripe cannot say.
+    pub payment_method: Option<PaymentMethodSummary>,
+    /// The signup's bank account still waits for its micro-deposits: verify
+    /// it by then (ISO 8601, UTC), else access pauses. Null otherwise.
+    pub bank_verification_until: Option<DateTime<Utc>>,
+    /// Why access is paused (the gate's `reason` while `restricted`):
+    /// `payment_failed`, `subscription_required` or
+    /// `payment_method_required`; null when access works.
+    pub restricted_reason: Option<BillingNoticeReason>,
     /// The latest invoices (up to 24, no drafts), newest first.
     pub invoices: Vec<Invoice>,
     /// Plans to subscribe or switch to.
@@ -221,7 +233,8 @@ pub struct OverviewQuery {
 /// Get the company's billing
 ///
 /// The subscription (refreshed from Stripe at most every 5 minutes, or now
-/// with `checkout=success`), the card on file, the plans with Stripe's
+/// with `checkout=success`), the card or bank account on file, the bank
+/// verification deadline of a signup, the plans with Stripe's
 /// prices, the invoices (read live from Stripe, else the stored copy) and
 /// the open plan invite (get its link with `create_billing_plan_invite_link`).
 /// Managers only; other users read `GET /v1/billing/gate`.
@@ -267,6 +280,9 @@ pub async fn overview(
     };
     let invoices = account::page_invoices(&state.stripe, &state.pool, record.as_ref()).await?;
     let card = account::default_card(&state.stripe, record.as_ref()).await;
+    let payment_method = account::default_payment_method(&state.stripe, record.as_ref()).await;
+    let bank_verification_until =
+        crate::billing::store::bank_verification_until(&state.pool, user.company_id).await?;
     let plan_source = plan_source(&state, user.company_id).await?;
     let plan_invite = invites::open_for_company(&state.pool, user.company_id)
         .await?
@@ -277,6 +293,9 @@ pub async fn overview(
     Ok(Json(BillingOverview {
         subscription: record.as_ref().map(subscription),
         card,
+        payment_method,
+        bank_verification_until: utc(bank_verification_until),
+        restricted_reason: gate.reason.filter(|_| gate.restricted),
         invoices: invoices.into_iter().map(Invoice::from).collect(),
         plans: plans(&state).await,
         restricted: gate.restricted,
@@ -406,7 +425,9 @@ pub struct PortalChoice {
 /// A Stripe billing portal link for the company's customer, returning to
 /// `/admin/billing`, or to the payments app's account page with
 /// `return_to: "account"`. The portal updates cards and customer details and
-/// lists invoices; it cannot cancel or change the plan.
+/// lists invoices; it cannot cancel or change the plan. A self-serve company
+/// (on a plan) is refused with 409 `self_serve_billing`: it manages its
+/// payment methods on the payments app's account page.
 #[crate::openapi::path(
     post,
     path = "/v1/billing/portal",
@@ -418,6 +439,7 @@ pub struct PortalChoice {
         (status = 400, description = "No Stripe customer, or Stripe refused", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a manager of the company", body = ErrorBody),
+        (status = 409, description = "A self-serve company: payment methods are managed in the payments app (code self_serve_billing)", body = CodedErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -446,7 +468,9 @@ pub async fn portal(
 
 /// Change the plan
 ///
-/// Moves the running subscription to another plan (prorated).
+/// Moves the running legacy subscription to another plan (prorated). A
+/// self-serve company (on a plan) is refused with 409 `self_serve_billing`:
+/// its plan changes in the payments app.
 #[crate::openapi::path(
     put,
     path = "/v1/billing/subscription",
@@ -458,6 +482,7 @@ pub async fn portal(
         (status = 400, description = "Unknown plan, no running subscription, or Stripe refused", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a manager of the company", body = ErrorBody),
+        (status = 409, description = "A self-serve company: the plan changes in the payments app (code self_serve_billing)", body = CodedErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))

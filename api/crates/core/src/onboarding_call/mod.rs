@@ -1,17 +1,18 @@
-//! Onboarding with Dima: the self-serve commitment to complete an onboarding
-//! call within 30 days, or pay the onboarding fee (Terms section 11).
+//! Onboarding with Dima: the self-serve commitment to complete the (free)
+//! onboarding call within 30 days, or pay the next month in advance with the
+//! next subscription charge (Terms section 11).
 //!
 //! - `commitment`: the rules, pure
 //! - `store`: `company_onboarding_commitments`, its timeline, the daily slot checks
 //! - `calendly`: Dima's Calendly (`CALENDLY_API_TOKEN`, `CALENDLY_BASE_URL`)
 //! - `job`: `POST /v1/jobs/onboarding-commitments`
-//! - `emails`: reminders and the fee notice
-//! - `fee`: the fee invoice in Stripe and its webhook events
+//! - `emails`: reminders and the advance notice
+//! - `advance`: the advance in Stripe (invoice item, credit) and its webhook
 
+pub mod advance;
 pub mod calendly;
 pub mod commitment;
 pub mod emails;
-pub mod fee;
 pub mod job;
 pub mod store;
 
@@ -31,24 +32,23 @@ pub struct Config {
     /// Dima's Calendly (`CALENDLY_API_TOKEN`, `CALENDLY_BASE_URL`,
     /// `CALENDLY_ONBOARDING_URL`).
     pub calendly: Calendly,
-    /// `ONBOARDING_FEE_CHARGING=1`: a passed deadline leads to the fee
-    /// notice and invoice; off, it ends as `fee_skipped`.
-    pub fee_charging: bool,
+    /// `ONBOARDING_ADVANCE_CHARGING=1`: a passed deadline leads to the
+    /// advance notice and charge; off, it ends as `advance_skipped`.
+    pub advance_charging: bool,
 }
 
 impl Config {
     pub fn disabled() -> Self {
         Self {
             calendly: Calendly::disabled(),
-            fee_charging: false,
+            advance_charging: false,
         }
     }
 
     pub fn from_env() -> Self {
         Self {
             calendly: Calendly::from_env(),
-            fee_charging: std::env::var("ONBOARDING_FEE_CHARGING")
-                .is_ok_and(|value| value.trim() == "1"),
+            advance_charging: crate::env_check::flag_on("ONBOARDING_ADVANCE_CHARGING"),
         }
     }
 }

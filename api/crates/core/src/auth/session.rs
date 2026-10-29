@@ -1,7 +1,8 @@
 //! Port of `getUser` + `handlePermissions` from the Remix app's
 //! `app/utils/session.server.ts`. Keep the two in sync until Remix is gone.
 
-use crate::billing::FIRST_PAYMENT_DAYS;
+use crate::billing::methods::PROCESSING_DAYS;
+use crate::billing::{ENDED_SUBSCRIPTION_STATUSES, FIRST_PAYMENT_DAYS};
 use crate::entitlements::{Entitlements, plan_columns};
 use crate::openapi::ToSchema;
 use serde::Serialize;
@@ -69,16 +70,23 @@ pub fn valid_session_id(value: &str) -> bool {
 }
 
 /// `company.billing_required` is on and the company's access is paused: its
-/// payment is suspended, its saved payment method's hold ended
-/// (`method_hold_until`, `billing::methods`), or it never paid and its
-/// first-payment window (`FIRST_PAYMENT_DAYS` from `billing_required_at`)
-/// ended, unless its signup's bank account is still inside its verification
-/// window (`signup_intents.bank_verification_until`). The same decisions as
-/// `billing::gate`. Expects `company` and a LEFT JOINed `company_billing`;
-/// binds the window's days.
+/// payment is suspended (unless a bank payment is on its way: set
+/// `payment_processing_at` less than `PROCESSING_DAYS` ago, for a
+/// subscription that has not ended), its saved
+/// payment method's hold ended (`method_hold_until`, `billing::methods`), or
+/// it never paid and its first-payment window (`FIRST_PAYMENT_DAYS` from
+/// `billing_required_at`) ended, unless its signup's bank account is still
+/// inside its verification window (`signup_intents.bank_verification_until`).
+/// The same decisions as `billing::gate`. Expects `company` and a LEFT JOINed
+/// `company_billing`; binds `PROCESSING_DAYS`
+/// (the window `billing::methods::is_processing` uses), then
+/// [`ended_statuses`], then `FIRST_PAYMENT_DAYS`.
 const BILLING_PAUSED: &str = r"
     COALESCE(company.billing_required, 0) <> 0
-    AND (company_billing.payment_status = 'suspended'
+    AND ((company_billing.payment_status = 'suspended'
+          AND (company_billing.payment_processing_at IS NULL
+               OR company_billing.payment_processing_at <= UTC_TIMESTAMP() - INTERVAL ? DAY
+               OR FIND_IN_SET(company_billing.subscription_status, ?) > 0))
          OR (company_billing.method_hold IS NOT NULL
              AND company_billing.method_hold_until <= UTC_TIMESTAMP())
          OR (COALESCE(company_billing.payment_status, 'none')
@@ -90,6 +98,11 @@ const BILLING_PAUSED: &str = r"
                 WHERE bank_signup.company_id = company.id
                   AND bank_signup.status = 'awaiting_bank_verification'
                   AND bank_signup.bank_verification_until > UTC_TIMESTAMP())))";
+
+/// `billing::ENDED_SUBSCRIPTION_STATUSES` for `FIND_IN_SET`.
+fn ended_statuses() -> String {
+    ENDED_SUBSCRIPTION_STATUSES.join(",")
+}
 
 /// A live session's user, and whether their own company's access is paused
 /// for billing.
@@ -130,6 +143,8 @@ pub async fn find_session(
         ",
         plan = plan_columns("company"),
     )))
+    .bind(PROCESSING_DAYS)
+    .bind(ended_statuses())
     .bind(FIRST_PAYMENT_DAYS)
     .bind(session_id)
     .bind(SESSION_MAX_AGE_MONTHS)
@@ -158,6 +173,8 @@ pub async fn company_billing_paused(
         WHERE company.id = ?
         "
     )))
+    .bind(PROCESSING_DAYS)
+    .bind(ended_statuses())
     .bind(FIRST_PAYMENT_DAYS)
     .bind(company_id)
     .fetch_optional(pool)

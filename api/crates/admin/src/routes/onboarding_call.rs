@@ -4,7 +4,8 @@
 //! - `GET  /v1/onboarding-call`                                  → the commitment and where to book
 //! - `POST /v1/onboarding-call/bookings`                         → record a call booked in the widget
 //! - `GET  /v1/superuser/companies/{id}/onboarding-commitment`   → commitment, timeline, slot checks
-//! - `PUT  /v1/superuser/companies/{id}/onboarding-commitment`   → extend, waive, complete, no-show
+//! - `PUT  /v1/superuser/companies/{id}/onboarding-commitment`   → extend, waive, complete, no-show,
+//!   hold for review, release
 //!
 //! These stay open while the company's access is paused for billing.
 
@@ -14,7 +15,9 @@ use crate::billing::{self, MANAGER_POSITION, iso};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::onboarding_call::calendly::{self, CalendlyError};
-use crate::onboarding_call::commitment::{self, Action, Commitment, Outcome, Refusal, Status};
+use crate::onboarding_call::commitment::{
+    self, Action, Commitment, Outcome, Refusal, Status, item_open,
+};
 use crate::onboarding_call::store::{self, SaveError, Stored};
 use crate::onboarding_call::{UTM_CAMPAIGN, utm_content};
 use crate::openapi::ToSchema;
@@ -44,25 +47,25 @@ pub enum OnboardingCallStatus {
     Pending,
     /// A call is booked.
     Booked,
-    /// The call took place (or Granite marked it complete): no fee.
+    /// The call took place (or Granite marked it complete): nothing is paid
+    /// in advance.
     Completed,
-    /// Granite waived the fee.
+    /// Granite waived the advance.
     Waived,
     /// A cancellation request is scheduled; withdrawing it resumes.
     Suspended,
-    /// The deadline passed and the fee notice went out; the fee is charged
-    /// at `charge_after`.
+    /// The deadline passed and the notice went out: the subscription charge
+    /// at `charge_at` also takes the following month (`advance_cents`).
     NoticeSent,
-    /// The fee invoice exists in Stripe.
-    FeeInvoiced,
-    /// The fee was paid.
-    FeePaid,
-    /// The fee payment failed. Stripe does not retry it: Granite staff
-    /// follow up by hand.
-    FeeFailed,
-    /// The deadline passed while fee charging was off: never charged.
-    FeeSkipped,
-    /// The subscription ended.
+    /// The advance is added to the subscription's next invoice (at
+    /// `charge_at`).
+    AdvanceScheduled,
+    /// The invoice with the advance was paid; the month is credited to the
+    /// following invoice.
+    AdvancePaid,
+    /// The advance was due while advance charging was off: never charged.
+    AdvanceSkipped,
+    /// The subscription ended, or there was none to charge.
     Void,
 }
 
@@ -75,17 +78,20 @@ impl From<Status> for OnboardingCallStatus {
             Status::Waived => Self::Waived,
             Status::Suspended => Self::Suspended,
             Status::NoticeSent => Self::NoticeSent,
-            Status::FeeInvoiced => Self::FeeInvoiced,
-            Status::FeePaid => Self::FeePaid,
-            Status::FeeFailed => Self::FeeFailed,
-            Status::FeeSkipped => Self::FeeSkipped,
+            Status::AdvanceScheduled => Self::AdvanceScheduled,
+            Status::AdvancePaid => Self::AdvancePaid,
+            Status::AdvanceSkipped => Self::AdvanceSkipped,
             Status::Void => Self::Void,
         }
     }
 }
 
-/// The company's onboarding commitment. Times are UTC ISO strings
-/// (`2026-11-20T14:00:00.000Z`).
+/// The company's onboarding commitment. Times are UTC ISO strings.
+///
+/// For example `2026-11-20T14:00:00.000Z`. Onboarding is free; when it is
+/// not completed by the deadline, one month is paid in advance with the next
+/// subscription charge at least 7 days after a notice, and credited to the
+/// invoice after it.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct OnboardingCommitment {
     /// Where it stands.
@@ -99,8 +105,12 @@ pub struct OnboardingCommitment {
     pub tolled_days: i32,
     /// The one 14-day extension was granted.
     pub extension_used: bool,
-    /// The fee in cents (2 x base plan + add-ons at signup, before tax).
-    pub fee_cents: i64,
+    /// The advance the signup consent stated, in cents: one month at the
+    /// plan chosen (base, add-ons, extra users), before tax.
+    pub signup_advance_cents: i64,
+    /// The advance fixed by the notice, in cents (one month of the live
+    /// subscription, before tax); null before the notice.
+    pub advance_cents: Option<i64>,
     /// Start of the booked call; null when none is booked.
     pub booked_start_at: Option<String>,
     /// End of the booked call; null when none is booked.
@@ -109,10 +119,15 @@ pub struct OnboardingCommitment {
     pub reschedule_url: Option<String>,
     /// When onboarding was completed; null until then.
     pub completed_at: Option<String>,
-    /// When the fee notice went out; null before.
+    /// When the notice went out; null before.
     pub notice_sent_at: Option<String>,
-    /// When the fee is charged (notice + 7 days); null before the notice.
-    pub charge_after: Option<String>,
+    /// The subscription charge that also takes the advance; null before the
+    /// notice.
+    pub charge_at: Option<String>,
+    /// The month the advance pays for (credited to the invoice of
+    /// `prepaid_from_at`); null before the notice.
+    pub prepaid_from_at: Option<String>,
+    pub prepaid_until_at: Option<String>,
 }
 
 fn opt(at: Option<NaiveDateTime>) -> Option<String> {
@@ -128,13 +143,16 @@ impl From<&Commitment> for OnboardingCommitment {
             original_deadline_at: iso(c.original_deadline_at),
             tolled_days: c.tolled_days,
             extension_used: c.extension_used,
-            fee_cents: c.fee_cents,
+            signup_advance_cents: c.signup_advance_cents,
+            advance_cents: c.terms.map(|t| t.advance_cents),
             booked_start_at: booking.map(|b| iso(b.start_at)),
             booked_end_at: booking.map(|b| iso(b.end_at)),
             reschedule_url: booking.and_then(|b| b.reschedule_url.clone()),
             completed_at: opt(c.completed_at),
             notice_sent_at: opt(c.notice_sent_at),
-            charge_after: opt(c.charge_after),
+            charge_at: opt(c.terms.map(|t| t.charge_at)),
+            prepaid_from_at: opt(c.terms.map(|t| t.prepaid_from)),
+            prepaid_until_at: opt(c.terms.map(|t| t.prepaid_until)),
         }
     }
 }
@@ -159,8 +177,8 @@ pub struct OnboardingCall {
     /// Calendly page to book on, with `name`, `email`,
     /// `utm_campaign=granite-onboarding` and `utm_content=company-<id>` in
     /// the query. Null when the caller cannot book, the status does not allow
-    /// booking (only pending, booked and notice_sent do), or no page can be
-    /// resolved.
+    /// booking (only pending, booked, notice_sent and advance_scheduled
+    /// before its invoice do), or no page can be resolved.
     pub booking_url: Option<String>,
     /// The caller is a Manager (position 5) or an Admin of the acting
     /// company, so may book. Always false for Granite superusers (they mark
@@ -225,8 +243,8 @@ async fn call_view(
     let bookable = commitment.is_some_and(|c| {
         matches!(
             c.status,
-            Status::Pending | Status::Booked | Status::NoticeSent
-        )
+            Status::Pending | Status::Booked | Status::NoticeSent | Status::AdvanceScheduled
+        ) && !commitment::is_invoiced(c)
     });
     let mut booking_url = None;
     let mut reason = None;
@@ -292,11 +310,13 @@ async fn change(
 /// Get the company's onboarding call
 ///
 /// The self-serve onboarding commitment of the company the request acts in
-/// (complete an onboarding call within 30 days of signup, or pay the
-/// onboarding fee), with where to book. `commitment` is null for companies
-/// without one. `booking_url` is set only for Managers and Admins of the
-/// acting company (never for Granite superusers) while the status is
-/// pending, booked or notice_sent; open it in the Calendly widget, then send
+/// (complete the free onboarding call within 30 days of signup, or the next
+/// subscription charge at least 7 days after a notice also takes the
+/// following month in advance, credited to the invoice after it), with
+/// where to book. `commitment` is null for companies without one.
+/// `booking_url` is set only for Managers and Admins of the acting company
+/// (never for Granite superusers) while the status is pending, booked,
+/// notice_sent or advance_scheduled (before its invoice); open it in the Calendly widget, then send
 /// the booked invitee to `POST /v1/onboarding-call/bookings`. When no page
 /// can be had, `booking_unavailable` is true and
 /// `booking_unavailable_reason` says whether booking is not set up yet or
@@ -361,7 +381,7 @@ fn calendly_failure(err: &CalendlyError) -> ApiError {
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a Manager or Admin of the company, or is a Granite superuser", body = ErrorBody),
         (status = 404, description = "The company has no onboarding commitment", body = ErrorBody),
-        (status = 409, description = "Refused: the commitment is settled or invoiced, or the call is at or before a recorded no-show (book a new time)", body = ErrorBody),
+        (status = 409, description = "Refused: the commitment is settled or the advance is on an invoice, or the call is at or before a recorded no-show (book a new time)", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 503, description = "Calendly is not set up or could not be reached", body = ErrorBody),
     ),
@@ -426,22 +446,41 @@ pub struct SuperuserCommitment {
     pub no_show_at: Option<String>,
     /// When it was suspended by a cancellation request; null when not.
     pub suspended_at: Option<String>,
-    /// The fee invoice in Stripe (`in_...`); null before it exists.
+    /// The advance's invoice item in Stripe (`ii_...`); null when none is
+    /// there.
+    pub advance_item_id: Option<String>,
+    /// The subscription invoice that carried the advance (`in_...`); null
+    /// before Stripe swept the item in.
     pub stripe_invoice_id: Option<String>,
+    /// The credit that gave the month back (a customer balance transaction,
+    /// `cbtxn_...`); null before.
+    pub advance_credit_id: Option<String>,
+    /// Held for review since (no notice or item while held); null when not.
+    pub review_hold_at: Option<String>,
+    /// The superuser who put the hold.
+    pub review_hold_by: Option<i32>,
+    /// What `PUT` accepts now (only these are offered): `extend`, `waive`,
+    /// `complete`, `no_show`, `hold`, `release`.
+    pub allowed_actions: Vec<CommitmentAction>,
+    /// The deadline `extend` would give; null when it is not allowed.
+    pub extension_deadline_at: Option<String>,
     /// Signup (when the commitment was created).
     pub created_at: String,
 }
 
-/// One timeline entry: who changed what, when (the evidence if the fee is
-/// disputed).
+/// One timeline entry: who changed what, when (the evidence if the advance
+/// is disputed).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct OnboardingCommitmentEvent {
     /// Entry id (increasing).
     pub id: i64,
     /// `created`, `booked`, `rescheduled`, `booking_cancelled`, `no_show`,
     /// `tolled`, `extended`, `waived`, `completed`, `suspended`, `resumed`,
-    /// `notice_sent`, `invoiced`, `fee_paid`, `fee_failed`, `fee_skipped`,
-    /// `voided`.
+    /// `notice_sent`, `notice_withdrawn`, `advance_scheduled`,
+    /// `advance_withdrawn`, `advance_invoiced`, `advance_paid`,
+    /// `advance_skipped`, `voided`, `review_held`, `review_released`
+    /// (older entries may read `invoiced`, `fee_paid`, `fee_failed`,
+    /// `fee_skipped`).
     pub kind: String,
     /// The status before; null for `created`.
     pub from_status: Option<String>,
@@ -454,7 +493,7 @@ pub struct OnboardingCommitmentEvent {
     /// That superuser's name; null for the customer or the system.
     pub actor_name: Option<String>,
     /// The facts behind it (reason, old and new deadline, call times,
-    /// invoice id); null when none.
+    /// invoice and item ids, the advance's amount and dates); null when none.
     #[schema(value_type = Option<Object>)]
     pub detail: Option<serde_json::Value>,
     /// When it happened (UTC ISO).
@@ -464,7 +503,7 @@ pub struct OnboardingCommitmentEvent {
 /// One day's slot check.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AvailabilityCheck {
-    /// The UTC day, `YYYY-MM-DD`.
+    /// The local day (America/Indiana/Indianapolis), `YYYY-MM-DD`.
     pub checked_on: String,
     /// `available`, `no_slots`, `not_configured` or `error`; anything but
     /// `available` moved open deadlines by a day.
@@ -482,28 +521,61 @@ pub struct SuperuserOnboardingCommitment {
     pub events: Vec<OnboardingCommitmentEvent>,
     /// The slot checks of the last 14 days, newest first.
     pub availability: Vec<AvailabilityCheck>,
-    /// `ONBOARDING_FEE_CHARGING=1`: a passed deadline leads to the fee.
+    /// `ONBOARDING_ADVANCE_CHARGING=1`: a passed deadline leads to the
+    /// advance (off: it ends `advance_skipped`).
     pub charging_enabled: bool,
 }
 
 /// What a superuser does to a commitment.
-#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CommitmentAction {
     /// The one 14-day extension the customer asked for.
     Extend,
-    /// No fee (a dispute, a goodwill gesture).
+    /// No advance (a dispute, a goodwill gesture).
     Waive,
     /// Onboarding done (say, on a call outside Calendly).
     Complete,
     /// The customer missed the booked call.
     NoShow,
+    /// Hold the advance for review (the customer replied to the notice): no
+    /// notice and no invoice item while held; a pending item is deleted.
+    Hold,
+    /// End the hold; with fewer than 7 days to the charge a new notice names
+    /// the next eligible charge.
+    Release,
+}
+
+impl From<CommitmentAction> for Action {
+    fn from(action: CommitmentAction) -> Self {
+        match action {
+            CommitmentAction::Extend => Self::Extend,
+            CommitmentAction::Waive => Self::Waive,
+            CommitmentAction::Complete => Self::Complete,
+            CommitmentAction::NoShow => Self::NoShow,
+            CommitmentAction::Hold => Self::Hold,
+            CommitmentAction::Release => Self::Release,
+        }
+    }
+}
+
+impl From<Action> for CommitmentAction {
+    fn from(action: Action) -> Self {
+        match action {
+            Action::Extend => Self::Extend,
+            Action::Waive => Self::Waive,
+            Action::Complete => Self::Complete,
+            Action::NoShow => Self::NoShow,
+            Action::Hold => Self::Hold,
+            Action::Release => Self::Release,
+        }
+    }
 }
 
 /// `PUT /v1/superuser/companies/{id}/onboarding-commitment`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CommitmentActionBody {
-    /// `extend`, `waive`, `complete` or `no_show`.
+    /// `extend`, `waive`, `complete`, `no_show`, `hold` or `release`.
     pub action: CommitmentAction,
 }
 
@@ -547,7 +619,8 @@ async fn superuser_view(
             created_at: iso(row.created_at),
         })
         .collect();
-    let availability = store::recent_availability(pool, billing::now().date())
+    let now = billing::now();
+    let availability = store::recent_availability(pool, commitment::local_day(now))
         .await?
         .into_iter()
         .map(|day| AvailabilityCheck {
@@ -563,12 +636,21 @@ async fn superuser_view(
             completed_by: c.completed_by,
             no_show_at: opt(c.no_show_at),
             suspended_at: opt(c.suspended_at),
+            allowed_actions: commitment::allowed_actions(&c, now)
+                .into_iter()
+                .map(CommitmentAction::from)
+                .collect(),
+            extension_deadline_at: opt(commitment::extension_deadline(&c, now)),
+            advance_item_id: c.advance_item_id,
             stripe_invoice_id: c.stripe_invoice_id,
+            advance_credit_id: c.advance_credit_id,
+            review_hold_at: opt(c.review_hold_at),
+            review_hold_by: c.review_hold_by,
             created_at: iso(c.created_at),
         }),
         events,
         availability,
-        charging_enabled: state.onboarding_call.fee_charging,
+        charging_enabled: state.onboarding_call.advance_charging,
     })
 }
 
@@ -576,7 +658,10 @@ async fn superuser_view(
 ///
 /// The self-serve onboarding commitment of any company, with its full
 /// timeline (who changed what, when; newest first, up to 100), the daily
-/// slot checks of the last 14 days and whether fee charging is on.
+/// slot checks of the last 14 days, whether advance charging is on, and for
+/// the commitment the actions allowed now (`allowed_actions`) and the
+/// deadline the extension would give (`extension_deadline_at`): show only
+/// those.
 /// `commitment` is null for a company without one. Change it with
 /// `PUT /v1/superuser/companies/{id}/onboarding-commitment`. Superusers only.
 #[crate::openapi::path(
@@ -603,15 +688,20 @@ pub async fn get_company_onboarding_commitment(
     Ok(Json(superuser_view(&state, id).await?))
 }
 
-/// Extend, waive, complete or mark a no-show on a company's onboarding commitment
+/// Extend, waive, complete, mark a no-show on, hold or release a company's onboarding commitment
 ///
 /// `extend`: the one 14-day extension (refused when used, or when the
-/// deadline would still be in the past). `waive`: no fee. `complete`:
+/// deadline would still be in the past). `waive`: no advance. `complete`:
 /// onboarding done. `no_show`: the customer missed the booked call (only
-/// once it started and within 48 hours after it ended). All are refused
-/// once the commitment is settled or the fee is invoiced (void or refund in
-/// Stripe instead). Each is stored on the timeline with the acting
-/// superuser and the time. Returns the commitment as
+/// once it started and within 48 hours after it ended). `hold`: hold the
+/// advance for review (no notice, no invoice item; a pending one is
+/// deleted). `release`: end the hold (fewer than 7 days to the charge: a
+/// new notice names the next eligible charge). All are refused once the
+/// commitment is settled or the advance is on a subscription invoice (it is
+/// credited back once paid). `allowed_actions` of the GET says which apply
+/// now. A pending invoice item no longer wanted is deleted in Stripe right
+/// after (else by the daily run). Each is stored on the timeline with the
+/// acting superuser and the time. Returns the commitment as
 /// `GET /v1/superuser/companies/{id}/onboarding-commitment` does.
 #[crate::openapi::path(
     put,
@@ -626,7 +716,7 @@ pub async fn get_company_onboarding_commitment(
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "The company has no onboarding commitment", body = ErrorBody),
-        (status = 409, description = "Refused: already extended or invoiced, settled, not booked, or the extension would leave the deadline in the past", body = ErrorBody),
+        (status = 409, description = "Refused: already extended, held or not held, settled, the advance is on an invoice, not booked, or the extension would leave the deadline in the past", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -638,17 +728,22 @@ pub async fn update_company_onboarding_commitment(
     JsonBody(input): JsonBody<CommitmentActionBody>,
 ) -> ApiResult<Json<SuperuserOnboardingCommitment>> {
     superuser(&user)?;
-    let action = match input.action {
-        CommitmentAction::Extend => Action::Extend,
-        CommitmentAction::Waive => Action::Waive,
-        CommitmentAction::Complete => Action::Complete,
-        CommitmentAction::NoShow => Action::NoShow,
-    };
+    let action = Action::from(input.action);
     let now = billing::now();
-    change(&state, id, now, |c| {
+    let stored = change(&state, id, now, |c| {
         commitment::superuser_action(c, action, user.id, now)
     })
     .await?;
+    let c = &stored.commitment;
+    if item_open(c) && c.status != Status::AdvanceScheduled {
+        // The pending item is no longer wanted: deleted now, else by the
+        // daily run.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        if let Err(err) = crate::onboarding_call::advance::settle_item(&state, id, now, until).await
+        {
+            tracing::warn!(company_id = id, code = %err.code(), "onboarding advance item not settled");
+        }
+    }
     Ok(Json(superuser_view(&state, id).await?))
 }
 

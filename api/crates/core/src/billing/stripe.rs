@@ -87,6 +87,41 @@ impl StripeError {
     }
 }
 
+/// How long one Stripe request may take: a job starts no work after 20 s and
+/// ends inside the API Gateway's 30 s, so one slow call must not outlast it.
+/// Stripe POSTs are keyed, so a timed out one is safe to retry.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The Stripe base URL to use and whether `STRIPE_API_BASE` was refused.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ChosenBase<'a> {
+    pub base: &'a str,
+    pub ignored: bool,
+}
+
+/// `override_base` (`STRIPE_API_BASE`) counts only with a test key, so a
+/// variable left over from a local run never sends live traffic elsewhere.
+pub fn api_base<'a>(key: Option<&str>, override_base: Option<&'a str>) -> ChosenBase<'a> {
+    let override_base = override_base.map(str::trim).filter(|base| !base.is_empty());
+    let test_key = key
+        .map(str::trim)
+        .is_some_and(|key| key.starts_with("sk_test_") || key.starts_with("rk_test_"));
+    match override_base {
+        Some(base) if test_key => ChosenBase {
+            base,
+            ignored: false,
+        },
+        Some(_) => ChosenBase {
+            base: API_BASE,
+            ignored: true,
+        },
+        None => ChosenBase {
+            base: API_BASE,
+            ignored: false,
+        },
+    }
+}
+
 /// A Stripe client; disabled without `STRIPE_SECRET_KEY`.
 #[derive(Clone)]
 pub struct Stripe {
@@ -105,15 +140,15 @@ impl Stripe {
     }
 
     /// `STRIPE_API_BASE` replaces `https://api.stripe.com` for local e2e runs
-    /// against a fake Stripe.
+    /// against a fake Stripe, and only with a `sk_test_`/`rk_test_` key.
     pub fn from_env() -> Self {
-        let base = std::env::var("STRIPE_API_BASE")
-            .ok()
-            .filter(|base| !base.trim().is_empty());
-        Self::new(
-            std::env::var("STRIPE_SECRET_KEY").ok().as_deref(),
-            base.as_deref().unwrap_or(API_BASE),
-        )
+        let key = std::env::var("STRIPE_SECRET_KEY").ok();
+        let base = std::env::var("STRIPE_API_BASE").ok();
+        let chosen = api_base(key.as_deref(), base.as_deref());
+        if chosen.ignored {
+            lambda_http::tracing::warn!("STRIPE_API_BASE is ignored: it needs a Stripe test key");
+        }
+        Self::new(key.as_deref(), chosen.base)
     }
 
     /// `base` is `https://api.stripe.com` (a stub in tests).
@@ -126,7 +161,7 @@ impl Stripe {
             base: Arc::from(base.trim_end_matches('/')),
             http: common::http::client(),
             poll_delay: Duration::from_millis(1500),
-            request_timeout: Duration::from_secs(30),
+            request_timeout: REQUEST_TIMEOUT,
         }
     }
 
@@ -268,6 +303,21 @@ impl Stripe {
         .await
     }
 
+    /// [`Self::cancel_subscription`] under an idempotency key.
+    pub async fn cancel_subscription_keyed(
+        &self,
+        id: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.send_keyed(
+            reqwest::Method::DELETE,
+            &format!("/v1/subscriptions/{}", path_part(id)),
+            &[],
+            Some(idempotency_key),
+        )
+        .await
+    }
+
     /// A subscription that waits for the first payment, with the invoice's
     /// confirmation secret for the browser.
     pub async fn create_subscription(
@@ -277,8 +327,9 @@ impl Stripe {
         quantity: i64,
         payment_method: &str,
         company_id: i32,
+        idempotency_key: &str,
     ) -> Result<Value, StripeError> {
-        self.post(
+        self.post_keyed(
             "/v1/subscriptions",
             &[
                 ("customer", customer.into()),
@@ -293,6 +344,7 @@ impl Stripe {
                 ("metadata[company_id]", company_id.to_string()),
                 ("expand[]", "latest_invoice.confirmation_secret".into()),
             ],
+            idempotency_key,
         )
         .await
     }
@@ -326,25 +378,12 @@ impl Stripe {
         &self,
         id: &str,
         customer: &str,
+        idempotency_key: &str,
     ) -> Result<Value, StripeError> {
-        self.post(
+        self.post_keyed(
             &format!("/v1/payment_methods/{}/attach", path_part(id)),
             &[("customer", customer.into())],
-        )
-        .await
-    }
-
-    pub async fn set_default_payment_method(
-        &self,
-        customer: &str,
-        payment_method: &str,
-    ) -> Result<Value, StripeError> {
-        self.post(
-            &format!("/v1/customers/{}", path_part(customer)),
-            &[(
-                "invoice_settings[default_payment_method]",
-                payment_method.into(),
-            )],
+            idempotency_key,
         )
         .await
     }
@@ -500,19 +539,6 @@ impl Stripe {
         )
         .await
     }
-
-    /// Charges the subscription to `payment_method` from now on.
-    pub async fn set_subscription_payment_method(
-        &self,
-        id: &str,
-        payment_method: &str,
-    ) -> Result<Value, StripeError> {
-        self.post(
-            &format!("/v1/subscriptions/{}", path_part(id)),
-            &[("default_payment_method", payment_method.into())],
-        )
-        .await
-    }
 }
 
 /// The Stripe customer of a self-serve signup.
@@ -531,8 +557,9 @@ pub struct SignupCustomer<'a> {
 /// What a self-serve subscription comes from.
 ///
 /// Its idempotency key
-/// (`signup:<id>:subscription`, `plan-invite:<id>:subscription`) and its
-/// origin metadata (`metadata[signup_id]`, `metadata[plan_invite_id]`).
+/// (`signup:<id>:subscription`, `plan-invite:<id>:subscription`, with
+/// `:now` when billed at once) and its origin metadata
+/// (`metadata[signup_id]`, `metadata[plan_invite_id]`).
 #[derive(Debug, Clone, Copy)]
 pub enum SubscriptionOrigin<'a> {
     Signup(&'a str),
@@ -547,11 +574,14 @@ impl SubscriptionOrigin<'_> {
         }
     }
 
-    fn idempotency_key(self) -> String {
-        match self {
+    /// `bills_now`: `:now` appended, so a retry after the free period
+    /// passed never reuses a dated request's key with other parameters.
+    fn idempotency_key(self, bills_now: bool) -> String {
+        let key = match self {
             Self::Signup(id) => format!("signup:{id}:subscription"),
             Self::PlanInvite(id) => format!("plan-invite:{id}:subscription"),
-        }
+        };
+        if bills_now { format!("{key}:now") } else { key }
     }
 }
 
@@ -565,7 +595,7 @@ pub struct NewSubscription<'a> {
     /// Quantity 1 each: the base price first, then the add-ons.
     pub price_ids: &'a [String],
     /// When the free period ends (Unix seconds, UTC); a time not in the
-    /// future is sent as `now` (billed at once).
+    /// future is sent as `now` (billed at once), under the `:now` key.
     pub trial_end: i64,
     pub automatic_tax: bool,
 }
@@ -752,6 +782,7 @@ impl Stripe {
         subscription: &NewSubscription<'_>,
     ) -> Result<Value, StripeError> {
         let (origin_key, origin_id) = subscription.origin.metadata();
+        let bills_now = subscription.trial_end <= chrono::Utc::now().timestamp();
         let mut form: Vec<(String, String)> = vec![
             ("customer".into(), subscription.customer.into()),
             (
@@ -760,10 +791,10 @@ impl Stripe {
             ),
             // A first charge day already passed (a bank verified late, D21):
             // Stripe refuses a past time, and `now` keeps the request (and
-            // its idempotency key) the same on a retry.
+            // its `:now` idempotency key) the same on a retry.
             (
                 "trial_end".into(),
-                if subscription.trial_end <= chrono::Utc::now().timestamp() {
+                if bills_now {
                     "now".into()
                 } else {
                     subscription.trial_end.to_string()
@@ -804,7 +835,7 @@ impl Stripe {
         self.post_keyed(
             "/v1/subscriptions",
             &form,
-            &subscription.origin.idempotency_key(),
+            &subscription.origin.idempotency_key(bills_now),
         )
         .await
     }
@@ -1128,6 +1159,26 @@ impl Stripe {
         )
         .await
     }
+
+    /// Undoes [`Self::replace_legacy_subscription`]: the legacy subscription
+    /// renews again, its `replaced_by` and `plan_invite_id` cleared.
+    /// Idempotency key `plan-invite:<id>:restore-legacy`.
+    pub async fn restore_legacy_subscription(
+        &self,
+        legacy_id: &str,
+        invite_id: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/subscriptions/{}", path_part(legacy_id)),
+            &[
+                ("cancel_at_period_end", "false".into()),
+                ("metadata[replaced_by]", String::new()),
+                ("metadata[plan_invite_id]", String::new()),
+            ],
+            &format!("plan-invite:{invite_id}:restore-legacy"),
+        )
+        .await
+    }
 }
 
 fn data(list: Value) -> Vec<Value> {
@@ -1384,6 +1435,17 @@ pub fn normalize_event(event: &Value) -> Option<BillingEvent> {
                 invoice: invoice_snapshot(object),
             })
         }
+        (kind @ ("invoice.voided" | "invoice.marked_uncollectible"), "invoice") => {
+            Some(BillingEvent::InvoiceClosed {
+                id,
+                kind: if kind == "invoice.voided" {
+                    "invoice.voided"
+                } else {
+                    "invoice.marked_uncollectible"
+                },
+                invoice: invoice_snapshot(object),
+            })
+        }
         ("payment_method.updated", "payment_method") => Some(BillingEvent::PaymentMethodUpdated {
             id,
             customer_id: stripe_id(&object["customer"])?,
@@ -1396,8 +1458,10 @@ pub fn normalize_event(event: &Value) -> Option<BillingEvent> {
 /// The event with Stripe's current state.
 ///
 /// Webhooks can arrive late or out of order. A failed invoice that has since been paid becomes `invoice.paid`;
-/// a voided one is dropped (`None`). A paid invoice carries its subscription's live status, so it restores access
-/// only once no other invoice of it is unpaid. Without a client the event is used as sent.
+/// a voided one is dropped (`None`: its `invoice.voided` event applies it). A closed (voided, uncollectible)
+/// invoice that has since been paid becomes `invoice.paid`. A paid or closed invoice carries its subscription's
+/// live status, so it restores access only once no other invoice of it is unpaid, and never for a subscription
+/// that has ended. Without a client the event is used as sent.
 pub async fn latest_event(
     stripe: &Stripe,
     event: BillingEvent,
@@ -1405,18 +1469,18 @@ pub async fn latest_event(
     if !stripe.is_enabled() {
         return Ok(Some(event));
     }
-    match event {
+    let event = match event {
         BillingEvent::Subscription {
             id,
             kind,
             subscription,
         } if kind != "customer.subscription.deleted" => {
             let live = stripe.subscription(&subscription.id).await?;
-            Ok(Some(BillingEvent::Subscription {
+            return Ok(Some(BillingEvent::Subscription {
                 id,
                 kind,
                 subscription: subscription_snapshot(&live),
-            }))
+            }));
         }
         BillingEvent::Invoice {
             id,
@@ -1425,174 +1489,289 @@ pub async fn latest_event(
         } => {
             let live = stripe.invoice(&invoice.id).await?;
             match live["status"].as_str() {
-                Some("void") => Ok(None),
-                status => Ok(Some(BillingEvent::Invoice {
+                Some("void") => return Ok(None),
+                status => BillingEvent::Invoice {
                     id,
                     paid: status == Some("paid"),
                     invoice: invoice_snapshot(&live),
-                })),
+                },
             }
         }
+        BillingEvent::InvoiceClosed { id, kind, invoice } => {
+            let live = stripe.invoice(&invoice.id).await?;
+            match live["status"].as_str() {
+                Some("paid") => BillingEvent::Invoice {
+                    id,
+                    paid: true,
+                    invoice: invoice_snapshot(&live),
+                },
+                Some("void" | "uncollectible") => BillingEvent::InvoiceClosed {
+                    id,
+                    kind,
+                    invoice: invoice_snapshot(&live),
+                },
+                // Not closed after all (a draft or open invoice): nothing to apply.
+                _ => return Ok(None),
+            }
+        }
+        other => other,
+    };
+    Ok(Some(match event {
         BillingEvent::Invoice {
             id,
             paid: true,
-            mut invoice,
-        } if invoice.subscription_id.is_some() => {
-            let subscription_id = invoice.subscription_id.as_deref().unwrap_or_default();
-            let live = stripe.subscription(subscription_id).await?;
-            invoice.live_subscription_status = live["status"].as_str().map(str::to_string);
-            invoice.replaced_by = invoice
-                .replaced_by
-                .or_else(|| non_empty(&live["metadata"]["replaced_by"]));
-            invoice.plan_invite_id = invoice
-                .plan_invite_id
-                .or_else(|| non_empty(&live["metadata"]["plan_invite_id"]));
-            Ok(Some(BillingEvent::Invoice {
+            invoice,
+        } if invoice.subscription_id.is_some() => BillingEvent::Invoice {
+            id,
+            paid: true,
+            invoice: with_live_subscription(stripe, invoice).await?,
+        },
+        BillingEvent::InvoiceClosed { id, kind, invoice } if invoice.subscription_id.is_some() => {
+            BillingEvent::InvoiceClosed {
                 id,
-                paid: true,
-                invoice,
-            }))
+                kind,
+                invoice: with_live_subscription(stripe, invoice).await?,
+            }
         }
-        other => Ok(Some(other)),
-    }
+        other => other,
+    }))
 }
 
-/// The onboarding fee invoice (03-stripe.md section 3.5).
+/// The invoice with its subscription's live status and plan-move metadata.
+async fn with_live_subscription(
+    stripe: &Stripe,
+    mut invoice: InvoiceSnapshot,
+) -> Result<InvoiceSnapshot, StripeError> {
+    let subscription_id = invoice.subscription_id.as_deref().unwrap_or_default();
+    let live = match stripe.subscription(subscription_id).await {
+        Ok(live) => live,
+        // Gone from Stripe: applied as sent.
+        Err(StripeError::Missing(_)) => return Ok(invoice),
+        Err(err) => return Err(err),
+    };
+    invoice.live_subscription_status = live["status"].as_str().map(str::to_string);
+    invoice.replaced_by = invoice
+        .replaced_by
+        .or_else(|| non_empty(&live["metadata"]["replaced_by"]));
+    invoice.plan_invite_id = invoice
+        .plan_invite_id
+        .or_else(|| non_empty(&live["metadata"]["plan_invite_id"]));
+    Ok(invoice)
+}
+
+/// `metadata[kind]` of the onboarding advance's invoice item (and of its
+/// invoice line).
+pub const ADVANCE_ITEM_KIND: &str = "onboarding_advance";
+/// `metadata[kind]` of the credit that gives the advance back.
+pub const ADVANCE_CREDIT_KIND: &str = "onboarding_advance_credit";
+
+/// The onboarding advance: a month of the subscription paid in advance.
 #[derive(Debug, Clone)]
-pub struct FeeInvoice<'a> {
+pub struct AdvanceItem<'a> {
     pub customer: &'a str,
+    /// The subscription whose next invoice sweeps the item in.
+    pub subscription: &'a str,
     pub company_id: i32,
-    /// `YYYY-MM-DD` of the deadline the fee is for.
+    /// `YYYY-MM-DD` of the deadline it is for.
     pub deadline: &'a str,
-    /// The company's stored payment method, charged instead of the
-    /// customer's default when set.
-    pub payment_method: Option<&'a str>,
+    pub amount_cents: i64,
+    /// `Advance payment for <month range>`.
     pub description: &'a str,
-    pub automatic_tax: bool,
-    /// `onboarding-fee:<company_id>:<deadline>`.
+    /// `onboarding-advance:<company_id>:<deadline>[:<n>]`.
     pub idempotency_key: &'a str,
 }
 
-/// The onboarding fee: a standalone invoice created first, its one item
-/// attached with `invoice=` (so no other pending item is swept in), then
-/// finalized and paid. Every POST carries an idempotency key.
+/// The onboarding advance (Terms 11): a pending invoice item on the
+/// subscription, swept by Stripe into its next invoice, and a customer
+/// balance credit once that invoice is paid. Every POST carries an
+/// idempotency key.
 impl Stripe {
-    /// The customer's invoices, any status, newest first (up to 100).
-    pub async fn customer_invoices(&self, customer: &str) -> Result<Vec<Value>, StripeError> {
+    /// A pending USD invoice item for the subscription's next invoice,
+    /// tagged `metadata[kind]=onboarding_advance`, `company_id`, `deadline`.
+    pub async fn create_advance_item(&self, item: &AdvanceItem<'_>) -> Result<Value, StripeError> {
+        self.post_keyed(
+            "/v1/invoiceitems",
+            &[
+                ("customer", item.customer.into()),
+                ("subscription", item.subscription.into()),
+                ("amount", item.amount_cents.to_string()),
+                ("currency", "usd".into()),
+                ("description", item.description.into()),
+                ("metadata[kind]", ADVANCE_ITEM_KIND.into()),
+                ("metadata[company_id]", item.company_id.to_string()),
+                ("metadata[deadline]", item.deadline.into()),
+            ],
+            item.idempotency_key,
+        )
+        .await
+    }
+
+    /// An invoice item; its `invoice` is null while pending. `Missing` when
+    /// deleted.
+    pub async fn invoice_item(&self, id: &str) -> Result<Value, StripeError> {
+        self.get(&format!("/v1/invoiceitems/{}", path_part(id)), &[])
+            .await
+    }
+
+    /// The customer's invoice items, newest first (up to 100), pending or not.
+    pub async fn customer_invoice_items(&self, customer: &str) -> Result<Vec<Value>, StripeError> {
         let list = self
             .get(
-                "/v1/invoices",
+                "/v1/invoiceitems",
                 &[("customer", customer.into()), ("limit", "100".into())],
             )
             .await?;
         Ok(data(list))
     }
 
-    /// A draft invoice that collects automatically and picks up no pending
-    /// items, tagged `metadata[kind]=onboarding_fee`.
-    pub async fn create_fee_invoice(&self, fee: &FeeInvoice<'_>) -> Result<Value, StripeError> {
-        let mut form: Vec<(&str, String)> = vec![
-            ("customer", fee.customer.into()),
-            ("collection_method", "charge_automatically".into()),
-            ("auto_advance", "false".into()),
-            ("pending_invoice_items_behavior", "exclude".into()),
-            ("description", fee.description.into()),
-            ("metadata[kind]", "onboarding_fee".into()),
-            ("metadata[company_id]", fee.company_id.to_string()),
-            ("metadata[deadline]", fee.deadline.into()),
-        ];
-        if let Some(method) = fee.payment_method {
-            form.push(("default_payment_method", method.into()));
-        }
-        if fee.automatic_tax {
-            form.push(("automatic_tax[enabled]", "true".into()));
-        }
-        self.post_keyed("/v1/invoices", &form, fee.idempotency_key)
-            .await
+    /// Deletes a pending invoice item (or one on a draft invoice); `Missing`
+    /// when already gone.
+    pub async fn delete_invoice_item(&self, id: &str) -> Result<Value, StripeError> {
+        self.send(
+            reqwest::Method::DELETE,
+            &format!("/v1/invoiceitems/{}", path_part(id)),
+            &[],
+        )
+        .await
     }
 
-    /// One USD line on a draft invoice.
-    pub async fn create_invoice_item(
+    /// The customer's balance transactions, newest first (up to 100).
+    pub async fn balance_transactions(&self, customer: &str) -> Result<Vec<Value>, StripeError> {
+        let list = self
+            .get(
+                &format!("/v1/customers/{}/balance_transactions", path_part(customer)),
+                &[("limit", "100".into())],
+            )
+            .await?;
+        Ok(data(list))
+    }
+
+    /// Credits `amount_cents` (USD) to the customer's balance: Stripe applies
+    /// it to the next invoice. Tagged `metadata[kind]=onboarding_advance_credit`,
+    /// `company_id`, `invoice`.
+    pub async fn credit_customer_balance(
         &self,
         customer: &str,
-        invoice: &str,
+        company_id: i32,
+        invoice_id: &str,
         amount_cents: i64,
         description: &str,
         idempotency_key: &str,
     ) -> Result<Value, StripeError> {
         self.post_keyed(
-            "/v1/invoiceitems",
+            &format!("/v1/customers/{}/balance_transactions", path_part(customer)),
             &[
-                ("customer", customer.into()),
-                ("invoice", invoice.into()),
-                ("amount", amount_cents.to_string()),
+                ("amount", (-amount_cents).to_string()),
                 ("currency", "usd".into()),
                 ("description", description.into()),
+                ("metadata[kind]", ADVANCE_CREDIT_KIND.into()),
+                ("metadata[company_id]", company_id.to_string()),
+                ("metadata[invoice]", invoice_id.into()),
             ],
             idempotency_key,
         )
         .await
     }
 
-    /// Finalizes a draft invoice without automatic advancement.
-    pub async fn finalize_invoice(
+    /// Ends the subscription at `cancel_at` (a period boundary) without
+    /// proration, or (`None`) removes a set end. `comment`: the customer's
+    /// reason.
+    pub async fn set_cancel_at(
+        &self,
+        subscription: &str,
+        cancel_at: Option<NaiveDateTime>,
+        comment: Option<&str>,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        let mut form = vec![(
+            "cancel_at",
+            cancel_at.map_or_else(String::new, |at| at.and_utc().timestamp().to_string()),
+        )];
+        if cancel_at.is_some() {
+            form.push(("proration_behavior", "none".into()));
+        }
+        if let Some(comment) = comment {
+            form.push(("cancellation_details[comment]", comment.into()));
+        }
+        self.post_keyed(
+            &format!("/v1/subscriptions/{}", path_part(subscription)),
+            &form,
+            idempotency_key,
+        )
+        .await
+    }
+}
+
+/// Account setup (`billing::stripe_setup`, `examples/stripe_setup.rs`). Every
+/// write takes the caller's idempotency key.
+impl Stripe {
+    /// `GET /v1/balance`, read only for its `livemode`.
+    pub async fn balance(&self) -> Result<Value, StripeError> {
+        self.get("/v1/balance", &[]).await
+    }
+
+    /// The account's payment method configurations (up to 100); the default
+    /// one has `is_default = true`.
+    pub async fn payment_method_configurations(&self) -> Result<Vec<Value>, StripeError> {
+        let list = self
+            .get(
+                "/v1/payment_method_configurations",
+                &[("limit", "100".into())],
+            )
+            .await?;
+        Ok(data(list))
+    }
+
+    pub async fn create_price_keyed(
+        &self,
+        form: &[(&str, String)],
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed("/v1/prices", form, idempotency_key).await
+    }
+
+    pub async fn create_portal_configuration_keyed(
+        &self,
+        form: &[(&str, String)],
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed("/v1/billing_portal/configurations", form, idempotency_key)
+            .await
+    }
+
+    pub async fn update_portal_configuration(
         &self,
         id: &str,
+        form: &[(&str, String)],
         idempotency_key: &str,
     ) -> Result<Value, StripeError> {
         self.post_keyed(
-            &format!("/v1/invoices/{}/finalize", path_part(id)),
-            &[("auto_advance", "false".into())],
+            &format!("/v1/billing_portal/configurations/{}", path_part(id)),
+            form,
             idempotency_key,
         )
         .await
     }
 
-    /// Charges an open invoice now; a decline is `StripeError::Api`.
-    pub async fn pay_invoice(&self, id: &str, idempotency_key: &str) -> Result<Value, StripeError> {
-        self.post_keyed(
-            &format!("/v1/invoices/{}/pay", path_part(id)),
-            &[],
-            idempotency_key,
-        )
-        .await
+    /// The answer carries the signing secret (`secret`) once, on creation.
+    pub async fn create_webhook_endpoint(
+        &self,
+        form: &[(&str, String)],
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed("/v1/webhook_endpoints", form, idempotency_key)
+            .await
     }
 
-    /// Deletes a draft invoice; `Missing` when already gone.
-    pub async fn delete_invoice(&self, id: &str) -> Result<Value, StripeError> {
-        self.send(
-            reqwest::Method::DELETE,
-            &format!("/v1/invoices/{}", path_part(id)),
-            &[],
-        )
-        .await
-    }
-
-    /// Tags an invoice as withdrawn by us (`metadata[withdrawn]`) before it
-    /// is voided, so its `invoice.voided` event is known as ours.
-    pub async fn mark_invoice_withdrawn(
+    pub async fn update_webhook_endpoint(
         &self,
         id: &str,
-        reason: &str,
+        form: &[(&str, String)],
         idempotency_key: &str,
     ) -> Result<Value, StripeError> {
         self.post_keyed(
-            &format!("/v1/invoices/{}", path_part(id)),
-            &[("metadata[withdrawn]", reason.to_string())],
-            idempotency_key,
-        )
-        .await
-    }
-
-    /// Voids an open invoice (a draft is deleted instead).
-    pub async fn void_invoice(
-        &self,
-        id: &str,
-        idempotency_key: &str,
-    ) -> Result<Value, StripeError> {
-        self.post_keyed(
-            &format!("/v1/invoices/{}/void", path_part(id)),
-            &[],
+            &format!("/v1/webhook_endpoints/{}", path_part(id)),
+            form,
             idempotency_key,
         )
         .await
@@ -1719,6 +1898,26 @@ mod tests {
     }
 
     #[test]
+    fn voided_and_uncollectible_invoices_are_closed_invoice_events() {
+        for kind in ["invoice.voided", "invoice.marked_uncollectible"] {
+            let event = normalize_event(&json!({ "id": "evt", "type": kind,
+                "data": { "object": { "object": "invoice", "id": "in_1", "customer": "cus_1",
+                    "status": "void", "amount_due": 4900,
+                    "parent": { "subscription_details": { "subscription": "sub_1" } } } } }));
+            let Some(BillingEvent::InvoiceClosed {
+                kind: read,
+                invoice,
+                ..
+            }) = event
+            else {
+                panic!("{kind} not normalized");
+            };
+            assert_eq!(read, kind);
+            assert_eq!(invoice.subscription_id.as_deref(), Some("sub_1"));
+        }
+    }
+
+    #[test]
     fn metadata_ids_are_positive_whole_numbers() {
         assert_eq!(positive_int(&json!("12")), Some(12));
         assert_eq!(positive_int(&json!(" 12 ")), Some(12));
@@ -1726,5 +1925,25 @@ mod tests {
         assert_eq!(positive_int(&json!("1.5")), None);
         assert_eq!(positive_int(&json!("abc")), None);
         assert_eq!(positive_int(&json!(12)), None);
+    }
+
+    #[test]
+    fn a_base_override_is_honoured_only_with_a_test_key() {
+        let fake = Some("http://127.0.0.1:12111");
+        for key in ["sk_test_a", "rk_test_a", " sk_test_a "] {
+            let chosen = api_base(Some(key), fake);
+            assert_eq!((chosen.base, chosen.ignored), ("http://127.0.0.1:12111", false));
+        }
+        for key in [Some("sk_live_a"), Some("rk_live_a"), Some("junk"), None] {
+            let chosen = api_base(key, fake);
+            assert_eq!((chosen.base, chosen.ignored), (API_BASE, true));
+        }
+        let none = api_base(Some("sk_live_a"), Some("  "));
+        assert_eq!((none.base, none.ignored), (API_BASE, false));
+    }
+
+    #[test]
+    fn requests_time_out_well_inside_the_gateway() {
+        assert!(Stripe::disabled().request_timeout <= Duration::from_secs(10));
     }
 }

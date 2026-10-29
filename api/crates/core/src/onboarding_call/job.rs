@@ -1,20 +1,21 @@
 //! The daily onboarding run behind `POST /v1/jobs/onboarding-commitments`.
 //!
-//! Each tick: today's slot check (once per UTC day, shared by every
-//! company), then up to 25 companies whose own run is due (every 23 hours,
-//! `job_runs` key `onboarding-commitment:<id>`). Per company: the booking as
-//! Calendly has it (or one made outside the widget), `commitment::daily`,
-//! then the work it says is due: reminders, the fee notice, the fee invoice.
+//! Each tick: today's slot check (once per local day in `SIGNUP_TZ`, shared
+//! by every company), then up to 25 companies whose own run is due (every 23
+//! hours, `job_runs` key `onboarding-commitment:<id>`). Per company: the
+//! booking as Calendly has it (or one made outside the widget),
+//! `commitment::daily`, then the work it says is due: the recorded advance
+//! item's settlement, reminders, the advance notice, the advance item.
 //! No Calendly, Stripe or mail work starts after [`RUN_BUDGET`]; a company
 //! cut short is left for the next tick. Reports carry ids and codes only.
 
+use super::advance::{self, AdvanceError, NoticeTerms};
 use super::calendly::{self, Calendly, CalendlyError, SlotEventTypes};
 use super::commitment::{
-    self, Availability, Booking, BookingCheck, Commitment, DailyFacts, Due, EventKind, NOTICE_DAYS,
-    Outcome, ReminderStep, SLOT_WINDOW_BUSINESS_DAYS, Status,
+    self, AdvanceTerms, Availability, Booking, BookingCheck, Commitment, DailyFacts, Due,
+    EventKind, Outcome, ReminderStep, SLOT_WINDOW_BUSINESS_DAYS, Status, local_day,
 };
 use super::emails::{self, NoticeInput, ReminderInput};
-use super::fee::{self, FeeError};
 use super::store::{self, EMAIL_CYCLE_KIND, NOTICE_STEP, NewAvailabilityDay, SaveError, Stored};
 use crate::billing::account::default_card;
 use crate::billing::catalog::SIGNUP_TZ;
@@ -48,17 +49,19 @@ const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// What one run did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ToSchema)]
 pub struct OnboardingRun {
-    /// Work done this run: `reminders` + `notices` + `invoices` + `tolled` +
-    /// `completed`; what the scheduler logs.
+    /// Work done this run: `reminders` + `notices` + `advance_items` +
+    /// `credits` + `tolled` + `completed`; what the scheduler logs.
     pub processed: usize,
     /// Companies whose daily run this run took.
     pub companies: usize,
     /// Reminder emails delivered to the mail service.
     pub reminders: usize,
-    /// Fee notices recorded as sent (one per company).
+    /// Advance notices recorded as sent (one per company).
     pub notices: usize,
-    /// Fee invoices created or finished in Stripe.
-    pub invoices: usize,
+    /// Advance invoice items added to (or found on) a subscription.
+    pub advance_items: usize,
+    /// Advances credited back once their invoice was paid.
+    pub credits: usize,
     /// Deadlines moved by a day without a bookable slot.
     pub tolled: usize,
     /// Commitments completed by their call (48 hours after it, no no-show).
@@ -77,7 +80,7 @@ enum CompanyError {
     #[error(transparent)]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
-    Fee(#[from] FeeError),
+    Advance(#[from] AdvanceError),
 }
 
 impl From<SaveError> for CompanyError {
@@ -95,7 +98,7 @@ impl CompanyError {
             Self::Conflict => "conflict".into(),
             Self::OutOfTime => "out_of_time".into(),
             Self::Database(_) => "database".into(),
-            Self::Fee(err) => err.code(),
+            Self::Advance(err) => err.code(),
         }
     }
 
@@ -107,25 +110,19 @@ impl CompanyError {
             Self::Conflict
                 | Self::OutOfTime
                 | Self::Database(_)
-                | Self::Fee(FeeError::Save(_) | FeeError::Database(_))
+                | Self::Advance(AdvanceError::Save(_) | AdvanceError::Database(_))
         )
     }
 }
 
-/// [`fee::charge`] within the run's time: stopped between Stripe calls, the
-/// company is left for the next tick.
-async fn charge(
-    state: &AppState,
-    stored: &Stored,
-    now: NaiveDateTime,
-    budget: &Budget,
-) -> Result<fee::Charged, CompanyError> {
-    fee::charge(state, stored, now, budget.deadline)
-        .await
-        .map_err(|err| match err {
-            FeeError::OutOfTime => CompanyError::OutOfTime,
-            err => CompanyError::Fee(err),
-        })
+/// An advance step within the run's time: stopped between Stripe calls,
+/// the company is left for the next tick.
+fn advance_failure(err: AdvanceError) -> CompanyError {
+    match err {
+        AdvanceError::OutOfTime => CompanyError::OutOfTime,
+        AdvanceError::Save(SaveError::Conflict) => CompanyError::Conflict,
+        err => CompanyError::Advance(err),
+    }
 }
 
 /// What one company's run may still spend: the run's time and its Calendly
@@ -248,7 +245,7 @@ fn slot_ranges(start: NaiveDateTime, end: NaiveDateTime) -> Vec<(NaiveDateTime, 
 async fn check_slots(calendly: &Calendly, now: NaiveDateTime) -> NewAvailabilityDay {
     let (window_start_at, window_end_at) = slot_window(now);
     let mut day = NewAvailabilityDay {
-        checked_on: now.date(),
+        checked_on: local_day(now),
         checked_at: now,
         result: "error",
         slots: 0,
@@ -295,11 +292,11 @@ async fn check_slots(calendly: &Calendly, now: NaiveDateTime) -> NewAvailability
     day
 }
 
-/// Today's slot check: read, or made once and recorded (the first run of
-/// the day reports a missing setup or a Calendly failure).
+/// Today's slot check (the local day): read, or made once and recorded
+/// (the first run of the day reports a missing setup or a Calendly failure).
 async fn today_availability(state: &AppState, now: NaiveDateTime) -> sqlx::Result<Availability> {
     let pool = &state.pool;
-    let today = now.date();
+    let today = local_day(now);
     if let Some(day) = store::availability_day(pool, today).await? {
         return Ok(availability_of(&day.result));
     }
@@ -466,19 +463,19 @@ async fn booking_check(
 /// Days a company's tolling was never decided for are looked back at most this far.
 const MAX_EARLIER_DAYS: i64 = 60;
 
-/// The days after the company's last tolling decision (or its signup) and
-/// before today, each with the check recorded that day (`NotChecked` when
-/// the job did not run).
+/// The local days after the company's last tolling decision (or its
+/// signup) and before today, each with the check recorded that day
+/// (`NotChecked` when the job did not run).
 async fn earlier_days(
     pool: &sqlx::MySqlPool,
     commitment: &Commitment,
     now: NaiveDateTime,
 ) -> sqlx::Result<Vec<(NaiveDate, Availability)>> {
-    let today = now.date();
+    let today = local_day(now);
     let first = commitment
         .availability_checked_on
         .map_or_else(
-            || commitment.created_at.date(),
+            || local_day(commitment.created_at),
             |day| day + Duration::days(1),
         )
         .max(today - Duration::days(MAX_EARLIER_DAYS));
@@ -518,7 +515,8 @@ async fn gather_facts(
             None => Vec::new(),
         },
         subscription_ended: store::subscription_ended(pool, company_id).await?,
-        charging_enabled: state.onboarding_call.fee_charging,
+        subscription_live: store::subscription_live(pool, company_id).await?,
+        charging_enabled: state.onboarding_call.advance_charging,
         consent_on_file: store::consent_on_file(pool, company_id).await?,
     })
 }
@@ -526,14 +524,14 @@ async fn gather_facts(
 async fn send(state: &AppState, to: &str, email: &RenderedEmail) -> ReminderSendResult {
     let message = OutgoingEmail {
         from_name: Some("Granite Manager".into()),
-        from_address: fee::from_address(),
+        from_address: advance::from_address(),
         to: vec![to.to_string()],
         cc: Vec::new(),
         bcc: Vec::new(),
         subject: email.subject.clone(),
         body: email.html.clone(),
         signature: None,
-        // The reminders and the fee notice ask people to reply.
+        // The reminders and the advance notice ask people to reply.
         reply_to: vec![SUPPORT_EMAIL.into()],
         in_reply_to: None,
         references: Vec::new(),
@@ -638,10 +636,11 @@ async fn send_reminders(
             step,
             booked: commitment.status == Status::Booked,
             call_start_at: commitment.booking.as_ref().map(|call| call.start_at),
+            call_end_at: commitment.booking.as_ref().map(|call| call.end_at),
             company_name: &company_name,
             user_name: manager.name.as_deref(),
             deadline_at: commitment.deadline_at,
-            fee_cents: commitment.fee_cents,
+            advance_cents: commitment.signup_advance_cents,
             app_url: &state.app_url,
         });
         if send_claimed(state, company_id, claim_id, &manager.email, &email, now).await? {
@@ -651,7 +650,7 @@ async fn send_reminders(
     Ok(())
 }
 
-/// When the first fee notice of the cycle went out, if one did.
+/// When the first advance notice of the cycle went out, if one did.
 async fn first_notice_at(
     pool: &sqlx::MySqlPool,
     company_id: i32,
@@ -671,30 +670,31 @@ async fn first_notice_at(
 }
 
 /// A booked call ends at or before the charge: like the rules, it holds the
-/// fee and completes the commitment.
+/// advance and completes the commitment.
 fn booked_before_charge(booking: Option<&Booking>, charge_at: NaiveDateTime) -> bool {
     booking.is_some_and(|booking| booking.end_at <= charge_at)
 }
 
-/// The fee notice of the cycle starting at `cycle` to each Manager, once
-/// each, all naming the charge date of its first email. When the first went
-/// out (now or in an earlier run), if one did.
+/// The advance notice of the cycle starting at `cycle` to each Manager,
+/// once each, all stating `terms`. When the first went out (now or in an
+/// earlier run), if one did.
 async fn send_notice(
     state: &AppState,
     commitment: &Commitment,
     cycle: NaiveDateTime,
+    terms: &AdvanceTerms,
     now: NaiveDateTime,
     budget: &Budget,
 ) -> Result<Option<NaiveDateTime>, CompanyError> {
     let pool = &state.pool;
     let company_id = commitment.company_id;
     let first = first_notice_at(pool, company_id, cycle).await?;
-    let charge_at = first.unwrap_or(now) + Duration::days(NOTICE_DAYS);
+    let charge_at = terms.charge_at;
     let managers = store::managers(pool, company_id).await?;
     let company_name = store::company_name(pool, company_id).await?;
     budget.check()?;
     let record = MySqlBillingStore(pool).by_company(company_id).await?;
-    let method = default_card(&fee::fee_stripe(state), record.as_ref())
+    let method = default_card(&advance::advance_stripe(state), record.as_ref())
         .await
         .map(|card| describe_card(&card));
     let mut sent = false;
@@ -708,9 +708,11 @@ async fn send_notice(
         let email = emails::render_notice(&NoticeInput {
             company_name: &company_name,
             user_name: manager.name.as_deref(),
-            fee_cents: commitment.fee_cents,
+            advance_cents: terms.advance_cents,
             deadline_at: commitment.deadline_at,
             charge_at,
+            prepaid_from: terms.prepaid_from,
+            prepaid_until: terms.prepaid_until,
             payment_method: method.as_deref(),
             booked_before_charge: booked_before_charge(commitment.booking.as_ref(), charge_at),
             app_url: &state.app_url,
@@ -741,6 +743,48 @@ async fn save(
     })
 }
 
+/// The notice's terms: those already stated when the cycle's first email
+/// went out, else fixed now from the live subscription and saved before any
+/// email. `None` when no notice can go out now (the commitment was voided
+/// for want of a subscription, or Stripe ends the subscription).
+async fn cycle_terms(
+    state: &AppState,
+    stored: Stored,
+    cycle: NaiveDateTime,
+    now: NaiveDateTime,
+    budget: &Budget,
+    run: &mut OnboardingRun,
+) -> Result<(Stored, Option<AdvanceTerms>), CompanyError> {
+    let company_id = stored.commitment.company_id;
+    let sent = first_notice_at(&state.pool, company_id, cycle).await?;
+    if let (Some(_), Some(terms)) = (sent, stored.commitment.terms) {
+        return Ok((stored, Some(terms)));
+    }
+    budget.check()?;
+    match advance::notice_terms(state, company_id, now, budget.deadline)
+        .await
+        .map_err(advance_failure)?
+    {
+        NoticeTerms::Terms(terms) => {
+            let outcome = commitment::notice_terms(&stored.commitment, terms);
+            let stored = save(state, stored, outcome, now, run).await?;
+            let terms = stored.commitment.terms;
+            Ok((stored, terms))
+        }
+        NoticeTerms::NoSubscription => {
+            let outcome = commitment::voided(&stored.commitment, "no_subscription");
+            Ok((save(state, stored, outcome, now, run).await?, None))
+        }
+        NoticeTerms::CancelScheduled => {
+            tracing::info!(
+                company_id,
+                "onboarding notice waits: the subscription is set to end"
+            );
+            Ok((stored, None))
+        }
+    }
+}
+
 async fn company(
     state: &AppState,
     company_id: i32,
@@ -754,23 +798,24 @@ async fn company(
     let Some(stored) = store::load(pool, company_id).await? else {
         return Ok(());
     };
-    if stored.commitment.status == Status::FeeInvoiced {
-        // An invoice a crash left unfinished (draft, or never attempted).
-        budget.check()?;
-        if matches!(
-            charge(state, &stored, now, budget).await?,
-            fee::Charged::Paid | fee::Charged::Failed
-        ) {
-            run.invoices += 1;
-        }
-        return Ok(());
-    }
     let facts = gather_facts(state, &stored.commitment, availability, now, budget).await?;
     let daily = commitment::daily(&stored.commitment, &facts, now);
     let mut stored = save(state, stored, daily.outcome, now, run).await?;
     let mails = state.webhooks.is_enabled();
     for due in daily.due {
         match due {
+            Due::SettleItem => {
+                budget.check()?;
+                let settled = advance::settle_item(state, company_id, now, budget.deadline)
+                    .await
+                    .map_err(advance_failure)?;
+                if settled == advance::Settled::Credited {
+                    run.credits += 1;
+                }
+                stored = store::load(pool, company_id)
+                    .await?
+                    .ok_or(CompanyError::Conflict)?;
+            }
             Due::Reminder(_) | Due::Notice if !mails => {
                 tracing::warn!(
                     company_id,
@@ -791,21 +836,30 @@ async fn company(
                     .await;
                     continue;
                 };
+                let (current, terms) = cycle_terms(state, stored, cycle, now, budget, run).await?;
+                stored = current;
+                let Some(terms) = terms else {
+                    continue;
+                };
                 if let Some(sent_at) =
-                    send_notice(state, &stored.commitment, cycle, now, budget).await?
+                    send_notice(state, &stored.commitment, cycle, &terms, now, budget).await?
                 {
                     let outcome = commitment::notice_sent(&stored.commitment, sent_at);
+                    let noticed = !outcome.events.is_empty();
                     stored = save(state, stored, outcome, now, run).await?;
-                    run.notices += 1;
+                    if noticed {
+                        run.notices += 1;
+                        advance::notify_notice(state, &stored.commitment).await;
+                    }
                 }
             }
-            Due::Invoice => {
+            Due::AddItem => {
                 budget.check()?;
-                if !matches!(
-                    charge(state, &stored, now, budget).await?,
-                    fee::Charged::Withdrawn
-                ) {
-                    run.invoices += 1;
+                let added = advance::add_item(state, company_id, now, budget.deadline)
+                    .await
+                    .map_err(advance_failure)?;
+                if matches!(added, advance::Added::Created | advance::Added::Found) {
+                    run.advance_items += 1;
                 }
             }
         }
@@ -887,7 +941,8 @@ pub async fn run_at(state: &AppState, now: NaiveDateTime) -> OnboardingRun {
             tracing::warn!(error = %err, company_id, "onboarding run not recorded");
         }
     }
-    run.processed = run.reminders + run.notices + run.invoices + run.tolled + run.completed;
+    run.processed =
+        run.reminders + run.notices + run.advance_items + run.credits + run.tolled + run.completed;
     run
 }
 

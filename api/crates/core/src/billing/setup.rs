@@ -16,7 +16,7 @@ pub const WEBHOOK_PATH: &str = "/v1/webhooks/stripe";
 /// The Stripe events the webhook endpoint must send: the ones
 /// `normalize_event` acts on, and the self-serve subscription signals
 /// (02-architecture.md section 5).
-pub const REQUIRED_EVENTS: [&str; 15] = [
+pub const REQUIRED_EVENTS: [&str; 18] = [
     "checkout.session.completed",
     "customer.subscription.created",
     "customer.subscription.updated",
@@ -33,6 +33,9 @@ pub const REQUIRED_EVENTS: [&str; 15] = [
     "charge.failed",
     "charge.dispute.created",
     "payment_method.automatically_updated",
+    "charge.dispute.closed",
+    "invoice.voided",
+    "invoice.marked_uncollectible",
 ];
 
 /// One line of the billing setup report.
@@ -66,7 +69,7 @@ pub enum KeyMode {
 }
 
 impl KeyMode {
-    const fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Live => "live",
             Self::Test => "test",
@@ -426,6 +429,12 @@ pub fn catalog_checks(
             if price["billing_scheme"] != "per_unit" {
                 problems.push("not a per-unit price".into());
             }
+            let tax = price["tax_behavior"].as_str().unwrap_or("unset");
+            if tax != "exclusive" {
+                problems.push(format!(
+                    "tax_behavior is {tax}, must be exclusive (a price cannot be edited: create a _v2 price)"
+                ));
+            }
             let amount = price["unit_amount"].as_i64();
             if amount.is_none() {
                 problems.push("no unit amount".into());
@@ -452,6 +461,232 @@ pub fn catalog_checks(
     checks
 }
 
+/// Checks of the payment method types customers can pay with: card and
+/// `us_bank_account` on the default payment method configuration (or why it
+/// could not be read).
+pub fn payment_method_checks(configurations: Result<&[Value], &str>) -> Vec<SetupCheck> {
+    const KEY: &str = "payment_method_types";
+    const LABEL: &str = "Payment method types";
+    let configurations = match configurations {
+        Ok(configurations) => configurations,
+        Err(error) => {
+            return vec![check(
+                KEY,
+                LABEL,
+                false,
+                format!("could not check the payment method configuration: {error}"),
+            )];
+        }
+    };
+    let Some(default) = configurations
+        .iter()
+        .find(|configuration| configuration["is_default"] == true)
+    else {
+        return vec![check(
+            KEY,
+            LABEL,
+            false,
+            "No default payment method configuration: enable Cards and ACH Direct Debit in Settings, Payment methods",
+        )];
+    };
+    let off: Vec<&str> = ["card", "us_bank_account"]
+        .into_iter()
+        .filter(|method| {
+            let setting = &default[*method];
+            setting["available"] != true
+                || setting["display_preference"]["value"] == "off"
+                || setting["display_preference"]["preference"] == "off"
+        })
+        .collect();
+    vec![check(
+        KEY,
+        LABEL,
+        off.is_empty(),
+        if off.is_empty() {
+            "card and us_bank_account are enabled".to_string()
+        } else {
+            format!(
+                "Not enabled in the default configuration: {} (Settings, Payment methods)",
+                off.join(", ")
+            )
+        },
+    )]
+}
+
+/// The check of the customer portal configuration the api uses (found by
+/// `tag`): it must exist and must not allow cancelling or changing the plan.
+pub fn portal_checks(configurations: Result<&[Value], &str>, tag: &str) -> Vec<SetupCheck> {
+    const KEY: &str = "portal_configuration";
+    const LABEL: &str = "Customer portal configuration";
+    let configurations = match configurations {
+        Ok(configurations) => configurations,
+        Err(error) => {
+            return vec![check(
+                KEY,
+                LABEL,
+                false,
+                format!("could not check the portal configuration: {error}"),
+            )];
+        }
+    };
+    let Some(config) = configurations
+        .iter()
+        .find(|configuration| configuration["metadata"]["app"] == tag)
+    else {
+        return vec![check(
+            KEY,
+            LABEL,
+            false,
+            format!("No active configuration tagged {tag}: run the stripe_setup script"),
+        )];
+    };
+    let on: Vec<&str> = ["subscription_cancel", "subscription_update"]
+        .into_iter()
+        .filter(|feature| config["features"][*feature]["enabled"] != false)
+        .collect();
+    vec![check(
+        KEY,
+        LABEL,
+        on.is_empty(),
+        if on.is_empty() {
+            format!(
+                "{} has cancelling and plan changes off",
+                config["id"].as_str().unwrap_or(tag)
+            )
+        } else {
+            format!(
+                "{} must be off in the portal: {} (run the stripe_setup script with --apply)",
+                config["id"].as_str().unwrap_or(tag),
+                on.join(", ")
+            )
+        },
+    )]
+}
+
+/// The release settings the route read from the environment (only whether
+/// they are set, never their values).
+pub struct ReleaseFacts<'a> {
+    pub billing_alert_email_set: bool,
+    /// The effective `PAYMENTS_APP_URL` (the default when unset).
+    pub payments_app_url: &'a str,
+    pub signup_enabled: bool,
+    pub publishable_key_set: bool,
+    pub webhook_secret_set: bool,
+    pub signup_notify_user_set: bool,
+    pub signup_notify_email_set: bool,
+    pub onboarding_advance_charging: bool,
+    pub calendly_token_set: bool,
+}
+
+/// The startup configuration check (`env_check::config_problems`): the
+/// problems joined, they never contain values.
+pub fn startup_check(problems: &[String]) -> SetupCheck {
+    if problems.is_empty() {
+        check("startup_config", "Startup configuration", true, "valid")
+    } else {
+        check(
+            "startup_config",
+            "Startup configuration",
+            false,
+            problems.join("; "),
+        )
+    }
+}
+
+/// Checks of the settings the release depends on besides Stripe itself.
+pub fn release_checks(facts: &ReleaseFacts) -> Vec<SetupCheck> {
+    let payments = facts.payments_app_url.trim();
+    let notify = facts.signup_notify_user_set || facts.signup_notify_email_set;
+    let mut missing = Vec::new();
+    if !facts.publishable_key_set {
+        missing.push("STRIPE_PUBLIC_KEY");
+    }
+    if !facts.webhook_secret_set {
+        missing.push("STRIPE_WEBHOOK_SECRET");
+    }
+    if !notify {
+        missing.push("SIGNUP_NOTIFY_USER_ID or SIGNUP_NOTIFY_EMAIL");
+    }
+    if !facts.billing_alert_email_set {
+        missing.push("BILLING_ALERT_EMAIL");
+    }
+    if !facts.calendly_token_set {
+        missing.push("CALENDLY_API_TOKEN");
+    }
+    vec![
+        check(
+            "billing_alert_email",
+            "Billing alert email",
+            facts.billing_alert_email_set,
+            if facts.billing_alert_email_set {
+                "set"
+            } else {
+                "BILLING_ALERT_EMAIL is not set: returned bank debits, blocked accounts and disputes are not emailed"
+            },
+        ),
+        check(
+            "payments_app_url",
+            "Payments app URL",
+            payments.starts_with("https://"),
+            if payments.starts_with("https://") {
+                payments.to_string()
+            } else {
+                format!("{payments} is not an https:// URL: billing links would point there")
+            },
+        ),
+        check(
+            "signup_notify",
+            "New-company notification",
+            notify,
+            if notify {
+                "SIGNUP_NOTIFY_USER_ID or SIGNUP_NOTIFY_EMAIL is set"
+            } else {
+                "Neither SIGNUP_NOTIFY_USER_ID nor SIGNUP_NOTIFY_EMAIL is set: nobody is told about a new company"
+            },
+        ),
+        check(
+            "calendly_token",
+            "Calendly token",
+            facts.calendly_token_set,
+            if facts.calendly_token_set {
+                "set"
+            } else {
+                "CALENDLY_API_TOKEN is not set: new companies cannot book the onboarding call"
+            },
+        ),
+        check(
+            "onboarding_advance_charging",
+            "Onboarding advance charging",
+            true,
+            if facts.onboarding_advance_charging {
+                "ONBOARDING_ADVANCE_CHARGING is on: a passed onboarding deadline adds one month in advance to the next charge"
+            } else {
+                "ONBOARDING_ADVANCE_CHARGING is off: a passed onboarding deadline adds nothing to any charge"
+            },
+        ),
+        check(
+            "signup_enabled",
+            "Self-serve signup switch",
+            true,
+            if facts.signup_enabled {
+                "SELF_SERVE_SIGNUP_ENABLED is on"
+            } else {
+                "SELF_SERVE_SIGNUP_ENABLED is off: signup answers 503 until it is set to 1"
+            },
+        ),
+        check(
+            "signup_dependencies",
+            "Self-serve signup dependencies",
+            missing.is_empty(),
+            if missing.is_empty() {
+                "everything signup needs is set".to_string()
+            } else {
+                format!("Not set: {}", missing.join(", "))
+            },
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +698,15 @@ mod tests {
             name: "Pro".into(),
             monthly_price_cents: cents,
         }
+    }
+
+    #[test]
+    fn the_startup_check_joins_the_problems() {
+        assert!(startup_check(&[]).ok);
+        let failed = startup_check(&["A is missing".into(), "B is wrong".into()]);
+        assert!(!failed.ok);
+        assert_eq!(failed.key, "startup_config");
+        assert_eq!(failed.detail, "A is missing; B is wrong");
     }
 
     fn good_env(plans: &[BillingPlan]) -> EnvFacts<'_> {
@@ -704,7 +948,7 @@ mod tests {
     fn lookup_price(key: &str, cents: i64) -> Value {
         json!({ "id": format!("price_{key}"), "lookup_key": key, "active": true,
                 "currency": "usd", "billing_scheme": "per_unit", "unit_amount": cents,
-                "recurring": { "interval": "month", "interval_count": 1 }, "livemode": false })
+                "tax_behavior": "exclusive", "recurring": { "interval": "month", "interval_count": 1 }, "livemode": false })
     }
 
     #[test]
@@ -742,5 +986,81 @@ mod tests {
         let unreadable = catalog_checks(&["granite_base_monthly_v1"], Err("api_error"), None, None);
         assert_eq!(unreadable.len(), 1);
         assert!(!unreadable[0].ok);
+    }
+
+    #[test]
+    fn card_and_bank_debit_must_be_enabled_on_the_default_configuration() {
+        let configuration = |bank: bool| {
+            json!({ "is_default": true,
+                "card": { "available": true, "display_preference": { "value": "on" } },
+                "us_bank_account": { "available": bank,
+                    "display_preference": { "value": if bank { "on" } else { "off" } } } })
+        };
+        assert!(payment_method_checks(Ok(&[configuration(true)]))[0].ok);
+        let off = payment_method_checks(Ok(&[configuration(false)]));
+        assert!(!off[0].ok && off[0].detail.contains("us_bank_account"));
+        assert!(!payment_method_checks(Ok(&[]))[0].ok);
+        let error = payment_method_checks(Err("permission"));
+        assert!(!error[0].ok && error[0].detail.contains("could not check"));
+    }
+
+    #[test]
+    fn the_portal_configuration_must_exist_with_cancelling_off() {
+        let config = |cancel: bool| {
+            json!({ "id": "bpc_1", "metadata": { "app": "tag" },
+                "features": { "subscription_cancel": { "enabled": cancel },
+                    "subscription_update": { "enabled": false } } })
+        };
+        assert!(portal_checks(Ok(&[config(false)]), "tag")[0].ok);
+        let on = portal_checks(Ok(&[config(true)]), "tag");
+        assert!(!on[0].ok && on[0].detail.contains("subscription_cancel"));
+        assert!(!portal_checks(Ok(&[config(false)]), "other")[0].ok);
+        assert!(!portal_checks(Err("boom"), "tag")[0].ok);
+    }
+
+    #[test]
+    fn the_release_settings_are_reported() {
+        let facts = ReleaseFacts {
+            billing_alert_email_set: true,
+            payments_app_url: "https://payments.granite-manager.com",
+            signup_enabled: false,
+            publishable_key_set: true,
+            webhook_secret_set: true,
+            signup_notify_user_set: false,
+            signup_notify_email_set: true,
+            onboarding_advance_charging: false,
+            calendly_token_set: true,
+        };
+        assert!(release_checks(&facts).iter().all(|c| c.ok));
+        let bad = release_checks(&ReleaseFacts {
+            billing_alert_email_set: false,
+            payments_app_url: "http://x",
+            signup_notify_email_set: false,
+            calendly_token_set: false,
+            ..facts
+        });
+        for key in [
+            "billing_alert_email",
+            "payments_app_url",
+            "signup_notify",
+            "calendly_token",
+            "signup_dependencies",
+        ] {
+            assert!(!by_key(&bad, key).ok, "{key}");
+        }
+        assert!(
+            by_key(&bad, "signup_dependencies")
+                .detail
+                .contains("CALENDLY_API_TOKEN")
+        );
+    }
+
+    #[test]
+    fn a_price_without_exclusive_tax_fails_its_check() {
+        let mut price = lookup_price("granite_base_monthly_v1", 30_000);
+        price["tax_behavior"] = json!("unspecified");
+        let checks = catalog_checks(&["granite_base_monthly_v1"], Ok(&[price]), None, None);
+        let base = by_key(&checks, "signup_price_granite_base_monthly_v1");
+        assert!(!base.ok && base.detail.contains("tax_behavior is unspecified"));
     }
 }

@@ -115,7 +115,10 @@ pub struct AccountSubscription {
     /// The subscription can be cancelled here
     /// (`POST /v1/billing/cancellation-request`): a self-serve company with a
     /// running subscription (`trialing`, `active` or `past_due`), even while
-    /// Stripe or its prices cannot be read.
+    /// Stripe or its prices cannot be read; also a company whose signup still
+    /// waits for its bank account's micro-deposits (no subscription yet: the
+    /// request cancels the pending verification and ends with the bank
+    /// window).
     pub can_cancel: bool,
     /// The Stripe publishable key for the Payment Element
     /// (`POST /v1/billing/payment-setup`); null when not configured.
@@ -600,11 +603,18 @@ async fn current_payment_method(
         if let Some(method) = payment_method(default) {
             return Ok(Some(method));
         }
-        if let Some(id) = default.as_str()
-            && let Ok(method) = stripe.payment_method(id).await
-            && let Some(method) = payment_method(&method)
-        {
-            return Ok(Some(method));
+        if let Some(id) = default.as_str() {
+            match stripe.payment_method(id).await {
+                Ok(method) => {
+                    if let Some(method) = payment_method(&method) {
+                        return Ok(Some(method));
+                    }
+                }
+                // Gone from Stripe: the customer's default is what is on file.
+                Err(StripeError::Missing(_)) => {}
+                // Never the customer's default instead: it may be another card.
+                Err(err) => return Err(err),
+            }
         }
     }
     let Some(customer) = customer else {
@@ -840,10 +850,12 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
     let has_subscription = record
         .as_ref()
         .is_some_and(|r| r.stripe_subscription_id.is_some());
-    let can_cancel = has_subscription && is_running(&timeline.status);
-    let can_change = stripe.is_enabled() && catalog.is_some() && can_cancel;
+    let running = has_subscription && is_running(&timeline.status);
+    let can_change = stripe.is_enabled() && catalog.is_some() && running;
     let methods = record.as_ref().map(|r| &r.methods);
     let bank_until = super::store::bank_verification_until(pool, company_id).await?;
+    // A signup still waiting for its bank account can cancel too (U16).
+    let can_cancel = running || (!has_subscription && bank_until.is_some());
     let pending_payment_method = if reachable && stripe.is_enabled() {
         pending_method(&stripe, pool, company_id, methods).await?
     } else {

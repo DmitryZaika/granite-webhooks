@@ -6,13 +6,17 @@
 //! day 4 (three days left), day 6 (paused tomorrow), the pause on day 7 once
 //! the access gate really pauses, then one email when the cycle is settled.
 //! A `first_charge` cycle (starts at `company_billing.trial_end_at`) sends one
-//! email 7 days before the first charge of a self-serve subscription. Port of
-//! the CRM's `billingReminders.ts`.
+//! email 7 days before the first charge of a self-serve subscription. A
+//! `method_hold` cycle (starts at `company_billing.method_hold_at`) sends the
+//! hold email of a self-serve company's saved method (blocked bank account,
+//! dispute) once to each Manager; the webhook tries first, each tick sends
+//! what is still open. Port of the CRM's `billingReminders.ts`.
 // Generic over the store, like `machine`.
 #![allow(clippy::future_not_send)]
 
-use super::CompanyBilling;
 use super::account::Card;
+use super::method_emails::{DisputedPayment, HoldInput, render_hold};
+use super::{CompanyBilling, MethodHold};
 use super::reminder_emails::{
     FirstChargeEmailInput, OnboardingLine, ReminderEmailInput, render_first_charge_email,
     render_reminder_email,
@@ -55,6 +59,8 @@ pub enum DunningKind {
     FirstPayment,
     /// The first charge after a self-serve free period is coming.
     FirstCharge,
+    /// The saved payment method stopped working (a hold).
+    MethodHold,
 }
 
 impl DunningKind {
@@ -63,6 +69,7 @@ impl DunningKind {
             Self::PaymentFailed => "payment_failed",
             Self::FirstPayment => "first_payment",
             Self::FirstCharge => "first_charge",
+            Self::MethodHold => "method_hold",
         }
     }
 
@@ -71,6 +78,7 @@ impl DunningKind {
             "payment_failed" => Some(Self::PaymentFailed),
             "first_payment" => Some(Self::FirstPayment),
             "first_charge" => Some(Self::FirstCharge),
+            "method_hold" => Some(Self::MethodHold),
             _ => None,
         }
     }
@@ -229,6 +237,9 @@ pub struct FirstChargeQuote {
     pub lines: Vec<ChargeLine>,
     /// `Visa ending in 4242`, when Stripe knows the default method.
     pub payment_method: Option<String>,
+    /// Made by a plan invite (`metadata.plan_invite_id`): a company moved
+    /// onto a plan, with no free period.
+    pub plan_invite: bool,
 }
 
 /// A reminder ready to send.
@@ -268,6 +279,17 @@ pub enum ReminderError {
     Stripe(String),
 }
 
+/// A self-serve company's hold on its saved method, as its email needs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MethodHoldFacts {
+    pub hold: MethodHold,
+    /// When it was set: keys the email's cycle.
+    pub at: NaiveDateTime,
+    /// When access pauses unless a new method is saved.
+    pub until: NaiveDateTime,
+    pub disputed: Option<DisputedPayment>,
+}
+
 /// Ids, kind, step and error codes for a report: never addresses or names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReportContext {
@@ -290,6 +312,12 @@ pub trait ReminderStore {
     /// and without a `skipped` row for that cycle newer than
     /// `FIRST_CHARGE_RECHECK_HOURS` (`LIMIT 500`).
     async fn first_charge_company_ids(&self, now: NaiveDateTime) -> StoreResult<Vec<i32>>;
+    /// Self-serve companies with billing required whose hold ends after
+    /// `now` (`LIMIT 500`).
+    async fn hold_company_ids(&self, now: NaiveDateTime) -> StoreResult<Vec<i32>>;
+    /// The company's hold, when it is a self-serve company with billing
+    /// required.
+    async fn method_hold(&self, company_id: i32) -> StoreResult<Option<MethodHoldFacts>>;
     async fn snapshot(&self, company_id: i32) -> StoreResult<CompanyBillingSnapshot>;
     /// Non-deleted users with the Manager position in the company, by id.
     async fn managers(&self, company_id: i32) -> StoreResult<Vec<i32>>;
@@ -756,6 +784,9 @@ pub fn first_charge_quote_from(
         amount_cents: lines.iter().map(|line| line.amount_cents).sum(),
         lines,
         payment_method,
+        plan_invite: subscription["metadata"]["plan_invite_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
     })
 }
 
@@ -815,6 +846,19 @@ async fn send_claimed<S: ReminderStore, E: ReminderEffects>(
             };
             effects
                 .report("Billing reminder email was rejected", &context)
+                .await;
+        }
+        // A hold email is the only notice of its hold: one that may not have
+        // gone out is retried like a refused one (a second copy beats none).
+        ReminderSendResult::Unknown { code } if context.kind == Some(DunningKind::MethodHold) => {
+            store.mark_failed(claimed, &code).await?;
+            result.failed += 1;
+            let context = ReportContext {
+                error_code: Some(code),
+                ..context.clone()
+            };
+            effects
+                .report("Billing hold email outcome unknown, retried", &context)
                 .await;
         }
         ReminderSendResult::Unknown { code } => {
@@ -1046,6 +1090,108 @@ async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
     Ok(())
 }
 
+/// The hold email's cycle while the hold has not ended.
+pub fn hold_due(facts: &MethodHoldFacts, now: NaiveDateTime) -> Option<DueReminder> {
+    (now < facts.until).then_some(DueReminder {
+        cycle: DunningCycle {
+            kind: DunningKind::MethodHold,
+            started_at: facts.at,
+        },
+        step: ReminderStep::Started,
+        pauses_at: Some(facts.until),
+    })
+}
+
+/// A hold email still to send: the hold, its cycle and the Managers who
+/// still need it.
+pub struct HoldPlan {
+    pub facts: MethodHoldFacts,
+    pub due: DueReminder,
+    pub contacts: Vec<ReminderContact>,
+}
+
+/// The company's hold email, unless every Manager has it (or it may not be
+/// retried, see `can_claim`).
+pub async fn hold_plan<S: ReminderStore>(
+    store: &S,
+    company_id: i32,
+    now: NaiveDateTime,
+) -> Result<Option<HoldPlan>, ReminderError> {
+    let Some(facts) = store.method_hold(company_id).await? else {
+        return Ok(None);
+    };
+    let Some(due) = hold_due(&facts, now) else {
+        return Ok(None);
+    };
+    let rows = store.reminders(company_id, due.cycle).await?;
+    let contacts = open_contacts(recipients(store, company_id).await?, &rows, due.step, now);
+    Ok((!contacts.is_empty()).then_some(HoldPlan {
+        facts,
+        due,
+        contacts,
+    }))
+}
+
+/// The hold email for one Manager.
+pub fn render_hold_email(
+    facts: &MethodHoldFacts,
+    company_name: &str,
+    contact: &ReminderContact,
+    account_url: &str,
+) -> ReminderEmail {
+    let rendered = render_hold(&HoldInput {
+        hold: facts.hold,
+        disputed: facts.disputed,
+        company_name,
+        user_name: contact.name.as_deref(),
+        pauses_at: facts.until,
+        account_url,
+    });
+    ReminderEmail {
+        to: contact.email.clone(),
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+    }
+}
+
+/// One company's hold emails not sent yet. No company lock: the unique claim
+/// is the idempotency, and nothing is settled.
+async fn hold_company<S: ReminderStore, E: ReminderEffects>(
+    store: &S,
+    effects: &E,
+    company_id: i32,
+    now: NaiveDateTime,
+    limits: ReminderLimits,
+    result: &mut ReminderTickResult,
+) -> Result<(), ReminderError> {
+    let Some(plan) = hold_plan(store, company_id, now).await? else {
+        return Ok(());
+    };
+    let company_name = store.company_name(company_id).await?;
+    let account_url = super::payments_account_url();
+    for contact in plan.contacts {
+        if limit_reached(effects, limits, result) {
+            return Ok(());
+        }
+        let key = ReminderKey {
+            company_id,
+            user_id: contact.user_id,
+            cycle: plan.due.cycle,
+            step: plan.due.step,
+        };
+        let Some(id) = store.claim(&key, now).await? else {
+            continue;
+        };
+        result.processed += 1;
+        let claimed = ClaimedReminder { id, company_id };
+        let email = render_hold_email(&plan.facts, &company_name, &contact, &account_url);
+        let context = send_context(claimed, contact.user_id, plan.due.cycle, plan.due.step);
+        send_claimed(store, effects, claimed, &email, &context, now, result).await?;
+    }
+    Ok(())
+}
+
 async fn report_company_error<E: ReminderEffects>(
     effects: &E,
     company_id: i32,
@@ -1065,8 +1211,11 @@ async fn report_company_error<E: ReminderEffects>(
         .await;
 }
 
-/// One tick: sweeps stuck claims, then dunning reminders (under the company
-/// lock), then first-charge notices, within `limits`.
+/// One tick, within `limits`.
+///
+/// Sweeps stuck claims, then the hold emails and the first-charge notices
+/// (cheap and dated, so they never wait behind a long dunning list), then
+/// dunning reminders (under the company lock).
 pub async fn process_billing_reminders<S: ReminderStore, E: ReminderEffects>(
     store: &S,
     effects: &E,
@@ -1105,16 +1254,17 @@ pub async fn process_billing_reminders<S: ReminderStore, E: ReminderEffects>(
         }
     }
 
-    match store.candidate_company_ids(now).await {
+    match store.hold_company_ids(now).await {
         Ok(ids) => {
             for company_id in ids {
                 if limit_reached(effects, limits, &result) {
                     break;
                 }
                 if let Err(error) =
-                    dunning_company(store, effects, company_id, now, limits, &mut result).await
+                    hold_company(store, effects, company_id, now, limits, &mut result).await
                 {
-                    report_company_error(effects, company_id, None, &error, &mut result).await;
+                    let kind = Some(DunningKind::MethodHold);
+                    report_company_error(effects, company_id, kind, &error, &mut result).await;
                 }
             }
         }
@@ -1134,6 +1284,24 @@ pub async fn process_billing_reminders<S: ReminderStore, E: ReminderEffects>(
                 {
                     let kind = Some(DunningKind::FirstCharge);
                     report_company_error(effects, company_id, kind, &error, &mut result).await;
+                }
+            }
+        }
+        Err(error) => {
+            report_list_failure(effects, &ReminderError::from(error)).await;
+        }
+    }
+
+    match store.candidate_company_ids(now).await {
+        Ok(ids) => {
+            for company_id in ids {
+                if limit_reached(effects, limits, &result) {
+                    break;
+                }
+                if let Err(error) =
+                    dunning_company(store, effects, company_id, now, limits, &mut result).await
+                {
+                    report_company_error(effects, company_id, None, &error, &mut result).await;
                 }
             }
         }
@@ -1226,6 +1394,10 @@ mod tests {
         pay_on_unlock: Cell<Option<NaiveDateTime>>,
         onboarding: Cell<Option<OnboardingLine>>,
         onboarding_fails: Cell<bool>,
+        /// Company 1's hold, when it has one.
+        hold: Cell<Option<MethodHoldFacts>>,
+        /// Companies the dunning list names.
+        dunning: RefCell<Vec<i32>>,
     }
 
     fn contact(user_id: i32, name: &str, email: &str) -> ReminderContact {
@@ -1245,6 +1417,7 @@ mod tests {
                 amount_cents: 30_000,
             }],
             payment_method: Some("Visa ending in 4242".into()),
+            plan_invite: false,
         }
     }
 
@@ -1275,6 +1448,8 @@ mod tests {
             pay_on_unlock: Cell::new(None),
             onboarding: Cell::new(None),
             onboarding_fails: Cell::new(false),
+            hold: Cell::new(None),
+            dunning: RefCell::new(vec![1]),
         }
     }
 
@@ -1285,7 +1460,19 @@ mod tests {
     #[allow(clippy::unused_async_trait_impl)] // the trait's signature
     impl ReminderStore for Fake {
         async fn candidate_company_ids(&self, _: NaiveDateTime) -> StoreResult<Vec<i32>> {
-            Ok(vec![1])
+            Ok(self.dunning.borrow().clone())
+        }
+        async fn hold_company_ids(&self, now: NaiveDateTime) -> StoreResult<Vec<i32>> {
+            Ok(self
+                .hold
+                .get()
+                .filter(|hold| now < hold.until)
+                .map(|_| 1)
+                .into_iter()
+                .collect())
+        }
+        async fn method_hold(&self, company_id: i32) -> StoreResult<Option<MethodHoldFacts>> {
+            Ok(self.hold.get().filter(|_| company_id == 1))
         }
         async fn first_charge_company_ids(&self, now: NaiveDateTime) -> StoreResult<Vec<i32>> {
             Ok(self
@@ -2449,6 +2636,95 @@ mod tests {
         assert_eq!(fake.sent_count(), 2);
     }
 
+    #[tokio::test]
+    async fn first_charge_notices_go_before_the_dunning_list() {
+        let fake = fake();
+        fake.fail().await;
+        fake.billing.users.borrow_mut().push((10, 2, true));
+        fake.billing.records.borrow_mut().insert(
+            2,
+            CompanyBilling {
+                company_id: 2,
+                ..trialing(Some(t(7, 0)))
+            },
+        );
+
+        fake.tick_max(t(0, 60), 1).await;
+        let subjects = fake.subjects();
+        assert_eq!(subjects.len(), 1);
+        assert!(
+            subjects[0].starts_with("ann@example.com: Your first Granite Manager charge is on"),
+            "{subjects:?}"
+        );
+    }
+
+    // ---- the hold emails
+
+    fn dispute_hold() -> MethodHoldFacts {
+        MethodHoldFacts {
+            hold: MethodHold::Disputed,
+            at: t(0, 0),
+            until: t(7, 0),
+            disputed: Some(DisputedPayment {
+                amount_cents: 37_500,
+                paid_at: at("2026-09-15 15:00:00"),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_hold_email_reaches_each_manager_once_and_a_refusal_is_retried() {
+        let fake = fake();
+        fake.dunning.borrow_mut().clear();
+        fake.hold.set(Some(dispute_hold()));
+        fake.mode.set(SendMode::Rejected);
+
+        let refused = fake.tick(t(0, 60)).await;
+        assert_eq!((refused.processed, refused.failed), (2, 2));
+        // Retried once the retry delay passed, then never again.
+        fake.mode.set(SendMode::Sent);
+        fake.tick(t(0, 120)).await;
+        assert_eq!(fake.sent_count(), 0);
+        fake.tick(t(0, 60 + REMINDER_RETRY_AFTER_MINUTES * 60)).await;
+        fake.tick(t(1, 0)).await;
+        assert_eq!(fake.subjects(), pair("A payment was disputed"));
+        let sent = fake.sent.borrow();
+        assert!(sent[0].text.contains("Your payment of $375.00 on September 15, 2026"));
+        assert!(sent[0].text.contains("by October 8, 2026"));
+        assert_eq!(
+            fake.statuses(),
+            [(10, ReminderStatus::Sent, 2), (11, ReminderStatus::Sent, 2)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hold_email_that_may_not_have_gone_out_is_retried() {
+        let fake = fake();
+        fake.dunning.borrow_mut().clear();
+        fake.hold.set(Some(dispute_hold()));
+        fake.mode.set(SendMode::Unknown);
+        let first = fake.tick(t(0, 60)).await;
+        assert_eq!((first.failed, first.unknown), (2, 0));
+        fake.mode.set(SendMode::Sent);
+        fake.tick(t(1, 0)).await;
+        assert_eq!(fake.sent_count(), 4);
+        assert_eq!(
+            fake.statuses(),
+            [(10, ReminderStatus::Sent, 2), (11, ReminderStatus::Sent, 2)]
+        );
+    }
+
+    #[tokio::test]
+    async fn no_hold_email_once_the_hold_ended_or_was_cleared() {
+        let fake = fake();
+        fake.dunning.borrow_mut().clear();
+        fake.hold.set(Some(dispute_hold()));
+        fake.tick(t(7, 0)).await;
+        fake.hold.set(None);
+        fake.tick(t(1, 0)).await;
+        assert_eq!(fake.sent_count(), 0);
+    }
+
     #[test]
     fn the_quote_comes_from_a_trialing_subscription() {
         let subscription = json!({
@@ -2490,6 +2766,10 @@ mod tests {
         );
         assert_eq!(quote.payment_method.as_deref(), Some("Visa ending in 4242"));
         assert_eq!(quote.charge_at, at("2027-01-15 08:00:00"));
+        assert!(!quote.plan_invite);
+        let mut invited = subscription.clone();
+        invited["metadata"] = json!({ "plan_invite_id": "inv-1" });
+        assert!(first_charge_quote_from(&invited, None).unwrap().plan_invite);
         let mut undated = subscription;
         undated["trial_end"] = Value::Null;
         assert_eq!(first_charge_quote_from(&undated, None), None);

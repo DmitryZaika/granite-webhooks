@@ -1,7 +1,7 @@
 //! An in-memory `BillingStore` for the state machine and gate tests.
 #![allow(clippy::future_not_send)]
 
-use super::store::{BillingStore, StoreResult};
+use super::store::{BillingStore, Claim, StoreResult};
 use super::{BillingInvoice, BillingNotification, CompanyBilling};
 use chrono::NaiveDateTime;
 use std::cell::{Cell, RefCell};
@@ -11,7 +11,8 @@ use std::collections::{HashMap, HashSet};
 pub struct Memory {
     pub records: RefCell<HashMap<i32, CompanyBilling>>,
     pub invoices: RefCell<Vec<BillingInvoice>>,
-    pub events: RefCell<HashSet<String>>,
+    /// Claimed events: whether their work finished.
+    pub events: RefCell<HashMap<String, bool>>,
     /// (user id, company id, is manager)
     pub users: RefCell<Vec<(i32, i32, bool)>>,
     pub notifications: RefCell<Vec<(BillingNotification, bool)>>,
@@ -78,8 +79,23 @@ impl BillingStore for Memory {
         );
         Ok(())
     }
-    async fn claim_event(&self, event_id: &str, _: &str) -> StoreResult<bool> {
-        Ok(self.events.borrow_mut().insert(event_id.to_string()))
+    async fn claim_event(&self, event_id: &str, _: &str) -> StoreResult<Claim> {
+        let mut events = self.events.borrow_mut();
+        if let Some(done) = events.get(event_id) {
+            return Ok(if *done {
+                Claim::Done
+            } else {
+                Claim::InProgress
+            });
+        }
+        events.insert(event_id.to_string(), false);
+        Ok(Claim::Taken)
+    }
+    async fn finish_event(&self, event_id: &str) -> StoreResult<()> {
+        if let Some(done) = self.events.borrow_mut().get_mut(event_id) {
+            *done = true;
+        }
+        Ok(())
     }
     async fn release_event(&self, event_id: &str) -> StoreResult<()> {
         self.events.borrow_mut().remove(event_id);

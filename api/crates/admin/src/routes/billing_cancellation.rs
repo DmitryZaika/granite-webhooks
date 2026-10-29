@@ -40,8 +40,14 @@ pub struct CancellationInput {
 /// "Request cancellation" on the account page, for a Manager of a self-serve
 /// company with a running subscription (trialing, active or past due). The
 /// subscription ends at the end of the free period when requested during it
-/// (then nothing is charged), else at the end of the current paid month; the
-/// company keeps full access until then. Answers 201 with the new request,
+/// (then nothing is charged), else at the end of the current paid month, or,
+/// when the onboarding advance was paid and its month not used yet, at the
+/// end of that prepaid month (`effective_at` says which); the company keeps
+/// full access until then. An onboarding advance not charged yet is never
+/// charged. A company whose signup still waits for its bank account's
+/// micro-deposits (no subscription yet) can request too: the verification is
+/// cancelled, no subscription is ever made, and `effective_at` is the end of
+/// the bank window (access pauses then). Answers 201 with the new request,
 /// and emails a confirmation to every Manager and a notice to Granite Manager
 /// staff (with the reason). When a request is already scheduled, answers 200
 /// with it and changes nothing (no second email). Withdraw it before it takes
@@ -59,7 +65,7 @@ pub struct CancellationInput {
         (status = 400, description = "Reason longer than 1000 characters, or a malformed body", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a Manager of the company", body = ErrorBody),
-        (status = 409, description = "Plan managed by Granite Manager staff (legacy), or no running subscription", body = ErrorBody),
+        (status = 409, description = "Plan managed by Granite Manager staff (legacy), no running subscription (and no signup waiting for its bank), or the bank account was just verified (try again in a minute)", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 502, description = "Stripe failed; try again", body = ErrorBody),
         (status = 503, description = "Billing busy or not configured; try again", body = ErrorBody),

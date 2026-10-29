@@ -20,7 +20,7 @@ use super::{
 use crate::auth::session::{SessionUser, UserPositionRow};
 use crate::billing::catalog::{Catalog, PlanChoice, Quote, QuoteLine, signup_day};
 use crate::billing::lock::{CompanyLock, LockError};
-use crate::billing::machine::apply_invite_subscription;
+use crate::billing::machine::{self, apply_invite_subscription};
 use crate::billing::store::{BillingStore, MySqlBillingStore};
 use crate::billing::stripe::{
     InviteCustomer, NewSubscription, SetupPurpose, StripeError, SubscriptionOrigin, stripe_id,
@@ -1025,6 +1025,8 @@ async fn run_locked(state: &AppState, invite_id: &str) -> ApiResult<RunOutcome> 
     if has_ended(&snapshot) {
         return Err(stop_ended(pool, &invite).await?);
     }
+    // Undone by withdrawing the invite (`restore_legacy`) when the switch
+    // never commits.
     if let Some(legacy_id) = invite.legacy_subscription_id.as_deref() {
         replace_legacy(state, &invite, legacy_id, &snapshot.id).await?;
     }
@@ -1188,6 +1190,67 @@ async fn replace_legacy(
         .replace_legacy_subscription(legacy_id, new_id, &invite.id)
         .await
         .map_err(|err| stripe_failure(&err))?;
+    Ok(())
+}
+
+/// Undoes [`replace_legacy`] of an invite withdrawn before its switch
+/// committed: the legacy subscription renews again.
+///
+/// Its `replaced_by` mark is cleared, under the idempotency key
+/// `plan-invite:<id>:restore-legacy`. Nothing to do when it was never
+/// replaced (by this invite), ended or gone.
+pub async fn restore_legacy(state: &AppState, invite: &Invite) -> ApiResult<()> {
+    let Some(legacy_id) = invite.legacy_subscription_id.as_deref() else {
+        return Ok(());
+    };
+    let legacy = match state.stripe.subscription(legacy_id).await {
+        Ok(legacy) => legacy,
+        Err(StripeError::Missing(_)) => return Ok(()),
+        Err(err) => return Err(stripe_failure(&err)),
+    };
+    let metadata = &legacy["metadata"];
+    let replaced = metadata["plan_invite_id"].as_str() == Some(invite.id.as_str())
+        && metadata["replaced_by"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty());
+    if !replaced || is_ended_subscription_status(legacy["status"].as_str().unwrap_or_default()) {
+        return Ok(());
+    }
+    state
+        .stripe
+        .restore_legacy_subscription(legacy_id, &invite.id)
+        .await
+        .map_err(|err| stripe_failure(&err))?;
+    Ok(())
+}
+
+/// The billing record goes back to the legacy subscription after a switch
+/// that never committed.
+///
+/// `run` wrote the invite's subscription into it; the legacy one's live
+/// state is re-read from Stripe and applied. Under the company lock; nothing
+/// to do without a legacy subscription, when it is gone, or when the record
+/// names neither.
+pub async fn restore_legacy_record(state: &AppState, invite: &Invite) -> ApiResult<()> {
+    let (Some(legacy_id), Some(made)) = (
+        invite.legacy_subscription_id.as_deref(),
+        invite.stripe_subscription_id.as_deref(),
+    ) else {
+        return Ok(());
+    };
+    let legacy = match state.stripe.subscription(legacy_id).await {
+        Ok(legacy) => legacy,
+        Err(StripeError::Missing(_)) => return Ok(()),
+        Err(err) => return Err(stripe_failure(&err)),
+    };
+    machine::restore_legacy_record(
+        &MySqlBillingStore(&state.pool),
+        invite.company_id,
+        made,
+        &subscription_snapshot(&legacy),
+        billing::now(),
+    )
+    .await?;
     Ok(())
 }
 

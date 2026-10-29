@@ -147,8 +147,9 @@ async fn plans_quote_is_exact(pool: MySqlPool) {
                       "quantity": 1, "unit_cents": 7500, "amount_cents": 7500 }
                 ],
                 "base_and_addons_cents": 37500, "monthly_cents": 43500,
-                "due_today_cents": 0, "fee_cents": 75000
-            }
+                "due_today_cents": 0, "advance_cents": 43500
+            },
+            "signups_enabled": true
         })
     );
 }
@@ -168,7 +169,11 @@ async fn plans_defaults_and_clamps(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn the_kill_switch_closes_signups_but_not_plans(pool: MySqlPool) {
     let env = env_with(pool, SignupConfig::default()).await;
-    env.server.get("/v1/public/plans").await.assert_status_ok();
+    let plans = env.server.get("/v1/public/plans").await;
+    plans.assert_status_ok();
+    let plans: Value = plans.json();
+    assert_eq!(plans["signups_enabled"], false);
+    assert_eq!(plans["addons"].as_array().unwrap().len(), 3);
     let id = "11111111-1111-4111-8111-111111111111";
     let calls = [
         env.server
@@ -264,33 +269,263 @@ async fn create_stores_the_signup_and_emails_a_code(pool: MySqlPool) {
     assert_eq!(signup["quote"]["monthly_cents"], 43500);
 }
 
+/// Whether the last email to `to` holds a 6-digit code.
+fn has_code(env: &Env, to: &str) -> bool {
+    let sink = env.sink.lock().unwrap();
+    let email = sink.emails_to(to).pop().expect("an email");
+    email["body"]
+        .as_str()
+        .unwrap()
+        .split('>')
+        .filter_map(|part| part.split('<').next())
+        .any(|text| {
+            let text = text.trim();
+            text.len() == 6 && text.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
+fn last_email(env: &Env, to: &str) -> Value {
+    env.sink
+        .lock()
+        .unwrap()
+        .emails_to(to)
+        .pop()
+        .expect("an email")
+}
+
+async fn backdate_code(env: &Env, id: &str) {
+    sqlx::query(
+        "UPDATE signup_intents SET code_sent_at = code_sent_at - INTERVAL 2 MINUTE WHERE id = ?",
+    )
+    .bind(id)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+}
+
+/// S3: an email that already has an account gets the same answer as a new
+/// one; the address is told so (no code), and the signup never verifies.
 #[test_db::test(seed)]
-async fn duplicate_emails_are_refused(pool: MySqlPool) {
+async fn existing_emails_get_the_same_answer_and_no_code(pool: MySqlPool) {
     let env = env(pool).await;
-    for (email, message) in [
-        ("rep@acme.test", "An account already uses this email."),
-        (
-            "gone@acme.test",
-            "This email belongs to a deleted account. Use a different email.",
-        ),
-        ("  REP@Acme.Test ", "An account already uses this email."),
-    ] {
-        let res = env
+    let start_json = |email: &'static str| {
+        let env = &env;
+        async move {
+            let res = env
+                .server
+                .post("/v1/public/signups")
+                .json(&body(email))
+                .await;
+            res.assert_status(StatusCode::CREATED);
+            res.json::<Value>()
+        }
+    };
+    let fresh = start_json("new@fresh.test").await;
+    let taken = start_json("  REP@Acme.Test ").await;
+    let gone = start_json("gone@acme.test").await;
+    for created in [&fresh, &taken, &gone] {
+        let keys: Vec<&String> = created.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["id", "resend_in_seconds"]);
+        assert_eq!(created["resend_in_seconds"], 60);
+    }
+    assert!(has_code(&env, "new@fresh.test"));
+
+    let email = last_email(&env, "rep@acme.test");
+    assert_eq!(email["subject"], "Your Granite Manager signup");
+    let html = email["body"].as_str().unwrap();
+    assert!(html.contains("You already have an account"));
+    assert!(html.contains(r#"href="https://app.example/login""#));
+    assert!(html.contains("Forgot password?"));
+    assert!(!has_code(&env, "rep@acme.test"));
+    let email = last_email(&env, "gone@acme.test");
+    let html = email["body"].as_str().unwrap();
+    assert!(html.contains("This email belonged to a deleted account"));
+    assert!(html.contains("a different email"));
+    assert!(!has_code(&env, "gone@acme.test"));
+
+    // The signup reads like any other and fails verification like a wrong code.
+    let id = taken["id"].as_str().unwrap();
+    let signup: Value = env
+        .server
+        .get(&format!("/v1/public/signups/{id}"))
+        .await
+        .json();
+    assert_eq!(signup["status"], "started");
+    assert_eq!(signup["email_masked"], "r***@acme.test");
+    for code in ["000000", "123456"] {
+        let res = verify(&env, id, code).await;
+        res.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(res.json::<Value>()["code"], "invalid_code");
+    }
+    let hash: String = sqlx::query_scalar("SELECT code_hash FROM signup_intents WHERE id = ?")
+        .bind(id)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(hash, "none");
+
+    // A resend repeats the account-exists email, still without a code.
+    backdate_code(&env, id).await;
+    let resent = env
+        .server
+        .post(&format!("/v1/public/signups/{id}/code"))
+        .await;
+    resent.assert_status_ok();
+    assert_eq!(resent.json::<Value>()["resend_in_seconds"], 60);
+    assert_eq!(env.sink.lock().unwrap().emails_to("rep@acme.test").len(), 2);
+    assert!(!has_code(&env, "rep@acme.test"));
+    let res = verify(&env, id, "000000").await;
+    res.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(res.json::<Value>()["code"], "invalid_code");
+}
+
+fn assert_too_many(res: &axum_test::TestResponse) {
+    res.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let json: Value = res.json();
+    assert_eq!(json["code"], "too_many_signups");
+    let wait = json["retry_after_seconds"].as_i64().unwrap();
+    assert!((3500..=3600).contains(&wait), "{wait}");
+    let header: i64 = res
+        .headers()
+        .get("retry-after")
+        .expect("Retry-After")
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(header, wait);
+}
+
+/// S3: three signups per email per hour, existing accounts included (no
+/// email bombing), and the per-signup resend still works.
+#[test_db::test(seed)]
+async fn signups_per_email_are_limited_per_hour(pool: MySqlPool) {
+    let env = env(pool).await;
+    for email in ["many@fresh.test", "rep@acme.test"] {
+        let first = start(&env, email).await;
+        start(&env, email).await;
+        start(&env, &email.to_uppercase()).await;
+        let fourth = env
             .server
             .post("/v1/public/signups")
             .json(&body(email))
             .await;
-        res.assert_status(StatusCode::CONFLICT);
-        let json: Value = res.json();
-        assert_eq!(json["code"], "email_taken");
-        assert_eq!(json["error"], message);
+        assert_too_many(&fourth);
+        assert_eq!(env.sink.lock().unwrap().emails_to(email).len(), 3);
+
+        backdate_code(&env, &first).await;
+        env.server
+            .post(&format!("/v1/public/signups/{first}/code"))
+            .await
+            .assert_status_ok();
+        assert_eq!(env.sink.lock().unwrap().emails_to(email).len(), 4);
     }
-    assert!(env.sink.lock().unwrap().emails.is_empty());
     let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM signup_intents")
         .fetch_one(&env.pool)
         .await
         .unwrap();
-    assert_eq!(rows, 0);
+    assert_eq!(rows, 6);
+
+    // Signups older than an hour no longer count.
+    sqlx::query(
+        "UPDATE signup_intents SET created_at = created_at - INTERVAL 61 MINUTE
+          WHERE email = 'many@fresh.test'",
+    )
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    start(&env, "many@fresh.test").await;
+}
+
+/// `SIGNUP_RATE_LIMITS=off` lifts the limits for e2e runs, with a test key
+/// only: a live key keeps them.
+#[test_db::test(seed)]
+async fn the_rate_limits_are_lifted_only_with_a_test_key(pool: MySqlPool) {
+    let lifted = SignupConfig {
+        enabled: true,
+        rate_limits_off: true,
+        ..Default::default()
+    };
+    let env = env_with(pool.clone(), lifted.clone()).await;
+    for n in 0..12 {
+        env.server
+            .post("/v1/public/signups")
+            .add_header("x-forwarded-for", "203.0.113.9")
+            .json(&body(&format!("lifted{n}@fresh.test")))
+            .await
+            .assert_status(StatusCode::CREATED);
+    }
+
+    let stripe = fake_stripe::FakeStripe::with_catalog();
+    let sink = Arc::new(Mutex::new(fake_webhooks::Sink::default()));
+    let live = api::billing::stripe::Stripe::new(
+        Some("sk_live_fake"),
+        &fake_stripe::start(Arc::clone(&stripe)).await,
+    );
+    let state = AppState::new(pool, SECRET, ALLOWED_ORIGIN)
+        .with_stripe(live)
+        .with_webhooks(fake_webhooks::start(&sink).await)
+        .with_app_url("https://app.example")
+        .with_signup(lifted);
+    let server = TestServer::new(app(state));
+    let mut last = None;
+    for n in 0..11 {
+        last = Some(
+            server
+                .post("/v1/public/signups")
+                .add_header("x-forwarded-for", "198.51.100.9")
+                .json(&body(&format!("live{n}@fresh.test")))
+                .await,
+        );
+    }
+    assert_too_many(&last.unwrap());
+}
+
+/// S3: ten signups per client IP per hour, whatever the email.
+#[test_db::test(seed)]
+async fn signups_per_ip_are_limited_per_hour(pool: MySqlPool) {
+    let env = env(pool).await;
+    let from = |ip: &'static str, n: usize| {
+        let env = &env;
+        async move {
+            env.server
+                .post("/v1/public/signups")
+                .add_header("x-forwarded-for", ip)
+                .json(&body(&format!("ip{n}@fresh.test")))
+                .await
+        }
+    };
+    for n in 0..10 {
+        from("203.0.113.7", n)
+            .await
+            .assert_status(StatusCode::CREATED);
+    }
+    assert_too_many(&from("203.0.113.7", 10).await);
+    // The payments app (another origin) can read the wait.
+    let limited = env
+        .server
+        .post("/v1/public/signups")
+        .add_header("x-forwarded-for", "203.0.113.7")
+        .add_header("origin", ALLOWED_ORIGIN)
+        .json(&body("ip-cors@fresh.test"))
+        .await;
+    assert_too_many(&limited);
+    assert!(
+        limited
+            .header("access-control-expose-headers")
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("retry-after")
+    );
+    from("198.51.100.4", 11)
+        .await
+        .assert_status(StatusCode::CREATED);
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM signup_intents")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 11);
 }
 
 #[test_db::test(seed)]
@@ -335,8 +570,8 @@ async fn invalid_details_are_refused_before_any_write(pool: MySqlPool) {
         ),
         (
             "owner",
-            Box::new(|b| b["owner"]["name"] = json!("x".repeat(101))),
-            "The owner name can be up to 100 characters.",
+            Box::new(|b| b["owner"]["name"] = json!("x".repeat(81))),
+            "The owner name can be up to 80 characters.",
         ),
     ];
     for (what, edit, message) in edits {
@@ -513,7 +748,7 @@ async fn consents_follow_verification_and_the_plan(pool: MySqlPool) {
             ("terms", Value::Null),
             ("auto_renewal", Value::Null),
             ("per_user_pricing", Value::Null),
-            ("onboarding_fee", Value::Null),
+            ("onboarding_advance", Value::Null),
             ("card_authorization", json!("card")),
             ("ach_authorization", json!("us_bank_account")),
         ]
@@ -533,7 +768,10 @@ async fn consents_follow_verification_and_the_plan(pool: MySqlPool) {
             .unwrap()
             .starts_with("I am authorized to bind Fresh Stone.")
     );
-    assert_eq!(list[0]["documents"][0]["url"], "https://app.example/terms");
+    assert_eq!(
+        list[0]["documents"][0]["url"],
+        "https://app.example/terms?v=terms-2026-10-v3"
+    );
     assert!(
         list[1]["text"]
             .as_str()
@@ -930,7 +1168,7 @@ async fn completion_with_stale_consents_is_refused(pool: MySqlPool) {
         "terms",
         "auto_renewal",
         "per_user_pricing",
-        "onboarding_fee",
+        "onboarding_advance",
     ]
     .iter()
     .map(|kind| json!({ "kind": kind, "version": "x-v0", "text_sha256": "0".repeat(64) }))
@@ -979,7 +1217,11 @@ async fn a_full_signup_ends_signed_in(pool: MySqlPool) {
     done.assert_status_ok();
     assert_eq!(
         done.json::<Value>(),
-        json!({ "redirect_url": "https://app.example/employee?welcome=1", "bank_verification": null })
+        json!({
+            "redirect_url": "https://app.example/employee?welcome=1",
+            "bank_verification": null,
+            "signed_in": true
+        })
     );
     let cookie = done
         .headers()
@@ -1040,6 +1282,7 @@ async fn a_full_signup_ends_signed_in(pool: MySqlPool) {
         .await;
     again.assert_status_ok();
     assert!(again.headers().get("set-cookie").is_none());
+    assert_eq!(again.json::<Value>()["signed_in"], false);
     let stripe = env.stripe.lock().unwrap();
     assert_eq!(stripe.calls("POST", "/v1/subscriptions").len(), 1);
     assert_eq!(stripe.subscriptions.len(), 1);

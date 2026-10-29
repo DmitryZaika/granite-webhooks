@@ -13,11 +13,10 @@ use crate::billing::items::sync_items;
 use crate::billing::lock::CompanyLock;
 use crate::billing::machine::{apply_event, event_company_id};
 use crate::billing::reactivation::{self, Started};
-use crate::billing::store::BillingStore;
-use crate::billing::store::MySqlBillingStore;
+use crate::billing::store::{BillingStore, Claim, MySqlBillingStore};
 use crate::billing::stripe::{latest_event, normalize_event, verify_signature};
 use crate::billing::{self, BillingEvent, PaymentStatus, SubscriptionSnapshot};
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::error::{ApiError, ApiResult, CodedErrorBody, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
 use crate::openapi::{OpenApiRouter, routes};
@@ -25,7 +24,7 @@ use crate::state::AppState;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -233,9 +232,10 @@ pub struct WebhookReceived {
 /// verified bank account becomes the default (or completes the signup
 /// waiting on it), a failed one is reported to the Managers, a bank payment
 /// in flight keeps access on, a blocked account or a dispute starts a 7-day
-/// hold. Events of
-/// the onboarding fee invoice (`metadata.kind = onboarding_fee`) only move
-/// the company's onboarding commitment. Needs a valid `Stripe-Signature` for
+/// hold. A paid
+/// subscription invoice that carried the onboarding advance (its invoice
+/// item, `metadata.kind = onboarding_advance`) credits that month back to
+/// the customer's balance, once. Needs a valid `Stripe-Signature` for
 /// `STRIPE_WEBHOOK_SECRET`; no session.
 #[crate::openapi::path(
     post,
@@ -248,6 +248,7 @@ pub struct WebhookReceived {
         (status = 200, description = "Processed (or ignored)", body = WebhookReceived),
         (status = 400, description = "Missing or invalid signature, or not configured", body = ErrorBody),
         (status = 500, description = "Processing failed; Stripe retries", body = ErrorBody),
+        (status = 409, description = "`event_in_progress`: another delivery of the event is still being processed (or stopped less than 5 minutes ago); Stripe retries", body = CodedErrorBody),
     )
 )]
 pub async fn stripe_webhook(
@@ -268,22 +269,17 @@ pub async fn stripe_webhook(
     }
     let event: Value = serde_json::from_slice(&body)
         .map_err(|_| ApiError::BadRequest("Invalid webhook payload".into()))?;
-    if crate::onboarding_call::fee::is_fee_event(&event) {
-        // The onboarding fee invoice: never subscription billing.
-        if let Err(err) = crate::onboarding_call::fee::apply_webhook(&state, &event).await {
-            tracing::error!(code = %err.code(), "onboarding fee webhook failed");
-            return Err(ApiError::Internal("Webhook processing failed".into()));
-        }
-        return Ok(Json(WebhookReceived { received: true }));
-    }
     if crate::billing::methods::is_method_event(&event) {
         // Card and bank payment methods: claimed once, re-read from Stripe,
         // never under the company lock (signup provisioning takes its own).
-        if let Err(err) = crate::billing::methods::apply_method_event(&state, &event).await {
-            tracing::error!(error = %err, "Stripe payment method webhook failed");
-            return Err(ApiError::Internal("Webhook processing failed".into()));
-        }
-        return Ok(Json(WebhookReceived { received: true }));
+        return match crate::billing::methods::apply_method_event(&state, &event).await {
+            Ok(Claim::InProgress) => Err(event_in_progress()),
+            Ok(_) => Ok(Json(WebhookReceived { received: true })),
+            Err(err) => {
+                tracing::error!(error = %err, "Stripe payment method webhook failed");
+                Err(ApiError::Internal("Webhook processing failed".into()))
+            }
+        };
     }
     let Some(normalized) = normalize_event(&event) else {
         return Ok(Json(WebhookReceived { received: true }));
@@ -310,11 +306,16 @@ pub async fn stripe_webhook(
                 .await
                 .map_err(|err| err.to_string())?
             else {
-                return Ok(());
+                return Ok(Claim::Done);
             };
-            apply_event(&store, &latest, billing::now())
+            let claim = apply_event(&store, &latest, billing::now())
                 .await
-                .map_err(|err| err.to_string())?;
+                .map_err(|err| err.to_string())?
+                .claim;
+            if claim == Claim::InProgress {
+                // The other delivery does the rest.
+                return Ok(claim);
+            }
             if let (Some(company_id), BillingEvent::Subscription { subscription, .. }) =
                 (company_id, &latest)
             {
@@ -326,7 +327,20 @@ pub async fn stripe_webhook(
                     .await
                     .map_err(|err| err.to_string())?;
             }
-            Ok::<(), String>(())
+            // A paid invoice carrying the onboarding advance credits it back.
+            if let (Some(company_id), BillingEvent::Invoice { paid: true, .. }) =
+                (company_id, &latest)
+            {
+                crate::onboarding_call::advance::invoice_paid(
+                    &state,
+                    company_id,
+                    &event["data"]["object"],
+                    billing::now(),
+                )
+                .await
+                .map_err(|err| err.code())?;
+            }
+            Ok::<Claim, String>(claim)
         }
         .await;
         if let Some(lock) = lock {
@@ -335,11 +349,24 @@ pub async fn stripe_webhook(
         applied
     }
     .await;
-    if let Err(err) = result {
-        tracing::error!(error = %err, "Stripe webhook processing failed");
-        return Err(ApiError::Internal("Webhook processing failed".into()));
+    match result {
+        Ok(Claim::InProgress) => Err(event_in_progress()),
+        Ok(_) => Ok(Json(WebhookReceived { received: true })),
+        Err(err) => {
+            tracing::error!(error = %err, "Stripe webhook processing failed");
+            Err(ApiError::Internal("Webhook processing failed".into()))
+        }
     }
-    Ok(Json(WebhookReceived { received: true }))
+}
+
+/// Another delivery of the event holds its claim: a 503 Stripe retries
+/// (a 2xx would end Stripe's retries, and the event could be lost).
+fn event_in_progress() -> ApiError {
+    ApiError::coded(
+        StatusCode::CONFLICT,
+        "event_in_progress",
+        "This event is still being processed. Retry later.",
+    )
 }
 
 /// Syncs a subscription event's items into the company's add-ons, when it is

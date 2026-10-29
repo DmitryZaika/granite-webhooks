@@ -494,10 +494,10 @@ pub(crate) async fn function_handler(
 ) -> Result<OutgoingMessage, Error> {
     // This will now print the full JSON structure to your CloudWatch logs
     tracing::info!("Received event: {:?}", event.payload);
-    // First: everything below can end the tick early with `?`.
+    // Never ends the tick, whatever the api answers.
     run_subscription_maintenance().await;
 
-    // First: every later job may abort the tick with `?`.
+    // A failure is reported and logged; the jobs after it still run.
     let billing_reminder_count =
         match report_job("billing-reminders", process_billing_reminders().await).await {
             Ok(count) => count,

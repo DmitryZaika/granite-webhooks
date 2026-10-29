@@ -220,3 +220,142 @@ async fn a_webhook_works_on_a_single_connection_pool(pool: MySqlPool) {
     );
     assert_eq!(open_notifications(&pool).await.len(), 1);
 }
+
+/// Company 100's billing row's `payment_status`, or `None` without a row.
+async fn payment_status(pool: &MySqlPool) -> Option<String> {
+    sqlx::query_scalar("SELECT payment_status FROM company_billing WHERE company_id = 100")
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+}
+
+#[test_db::test(seed)]
+async fn a_claim_left_unfinished_is_taken_over_once_stale_and_a_finished_one_never(
+    pool: MySqlPool,
+) {
+    manager_and_billing(&pool).await;
+    let server = server(&pool, None).await;
+    let claim = |id: &'static str, age_minutes: i64, done: bool| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO stripe_webhook_events (stripe_event_id, event_type, processed_at, done_at)
+                 VALUES (?, 'invoice.payment_failed', CURRENT_TIMESTAMP - INTERVAL ? MINUTE,
+                         IF(?, CURRENT_TIMESTAMP, NULL))",
+            )
+            .bind(id)
+            .bind(age_minutes)
+            .bind(done)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    // Another delivery is working on it: Stripe has to retry this one.
+    claim("evt_running", 1, false).await;
+    let running = post_event(
+        &server,
+        &event(
+            "evt_running",
+            "invoice.payment_failed",
+            invoice("in_1", false, 4900),
+        ),
+    )
+    .await;
+    running.assert_status(StatusCode::CONFLICT);
+    assert_eq!(running.json::<Value>()["code"], "event_in_progress");
+    assert_eq!(payment_status(&pool).await, None);
+    let running_done: Option<NaiveDateTime> = sqlx::query_scalar(
+        "SELECT done_at FROM stripe_webhook_events WHERE stripe_event_id = 'evt_running'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(running_done, None);
+    // Finished long ago: still a duplicate.
+    claim("evt_done", 30, true).await;
+    post_event(
+        &server,
+        &event(
+            "evt_done",
+            "invoice.payment_failed",
+            invoice("in_1", false, 4900),
+        ),
+    )
+    .await
+    .assert_status_ok();
+    assert_eq!(payment_status(&pool).await, None);
+    // A run that crashed after its claim: Stripe's retry does the work.
+    claim("evt_crashed", 10, false).await;
+    post_event(
+        &server,
+        &event(
+            "evt_crashed",
+            "invoice.payment_failed",
+            invoice("in_1", false, 4900),
+        ),
+    )
+    .await
+    .assert_status_ok();
+    assert_eq!(payment_status(&pool).await.as_deref(), Some("past_due"));
+    let done: Option<NaiveDateTime> = sqlx::query_scalar(
+        "SELECT done_at FROM stripe_webhook_events WHERE stripe_event_id = 'evt_crashed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(done.is_some());
+}
+
+#[test_db::test(seed)]
+async fn a_voided_invoice_ends_the_failed_payment_it_was_for(pool: MySqlPool) {
+    manager_and_billing(&pool).await;
+    let stripe = Shared::default();
+    {
+        let mut stripe = stripe.lock().unwrap();
+        stripe
+            .invoices
+            .insert("in_1".into(), invoice("in_1", false, 4900));
+        stripe.subscriptions.insert(
+            "sub_100".into(),
+            json!({ "id": "sub_100", "object": "subscription", "status": "active",
+                    "customer": "cus_100", "metadata": { "company_id": "100" },
+                    "items": { "data": [] } }),
+        );
+    }
+    let server = server(&pool, Some(&stripe)).await;
+    post_event(
+        &server,
+        &event(
+            "evt_fail",
+            "invoice.payment_failed",
+            invoice("in_1", false, 4900),
+        ),
+    )
+    .await
+    .assert_status_ok();
+    assert_eq!(payment_status(&pool).await.as_deref(), Some("past_due"));
+
+    let mut voided = invoice("in_1", false, 4900);
+    voided["status"] = json!("void");
+    stripe
+        .lock()
+        .unwrap()
+        .invoices
+        .insert("in_1".into(), voided.clone());
+    post_event(&server, &event("evt_void", "invoice.voided", voided))
+        .await
+        .assert_status_ok();
+    let row = billing_row(&pool, 100).await.unwrap();
+    assert_eq!(row.outstanding_balance_cents, 0);
+    assert!(!row.grace);
+    assert_eq!(row.payment_status, "active");
+    assert!(open_notifications(&pool).await.is_empty());
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM company_billing_invoices WHERE stripe_invoice_id = 'in_1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "void");
+}

@@ -29,6 +29,13 @@ const NO_BILLING_ACCOUNT: &str = "There is no billing account for this company y
 pub const SELF_SERVE_ENDED: &str =
     "This company is on a self-serve plan. Contact Granite Manager to start again.";
 
+/// Self-serve companies change their plan and payment methods in the
+/// payments app, never through the legacy plan change or the Stripe portal.
+pub const SELF_SERVE_BILLING: &str =
+    "This company's plan and payment methods are managed on your payments account page.";
+/// The error code of [`SELF_SERVE_BILLING`].
+pub const SELF_SERVE_BILLING_CODE: &str = "self_serve_billing";
+
 /// Monthly cents per (Stripe base, price id), `None` when Stripe could not
 /// say, with when the entry expires (per Lambda container).
 static PRICES: LazyLock<Mutex<PriceCache>> = LazyLock::new(Mutex::default);
@@ -169,6 +176,9 @@ pub enum ReactivationError {
     /// For the user (Stripe's own words, or why the payment cannot start).
     #[error("{0}")]
     Refused(String),
+    /// A self-serve company: [`SELF_SERVE_BILLING`].
+    #[error("{SELF_SERVE_BILLING}")]
+    SelfServe,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -192,6 +202,11 @@ impl From<ReactivationError> for ApiError {
     fn from(err: ReactivationError) -> Self {
         match err {
             ReactivationError::Refused(message) => Self::BadRequest(message),
+            ReactivationError::SelfServe => Self::coded(
+                axum::http::StatusCode::CONFLICT,
+                SELF_SERVE_BILLING_CODE,
+                SELF_SERVE_BILLING,
+            ),
             ReactivationError::Database(err) => Self::Database(err),
         }
     }
@@ -299,6 +314,23 @@ async fn pending_reactivation<'a>(
     Ok(None)
 }
 
+/// The idempotency key prefix of one reactivation attempt,
+/// `reactivation:<company>:<newest subscription>`: a retry sees the same
+/// subscriptions, and the subscription an attempt creates starts the next.
+fn attempt_key(company_id: i32, subscriptions: &[Value]) -> String {
+    let newest = subscriptions
+        .iter()
+        .filter_map(|subscription| {
+            Some((
+                subscription["created"].as_i64(),
+                subscription["id"].as_str()?,
+            ))
+        })
+        .max()
+        .map_or("first", |(_, id)| id);
+    format!("reactivation:{company_id}:{newest}")
+}
+
 /// Starts paying for a new subscription with `payment_method_id`, under the
 /// company's lock: two tabs or two managers paying at once must not end up
 /// with two subscriptions (and two charges).
@@ -339,6 +371,7 @@ async fn start_locked<S: BillingStore>(
     };
     let now = super::now();
     let existing = stripe.list_subscriptions(&customer).await?;
+    let key = attempt_key(company_id, &existing);
     for subscription in &existing {
         if subscription_is_paid(stripe, subscription).await? {
             apply_subscription_change(store, &subscription_snapshot(subscription), now).await?;
@@ -362,11 +395,17 @@ async fn start_locked<S: BillingStore>(
         Some(owner) if owner != customer => return Err(refused("This card cannot be used")),
         Some(_) => {}
         None => {
-            stripe.attach_payment_method(&method_id, &customer).await?;
+            stripe
+                .attach_payment_method(&method_id, &customer, &format!("{key}:attach:{method_id}"))
+                .await?;
         }
     }
     stripe
-        .set_default_payment_method(&customer, &method_id)
+        .set_default_payment_method_keyed(
+            &customer,
+            &method_id,
+            &format!("{key}:default:{method_id}"),
+        )
         .await?;
 
     if let Some((subscription, invoice_id)) =
@@ -374,7 +413,11 @@ async fn start_locked<S: BillingStore>(
     {
         let id = subscription["id"].as_str().unwrap_or_default();
         stripe
-            .set_subscription_payment_method(id, &method_id)
+            .set_subscription_payment_method_keyed(
+                id,
+                &method_id,
+                &format!("{key}:subscription-method:{id}:{method_id}"),
+            )
             .await?;
         let invoice = stripe.invoice_with_confirmation_secret(&invoice_id).await?;
         if let Some(secret) = invoice["confirmation_secret"]["client_secret"].as_str() {
@@ -400,6 +443,7 @@ async fn start_locked<S: BillingStore>(
             plan.quantity,
             &method_id,
             company_id,
+            &format!("{key}:subscription:{method_id}"),
         )
         .await?;
     apply_subscription_change(store, &subscription_snapshot(&subscription), now).await?;
@@ -495,6 +539,20 @@ mod tests {
             monthly_price_cents: monthly,
             ..CompanyBilling::empty(1)
         }
+    }
+
+    #[test]
+    fn an_attempt_is_keyed_by_the_newest_subscription_it_saw() {
+        use serde_json::json;
+        assert_eq!(attempt_key(7, &[]), "reactivation:7:first");
+        let seen = [
+            json!({ "id": "sub_old", "created": 100 }),
+            json!({ "id": "sub_newer", "created": 200 }),
+        ];
+        assert_eq!(attempt_key(7, &seen), "reactivation:7:sub_newer");
+        let mut reversed = seen;
+        reversed.reverse();
+        assert_eq!(attempt_key(7, &reversed), "reactivation:7:sub_newer");
     }
 
     #[test]

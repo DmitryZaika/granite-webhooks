@@ -1,11 +1,13 @@
 //! `billing_reminder_emails` and the billing facts the reminders read, on MySQL.
 
+use super::MethodHold;
+use super::method_emails::DisputedPayment;
 use super::reminder_emails::OnboardingLine;
 use super::reminders::{
     ClaimedReminder, CompanyBillingSnapshot, DunningCycle, DunningKind, FIRST_CHARGE_NOTICE_DAYS,
-    FIRST_CHARGE_RECHECK_HOURS, NO_USER, RECOVERED_NOTICE_WINDOW_DAYS, REMINDER_CYCLE_MAX_AGE_DAYS,
-    REMINDER_MAX_ATTEMPTS, REMINDER_RETRY_AFTER_MINUTES, ReminderContact, ReminderKey, ReminderRow,
-    ReminderStatus, ReminderStep, ReminderStore,
+    FIRST_CHARGE_RECHECK_HOURS, MethodHoldFacts, NO_USER, RECOVERED_NOTICE_WINDOW_DAYS,
+    REMINDER_CYCLE_MAX_AGE_DAYS, REMINDER_MAX_ATTEMPTS, REMINDER_RETRY_AFTER_MINUTES,
+    ReminderContact, ReminderKey, ReminderRow, ReminderStatus, ReminderStep, ReminderStore,
 };
 use super::store::{BillingStore, MySqlBillingStore, StoreResult};
 use chrono::{Duration, NaiveDateTime};
@@ -45,6 +47,15 @@ impl ReminderDbRow {
             claimed_at: self.claimed_at,
         })
     }
+}
+
+#[derive(FromRow)]
+struct HoldRow {
+    hold: Option<String>,
+    at: Option<NaiveDateTime>,
+    until: Option<NaiveDateTime>,
+    amount_cents: Option<i64>,
+    charged_at: Option<NaiveDateTime>,
 }
 
 const REMINDER_SELECT: &str = "SELECT id, company_id, user_id, cycle_kind, cycle_started_at, step,
@@ -143,6 +154,51 @@ impl ReminderStore for MySqlReminderStore<'_> {
         .bind(now - Duration::hours(FIRST_CHARGE_RECHECK_HOURS))
         .fetch_all(self.0)
         .await
+    }
+
+    async fn hold_company_ids(&self, now: NaiveDateTime) -> StoreResult<Vec<i32>> {
+        sqlx::query_scalar(
+            "SELECT cb.company_id
+               FROM company_billing cb
+               JOIN company c ON c.id = cb.company_id
+              WHERE c.deleted_at IS NULL AND c.billing_required = 1
+                AND c.plan_source = 'subscription'
+                AND cb.method_hold IS NOT NULL AND cb.method_hold_until > ?
+              ORDER BY cb.company_id
+              LIMIT 500",
+        )
+        .bind(now)
+        .fetch_all(self.0)
+        .await
+    }
+
+    async fn method_hold(&self, company_id: i32) -> StoreResult<Option<MethodHoldFacts>> {
+        let row: Option<HoldRow> = sqlx::query_as(
+            "SELECT CAST(cb.method_hold AS CHAR) AS hold, cb.method_hold_at AS at,
+                    cb.method_hold_until AS until, cb.method_hold_amount_cents AS amount_cents,
+                    cb.method_hold_charged_at AS charged_at
+               FROM company_billing cb
+               JOIN company c ON c.id = cb.company_id
+              WHERE cb.company_id = ? AND c.deleted_at IS NULL AND c.billing_required = 1
+                AND c.plan_source = 'subscription' AND cb.method_hold IS NOT NULL",
+        )
+        .bind(company_id)
+        .fetch_optional(self.0)
+        .await?;
+        Ok(row.and_then(|row| {
+            Some(MethodHoldFacts {
+                hold: MethodHold::parse(row.hold.as_deref()?)?,
+                at: row.at?,
+                until: row.until?,
+                disputed: row
+                    .amount_cents
+                    .zip(row.charged_at)
+                    .map(|(amount_cents, paid_at)| DisputedPayment {
+                        amount_cents,
+                        paid_at,
+                    }),
+            })
+        }))
     }
 
     async fn snapshot(&self, company_id: i32) -> StoreResult<CompanyBillingSnapshot> {

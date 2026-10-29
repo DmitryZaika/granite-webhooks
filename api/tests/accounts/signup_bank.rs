@@ -70,9 +70,22 @@ async fn a_pending_bank_account_signs_the_owner_in_without_a_subscription(pool: 
     assert_eq!(intent.password_hash, "");
     assert_eq!(intent.user_id, Some(user_id));
     assert_eq!(intent.stripe_subscription_id, None);
-    let accepted_at = intent.accepted_at.unwrap();
+    // P13: one clock, the SetupIntent's creation (as step 3 showed it).
+    let created = env.stripe.lock().unwrap().setup_intents[&setup]["created"]
+        .as_i64()
+        .unwrap();
     let until = intent.bank_verification_until.unwrap();
-    assert_eq!(until, accepted_at + Duration::days(BANK_VERIFICATION_DAYS));
+    assert_eq!(
+        until,
+        chrono::DateTime::from_timestamp(created, 0)
+            .unwrap()
+            .naive_utc()
+            + Duration::days(BANK_VERIFICATION_DAYS)
+    );
+    assert_ne!(
+        until,
+        intent.accepted_at.unwrap() + Duration::days(BANK_VERIFICATION_DAYS)
+    );
     let bank = outcome.bank_verification.expect("the verify panel");
     assert_eq!(bank.verify_url.as_deref(), Some(VERIFY_URL));
     assert_eq!(bank.verify_by, until.and_utc());
@@ -133,7 +146,7 @@ async fn a_pending_bank_account_signs_the_owner_in_without_a_subscription(pool: 
             "terms",
             "auto_renewal",
             "per_user_pricing",
-            "onboarding_fee",
+            "onboarding_advance",
             "ach_authorization"
         ]
     );
@@ -200,27 +213,36 @@ async fn a_pending_bank_account_signs_the_owner_in_without_a_subscription(pool: 
 async fn a_signup_waiting_on_its_bank_is_never_expired_or_resumed_by_the_job(pool: MySqlPool) {
     let env = Env::new(&pool).await;
     let (id, _) = awaiting_signup(&env, "owner@bank-old.test", "Bank Old Stone").await;
+    let (late_id, _) = awaiting_signup(&env, "owner@bank-late.test", "Bank Late Stone").await;
     let long_ago: NaiveDateTime = Env::now() - Duration::days(40);
-    sqlx::query(
-        "UPDATE signup_intents
-            SET updated_at = ?, expires_at = ?, accepted_at = ?, bank_verification_until = ?
-          WHERE id = ?",
-    )
-    .bind(long_ago)
-    .bind(long_ago)
-    .bind(long_ago)
-    .bind(long_ago + Duration::days(BANK_VERIFICATION_DAYS))
-    .bind(&id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    // Everything about both signups is old; only the first still has its
+    // verification window open.
+    for (signup, until) in [
+        (&id, Env::now() + Duration::days(1)),
+        (&late_id, long_ago + Duration::days(BANK_VERIFICATION_DAYS)),
+    ] {
+        sqlx::query(
+            "UPDATE signup_intents
+                SET updated_at = ?, expires_at = ?, accepted_at = ?, bank_verification_until = ?
+              WHERE id = ?",
+        )
+        .bind(long_ago)
+        .bind(long_ago)
+        .bind(long_ago)
+        .bind(until)
+        .bind(signup)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
     let server = TestServer::new(app(env.state.clone()));
     let run: Value = server
         .post("/v1/jobs/subscription-maintenance")
         .add_header("authorization", JOB_KEY)
         .await
         .json();
-    assert_eq!(run["expired"], 0);
+    // Only the signup past its window expires.
+    assert_eq!(run["expired"], 1);
     assert_eq!(run["resumed"], 0);
     assert_eq!(run["given_up"], 0);
     let intent = env.intent(&id).await;
@@ -234,6 +256,9 @@ async fn a_signup_waiting_on_its_bank_is_never_expired_or_resumed_by_the_job(poo
         .get(&format!("/v1/public/signups/{id}"))
         .await
         .assert_status_ok();
+    let late = env.intent(&late_id).await;
+    assert_eq!(late.status, intent::SignupStatus::Expired);
+    assert!(late.company_id.is_some(), "the company is kept");
 }
 
 #[test_db::test(seed)]

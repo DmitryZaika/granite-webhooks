@@ -141,6 +141,12 @@ pub struct CompanySummary {
     pub manager_count: i64,
     /// When Stripe payment became required (ISO 8601, UTC), or null.
     pub billing_required_since: Option<DateTime<Utc>>,
+    /// When its first-payment window ends and access pauses (ISO 8601, UTC):
+    /// payment is required and it has no paying subscription; else null.
+    pub first_payment_pauses_at: Option<DateTime<Utc>>,
+    /// Access is paused for want of a first payment (the rule of the session
+    /// check): that window is over and no bank account is still verifying.
+    pub first_payment_paused: bool,
     /// Its stored Stripe subscription, or null when it never had one.
     pub billing: Option<CompanyBillingSummary>,
     /// Its live plan invite (open and not expired, or being accepted), or
@@ -208,6 +214,7 @@ struct SummaryRow {
     plan_source: String,
     manager_count: i64,
     billing_required_at: Option<NaiveDateTime>,
+    bank_window_open: bool,
     #[sqlx(flatten)]
     features: Features,
 }
@@ -320,6 +327,11 @@ pub async fn list_companies(
                    FROM users_positions up JOIN users mu ON mu.id = up.user_id
                   WHERE up.company_id = c.id AND up.position_id = {MANAGER} AND mu.is_deleted = 0)
                   AS manager_count,
+                EXISTS (SELECT 1 FROM signup_intents bank_signup
+                         WHERE bank_signup.company_id = c.id
+                           AND bank_signup.status = 'awaiting_bank_verification'
+                           AND bank_signup.bank_verification_until > UTC_TIMESTAMP())
+                  AS bank_window_open,
                 {features}
            FROM company c
            {joins}
@@ -337,9 +349,23 @@ pub async fn list_companies(
     let mut active = active_addons(&state.pool).await?;
     let mut billing = billing_by_company(&state.pool).await?;
     let mut plan_invites = plan_invites_by_company(&state.pool).await?;
+    let now = crate::billing::now();
     Ok(Json(
         rows.into_iter()
             .map(|row| {
+                let billing = billing.remove(&row.id);
+                // The first-payment branch of the session's billing pause.
+                let paying = billing.as_ref().is_some_and(|b| {
+                    matches!(
+                        b.payment_status.as_str(),
+                        "active" | "past_due" | "suspended"
+                    )
+                });
+                let pauses_at = row
+                    .billing_required_at
+                    .filter(|_| row.billing_required && !paying)
+                    .map(crate::billing::first_payment_deadline);
+                let paused = pauses_at.is_some_and(|at| at <= now) && !row.bank_window_open;
                 let own = active.remove(&row.id).unwrap_or_default();
                 let held = |key: AddonKey| own.iter().any(|a| a.addon_key == key.as_str());
                 let addons = AddonKey::ALL
@@ -373,7 +399,9 @@ pub async fn list_companies(
                     comp_addons,
                     manager_count: row.manager_count,
                     billing_required_since: row.billing_required_at.map(|d| d.and_utc()),
-                    billing: billing.remove(&row.id),
+                    first_payment_pauses_at: pauses_at.map(|d| d.and_utc()),
+                    first_payment_paused: paused,
+                    billing,
                     plan_invite: plan_invites.remove(&row.id),
                     features: row.features,
                 }

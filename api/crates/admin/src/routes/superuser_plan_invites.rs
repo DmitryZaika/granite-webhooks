@@ -115,7 +115,7 @@ pub struct CreatedPlanInvite {
 /// codes: `invalid_addon`, `invalid_first_charge`, `invalid_expiry`; 409:
 /// the `blocked` codes of `get_platform_company_plan_move`
 /// (`already_on_plan`, `invite_accepting`, `payment_unavailable`,
-/// `no_managers`, `legacy_overdue`, `onboarding_fee_open`,
+/// `no_managers`, `legacy_overdue`, `onboarding_advance_open`,
 /// `legacy_subscription_unsupported`, `legacy_period_too_close`); 503: `catalog_unavailable` (nothing made).
 #[crate::openapi::path(
     post,
@@ -130,7 +130,7 @@ pub struct CreatedPlanInvite {
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "No such company", body = ErrorBody),
-        (status = 409, description = "The company cannot be invited now (codes already_on_plan, invite_accepting, payment_unavailable, no_managers, legacy_overdue, onboarding_fee_open, legacy_subscription_unsupported, legacy_period_too_close)", body = CodedErrorBody),
+        (status = 409, description = "The company cannot be invited now (codes already_on_plan, invite_accepting, payment_unavailable, no_managers, legacy_overdue, onboarding_advance_open, legacy_subscription_unsupported, legacy_period_too_close)", body = CodedErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 503, description = "Prices cannot be loaded now (code catalog_unavailable), or billing is busy", body = CodedErrorBody),
     ),

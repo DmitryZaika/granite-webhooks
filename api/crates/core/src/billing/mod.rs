@@ -31,6 +31,7 @@ pub mod seats;
 pub mod setup;
 pub mod store;
 pub mod stripe;
+pub mod stripe_setup;
 #[cfg(test)]
 mod test_store;
 
@@ -192,7 +193,7 @@ impl CompanyBilling {
 pub struct BillingInvoice {
     pub company_id: i32,
     pub stripe_invoice_id: String,
-    /// `paid` or `open`.
+    /// `paid`, `open`, `void` or `uncollectible`.
     pub status: String,
     pub amount_due_cents: i64,
     pub amount_paid_cents: i64,
@@ -305,6 +306,12 @@ pub enum BillingEvent {
         paid: bool,
         invoice: InvoiceSnapshot,
     },
+    /// `invoice.voided` or `invoice.marked_uncollectible`: nobody will pay it.
+    InvoiceClosed {
+        id: String,
+        kind: &'static str,
+        invoice: InvoiceSnapshot,
+    },
     PaymentMethodUpdated {
         id: String,
         customer_id: String,
@@ -318,6 +325,7 @@ impl BillingEvent {
             Self::CheckoutCompleted { id, .. }
             | Self::Subscription { id, .. }
             | Self::Invoice { id, .. }
+            | Self::InvoiceClosed { id, .. }
             | Self::PaymentMethodUpdated { id, .. } => id,
         }
     }
@@ -325,7 +333,7 @@ impl BillingEvent {
     pub const fn event_type(&self) -> &'static str {
         match self {
             Self::CheckoutCompleted { .. } => "checkout.session.completed",
-            Self::Subscription { kind, .. } => kind,
+            Self::Subscription { kind, .. } | Self::InvoiceClosed { kind, .. } => kind,
             Self::Invoice { paid: true, .. } => "invoice.paid",
             Self::Invoice { paid: false, .. } => "invoice.payment_failed",
             Self::PaymentMethodUpdated { .. } => "payment_method.updated",
@@ -375,8 +383,12 @@ pub fn parse_billing_plans(raw: Option<&str>, fallback_price_id: Option<&str>) -
     plans
 }
 
+/// Subscription statuses that never renew (SQL checks bind them joined with
+/// commas, for `FIND_IN_SET`).
+pub const ENDED_SUBSCRIPTION_STATUSES: [&str; 2] = ["canceled", "incomplete_expired"];
+
 pub fn is_ended_subscription_status(status: &str) -> bool {
-    matches!(status, "canceled" | "incomplete_expired")
+    ENDED_SUBSCRIPTION_STATUSES.contains(&status)
 }
 
 pub fn is_paying_subscription_status(status: &str) -> bool {
@@ -508,6 +520,24 @@ pub fn payments_app_url() -> String {
 /// The payments app's account page.
 pub fn payments_account_url() -> String {
     format!("{}/account", payments_app_url())
+}
+
+/// The `From:` of every billing email unless `BILLING_EMAIL_FROM_ADDRESS` says
+/// otherwise.
+pub const DEFAULT_FROM_ADDRESS: &str = "noreply@granite-manager.com";
+
+/// The `From:` address of billing, signup and plan emails:
+/// `BILLING_EMAIL_FROM_ADDRESS`, else [`DEFAULT_FROM_ADDRESS`].
+pub fn from_address() -> String {
+    from_address_of(std::env::var("BILLING_EMAIL_FROM_ADDRESS").ok().as_deref())
+}
+
+fn from_address_of(configured: Option<&str>) -> String {
+    configured
+        .map(str::trim)
+        .filter(|address| !address.is_empty())
+        .unwrap_or(DEFAULT_FROM_ADDRESS)
+        .to_string()
 }
 
 /// The current time, whole seconds (what a DATETIME column keeps).
@@ -654,5 +684,15 @@ mod tests {
         assert!(stripe_confirms_non_payment(&state(Some("past_due"), 0)));
         assert!(!stripe_confirms_non_payment(&state(Some("active"), 0)));
         assert!(!stripe_confirms_non_payment(&state(None, 0)));
+    }
+
+    #[test]
+    fn the_from_address_defaults_and_trims() {
+        assert_eq!(from_address_of(None), DEFAULT_FROM_ADDRESS);
+        assert_eq!(from_address_of(Some("  ")), DEFAULT_FROM_ADDRESS);
+        assert_eq!(
+            from_address_of(Some(" billing@granite.test ")),
+            "billing@granite.test"
+        );
     }
 }

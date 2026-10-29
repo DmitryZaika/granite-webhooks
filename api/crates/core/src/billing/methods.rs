@@ -8,27 +8,36 @@
 //! a new method. Paying an open invoice never changes `payment_status`
 //! (D17): only `invoice.paid` or the gate's Stripe read do.
 //!
+//! Holds apply to self-serve companies only (`plan_source = 'subscription'`):
+//! a legacy company's dispute or blocked account only tells staff.
+//!
 //! The Stripe events of this module (`setup_intent.*`,
 //! `payment_intent.processing`, `charge.failed`, `charge.dispute.created`,
-//! `payment_method.automatically_updated`) are claimed once by event id and
-//! re-read from Stripe before anything changes, so a late or out-of-order
-//! event acts on Stripe's current state. Logs carry Stripe error codes only.
+//! `charge.dispute.closed`, `payment_method.automatically_updated`) are
+//! claimed once by event id and re-read from Stripe before anything changes,
+//! so a late or out-of-order event acts on Stripe's current state (a closed
+//! dispute's outcome is final, read from the event). Logs carry Stripe error
+//! codes only.
 
 use super::addons::{AccountPaymentMethod, payment_method};
-use super::cancellation::{company_name, failure_kind, manager_contacts, send_rendered};
+use super::cancellation::{company_name, failure_kind, manager_contacts};
+use super::reminder_store::MySqlReminderStore;
+use super::reminders::{
+    ClaimedReminder, ReminderKey, ReminderSendResult, ReminderStore, classify_send_failure,
+    hold_plan, render_hold_email,
+};
 use super::lock::{CompanyLock, LockError};
 use super::method_emails::{
-    BankFailedInput, BankFailure, HoldInput, InternalEvent, InternalNotice, render_bank_failed,
-    render_hold, render_internal_notice,
+    BankFailedInput, BankFailure, HoldOutcome, InternalEvent, InternalNotice, render_bank_failed,
+    render_internal_notice,
 };
-use super::store::{BillingStore, MySqlBillingStore, bank_verification_until};
+use super::store::{BillingStore, Claim, MySqlBillingStore, bank_verification_until};
 use super::stripe::{SetupPurpose, StripeError, positive_int, stripe_id};
 use super::{
     CompanyBilling, MethodHold, MethodState, is_ended_subscription_status, is_overdue,
     payments_account_url,
 };
 use crate::error::{ApiError, ApiResult};
-use crate::onboarding_call::fee::is_fee_invoice_object;
 use crate::signup::intent::{self, SignupStatus};
 use crate::signup::payment::{Setup, is_test_mode};
 use crate::signup::provision::{ResumeOutcome, awaiting_signup, resume_verified};
@@ -46,10 +55,6 @@ pub const HOLD_DAYS: i64 = 7;
 /// gate from pausing the company (D18). ACH takes up to 4 business days.
 pub const PROCESSING_DAYS: i64 = 10;
 
-/// Days Stripe leaves micro-deposits to be verified before the SetupIntent
-/// times out.
-pub const MICRODEPOSIT_DAYS: i64 = 10;
-
 /// The retry policy set in Stripe's Dashboard (D7), not in code.
 ///
 /// Cards use Smart Retries over 1 week; ACH retries insufficient funds only, at most
@@ -63,6 +68,13 @@ pub const PURPOSE_UPDATE: &str = "payment_method_update";
 pub const PURPOSE_PAY: &str = "pay";
 /// `metadata[purpose]` of a plan invite's SetupIntent.
 pub const PURPOSE_PLAN_INVITE: &str = "plan_invite";
+
+/// How long one payment method email may take (as the cancellation emails).
+const EMAIL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// For alert email failures reported to `PostHog`.
+static POSTHOG_HTTP: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(common::http::client);
 
 /// Where internal payment notices go (`BILLING_ALERT_EMAIL`); `None` sends
 /// none (D12).
@@ -117,10 +129,10 @@ pub fn verify_url(setup_intent: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// When the micro-deposits must be verified: created + [`MICRODEPOSIT_DAYS`].
+/// When the micro-deposits must be verified: the signup's clock
+/// (`signup::payment::bank_verification_due`), one for every bank account.
 pub fn verify_by(setup_intent: &Value) -> Option<NaiveDateTime> {
-    let created = DateTime::from_timestamp(setup_intent["created"].as_i64()?, 0)?;
-    Some(created.naive_utc() + Duration::days(MICRODEPOSIT_DAYS))
+    crate::signup::payment::bank_verification_due(setup_intent).map(|due| due.naive_utc())
 }
 
 /// A stable UUID-shaped attempt id for a webhook's payment (the same event
@@ -359,7 +371,9 @@ async fn make_default(
     sqlx::query(
         "UPDATE company_billing
             SET stripe_payment_method_id = ?, pending_setup_intent_id = NULL,
-                method_hold = NULL, method_hold_at = NULL, method_hold_until = NULL
+                method_hold = NULL, method_hold_at = NULL, method_hold_until = NULL,
+                method_hold_charge_id = NULL, method_hold_amount_cents = NULL,
+                method_hold_charged_at = NULL
           WHERE company_id = ?",
     )
     .bind(method)
@@ -508,13 +522,11 @@ fn amount_of(invoice: &Value) -> i64 {
         .unwrap_or_default()
 }
 
-/// The oldest open subscription invoice with something left to pay (never
-/// the onboarding fee).
+/// The oldest open subscription invoice with something left to pay.
 fn oldest_open(invoices: &[Value]) -> Option<&Value> {
     invoices
         .iter()
         .filter(|invoice| invoice["status"] == "open")
-        .filter(|invoice| !is_fee_invoice_object(invoice))
         .filter(|invoice| amount_of(invoice) > 0)
         .min_by_key(|invoice| {
             (
@@ -666,12 +678,13 @@ pub async fn pay_open_invoice(
 // ---- Webhook events
 
 /// The Stripe event types this module handles.
-pub const METHOD_EVENTS: [&str; 6] = [
+pub const METHOD_EVENTS: [&str; 7] = [
     "setup_intent.succeeded",
     "setup_intent.setup_failed",
     "payment_intent.processing",
     "charge.failed",
     "charge.dispute.created",
+    "charge.dispute.closed",
     "payment_method.automatically_updated",
 ];
 
@@ -684,16 +697,20 @@ pub fn is_method_event(event: &Value) -> bool {
 
 /// Applies a payment method event once: a repeat delivery is a no-op, and a
 /// failure releases the claim so Stripe's retry runs it again.
-pub async fn apply_method_event(state: &AppState, event: &Value) -> ApiResult<()> {
+///
+/// [`Claim::InProgress`] when another delivery is still applying it (an
+/// event with nothing to apply counts as [`Claim::Done`]).
+pub async fn apply_method_event(state: &AppState, event: &Value) -> ApiResult<Claim> {
     let (Some(id), Some(kind)) = (event["id"].as_str(), event["type"].as_str()) else {
-        return Ok(());
+        return Ok(Claim::Done);
     };
     if !state.stripe.is_enabled() {
-        return Ok(());
+        return Ok(Claim::Done);
     }
     let store = MySqlBillingStore(&state.pool);
-    if !store.claim_event(id, kind).await? {
-        return Ok(());
+    let claim = store.claim_event(id, kind).await?;
+    if claim != Claim::Taken {
+        return Ok(claim);
     }
     let object = &event["data"]["object"];
     let result = match kind {
@@ -702,13 +719,15 @@ pub async fn apply_method_event(state: &AppState, event: &Value) -> ApiResult<()
         "payment_intent.processing" => payment_processing(state, object).await,
         "charge.failed" => charge_failed(state, object).await,
         "charge.dispute.created" => dispute_created(state, object).await,
+        "charge.dispute.closed" => dispute_closed(state, object).await,
         _ => method_updated(state, object).await,
     };
     if let Err(err) = result {
         store.release_event(id).await?;
         return Err(err);
     }
-    Ok(())
+    store.finish_event(id).await?;
+    Ok(claim)
 }
 
 /// A Stripe object re-read; `None` when it is gone.
@@ -850,6 +869,8 @@ async fn charge_failed(state: &AppState, object: &Value) -> ApiResult<()> {
         return Ok(());
     }
     if let Some(record) = company_of_customer(state, stripe_id(&charge["customer"])).await? {
+        // The bank payment in flight came back: the gate may pause again.
+        clear_processing(&state.pool, record.company_id).await?;
         notify_internal(
             state,
             record.company_id,
@@ -875,19 +896,76 @@ async fn dispute_created(state: &AppState, object: &Value) -> ApiResult<()> {
     };
     // A dispute on a method the company has since replaced holds nothing.
     let charged = stripe_id(&charge["payment_method"]);
-    if record.stripe_payment_method_id.is_none() || charged == record.stripe_payment_method_id {
-        hold(state, &record, MethodHold::Disputed).await?;
-    }
+    let outcome =
+        if record.stripe_payment_method_id.is_none() || charged == record.stripe_payment_method_id {
+            let disputed = Disputed {
+                charge_id: &charge_id,
+                amount_cents: object["amount"].as_i64(),
+                charged_at: charge["created"]
+                    .as_i64()
+                    .and_then(|at| DateTime::from_timestamp(at, 0))
+                    .map(|at| at.naive_utc()),
+            };
+            hold(state, &record, MethodHold::Disputed, Some(disputed)).await?
+        } else {
+            HoldOutcome::Unchanged
+        };
     notify_internal(
         state,
         record.company_id,
         InternalEvent::Dispute {
             reason: object["reason"].as_str(),
             amount_cents: object["amount"].as_i64(),
+            hold: outcome,
         },
     )
     .await;
     Ok(())
+}
+
+/// A closed dispute: won (or an inquiry closed without a chargeback) lifts
+/// the hold set for its charge; a lost one keeps it. Staff are told either
+/// way.
+async fn dispute_closed(state: &AppState, object: &Value) -> ApiResult<()> {
+    let Some(charge_id) = stripe_id(&object["charge"]) else {
+        return Ok(());
+    };
+    let Some(charge) = present(state.stripe.charge(&charge_id).await, "charge")? else {
+        return Ok(());
+    };
+    let Some(record) = company_of_customer(state, stripe_id(&charge["customer"])).await? else {
+        return Ok(());
+    };
+    let status = object["status"].as_str();
+    let won = matches!(status, Some("won" | "warning_closed"));
+    let hold_cleared = won && clear_dispute_hold(state, record.company_id, &charge_id).await?;
+    notify_internal(
+        state,
+        record.company_id,
+        InternalEvent::DisputeClosed {
+            status,
+            amount_cents: object["amount"].as_i64(),
+            hold_cleared,
+        },
+    )
+    .await;
+    Ok(())
+}
+
+/// Clears the company's dispute hold when it was set for `charge_id`.
+async fn clear_dispute_hold(state: &AppState, company_id: i32, charge_id: &str) -> sqlx::Result<bool> {
+    let cleared = sqlx::query(
+        "UPDATE company_billing
+            SET method_hold = NULL, method_hold_at = NULL, method_hold_until = NULL,
+                method_hold_charge_id = NULL, method_hold_amount_cents = NULL,
+                method_hold_charged_at = NULL
+          WHERE company_id = ? AND method_hold = 'disputed' AND method_hold_charge_id = ?",
+    )
+    .bind(company_id)
+    .bind(charge_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(cleared.rows_affected() == 1)
 }
 
 async fn method_updated(state: &AppState, object: &Value) -> ApiResult<()> {
@@ -907,53 +985,141 @@ async fn method_updated(state: &AppState, object: &Value) -> ApiResult<()> {
     if record.stripe_payment_method_id.as_deref() != Some(id) {
         return Ok(());
     }
-    hold(state, &record, MethodHold::Blocked).await?;
+    let outcome = hold(state, &record, MethodHold::Blocked, None).await?;
     notify_internal(
         state,
         record.company_id,
         InternalEvent::Blocked {
             reason: blocked["reason"].as_str(),
+            hold: outcome,
         },
     )
     .await;
     Ok(())
 }
 
-/// Sets a hold unless one runs already (its end never moves), and emails
-/// the Managers when it is new.
-async fn hold(state: &AppState, record: &CompanyBilling, kind: MethodHold) -> ApiResult<()> {
-    let now = super::now();
-    let until = hold_until(now);
+/// The disputed charge behind a dispute hold.
+#[derive(Debug, Clone, Copy)]
+pub struct Disputed<'a> {
+    pub charge_id: &'a str,
+    pub amount_cents: Option<i64>,
+    /// When the disputed payment was made.
+    pub charged_at: Option<NaiveDateTime>,
+}
+
+/// Sets a hold on a self-serve company unless one runs already (its end
+/// never moves), then tries its email at once (the billing reminders job
+/// sends what is left).
+async fn hold(
+    state: &AppState,
+    record: &CompanyBilling,
+    kind: MethodHold,
+    disputed: Option<Disputed<'_>>,
+) -> ApiResult<HoldOutcome> {
+    let self_serve: Option<bool> = sqlx::query_scalar(
+        "SELECT COALESCE(plan_source = 'subscription', 0) FROM company WHERE id = ?",
+    )
+    .bind(record.company_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if self_serve != Some(true) {
+        return Ok(HoldOutcome::Legacy);
+    }
+    let read = record.stripe_payment_method_id.as_deref();
+    if !set_hold(&state.pool, record.company_id, read, kind, disputed, super::now()).await? {
+        return Ok(HoldOutcome::Unchanged);
+    }
+    send_hold_emails(state, record.company_id).await;
+    Ok(HoldOutcome::Set)
+}
+
+/// Writes a hold set at `now` unless one runs already; `true` when it did.
+///
+/// It lands only while the company's saved method is still `read_method`
+/// (the one charged or blocked, as read before): a Manager who saved a new
+/// method meanwhile (which clears holds) is not held.
+pub async fn set_hold(
+    pool: &sqlx::MySqlPool,
+    company_id: i32,
+    read_method: Option<&str>,
+    kind: MethodHold,
+    disputed: Option<Disputed<'_>>,
+    now: NaiveDateTime,
+) -> sqlx::Result<bool> {
     let set = sqlx::query(
         "UPDATE company_billing
-            SET method_hold = ?, method_hold_at = ?, method_hold_until = ?
-          WHERE company_id = ? AND method_hold IS NULL",
+            SET method_hold = ?, method_hold_at = ?, method_hold_until = ?,
+                method_hold_charge_id = ?, method_hold_amount_cents = ?,
+                method_hold_charged_at = ?
+          WHERE company_id = ? AND method_hold IS NULL AND stripe_payment_method_id <=> ?",
     )
     .bind(kind.as_str())
     .bind(now)
-    .bind(until)
-    .bind(record.company_id)
-    .execute(&state.pool)
+    .bind(hold_until(now))
+    .bind(disputed.map(|disputed| disputed.charge_id))
+    .bind(disputed.and_then(|disputed| disputed.amount_cents))
+    .bind(disputed.and_then(|disputed| disputed.charged_at))
+    .bind(company_id)
+    .bind(read_method)
+    .execute(pool)
     .await?;
-    if set.rows_affected() == 1 {
-        email_hold(state, record.company_id, kind, until).await;
-    }
-    Ok(())
+    Ok(set.rows_affected() == 1)
 }
 
-async fn email_hold(state: &AppState, company_id: i32, kind: MethodHold, until: NaiveDateTime) {
+/// Sends the hold email to the Managers who do not have it yet, each claimed
+/// in `billing_reminder_emails` (`method_hold`) like the dunning emails, so
+/// the billing reminders job retries one that failed (refused or not
+/// answered: a second copy beats none) and never sends a delivered one
+/// again. Failures are logged; the job carries on.
+async fn send_hold_emails(state: &AppState, company_id: i32) {
+    let store = MySqlReminderStore(&state.pool);
+    let now = super::now();
+    let plan = match hold_plan(&store, company_id, now).await {
+        Ok(Some(plan)) => plan,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::warn!(company_id, error = %err, "payment hold email not planned");
+            return;
+        }
+    };
     let company = company_name(&state.pool, company_id).await;
     let account_url = payments_account_url();
-    for contact in managers(state, company_id).await {
-        let email = render_hold(&HoldInput {
-            hold: kind,
-            company_name: &company,
-            user_name: contact.name.as_deref(),
-            pauses_at: until,
-            account_url: &account_url,
-        });
-        if let Err(err) = send_rendered(state, &contact.email, &email).await {
-            tracing::warn!(company_id, kind = failure_kind(&err), "payment hold email failed");
+    for contact in &plan.contacts {
+        let key = ReminderKey {
+            company_id,
+            user_id: contact.user_id,
+            cycle: plan.due.cycle,
+            step: plan.due.step,
+        };
+        let id = match store.claim(&key, now).await {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(err) => {
+                tracing::warn!(company_id, error = %err, "payment hold email not claimed");
+                continue;
+            }
+        };
+        let claimed = ClaimedReminder { id, company_id };
+        let email = render_hold_email(&plan.facts, &company, contact, &account_url);
+        let rendered = super::reminder_emails::RenderedEmail {
+            subject: email.subject,
+            html: email.html,
+            text: email.text,
+        };
+        let recorded = match send_rendered(state, &contact.email, &rendered).await {
+            Ok(()) => store.mark_sent(claimed, None, now).await,
+            Err(err) => {
+                tracing::warn!(company_id, kind = failure_kind(&err), "payment hold email failed");
+                match classify_send_failure(&err) {
+                    ReminderSendResult::Rejected { code } | ReminderSendResult::Unknown { code } => {
+                        store.mark_failed(claimed, &code).await
+                    }
+                    ReminderSendResult::Sent { .. } => Ok(()),
+                }
+            }
+        };
+        if let Err(err) = recorded {
+            tracing::warn!(company_id, error = %err, "payment hold email outcome not recorded");
         }
     }
 }
@@ -983,6 +1149,35 @@ async fn managers(state: &AppState, company_id: i32) -> Vec<super::cancellation:
         })
 }
 
+/// Sends one rendered payment method email from `billing::from_address`,
+/// replies going to support.
+async fn send_rendered(
+    state: &AppState,
+    to: &str,
+    email: &super::reminder_emails::RenderedEmail,
+) -> Result<(), crate::webhooks_client::SendFailure> {
+    let message = crate::webhooks_client::OutgoingEmail {
+        from_name: Some("Granite Manager".into()),
+        from_address: super::from_address(),
+        to: vec![to.to_string()],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: email.subject.clone(),
+        body: email.html.clone(),
+        signature: None,
+        reply_to: vec![super::reminder_emails::SUPPORT_EMAIL.into()],
+        in_reply_to: None,
+        references: Vec::new(),
+        attachments: Vec::new(),
+        transactional: true,
+    };
+    state
+        .webhooks
+        .send_notice(&message, &email.text, EMAIL_TIMEOUT)
+        .await
+        .map(|_| ())
+}
+
 /// The internal notice, when `BILLING_ALERT_EMAIL` is set.
 async fn notify_internal(state: &AppState, company_id: i32, event: InternalEvent<'_>) {
     let Some(to) = alert_email(state) else {
@@ -995,7 +1190,21 @@ async fn notify_internal(state: &AppState, company_id: i32, event: InternalEvent
         company_name: &company,
     });
     if let Err(err) = send_rendered(state, to, &email).await {
-        tracing::warn!(company_id, kind = failure_kind(&err), "billing alert email failed");
+        // Never retried (the event is claimed): staff hear of it through
+        // Error Tracking instead.
+        tracing::error!(company_id, kind = failure_kind(&err), "billing alert email failed");
+        let properties = serde_json::json!({
+            "$exception_list": [{
+                "type": "BillingAlertEmailError",
+                "value": "billing alert email failed, not resent",
+                "mechanism": { "handled": true, "synthetic": false },
+            }],
+            "$process_person_profile": false,
+            "error_source": "api",
+            "company_id": company_id,
+            "error_code": failure_kind(&err),
+        });
+        crate::posthog::capture(&POSTHOG_HTTP, "$exception", "granite-api", properties).await;
     }
 }
 
@@ -1073,23 +1282,22 @@ mod tests {
     }
 
     #[test]
-    fn the_oldest_open_subscription_invoice_is_paid_never_the_fee() {
+    fn the_oldest_open_subscription_invoice_is_paid() {
         let invoices = [
             json!({ "id": "in_new", "status": "open", "created": 300, "amount_remaining": 100 }),
-            json!({ "id": "in_fee", "status": "open", "created": 100, "amount_remaining": 9_900,
-                "metadata": { "kind": "onboarding_fee" } }),
             json!({ "id": "in_old", "status": "open", "created": 200, "amount_remaining": 100 }),
             json!({ "id": "in_zero", "status": "open", "created": 50, "amount_remaining": 0 }),
             json!({ "id": "in_paid", "status": "paid", "created": 10, "amount_remaining": 0 }),
         ];
         assert_eq!(oldest_open(&invoices).unwrap()["id"], "in_old");
-        assert!(oldest_open(&invoices[1..2]).is_none());
+        assert!(oldest_open(&invoices[2..]).is_none());
     }
 
     #[test]
-    fn only_the_six_new_events_come_here() {
+    fn only_the_method_events_come_here() {
         assert!(is_method_event(&json!({ "type": "setup_intent.succeeded" })));
         assert!(is_method_event(&json!({ "type": "charge.dispute.created" })));
+        assert!(is_method_event(&json!({ "type": "charge.dispute.closed" })));
         assert!(!is_method_event(&json!({ "type": "invoice.paid" })));
         assert!(!is_method_event(&json!({ "type": "payment_method.updated" })));
     }

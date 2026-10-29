@@ -8,7 +8,8 @@ use crate::common::{ALLOWED_ORIGIN, SECRET, WithSession};
 use crate::{fake_stripe, fake_webhooks};
 
 use api::app;
-use api::billing::methods::attempt_for_event;
+use api::billing::MethodHold;
+use api::billing::methods::{attempt_for_event, set_hold};
 use api::billing::stripe::signature_header;
 use api::signup::SignupConfig;
 use api::state::AppState;
@@ -31,6 +32,7 @@ const CUSTOMER: &str = "cus_pm";
 const SUBSCRIPTION: &str = "sub_pm";
 const WEBHOOK_SECRET: &str = "whsec_pm_test";
 const UUID: &str = "6f1c1d1e-2a3b-4c5d-8e9f-0a1b2c3d4e5f";
+const JOB_KEY: &str = "job-secret";
 
 struct Fixture {
     pool: MySqlPool,
@@ -130,6 +132,7 @@ async fn fixture_with(pool: MySqlPool, alert: bool, signup: SignupConfig) -> Fix
         .with_stripe(fake_stripe::client(&stripe).await)
         .with_stripe_webhook_secret(WEBHOOK_SECRET)
         .with_webhooks(fake_webhooks::start(&sink).await)
+        .with_job_key(JOB_KEY)
         .with_signup(signup);
     if alert {
         state = state.with_billing_alert_email(ALERT_EMAIL);
@@ -220,6 +223,33 @@ impl Fixture {
 
     fn emails_to(&self, to: &str) -> Vec<Value> {
         self.sink.lock().unwrap().emails_to(to)
+    }
+
+    async fn run_reminders(&self) -> Value {
+        let res = self
+            .server
+            .post("/v1/jobs/billing-reminders")
+            .add_header("Authorization", JOB_KEY)
+            .await;
+        res.assert_status_ok();
+        res.json()
+    }
+
+    async fn customers_status(&self, session: &str) -> StatusCode {
+        self.server
+            .get("/v1/customers")
+            .with_session(session)
+            .await
+            .status_code()
+    }
+
+    fn dispute_charge(&self) {
+        self.fake().charges.insert(
+            "ch_1".into(),
+            json!({ "id": "ch_1", "object": "charge", "customer": CUSTOMER, "status": "succeeded",
+                "payment_method": "pm_old", "amount": 37_500, "created": 1_790_000_000,
+                "payment_method_details": { "type": "card" } }),
+        );
     }
 
     async fn past_due(&self) {
@@ -557,11 +587,9 @@ async fn three_d_secure_decline_and_nothing_due(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn the_onboarding_fee_is_never_paid_here_and_no_method_is_409(pool: MySqlPool) {
+async fn nothing_open_is_nothing_due_and_no_method_is_409(pool: MySqlPool) {
     let f = fixture(pool).await;
-    let mut fee = invoice("in_fee", 50);
-    fee["metadata"] = json!({ "kind": "onboarding_fee" });
-    f.fake().invoices = vec![fee];
+    f.fake().invoices = Vec::new();
     assert_eq!(f.pay(UUID).await.json::<Value>()["status"], "nothing_due");
 
     f.sql("UPDATE company_billing SET stripe_payment_method_id = NULL WHERE company_id = 20750").await;
@@ -595,6 +623,26 @@ async fn a_verified_bank_on_the_pay_page_pays_the_overdue_invoice(pool: MySqlPoo
     assert_eq!(methods.stripe_payment_method_id.as_deref(), Some("pm_bank"));
     assert!(methods.payment_processing_at.is_some());
     assert_eq!(methods.payment_status, "past_due");
+}
+
+#[test_db::test(seed)]
+async fn a_method_event_another_delivery_is_applying_is_left_to_a_retry(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.add_setup("seti_card", "payment_method_update", "succeeded", Some("pm_card"));
+    f.sql(
+        "INSERT INTO stripe_webhook_events (stripe_event_id, event_type)
+         VALUES ('evt_busy', 'setup_intent.succeeded')",
+    )
+    .await;
+    let busy = event("evt_busy", "setup_intent.succeeded", json!({ "id": "seti_card" }));
+    let res = f.post_event(&busy).await;
+    res.assert_status(StatusCode::CONFLICT);
+    assert_eq!(res.json::<Value>()["code"], "event_in_progress");
+    assert!(f.fake().calls("GET", "/v1/setup_intents/seti_card").is_empty());
+    // Once the other delivery finished: a duplicate, answered 200.
+    f.sql("UPDATE stripe_webhook_events SET done_at = CURRENT_TIMESTAMP WHERE stripe_event_id = 'evt_busy'")
+        .await;
+    f.post_event(&busy).await.assert_status_ok();
 }
 
 #[test_db::test(seed)]
@@ -727,12 +775,7 @@ async fn a_blocked_bank_account_holds_warns_then_pauses_until_a_new_method(pool:
 #[test_db::test(seed)]
 async fn a_dispute_holds_the_company_and_tells_staff_only_when_configured(pool: MySqlPool) {
     let f = fixture_with(pool, false, stripe_signup()).await;
-    f.fake().charges.insert(
-        "ch_1".into(),
-        json!({ "id": "ch_1", "object": "charge", "customer": CUSTOMER, "status": "succeeded",
-            "payment_method": "pm_old", "amount": 37_500,
-            "payment_method_details": { "type": "card" } }),
-    );
+    f.dispute_charge();
     let dispute = json!({ "id": "dp_1", "object": "dispute", "charge": "ch_1",
         "reason": "fraudulent", "amount": 37_500 });
     f.post_event(&event("evt_dispute", "charge.dispute.created", dispute))
@@ -741,7 +784,10 @@ async fn a_dispute_holds_the_company_and_tells_staff_only_when_configured(pool: 
     assert_eq!(f.methods().await.method_hold.as_deref(), Some("disputed"));
     let emails = f.emails_to(MANAGER_EMAIL);
     assert_eq!(subjects(&emails), ["A payment was disputed"]);
-    assert!(emails[0]["body"].as_str().unwrap().contains("support@granite-manager.com"));
+    let body = emails[0]["body"].as_str().unwrap();
+    assert!(body.contains("support@granite-manager.com"));
+    // The disputed payment: its amount and the day it was made.
+    assert!(body.contains("Your payment of $375.00 on September 21, 2026 was disputed"), "{body}");
     // No BILLING_ALERT_EMAIL: no internal notice.
     assert!(f.emails_to(ALERT_EMAIL).is_empty());
     assert_eq!(f.sink.lock().unwrap().emails.len(), 1);
@@ -778,6 +824,176 @@ async fn a_returned_bank_debit_sends_the_internal_notice(pool: MySqlPool) {
     assert!(body.contains("insufficient_funds") && body.contains("$375.00"));
     // Managers hear about it from the dunning emails, not from this.
     assert!(f.emails_to(MANAGER_EMAIL).is_empty());
+}
+
+#[test_db::test(seed)]
+async fn a_bank_payment_on_its_way_lifts_a_pause_until_it_fails(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.fake().subscriptions.get_mut(SUBSCRIPTION).unwrap()["status"] = json!("unpaid");
+    f.fake().invoices = vec![invoice("in_1", 100)];
+    f.sql(
+        "UPDATE company_billing SET payment_status = 'suspended', subscription_status = 'unpaid',
+                failed_payment_at = UTC_TIMESTAMP() - INTERVAL 20 DAY,
+                payment_processing_at = UTC_TIMESTAMP() - INTERVAL 1 DAY
+          WHERE company_id = 20750",
+    )
+    .await;
+    assert_eq!(f.customers_status(REP).await, StatusCode::OK);
+    assert_eq!(f.gate(REP).await["restricted"], false);
+
+    // The debit came back: paused again.
+    f.post_event(&event("evt_failed", "invoice.payment_failed", invoice("in_1", 100)))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.methods().await.payment_processing_at, None);
+    assert_eq!(f.customers_status(REP).await, StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(f.gate(REP).await["restricted"], true);
+
+    // A payment still marked in flight after its window pauses too.
+    f.sql("UPDATE company_billing SET payment_processing_at = UTC_TIMESTAMP() - INTERVAL 10 DAY - INTERVAL 1 MINUTE WHERE company_id = 20750")
+        .await;
+    assert_eq!(f.customers_status(REP).await, StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(f.gate(REP).await["restricted"], true);
+}
+
+#[test_db::test(seed)]
+async fn a_bank_payment_for_an_ended_subscription_lifts_no_pause(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.fake().subscriptions.get_mut(SUBSCRIPTION).unwrap()["status"] = json!("canceled");
+    f.fake().invoices = vec![invoice("in_1", 100)];
+    f.sql(
+        "UPDATE company_billing SET payment_status = 'suspended', subscription_status = 'canceled',
+                failed_payment_at = UTC_TIMESTAMP() - INTERVAL 20 DAY,
+                payment_processing_at = UTC_TIMESTAMP() - INTERVAL 1 DAY
+          WHERE company_id = 20750",
+    )
+    .await;
+    assert_eq!(f.customers_status(REP).await, StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(f.gate(REP).await["restricted"], true);
+}
+
+#[test_db::test(seed)]
+async fn an_ended_hold_pauses_a_company_still_in_its_first_payment_window(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.sql(
+        "INSERT INTO company_billing (company_id, payment_status, subscription_status, method_hold,
+                                      method_hold_at, method_hold_until)
+         VALUES (20751, 'none', 'incomplete', 'disputed', UTC_TIMESTAMP() - INTERVAL 8 DAY,
+                 UTC_TIMESTAMP() - INTERVAL 1 DAY)",
+    )
+    .await;
+    let gate = f.gate(OTHER_MANAGER).await;
+    assert_eq!(gate["restricted"], true);
+    assert_eq!(gate["reason"], "payment_method_required");
+    assert_eq!(f.customers_status(OTHER_MANAGER).await, StatusCode::PAYMENT_REQUIRED);
+}
+
+#[test_db::test(seed)]
+async fn a_legacy_companys_dispute_or_blocked_bank_only_tells_staff(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.sql("UPDATE company SET plan_source = 'legacy' WHERE id = 20750").await;
+    f.dispute_charge();
+    let dispute = json!({ "id": "dp_1", "object": "dispute", "charge": "ch_1",
+        "reason": "fraudulent", "amount": 37_500 });
+    f.post_event(&event("evt_dispute", "charge.dispute.created", dispute))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.methods().await.method_hold, None);
+    assert!(f.emails_to(MANAGER_EMAIL).is_empty());
+    let notices = f.emails_to(ALERT_EMAIL);
+    assert_eq!(subjects(&notices), ["Billing alert: Payment disputed: Pm Stone"]);
+    assert!(notices[0]["body"].as_str().unwrap().contains("not paused (legacy plan)"));
+    assert_eq!(f.gate(REP).await["restricted"], false);
+}
+
+#[test_db::test(seed)]
+async fn a_hold_never_lands_on_a_method_saved_meanwhile(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    // The webhook read pm_old; a Manager saved pm_card before its write.
+    f.sql("UPDATE company_billing SET stripe_payment_method_id = 'pm_card' WHERE company_id = 20750")
+        .await;
+    let now = chrono::Utc::now().naive_utc();
+    let set = set_hold(&f.pool, COMPANY, Some("pm_old"), MethodHold::Blocked, None, now)
+        .await
+        .unwrap();
+    assert!(!set);
+    assert_eq!(f.methods().await.method_hold, None);
+    // On the method it read, it lands.
+    assert!(
+        set_hold(&f.pool, COMPANY, Some("pm_card"), MethodHold::Blocked, None, now)
+            .await
+            .unwrap()
+    );
+}
+
+#[test_db::test(seed)]
+async fn a_won_dispute_lifts_its_hold_and_a_lost_one_keeps_it(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.dispute_charge();
+    let dispute = |status: &str| {
+        json!({ "id": "dp_1", "object": "dispute", "charge": "ch_1", "reason": "fraudulent",
+            "amount": 37_500, "status": status })
+    };
+    f.post_event(&event("evt_dispute", "charge.dispute.created", dispute("needs_response")))
+        .await
+        .assert_status_ok();
+    f.post_event(&event("evt_lost", "charge.dispute.closed", dispute("lost")))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.methods().await.method_hold.as_deref(), Some("disputed"));
+    // A won dispute of another charge lifts nothing.
+    let other = json!({ "id": "dp_2", "object": "dispute", "charge": "ch_2", "status": "won" });
+    f.fake().charges.insert(
+        "ch_2".into(),
+        json!({ "id": "ch_2", "object": "charge", "customer": CUSTOMER, "status": "succeeded",
+            "payment_method": "pm_old", "amount": 100 }),
+    );
+    f.post_event(&event("evt_other", "charge.dispute.closed", other))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.methods().await.method_hold.as_deref(), Some("disputed"));
+
+    f.post_event(&event("evt_won", "charge.dispute.closed", dispute("won")))
+        .await
+        .assert_status_ok();
+    let methods = f.methods().await;
+    assert_eq!(methods.method_hold, None);
+    assert_eq!(methods.method_hold_until, None);
+    let notices = subjects(&f.emails_to(ALERT_EMAIL));
+    assert_eq!(
+        notices.iter().filter(|s| *s == "Billing alert: Dispute closed: Pm Stone").count(),
+        3
+    );
+    let last = f.emails_to(ALERT_EMAIL).pop().unwrap();
+    assert!(last["body"].as_str().unwrap().contains("its hold was lifted"));
+}
+
+#[test_db::test(seed)]
+async fn a_hold_email_that_did_not_go_out_is_sent_by_the_reminders_job(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.dispute_charge();
+    f.sink.lock().unwrap().fail_emails = 1;
+    let dispute = json!({ "id": "dp_1", "object": "dispute", "charge": "ch_1",
+        "reason": "fraudulent", "amount": 37_500 });
+    f.post_event(&event("evt_dispute", "charge.dispute.created", dispute))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.methods().await.method_hold.as_deref(), Some("disputed"));
+    assert!(f.emails_to(MANAGER_EMAIL).is_empty());
+
+    // Too soon for a retry; then due.
+    f.run_reminders().await;
+    assert!(f.emails_to(MANAGER_EMAIL).is_empty());
+    f.sql("UPDATE billing_reminder_emails SET claimed_at = claimed_at - INTERVAL 10 MINUTE WHERE company_id = 20750")
+        .await;
+    let run = f.run_reminders().await;
+    assert_eq!(run["sent"], 1);
+    assert_eq!(subjects(&f.emails_to(MANAGER_EMAIL)), ["A payment was disputed"]);
+    // Delivered: never again.
+    f.sql("UPDATE billing_reminder_emails SET claimed_at = claimed_at - INTERVAL 10 MINUTE WHERE company_id = 20750")
+        .await;
+    f.run_reminders().await;
+    assert_eq!(f.emails_to(MANAGER_EMAIL).len(), 1);
 }
 
 // ---- a signup waiting on its bank account (D1)

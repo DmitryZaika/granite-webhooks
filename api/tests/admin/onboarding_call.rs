@@ -1,15 +1,16 @@
 //! Onboarding with Dima: `/v1/onboarding-call`, the superuser routes, the
-//! daily job (`onboarding_call::job::run_at` with fixed clocks) and the fee
-//! invoice's Stripe webhook, against a fake Calendly, a fake Stripe and a
-//! fake mail service. Seed ids 20400-20499 are this file's: 20400 pending
+//! daily job (`onboarding_call::job::run_at` with fixed clocks) and the
+//! advance payment (the invoice item on the subscription, the credit once
+//! its invoice is paid, the `invoice.paid` webhook), against a fake
+//! Calendly, the shared fake Stripe and a fake mail service. Seed ids 20400-20499 are this file's: 20400 pending
 //! (Owen Manager 20400, Rita Rep 20401, Ada Admin 20402), 20401 booked (Bea
 //! Manager 20403).
 
 use crate::common;
+use crate::fake_stripe::{self, FakeStripe};
 
 use api::app;
-use api::billing::catalog::SIGNUP_TZ;
-use api::billing::stripe::{Stripe, signature_header};
+use api::billing::stripe::signature_header;
 use api::onboarding_call::Config;
 use api::onboarding_call::calendly::{Calendly, calendly_time};
 use api::onboarding_call::commitment::{add_local_days, end_of_local_day, signup_deadline_at};
@@ -19,11 +20,11 @@ use api::signup::SignupConfig;
 use api::state::AppState;
 use api::webhooks_client::{OutgoingEmail, WebhooksClient};
 use axum::extract::{Path, RawQuery, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_test::TestServer;
-use chrono::{Duration, NaiveDateTime, TimeZone};
+use chrono::{Duration, NaiveDateTime};
 use common::{ALLOWED_ORIGIN, SECRET, WithSession, sessions};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
@@ -41,7 +42,10 @@ const BOOKED: i32 = 20401;
 /// `SIGNUP_NOTIFY_EMAIL` and `SIGNUP_NOTIFY_USER_ID` (Dima).
 const STAFF_EMAIL: &str = "staff@granite.test";
 const STAFF_USER: i32 = 1;
-const PREFIX_NOTICE: &str = "Action needed: onboarding fee of $600.00 will be charged on ";
+/// The start of the notice's subject.
+const PREFIX_NOTICE: &str = "Action needed: your charge on ";
+/// `BILLING_ALERT_EMAIL`.
+const ALERT_EMAIL: &str = "billing-alerts@granite.test";
 
 // ---- fake Calendly
 
@@ -210,202 +214,33 @@ fn edit_invitee(cal: &SharedCal, n: u32, change: impl FnOnce(&mut Value)) {
     change(cal.resources.get_mut(&path).unwrap());
 }
 
-// ---- fake Stripe
+// ---- fake Stripe (the shared one) with company 20400's subscription
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
-enum Pay {
-    #[default]
-    Paid,
-    /// A bank debit on its way: the invoice stays open.
-    Processing,
-    /// 402 `card_error`.
-    Declined,
-    /// 400 `invalid_request_error` (an idempotency mismatch): no attempt.
-    Refused,
-    /// The charge went through but the answer is a 400 ("already paid").
-    PaidButRefused,
-}
+const CUSTOMER: &str = "cus_seed_onboarding";
+const SUBSCRIPTION: &str = "sub_seed_onboarding";
 
-#[derive(Default)]
-struct FakeStripe {
-    invoices: HashMap<String, Value>,
-    /// Idempotency key -> invoice id of `POST /v1/invoices`.
-    keys: HashMap<String, String>,
-    creates: usize,
-    items: usize,
-    finalizes: usize,
-    pays: usize,
-    deletes: usize,
-    voids: usize,
-    pay: Pay,
-    /// (path, form)
-    requests: Vec<(String, String)>,
-}
-
-type SharedStripe = Arc<Mutex<FakeStripe>>;
-
-fn form(body: &str) -> HashMap<String, String> {
-    serde_html_form::from_str(body).unwrap()
-}
-
-fn invoice_or_404(stripe: &FakeStripe, id: &str) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    stripe.invoices.get(id).cloned().map(Json).ok_or((
-        StatusCode::NOT_FOUND,
-        Json(json!({ "error": { "message": "No such invoice" } })),
-    ))
-}
-
-async fn fake_stripe(stripe: SharedStripe) -> String {
-    let router = Router::new()
-        .route(
-            "/v1/invoices",
-            get(|State(s): State<SharedStripe>, RawQuery(query): RawQuery| async move {
-                let s = s.lock().unwrap();
-                let customer = params(query).remove("customer").unwrap_or_default();
-                let data: Vec<Value> = s
-                    .invoices
-                    .values()
-                    .filter(|invoice| invoice["customer"] == customer.as_str())
-                    .cloned()
-                    .collect();
-                Json(json!({ "object": "list", "data": data }))
-            })
-            .post(|State(s): State<SharedStripe>, headers: HeaderMap, body: String| async move {
-                let mut s = s.lock().unwrap();
-                s.requests.push(("/v1/invoices".into(), body.clone()));
-                let key = headers
-                    .get("idempotency-key")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or_default()
-                    .to_string();
-                if let Some(id) = s.keys.get(&key).cloned() {
-                    return Json(s.invoices[&id].clone());
-                }
-                s.creates += 1;
-                let id = format!("in_fee_{}", s.creates);
-                let params = form(&body);
-                let invoice = json!({
-                    "id": id, "object": "invoice", "customer": params["customer"],
-                    "status": "draft", "attempted": false, "lines": { "data": [] },
-                    "metadata": {
-                        "kind": params["metadata[kind]"],
-                        "company_id": params["metadata[company_id]"],
-                        "deadline": params["metadata[deadline]"],
-                    },
-                });
-                s.keys.insert(key, id.clone());
-                s.invoices.insert(id, invoice.clone());
-                Json(invoice)
-            }),
-        )
-        .route(
-            "/v1/invoices/{id}",
-            get(|State(s): State<SharedStripe>, Path(id): Path<String>| async move {
-                invoice_or_404(&s.lock().unwrap(), &id)
-            })
-            .post(
-                |State(s): State<SharedStripe>, Path(id): Path<String>, body: String| async move {
-                    let mut s = s.lock().unwrap();
-                    let params = form(&body);
-                    if let (Some(invoice), Some(reason)) =
-                        (s.invoices.get_mut(&id), params.get("metadata[withdrawn]"))
-                    {
-                        invoice["metadata"]["withdrawn"] = json!(reason);
-                    }
-                    invoice_or_404(&s, &id)
-                },
-            )
-            .delete(|State(s): State<SharedStripe>, Path(id): Path<String>| async move {
-                let mut s = s.lock().unwrap();
-                s.deletes += 1;
-                match s.invoices.get(&id).map(|invoice| invoice["status"] == "draft") {
-                    Some(true) => {
-                        s.invoices.remove(&id);
-                        Ok(Json(json!({ "id": id, "object": "invoice", "deleted": true })))
-                    }
-                    Some(false) => Err((
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({ "error": { "type": "invalid_request_error", "message": "Only drafts can be deleted" } })),
-                    )),
-                    None => invoice_or_404(&s, &id),
-                }
-            }),
-        )
-        .route(
-            "/v1/invoices/{id}/void",
-            post(|State(s): State<SharedStripe>, Path(id): Path<String>| async move {
-                let mut s = s.lock().unwrap();
-                s.voids += 1;
-                if let Some(invoice) = s.invoices.get_mut(&id) {
-                    invoice["status"] = json!("void");
-                }
-                invoice_or_404(&s, &id)
-            }),
-        )
-        .route(
-            "/v1/invoiceitems",
-            post(|State(s): State<SharedStripe>, body: String| async move {
-                let mut s = s.lock().unwrap();
-                s.requests.push(("/v1/invoiceitems".into(), body.clone()));
-                s.items += 1;
-                let params = form(&body);
-                let line = json!({ "id": "il_1", "amount": params["amount"].parse::<i64>().unwrap() });
-                if let Some(invoice) = s.invoices.get_mut(&params["invoice"]) {
-                    invoice["lines"]["data"].as_array_mut().unwrap().push(line);
-                }
-                Json(json!({ "id": "ii_1", "object": "invoiceitem" }))
-            }),
-        )
-        .route(
-            "/v1/invoices/{id}/finalize",
-            post(|State(s): State<SharedStripe>, Path(id): Path<String>| async move {
-                let mut s = s.lock().unwrap();
-                s.finalizes += 1;
-                if let Some(invoice) = s.invoices.get_mut(&id) {
-                    invoice["status"] = json!("open");
-                }
-                invoice_or_404(&s, &id)
-            }),
-        )
-        .route(
-            "/v1/invoices/{id}/pay",
-            post(|State(s): State<SharedStripe>, Path(id): Path<String>| async move {
-                let mut s = s.lock().unwrap();
-                s.pays += 1;
-                let pay = s.pay;
-                let Some(invoice) = s.invoices.get_mut(&id) else {
-                    return Err((StatusCode::NOT_FOUND, Json(json!({ "error": { "message": "No such invoice" } }))));
-                };
-                invoice["attempted"] = json!(true);
-                match pay {
-                    Pay::Paid => invoice["status"] = json!("paid"),
-                    Pay::Processing => {}
-                    Pay::Declined => {
-                        return Err((
-                            StatusCode::PAYMENT_REQUIRED,
-                            Json(json!({ "error": { "type": "card_error", "code": "card_declined", "message": "Your card was declined." } })),
-                        ));
-                    }
-                    Pay::Refused => {
-                        invoice["attempted"] = json!(false);
-                        return Err((
-                            StatusCode::BAD_REQUEST,
-                            Json(json!({ "error": { "type": "idempotency_error", "message": "Keys for idempotent requests can only be used with the same parameters" } })),
-                        ));
-                    }
-                    Pay::PaidButRefused => {
-                        invoice["status"] = json!("paid");
-                        return Err((
-                            StatusCode::BAD_REQUEST,
-                            Json(json!({ "error": { "type": "invalid_request_error", "code": "invoice_already_paid", "message": "Invoice is already paid" } })),
-                        ));
-                    }
-                }
-                Ok(Json(invoice.clone()))
-            }),
-        )
-        .with_state(stripe);
-    serve(router).await
+/// Company 20400's trialing subscription in the fake: the base price, the
+/// trial end (also the billing cycle anchor) as the seed stored it.
+async fn seed_subscription(pool: &MySqlPool, stripe: &fake_stripe::Shared) {
+    let trial_end: NaiveDateTime =
+        sqlx::query_scalar("SELECT trial_end_at FROM company_billing WHERE company_id = 20400")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let end = trial_end.and_utc().timestamp();
+    let mut fake = stripe.lock().unwrap();
+    let mut item = fake.item("price_base", 1, SUBSCRIPTION);
+    item["current_period_end"] = json!(end);
+    fake.subscriptions.insert(
+        SUBSCRIPTION.into(),
+        json!({
+            "id": SUBSCRIPTION, "object": "subscription", "customer": CUSTOMER,
+            "status": "trialing", "trial_end": end, "billing_cycle_anchor": end,
+            "cancel_at_period_end": false, "cancel_at": null,
+            "metadata": { "company_id": "20400" },
+            "items": { "object": "list", "data": [item] },
+        }),
+    );
 }
 
 // ---- mail and the harness
@@ -417,10 +252,8 @@ struct Harness {
     server: TestServer,
     state: AppState,
     cal: SharedCal,
-    stripe: SharedStripe,
+    stripe: fake_stripe::Shared,
     mailbox: Mailbox,
-    /// Each `/telegram/notifications-notify` body.
-    telegrams: Mailbox,
 }
 
 #[derive(Clone, Copy)]
@@ -446,8 +279,9 @@ async fn harness(pool: &MySqlPool, options: Options) -> Harness {
         c.slots = vec![json!({ "status": "available", "start_time": "2030-01-02T15:00:00Z" })];
     }
     let calendly_base = fake_calendly(Arc::clone(&cal)).await;
-    let stripe = SharedStripe::default();
-    let stripe_base = fake_stripe(Arc::clone(&stripe)).await;
+    let stripe = FakeStripe::with_catalog();
+    seed_subscription(pool, &stripe).await;
+    let stripe_client = fake_stripe::client(&stripe).await;
     let mailbox = Mailbox::default();
     let telegrams = Mailbox::default();
     let webhooks =
@@ -485,7 +319,8 @@ async fn harness(pool: &MySqlPool, options: Options) -> Harness {
         .with_webhooks(WebhooksClient::new(Some(&webhooks), Some("key")))
         .with_job_key("job-secret")
         .with_app_url("https://app.example.test")
-        .with_stripe(Stripe::new(Some("sk_test_fake"), &stripe_base))
+        .with_stripe(stripe_client)
+        .with_billing_alert_email(ALERT_EMAIL)
         .with_stripe_webhook_secret(WEBHOOK_SECRET)
         .with_signup(SignupConfig {
             notify_user_id: Some(STAFF_USER),
@@ -494,7 +329,7 @@ async fn harness(pool: &MySqlPool, options: Options) -> Harness {
         })
         .with_onboarding_call(Config {
             calendly,
-            fee_charging: options.charging,
+            advance_charging: options.charging,
         });
     Harness {
         server: TestServer::new(app(state.clone())),
@@ -502,7 +337,6 @@ async fn harness(pool: &MySqlPool, options: Options) -> Harness {
         cal,
         stripe,
         mailbox,
-        telegrams,
     }
 }
 
@@ -516,7 +350,8 @@ impl Harness {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        let mut day = first.unwrap_or_else(|| now.date());
+        // From the day before: the local signup day can be the UTC day before.
+        let mut day = first.unwrap_or_else(|| now.date()) - Duration::days(1);
         while day < now.date() {
             sqlx::query(
                 "INSERT IGNORE INTO onboarding_availability_days
@@ -569,7 +404,7 @@ impl Harness {
             .collect()
     }
 
-    /// Subjects of the fee notices to `email`.
+    /// Subjects of the advance notices to `email`.
     fn notices_to(&self, email: &str) -> Vec<String> {
         self.subjects_to(email)
             .into_iter()
@@ -685,7 +520,8 @@ async fn a_rep_sees_the_commitment_but_cannot_book(pool: MySqlPool) {
         .await
         .json();
     assert_eq!(body["commitment"]["status"], "pending");
-    assert_eq!(body["commitment"]["fee_cents"], 60_000);
+    assert_eq!(body["commitment"]["signup_advance_cents"], 30_000);
+    assert_eq!(body["commitment"]["advance_cents"], Value::Null);
     assert_eq!(body["can_book"], false);
     assert_eq!(body["booking_url"], Value::Null);
     assert_eq!(body["booking_unavailable"], false);
@@ -972,10 +808,17 @@ async fn the_job_needs_the_job_key(pool: MySqlPool) {
     res.assert_status_ok();
     // time-triggered logs `processed` from every job.
     let body: Value = res.json();
-    let work = ["reminders", "notices", "invoices", "tolled", "completed"]
-        .iter()
-        .map(|key| body[key].as_u64().unwrap())
-        .sum::<u64>();
+    let work = [
+        "reminders",
+        "notices",
+        "advance_items",
+        "credits",
+        "tolled",
+        "completed",
+    ]
+    .iter()
+    .map(|key| body[key].as_u64().unwrap())
+    .sum::<u64>();
     assert_eq!(body["processed"].as_u64(), Some(work));
 }
 
@@ -1012,7 +855,7 @@ async fn reminders_go_once_to_each_manager_across_two_runs(pool: MySqlPool) {
     );
     assert_eq!(
         h.subjects_to("manager@onboarding.test"),
-        ["Book your Granite Manager onboarding call"]
+        ["Book your free Granite Manager onboarding call"]
     );
     // It asks people to reply: replies go to support, not to noreply.
     assert_eq!(
@@ -1209,220 +1052,6 @@ async fn a_booking_made_outside_the_widget_is_found(pool: MySqlPool) {
     assert_eq!(booking.start_at, start);
 }
 
-#[test_db::test(seed)]
-async fn after_the_deadline_the_notice_then_exactly_one_invoice(pool: MySqlPool) {
-    only_pending(&pool).await;
-    let h = harness(&pool, ON).await;
-    h.stripe.lock().unwrap().pay = Pay::Processing;
-    let (_, deadline) = clock(&pool).await;
-    let noticed_at = deadline + Duration::hours(1);
-
-    let first = h.run(noticed_at).await;
-
-    assert_eq!(first.notices, 1);
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "notice_sent");
-    let charge_after = noticed_at + Duration::days(7);
-    assert_eq!(c.charge_after, Some(charge_after));
-    let subjects = h.subjects_to("manager@onboarding.test");
-    assert_eq!(subjects.len(), 1);
-    assert!(subjects[0].starts_with(PREFIX_NOTICE));
-    assert!(h.subjects_to("rep@onboarding.test").is_empty());
-    assert_eq!(
-        h.reply_tos("manager@onboarding.test"),
-        [vec!["support@granite-manager.com".to_string()]]
-    );
-
-    let charged = h.run(charge_after + Duration::hours(1)).await;
-    let again = h
-        .run(charge_after + Duration::days(1) + Duration::hours(2))
-        .await;
-
-    assert_eq!(charged.invoices, 1);
-    assert_eq!(again.invoices, 0);
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "fee_invoiced");
-    assert_eq!(c.stripe_invoice_id.as_deref(), Some("in_fee_1"));
-    let stripe = h.stripe.lock().unwrap();
-    assert_eq!(
-        (stripe.creates, stripe.items, stripe.finalizes, stripe.pays),
-        (1, 1, 1, 1)
-    );
-    let created = form(
-        &stripe
-            .requests
-            .iter()
-            .find(|(path, _)| path == "/v1/invoices")
-            .unwrap()
-            .1,
-    );
-    assert_eq!(created["customer"], "cus_seed_onboarding");
-    assert_eq!(created["pending_invoice_items_behavior"], "exclude");
-    assert_eq!(created["auto_advance"], "false");
-    assert_eq!(created["metadata[kind]"], "onboarding_fee");
-    assert_eq!(created["metadata[company_id]"], "20400");
-    assert_eq!(
-        created["metadata[deadline]"],
-        SIGNUP_TZ
-            .from_utc_datetime(&deadline)
-            .format("%Y-%m-%d")
-            .to_string()
-    );
-    let item = form(
-        &stripe
-            .requests
-            .iter()
-            .find(|(path, _)| path == "/v1/invoiceitems")
-            .unwrap()
-            .1,
-    );
-    assert_eq!(item["invoice"], "in_fee_1");
-    assert_eq!(item["amount"], "60000");
-    assert_eq!(item["currency"], "usd");
-}
-
-#[test_db::test(seed)]
-async fn a_paid_fee_invoice_is_fee_paid(pool: MySqlPool) {
-    only_pending(&pool).await;
-    let h = harness(&pool, ON).await;
-    let (_, deadline) = clock(&pool).await;
-    h.run(deadline + Duration::hours(1)).await;
-    h.run(deadline + Duration::days(8) + Duration::hours(2))
-        .await;
-    assert_eq!(status(&pool, PENDING).await, "fee_paid");
-}
-
-#[test_db::test(seed)]
-async fn a_declined_fee_invoice_is_fee_failed_and_staff_are_told_once(pool: MySqlPool) {
-    only_pending(&pool).await;
-    let h = harness(&pool, ON).await;
-    h.stripe.lock().unwrap().pay = Pay::Declined;
-    let (_, deadline) = clock(&pool).await;
-    h.run(deadline + Duration::hours(1)).await;
-    h.run(deadline + Duration::days(8) + Duration::hours(2))
-        .await;
-    assert_eq!(status(&pool, PENDING).await, "fee_failed");
-    assert_eq!(
-        h.subjects_to(STAFF_EMAIL),
-        ["Onboarding fee payment failed: Onboarding Stone"]
-    );
-    let body = h.bodies_to(STAFF_EMAIL).remove(0);
-    assert!(body.contains("(id 20400)") && body.contains("$600.00"));
-    assert!(!body.contains("onboarding.test"));
-    let telegrams = h.telegrams.lock().unwrap().clone();
-    assert_eq!(telegrams.len(), 1);
-    assert_eq!(telegrams[0]["user_id"], STAFF_USER);
-    let text = telegrams[0]["message"].as_str().unwrap();
-    assert!(text.contains("Onboarding Stone (id 20400)") && text.contains("$600.00"));
-    assert!(!text.contains("onboarding.test"));
-
-    // Stripe's own failure event for the same invoice tells nobody again.
-    post_event(
-        &h.server,
-        &fee_event("evt_9", "invoice.payment_failed", "in_fee_1"),
-    )
-    .await
-    .assert_status_ok();
-    assert_eq!(h.subjects_to(STAFF_EMAIL).len(), 1);
-    assert_eq!(h.telegrams.lock().unwrap().len(), 1);
-}
-
-fn fee_event(id: &str, kind: &str, invoice_id: &str) -> Value {
-    json!({ "id": id, "object": "event", "type": kind, "data": { "object": {
-        "id": invoice_id, "object": "invoice", "customer": "cus_seed_onboarding",
-        "status": "open", "amount_due": 60_000, "amount_paid": 0, "currency": "usd",
-        "metadata": { "kind": "onboarding_fee", "company_id": "20400", "deadline": "2026-11-20" },
-    }}})
-}
-
-async fn billing_snapshot(pool: &MySqlPool) -> (String, String, i32, i64) {
-    let row: (String, String, i32) = sqlx::query_as(
-        "SELECT subscription_status, payment_status, outstanding_balance_cents
-           FROM company_billing WHERE company_id = 20400",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    let invoices: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM company_billing_invoices WHERE company_id = 20400",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    (row.0, row.1, row.2, invoices)
-}
-
-async fn claimed_events(pool: &MySqlPool) -> i64 {
-    sqlx::query_scalar("SELECT COUNT(*) FROM stripe_webhook_events")
-        .fetch_one(pool)
-        .await
-        .unwrap()
-}
-
-#[test_db::test(seed)]
-async fn fee_invoice_webhooks_move_the_commitment_and_never_billing(pool: MySqlPool) {
-    sqlx::query(
-        "UPDATE company_onboarding_commitments
-            SET status = 'fee_invoiced', stripe_invoice_id = 'in_fee_1', version = version + 1
-          WHERE company_id = 20400",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let h = harness(&pool, ON).await;
-    let billing = billing_snapshot(&pool).await;
-    let claimed_before = claimed_events(&pool).await;
-
-    post_event(
-        &h.server,
-        &fee_event("evt_1", "invoice.payment_failed", "in_other"),
-    )
-    .await
-    .assert_status_ok();
-    assert_eq!(status(&pool, PENDING).await, "fee_invoiced");
-    post_event(
-        &h.server,
-        &fee_event("evt_2", "invoice.finalized", "in_fee_1"),
-    )
-    .await
-    .assert_status_ok();
-    assert_eq!(status(&pool, PENDING).await, "fee_invoiced");
-
-    assert!(h.subjects_to(STAFF_EMAIL).is_empty());
-    post_event(
-        &h.server,
-        &fee_event("evt_3", "invoice.payment_failed", "in_fee_1"),
-    )
-    .await
-    .assert_status_ok();
-    assert_eq!(status(&pool, PENDING).await, "fee_failed");
-    assert_eq!(
-        h.subjects_to(STAFF_EMAIL),
-        ["Onboarding fee payment failed: Onboarding Stone"]
-    );
-    post_event(
-        &h.server,
-        &fee_event("evt_3b", "invoice.payment_failed", "in_fee_1"),
-    )
-    .await
-    .assert_status_ok();
-    assert_eq!(h.subjects_to(STAFF_EMAIL).len(), 1);
-    assert_eq!(h.telegrams.lock().unwrap().len(), 1);
-    post_event(&h.server, &fee_event("evt_4", "invoice.paid", "in_fee_1"))
-        .await
-        .assert_status_ok();
-    assert_eq!(status(&pool, PENDING).await, "fee_paid");
-
-    assert_eq!(billing_snapshot(&pool).await, billing);
-    assert_eq!(claimed_events(&pool).await, claimed_before);
-    assert_eq!(
-        event_kinds(&pool, PENDING).await,
-        ["created", "fee_failed", "fee_paid"]
-    );
-}
-
-/// `billing_cancellation_requests` (step 10 owns it; its DDL from
-/// 02-architecture.md section 4) with company 20400's request, scheduled at
 /// `requested_at`.
 async fn request_cancellation(pool: &MySqlPool, requested_at: NaiveDateTime) {
     sqlx::raw_sql(
@@ -1505,31 +1134,6 @@ async fn the_subscription_ending_voids_the_commitment(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn with_charging_off_the_fee_is_skipped_for_good(pool: MySqlPool) {
-    only_pending(&pool).await;
-    let off = harness(
-        &pool,
-        Options {
-            calendly: true,
-            charging: false,
-        },
-    )
-    .await;
-    let (_, deadline) = clock(&pool).await;
-
-    off.run(deadline + Duration::hours(1)).await;
-    assert_eq!(status(&pool, PENDING).await, "fee_skipped");
-    assert!(off.subjects_to("manager@onboarding.test").is_empty());
-
-    let on = harness(&pool, ON).await;
-    let later = on.run(deadline + Duration::days(9)).await;
-    assert_eq!(later.companies, 0);
-    assert_eq!(status(&pool, PENDING).await, "fee_skipped");
-    assert_eq!(on.stripe.lock().unwrap().creates, 0);
-    assert!(on.mailbox.lock().unwrap().is_empty());
-}
-
-#[test_db::test(seed)]
 async fn a_missed_call_is_never_booked_or_completed_again(pool: MySqlPool) {
     only_pending(&pool).await;
     sqlx::query("UPDATE users SET is_superuser = 1 WHERE id = 102")
@@ -1585,189 +1189,535 @@ async fn a_missed_call_is_never_booked_or_completed_again(pool: MySqlPool) {
     assert_eq!(booked.json::<Value>()["commitment"]["status"], "booked");
 }
 
-#[test_db::test(seed)]
-async fn a_completed_cancellation_request_never_resumes_the_fee(pool: MySqlPool) {
-    only_pending(&pool).await;
-    let h = harness(&pool, ON).await;
-    let (created, deadline) = clock(&pool).await;
-    request_cancellation(&pool, created + Duration::days(1)).await;
-    h.run(created + Duration::days(2)).await;
-    assert_eq!(status(&pool, PENDING).await, "suspended");
+// ---- the advance payment
 
-    // Step 10 completes the request when the subscription ends; the billing
-    // row can lag behind it.
-    settle_cancellation(&pool, "completed", deadline).await;
-    for now in [deadline + Duration::hours(1), deadline + Duration::days(9)] {
-        let run = h.run(now).await;
-        assert_eq!((run.notices, run.invoices), (0, 0));
-        assert_eq!(status(&pool, PENDING).await, "suspended");
+/// Company 20400's trial end (its first charge) as the seed stored it.
+async fn trial_end(pool: &MySqlPool) -> NaiveDateTime {
+    sqlx::query_scalar("SELECT trial_end_at FROM company_billing WHERE company_id = 20400")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+impl Harness {
+    fn items(&self) -> Vec<Value> {
+        self.stripe.lock().unwrap().invoice_items.clone()
     }
-    assert!(h.mailbox.lock().unwrap().is_empty());
-    assert_eq!(h.stripe.lock().unwrap().creates, 0);
 
+    fn credits(&self) -> Vec<Value> {
+        self.stripe.lock().unwrap().balance_transactions.clone()
+    }
+
+    fn calls(&self, method: &str, path: &str) -> usize {
+        self.stripe.lock().unwrap().calls(method, path).len()
+    }
+
+    /// Stripe renews the subscription: the pending items go on `invoice_id`.
+    fn renew(&self, invoice_id: &str, status: &str) -> Value {
+        self.stripe
+            .lock()
+            .unwrap()
+            .sweep_items(SUBSCRIPTION, invoice_id, status)
+    }
+
+    async fn superuser(&self, action: &str) -> axum_test::TestResponse {
+        self.server
+            .put("/v1/superuser/companies/20400/onboarding-commitment")
+            .with_session(sessions::ADMIN)
+            .json(&json!({ "action": action }))
+            .await
+    }
+}
+
+async fn make_superuser(pool: &MySqlPool) {
+    sqlx::query("UPDATE users SET is_superuser = 1 WHERE id = 102")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// The notice an hour after the deadline; the trial end.
+async fn noticed(h: &Harness, pool: &MySqlPool) -> NaiveDateTime {
+    only_pending(pool).await;
+    let (_, deadline) = clock(pool).await;
+    assert_eq!(h.run(deadline + Duration::hours(1)).await.notices, 1);
+    trial_end(pool).await
+}
+
+/// The notice, then the item two days before the trial end.
+async fn scheduled(h: &Harness, pool: &MySqlPool) -> NaiveDateTime {
+    let charge_at = noticed(h, pool).await;
+    assert_eq!(h.run(charge_at - Duration::days(2)).await.advance_items, 1);
+    assert_eq!(status(pool, PENDING).await, "advance_scheduled");
+    charge_at
+}
+
+fn paid_event(id: &str, invoice: &Value) -> Value {
+    json!({ "id": id, "object": "event", "type": "invoice.paid", "data": { "object": invoice } })
+}
+
+#[test_db::test(seed)]
+async fn the_notice_fixes_a_month_of_the_live_items_on_the_trial_end_and_tells_staff(
+    pool: MySqlPool,
+) {
+    let h = harness(&pool, ON).await;
+    // An extra user on the live subscription: one month is base + users.
+    {
+        let mut fake = h.stripe.lock().unwrap();
+        let mut extra = fake.item("price_extra_user", 2, SUBSCRIPTION);
+        extra["current_period_end"] =
+            fake.subscriptions[SUBSCRIPTION]["items"]["data"][0]["current_period_end"].clone();
+        fake.subscriptions.get_mut(SUBSCRIPTION).unwrap()["items"]["data"]
+            .as_array_mut()
+            .unwrap()
+            .push(extra);
+    }
+    let charge_at = noticed(&h, &pool).await;
+    let c = commitment(&pool, PENDING).await;
+    let terms = c.terms.unwrap();
+    assert_eq!(terms.advance_cents, 36_000);
+    assert_eq!(terms.charge_at, charge_at);
+    assert_eq!(
+        terms.prepaid_from,
+        charge_at
+            .checked_add_months(chrono::Months::new(1))
+            .unwrap()
+    );
+    assert_eq!(
+        terms.prepaid_until,
+        charge_at
+            .checked_add_months(chrono::Months::new(2))
+            .unwrap()
+    );
+    assert_eq!(
+        h.subjects_to("manager@onboarding.test"),
+        [format!(
+            "Action needed: your charge on {} will include a $360.00 advance payment",
+            api::billing::reminder_emails::format_local_date(charge_at)
+        )]
+    );
+    let staff = h.subjects_to(ALERT_EMAIL);
+    assert_eq!(staff, ["Onboarding advance notice sent: Onboarding Stone"]);
+    let body = h.bodies_to(ALERT_EMAIL).join("\n");
+    assert!(body.contains("(id 20400)") && body.contains("$360.00"));
+    assert!(!body.contains("manager@onboarding.test"));
+    // Nothing reaches Stripe before the last three days.
+    h.run(charge_at - Duration::days(4)).await;
+    assert!(h.items().is_empty());
+}
+
+#[test_db::test(seed)]
+async fn a_trial_end_under_seven_days_after_the_notice_moves_the_advance_a_period_on(
+    pool: MySqlPool,
+) {
+    only_pending(&pool).await;
+    let (_, deadline) = clock(&pool).await;
+    let soon = (deadline + Duration::days(3)).and_utc().timestamp();
     sqlx::query(
-        "UPDATE company_billing SET subscription_status = 'incomplete_expired'
+        "UPDATE company_billing SET trial_end_at = FROM_UNIXTIME(?) WHERE company_id = 20400",
+    )
+    .bind(soon)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = harness(&pool, ON).await;
+    h.run(deadline + Duration::hours(1)).await;
+    let terms = commitment(&pool, PENDING).await.terms.unwrap();
+    let trial_end = chrono::DateTime::from_timestamp(soon, 0)
+        .unwrap()
+        .naive_utc();
+    assert_eq!(
+        terms.charge_at,
+        trial_end
+            .checked_add_months(chrono::Months::new(1))
+            .unwrap()
+    );
+}
+
+#[test_db::test(seed)]
+async fn the_item_is_added_once_in_the_last_three_days_keyed_on_the_subscription(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    let charge_at = scheduled(&h, &pool).await;
+    let items = h.items();
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    assert_eq!(item["subscription"], SUBSCRIPTION);
+    assert_eq!(item["customer"], CUSTOMER);
+    assert_eq!(item["amount"], 30_000);
+    assert_eq!(item["currency"], "usd");
+    assert_eq!(item["metadata"]["kind"], "onboarding_advance");
+    assert_eq!(item["metadata"]["company_id"], "20400");
+    assert!(
+        item["description"]
+            .as_str()
+            .unwrap()
+            .starts_with("Advance payment for ")
+    );
+    let (_, deadline) = clock(&pool).await;
+    let key = format!(
+        "onboarding-advance:20400:{}",
+        api::onboarding_call::advance::deadline_key(deadline)
+    );
+    assert_eq!(
+        h.stripe.lock().unwrap().keys("POST", "/v1/invoiceitems"),
+        [key]
+    );
+    // The next run only reads it.
+    h.run(charge_at - Duration::hours(1)).await;
+    assert_eq!(h.calls("POST", "/v1/invoiceitems"), 1);
+    assert_eq!(h.items().len(), 1);
+    assert_eq!(status(&pool, PENDING).await, "advance_scheduled");
+}
+
+#[test_db::test(seed)]
+async fn a_lost_save_finds_the_item_again_instead_of_adding_a_second(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    let charge_at = noticed(&h, &pool).await;
+    h.run(charge_at - Duration::days(2)).await;
+    // As if the save after Stripe's answer was lost.
+    sqlx::query(
+        "UPDATE company_onboarding_commitments SET status = 'notice_sent', advance_item_id = NULL
           WHERE company_id = 20400",
     )
     .execute(&pool)
     .await
     .unwrap();
-    h.run(deadline + Duration::days(10)).await;
-    assert_eq!(status(&pool, PENDING).await, "void");
+    sqlx::query("DELETE FROM job_runs WHERE job_key = 'onboarding-commitment:20400'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    h.run(charge_at - Duration::days(2) + Duration::hours(1))
+        .await;
+    assert_eq!(h.calls("POST", "/v1/invoiceitems"), 1);
+    let c = commitment(&pool, PENDING).await;
+    assert_eq!(c.advance_item_id.as_deref(), h.items()[0]["id"].as_str());
 }
 
 #[test_db::test(seed)]
-async fn a_cancellation_during_the_notice_and_its_withdrawal_keep_the_charge_date(pool: MySqlPool) {
-    only_pending(&pool).await;
+async fn a_paid_invoice_credits_the_month_once_and_replays_change_nothing(pool: MySqlPool) {
     let h = harness(&pool, ON).await;
-    let (_, deadline) = clock(&pool).await;
-    let noticed_at = deadline + Duration::hours(1);
-    assert_eq!(h.run(noticed_at).await.notices, 1);
-    let charge_after = Some(noticed_at + Duration::days(7));
-
-    // After the deadline, before the charge date the notice gave.
-    request_cancellation(&pool, deadline + Duration::days(2)).await;
-    h.run(deadline + Duration::days(2) + Duration::hours(2))
-        .await;
+    let charge_at = scheduled(&h, &pool).await;
+    let invoice = h.renew("in_advance_1", "paid");
+    assert_eq!(invoice["amount_due"], 30_000);
+    post_event(&h.server, &paid_event("evt_adv_1", &invoice))
+        .await
+        .assert_status_ok();
+    assert_eq!(status(&pool, PENDING).await, "advance_paid");
+    let credits = h.credits();
+    assert_eq!(credits.len(), 1);
+    assert_eq!(credits[0]["amount"], -30_000);
+    assert_eq!(credits[0]["customer"], CUSTOMER);
+    assert_eq!(credits[0]["metadata"]["kind"], "onboarding_advance_credit");
+    assert_eq!(credits[0]["metadata"]["invoice"], "in_advance_1");
+    assert_eq!(
+        h.stripe.lock().unwrap().keys(
+            "POST",
+            "/v1/customers/cus_seed_onboarding/balance_transactions"
+        ),
+        ["onboarding-advance:20400:in_advance_1:credit"]
+    );
     let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "suspended");
-    assert_eq!((c.charge_after, c.notice_cycle_at), (charge_after, None));
+    assert_eq!(c.stripe_invoice_id.as_deref(), Some("in_advance_1"));
+    assert_eq!(c.advance_credit_id.as_deref(), credits[0]["id"].as_str());
 
-    settle_cancellation(&pool, "withdrawn", deadline + Duration::days(3)).await;
-    let resumed = h
-        .run(deadline + Duration::days(3) + Duration::hours(3))
-        .await;
-    assert_eq!((resumed.notices, resumed.invoices), (0, 0));
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "notice_sent");
-    assert_eq!(c.charge_after, charge_after);
-    assert_eq!(h.notices_to("manager@onboarding.test").len(), 1);
-
-    // The first notice's charge date stands.
-    let run = h
-        .run(noticed_at + Duration::days(7) + Duration::hours(4))
-        .await;
-    assert_eq!(run.invoices, 1);
-    assert_eq!(status(&pool, PENDING).await, "fee_paid");
-    assert_eq!(h.stripe.lock().unwrap().creates, 1);
+    // A redelivery, another event for it and the daily run: no second credit.
+    post_event(&h.server, &paid_event("evt_adv_1", &invoice))
+        .await
+        .assert_status_ok();
+    post_event(&h.server, &paid_event("evt_adv_2", &invoice))
+        .await
+        .assert_status_ok();
+    let run = h.run(charge_at + Duration::days(1)).await;
+    assert_eq!(run.companies, 0);
+    assert_eq!(h.credits().len(), 1);
 }
 
 #[test_db::test(seed)]
-async fn a_request_after_the_deadline_before_the_notice_suspends_and_no_notice_goes_out(
-    pool: MySqlPool,
-) {
-    only_pending(&pool).await;
+async fn with_automatic_tax_the_credit_returns_the_advance_line_with_its_tax(pool: MySqlPool) {
     let h = harness(&pool, ON).await;
-    let (_, deadline) = clock(&pool).await;
-    request_cancellation(&pool, deadline + Duration::hours(1)).await;
-
-    let run = h.run(deadline + Duration::hours(2)).await;
-
-    assert_eq!(run.notices, 0);
-    assert_eq!(status(&pool, PENDING).await, "suspended");
-    assert!(h.notices_to("manager@onboarding.test").is_empty());
-
-    // Withdrawn: the notice goes out first, the charge 7 days after it.
-    settle_cancellation(&pool, "withdrawn", deadline + Duration::days(1)).await;
-    let resumed_at = deadline + Duration::days(1) + Duration::hours(3);
-    assert_eq!(h.run(resumed_at).await.notices, 1);
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "notice_sent");
-    assert_eq!(c.charge_after, Some(resumed_at + Duration::days(7)));
+    scheduled(&h, &pool).await;
+    h.stripe.lock().unwrap().line_tax_percent = 7;
+    let invoice = h.renew("in_advance_1", "paid");
+    assert_eq!(invoice["amount_due"], 30_000 + 2_100);
+    post_event(&h.server, &paid_event("evt_adv_1", &invoice))
+        .await
+        .assert_status_ok();
+    assert_eq!(status(&pool, PENDING).await, "advance_paid");
+    let credits = h.credits();
+    assert_eq!(credits.len(), 1);
+    // The month's tax was paid with the advance: the credit returns it too.
+    assert_eq!(credits[0]["amount"], -32_100);
 }
 
 #[test_db::test(seed)]
-async fn a_withdrawal_after_the_charge_date_sends_a_new_notice_before_any_charge(pool: MySqlPool) {
-    only_pending(&pool).await;
+async fn without_the_webhook_the_daily_run_credits_once_even_after_a_lost_save(pool: MySqlPool) {
     let h = harness(&pool, ON).await;
-    let (_, deadline) = clock(&pool).await;
-    let noticed_at = deadline + Duration::hours(1);
-    assert_eq!(h.run(noticed_at).await.notices, 1);
-    request_cancellation(&pool, deadline + Duration::days(2)).await;
-    h.run(deadline + Duration::days(2) + Duration::hours(2))
-        .await;
-    assert_eq!(status(&pool, PENDING).await, "suspended");
-
-    settle_cancellation(&pool, "withdrawn", noticed_at + Duration::days(8)).await;
-    let resumed_at = noticed_at + Duration::days(8) + Duration::hours(1);
-    let run = h.run(resumed_at).await;
-
-    assert_eq!((run.notices, run.invoices), (1, 0));
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "notice_sent");
-    assert_eq!(c.charge_after, Some(resumed_at + Duration::days(7)));
-    assert_eq!(h.notices_to("manager@onboarding.test").len(), 2);
-    assert_eq!(h.stripe.lock().unwrap().creates, 0);
-}
-
-#[test_db::test(seed)]
-async fn a_request_and_withdrawal_between_two_runs_across_the_charge_date_send_a_new_notice(
-    pool: MySqlPool,
-) {
-    only_pending(&pool).await;
-    let h = harness(&pool, ON).await;
-    let (_, deadline) = clock(&pool).await;
-    let noticed_at = deadline + Duration::hours(1);
-    assert_eq!(h.run(noticed_at).await.notices, 1);
-    let charge_after = noticed_at + Duration::days(7);
-    // No run sees the request: asked before the charge date, withdrawn after it.
-    request_cancellation(&pool, charge_after - Duration::hours(2)).await;
-    settle_cancellation(&pool, "withdrawn", charge_after + Duration::hours(1)).await;
-
-    let rerun_at = charge_after + Duration::hours(2);
-    let run = h.run(rerun_at).await;
-
-    assert_eq!((run.notices, run.invoices), (1, 0));
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "notice_sent");
-    assert_eq!(c.charge_after, Some(rerun_at + Duration::days(7)));
-    assert_eq!(h.stripe.lock().unwrap().creates, 0);
-}
-
-/// Company 20400 as a run left it: `fee_invoiced` with invoice `in_fee_left`
-/// (`invoice_status`, never attempted) in `h`'s Stripe, the notice sent an
-/// hour after the deadline. The notice time.
-async fn left_invoiced(pool: &MySqlPool, h: &Harness, invoice_status: &str) -> NaiveDateTime {
-    only_pending(pool).await;
-    let (_, deadline) = clock(pool).await;
-    let noticed_at = deadline + Duration::hours(1);
+    let charge_at = scheduled(&h, &pool).await;
+    h.renew("in_advance_1", "paid");
+    let run = h.run(charge_at + Duration::hours(2)).await;
+    assert_eq!(run.credits, 1);
+    assert_eq!(status(&pool, PENDING).await, "advance_paid");
+    // As if the credit's save was lost: the credit is found, not made again.
     sqlx::query(
         "UPDATE company_onboarding_commitments
-            SET status = 'fee_invoiced', stripe_invoice_id = 'in_fee_left', notice_sent_at = ?,
-                notice_cycle_at = ?, charge_after = ?, version = version + 1
-          WHERE company_id = 20400",
+            SET status = 'advance_scheduled', advance_credit_id = NULL WHERE company_id = 20400",
     )
-    .bind(noticed_at)
-    .bind(noticed_at)
-    .bind(noticed_at + Duration::days(7))
-    .execute(pool)
+    .execute(&pool)
     .await
     .unwrap();
-    let invoice = json!({
-        "id": "in_fee_left", "object": "invoice", "customer": "cus_seed_onboarding",
-        "status": invoice_status, "attempted": false,
-        "lines": { "data": [{ "id": "il_1", "amount": 60_000 }] },
-        "metadata": {
-            "kind": "onboarding_fee", "company_id": "20400",
-            "deadline": deadline.format("%Y-%m-%d").to_string(),
-        },
-    });
-    h.stripe
-        .lock()
-        .unwrap()
-        .invoices
-        .insert("in_fee_left".into(), invoice);
-    noticed_at
-}
-
-/// (creates, finalizes, pays, deletes, voids) of `h`'s Stripe.
-fn stripe_calls(h: &Harness) -> (usize, usize, usize, usize, usize) {
-    let s = h.stripe.lock().unwrap();
-    (s.creates, s.finalizes, s.pays, s.deletes, s.voids)
+    h.run(charge_at + Duration::days(1) + Duration::hours(3))
+        .await;
+    assert_eq!(status(&pool, PENDING).await, "advance_paid");
+    assert_eq!(h.credits().len(), 1);
+    assert_eq!(
+        h.calls(
+            "POST",
+            "/v1/customers/cus_seed_onboarding/balance_transactions"
+        ),
+        1
+    );
 }
 
 #[test_db::test(seed)]
-async fn a_fee_draft_held_by_charging_off_is_deleted_and_never_charged(pool: MySqlPool) {
+async fn a_voided_invoice_with_the_advance_voids_it_and_credits_nothing(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    let charge_at = scheduled(&h, &pool).await;
+    h.renew("in_advance_1", "void");
+    h.run(charge_at + Duration::hours(2)).await;
+    assert_eq!(status(&pool, PENDING).await, "void");
+    assert!(h.credits().is_empty());
+    assert_eq!(commitment(&pool, PENDING).await.advance_item_id, None);
+}
+
+#[test_db::test(seed)]
+async fn completing_waiving_or_holding_while_pending_deletes_the_item(pool: MySqlPool) {
+    make_superuser(&pool).await;
+    for (action, after) in [
+        ("complete", "completed"),
+        ("waive", "waived"),
+        ("hold", "notice_sent"),
+    ] {
+        sqlx::query("DELETE FROM job_runs")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE company_onboarding_commitments
+                SET status = 'pending', notice_sent_at = NULL, notice_cycle_at = NULL,
+                    advance_cents = NULL, charge_at = NULL, prepaid_from_at = NULL,
+                    prepaid_until_at = NULL, advance_item_id = NULL, review_hold_at = NULL,
+                    review_hold_by = NULL
+              WHERE company_id = 20400",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let h = harness(&pool, ON).await;
+        scheduled(&h, &pool).await;
+        assert_eq!(h.items().len(), 1, "{action}");
+        let res = h.superuser(action).await;
+        res.assert_status_ok();
+        assert_eq!(status(&pool, PENDING).await, after, "{action}");
+        assert!(h.items().is_empty(), "{action}: the item must be gone");
+        assert_eq!(commitment(&pool, PENDING).await.advance_item_id, None);
+        // Stripe's renewal now charges no advance.
+        assert_eq!(h.renew("in_after", "paid")["amount_due"], 0);
+    }
+}
+
+#[test_db::test(seed)]
+async fn a_release_under_seven_days_before_the_charge_sends_a_new_notice_a_period_later(
+    pool: MySqlPool,
+) {
+    make_superuser(&pool).await;
+    let h = harness(&pool, ON).await;
+    let charge_at = noticed(&h, &pool).await;
+    h.superuser("hold").await.assert_status_ok();
+    // Held: no item in the window.
+    h.run(charge_at - Duration::days(2)).await;
+    assert!(h.items().is_empty());
+    // The release (at the real clock) comes 3 days before the charge.
+    sqlx::query(
+        "UPDATE company_onboarding_commitments SET charge_at = UTC_TIMESTAMP() + INTERVAL 3 DAY
+          WHERE company_id = 20400",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let released: Value = h.superuser("release").await.json();
+    assert_eq!(released["commitment"]["status"], "pending");
+    assert_eq!(released["events"][0]["kind"], "review_released");
+    assert_eq!(released["events"][0]["detail"]["new_notice"], true);
+    // The notice the run sends names the next eligible charge.
+    h.run(charge_at - Duration::days(1)).await;
+    let terms = commitment(&pool, PENDING).await.terms.unwrap();
+    assert_eq!(
+        terms.charge_at,
+        charge_at
+            .checked_add_months(chrono::Months::new(1))
+            .unwrap()
+    );
+    assert_eq!(h.notices_to("manager@onboarding.test").len(), 2);
+}
+
+#[test_db::test(seed)]
+async fn a_cancellation_request_while_pending_deletes_the_item_and_nothing_is_charged(
+    pool: MySqlPool,
+) {
+    let h = harness(&pool, ON).await;
+    scheduled(&h, &pool).await;
+    h.server
+        .post("/v1/billing/cancellation-request")
+        .with_session(OWEN)
+        .json(&json!({}))
+        .await
+        .assert_status(StatusCode::CREATED);
+    assert_eq!(status(&pool, PENDING).await, "suspended");
+    assert!(h.items().is_empty());
+    let subscription = h.stripe.lock().unwrap().subscriptions[SUBSCRIPTION].clone();
+    assert_eq!(subscription["cancel_at_period_end"], true);
+    assert_eq!(h.renew("in_after", "paid")["amount_due"], 0);
+}
+
+#[test_db::test(seed)]
+async fn a_cancellation_after_the_paid_advance_ends_with_the_prepaid_month(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    scheduled(&h, &pool).await;
+    let invoice = h.renew("in_advance_1", "paid");
+    post_event(&h.server, &paid_event("evt_adv_1", &invoice))
+        .await
+        .assert_status_ok();
+    let terms = commitment(&pool, PENDING).await.terms.unwrap();
+    // While the credit is unused (its renewal is ahead), the month it paid
+    // for is kept.
+    let until = commitment(&pool, PENDING)
+        .await
+        .terms
+        .unwrap()
+        .prepaid_until;
+    assert!(until > terms.charge_at);
+    let res = h
+        .server
+        .post("/v1/billing/cancellation-request")
+        .with_session(OWEN)
+        .json(&json!({}))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let body: Value = res.json();
+    assert_eq!(body["effective_at"], json!(until.and_utc()));
+    let calls = h
+        .stripe
+        .lock()
+        .unwrap()
+        .calls("POST", "/v1/subscriptions/sub_seed_onboarding");
+    let last = calls.last().unwrap();
+    assert_eq!(
+        last.field("cancel_at"),
+        Some(until.and_utc().timestamp().to_string())
+    );
+    assert_eq!(last.field("proration_behavior").as_deref(), Some("none"));
+    assert_eq!(last.field("cancel_at_period_end"), None);
+    // Withdrawn: the set end is removed.
+    h.server
+        .delete("/v1/billing/cancellation-request")
+        .with_session(OWEN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let subscription = h.stripe.lock().unwrap().subscriptions[SUBSCRIPTION].clone();
+    assert_eq!(subscription["cancel_at"], Value::Null);
+}
+
+#[test_db::test(seed)]
+async fn a_cancellation_scheduled_when_the_credit_is_granted_moves_to_the_prepaid_month_end(
+    pool: MySqlPool,
+) {
+    let h = harness(&pool, ON).await;
+    let charge_at = scheduled(&h, &pool).await;
+    // Swept into the renewal invoice before the request, paid after it.
+    let invoice = h.renew("in_advance_1", "open");
+    h.server
+        .post("/v1/billing/cancellation-request")
+        .with_session(OWEN)
+        .json(&json!({}))
+        .await
+        .assert_status(StatusCode::CREATED);
+    // On an invoice already: nothing to take back.
+    assert_eq!(status(&pool, PENDING).await, "advance_scheduled");
+    let until = commitment(&pool, PENDING)
+        .await
+        .terms
+        .unwrap()
+        .prepaid_until;
+    {
+        let mut fake = h.stripe.lock().unwrap();
+        fake.invoices
+            .iter_mut()
+            .for_each(|i| i["status"] = json!("paid"));
+    }
+    let mut paid = invoice;
+    paid["status"] = json!("paid");
+    post_event(&h.server, &paid_event("evt_adv_1", &paid))
+        .await
+        .assert_status_ok();
+    assert_eq!(status(&pool, PENDING).await, "advance_paid");
+    let effective: NaiveDateTime = sqlx::query_scalar(
+        "SELECT effective_at FROM billing_cancellation_requests
+          WHERE company_id = 20400 AND status = 'scheduled'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(effective, until);
+    let subscription = h.stripe.lock().unwrap().subscriptions[SUBSCRIPTION].clone();
+    assert_eq!(subscription["cancel_at"], until.and_utc().timestamp());
+    assert!(charge_at < until);
+    // The Managers hear the new end date, once (a replay sends nothing).
+    let moved = format!(
+        "Your Granite Manager subscription now ends on {}",
+        api::billing::reminder_emails::format_local_date(until)
+    );
+    let count = |h: &Harness| {
+        h.subjects_to("manager@onboarding.test")
+            .into_iter()
+            .filter(|subject| *subject == moved)
+            .count()
+    };
+    assert_eq!(count(&h), 1);
+    let body = h.bodies_to("manager@onboarding.test").join("\n");
+    assert!(body.contains(&format!(
+        "now takes effect on {}",
+        api::billing::reminder_emails::format_local_date(until)
+    )));
+    post_event(&h.server, &paid_event("evt_adv_2", &paid))
+        .await
+        .assert_status_ok();
+    assert_eq!(count(&h), 1);
+}
+
+#[test_db::test(seed)]
+async fn without_a_running_subscription_at_the_deadline_it_is_void_and_never_noticed(
+    pool: MySqlPool,
+) {
+    only_pending(&pool).await;
+    sqlx::query(
+        "UPDATE company_billing SET stripe_subscription_id = NULL, subscription_status = 'incomplete'
+          WHERE company_id = 20400",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = harness(&pool, ON).await;
+    let (_, deadline) = clock(&pool).await;
+    let run = h.run(deadline + Duration::hours(1)).await;
+    assert_eq!(run.notices, 0);
+    assert_eq!(status(&pool, PENDING).await, "void");
+    assert!(h.notices_to("manager@onboarding.test").is_empty());
+    assert!(h.items().is_empty());
+}
+
+#[test_db::test(seed)]
+async fn with_charging_off_the_advance_is_skipped_for_good(pool: MySqlPool) {
+    only_pending(&pool).await;
     let off = harness(
         &pool,
         Options {
@@ -1776,206 +1726,66 @@ async fn a_fee_draft_held_by_charging_off_is_deleted_and_never_charged(pool: MyS
         },
     )
     .await;
-    let noticed_at = left_invoiced(&pool, &off, "draft").await;
+    let (_, deadline) = clock(&pool).await;
+    off.run(deadline + Duration::hours(1)).await;
+    assert_eq!(status(&pool, PENDING).await, "advance_skipped");
+    assert!(off.subjects_to("manager@onboarding.test").is_empty());
 
-    off.run(noticed_at + Duration::days(8)).await;
-
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "fee_skipped");
-    assert_eq!(c.stripe_invoice_id, None);
-    assert_eq!(stripe_calls(&off), (0, 0, 0, 1, 0));
-    assert!(
-        !off.stripe
-            .lock()
-            .unwrap()
-            .invoices
-            .contains_key("in_fee_left")
-    );
-    assert_eq!(
-        event_kinds(&pool, PENDING).await.last().unwrap(),
-        "fee_skipped"
-    );
-
-    // Charging on again charges nothing.
     let on = harness(&pool, ON).await;
-    let later = on.run(noticed_at + Duration::days(9)).await;
-    assert_eq!((later.companies, later.invoices), (0, 0));
-    assert_eq!(stripe_calls(&on), (0, 0, 0, 0, 0));
-    assert_eq!(status(&pool, PENDING).await, "fee_skipped");
+    let later = on.run(deadline + Duration::days(60)).await;
+    assert_eq!(later.companies, 0);
+    assert_eq!(status(&pool, PENDING).await, "advance_skipped");
+    assert!(on.items().is_empty());
 }
 
 #[test_db::test(seed)]
-async fn a_fee_draft_is_removed_and_the_commitment_void_once_the_subscription_ended(
-    pool: MySqlPool,
-) {
+async fn the_superuser_view_carries_the_allowed_actions_and_the_extended_deadline(pool: MySqlPool) {
+    make_superuser(&pool).await;
     let h = harness(&pool, ON).await;
-    let noticed_at = left_invoiced(&pool, &h, "draft").await;
-    sqlx::query(
-        "UPDATE company_billing SET subscription_status = 'canceled' WHERE company_id = 20400",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    h.run(noticed_at + Duration::days(8)).await;
-
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "void");
-    assert_eq!(c.stripe_invoice_id, None);
-    assert_eq!(stripe_calls(&h), (0, 0, 0, 1, 0));
-    assert!(
-        !h.stripe
-            .lock()
-            .unwrap()
-            .invoices
-            .contains_key("in_fee_left")
-    );
-}
-
-#[test_db::test(seed)]
-async fn an_open_fee_invoice_is_voided_by_a_cancellation_before_the_charge_date(pool: MySqlPool) {
-    let h = harness(&pool, ON).await;
-    let noticed_at = left_invoiced(&pool, &h, "open").await;
-    request_cancellation(&pool, noticed_at + Duration::days(6)).await;
-
-    h.run(noticed_at + Duration::days(8)).await;
-
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "suspended");
-    assert_eq!(c.stripe_invoice_id, None);
-    assert_eq!(c.charge_after, Some(noticed_at + Duration::days(7)));
-    assert_eq!(stripe_calls(&h), (0, 0, 0, 0, 1));
+    let (_, deadline) = clock(&pool).await;
+    let body: Value = h
+        .server
+        .get("/v1/superuser/companies/20400/onboarding-commitment")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    let c = &body["commitment"];
     assert_eq!(
-        h.stripe.lock().unwrap().invoices["in_fee_left"]["status"],
-        "void"
+        c["allowed_actions"],
+        json!(["extend", "waive", "complete", "hold"])
     );
     assert_eq!(
-        h.stripe.lock().unwrap().invoices["in_fee_left"]["metadata"]["withdrawn"],
-        "cancellation_requested"
+        c["extension_deadline_at"],
+        api::billing::iso(add_local_days(deadline, 14))
     );
-    assert!(h.subjects_to(STAFF_EMAIL).is_empty());
-}
-
-#[test_db::test(seed)]
-async fn our_void_whose_save_was_lost_settles_the_commitment_instead_of_waiting(pool: MySqlPool) {
-    let h = harness(&pool, ON).await;
-    let noticed_at = left_invoiced(&pool, &h, "void").await;
-    // Voided for a cancellation request, the save lost, the request withdrawn.
-    h.stripe
-        .lock()
-        .unwrap()
-        .invoices
-        .get_mut("in_fee_left")
-        .unwrap()["metadata"]["withdrawn"] = json!("cancellation_requested");
-
-    h.run(noticed_at + Duration::days(8)).await;
-
-    let c = commitment(&pool, PENDING).await;
-    assert_eq!(c.status.as_str(), "suspended");
-    assert_eq!(c.stripe_invoice_id, None);
-    assert_eq!(stripe_calls(&h), (0, 0, 0, 0, 0));
-
-    // No request on file: the next run resumes at the notice stage, never on
-    // the void invoice.
-    h.run(noticed_at + Duration::days(9) + Duration::hours(1))
-        .await;
-    let c = commitment(&pool, PENDING).await;
-    assert_ne!(c.status.as_str(), "suspended");
-    assert_ne!(c.stripe_invoice_id.as_deref(), Some("in_fee_left"));
-}
-
-#[test_db::test(seed)]
-async fn an_untagged_void_found_by_the_run_waives_the_fee(pool: MySqlPool) {
-    let h = harness(&pool, ON).await;
-    let noticed_at = left_invoiced(&pool, &h, "void").await;
-
-    h.run(noticed_at + Duration::days(8)).await;
-
-    assert_eq!(status(&pool, PENDING).await, "waived");
-    assert_eq!(stripe_calls(&h), (0, 0, 0, 0, 0));
-}
-
-#[test_db::test(seed)]
-async fn a_stale_withdrawn_tag_is_cleared_before_the_fee_is_charged(pool: MySqlPool) {
-    let h = harness(&pool, ON).await;
-    let noticed_at = left_invoiced(&pool, &h, "open").await;
-    // A withdrawal tagged it, then its void failed; now the fee may be charged.
-    h.stripe
-        .lock()
-        .unwrap()
-        .invoices
-        .get_mut("in_fee_left")
-        .unwrap()["metadata"]["withdrawn"] = json!("charging_off");
-
-    h.run(noticed_at + Duration::days(8)).await;
-
-    assert_eq!(status(&pool, PENDING).await, "fee_paid");
+    let held: Value = h.superuser("hold").await.json();
     assert_eq!(
-        h.stripe.lock().unwrap().invoices["in_fee_left"]["metadata"]["withdrawn"],
-        ""
+        held["commitment"]["allowed_actions"],
+        json!(["extend", "waive", "complete", "release"])
     );
+    assert!(held["commitment"]["review_hold_at"].is_string());
+    assert_eq!(held["commitment"]["review_hold_by"], 102);
+    let done: Value = h.superuser("complete").await.json();
+    assert_eq!(done["commitment"]["allowed_actions"], json!([]));
+    assert_eq!(done["commitment"]["extension_deadline_at"], Value::Null);
 }
 
 #[test_db::test(seed)]
-async fn the_voided_event_of_our_own_withdrawal_never_waives_the_fee(pool: MySqlPool) {
-    sqlx::query(
-        "UPDATE company_onboarding_commitments
-            SET status = 'fee_invoiced', stripe_invoice_id = 'in_fee_1', version = version + 1
-          WHERE company_id = 20400",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+async fn a_completed_cancellation_request_never_resumes_the_advance(pool: MySqlPool) {
+    only_pending(&pool).await;
     let h = harness(&pool, ON).await;
-    // Stripe's event can arrive before the run that voided it saves the outcome.
-    let mut ours = fee_event("evt_ours", "invoice.voided", "in_fee_1");
-    ours["data"]["object"]["metadata"]["withdrawn"] = json!("charging_off");
-    post_event(&h.server, &ours).await.assert_status_ok();
-    assert_eq!(status(&pool, PENDING).await, "fee_invoiced");
-
-    // A void by staff in Stripe still waives it.
-    post_event(
-        &h.server,
-        &fee_event("evt_staff", "invoice.voided", "in_fee_1"),
-    )
-    .await
-    .assert_status_ok();
-    assert_eq!(status(&pool, PENDING).await, "waived");
-}
-
-#[test_db::test(seed)]
-async fn a_refused_payment_is_retried_the_next_day_without_telling_staff(pool: MySqlPool) {
-    let h = harness(&pool, ON).await;
-    let noticed_at = left_invoiced(&pool, &h, "draft").await;
-    h.stripe.lock().unwrap().pay = Pay::Refused;
-
-    let first = h.run(noticed_at + Duration::days(8)).await;
-
-    assert_eq!(first.errors, 1);
-    assert_eq!(status(&pool, PENDING).await, "fee_invoiced");
-    assert!(h.subjects_to(STAFF_EMAIL).is_empty());
-    assert!(h.telegrams.lock().unwrap().is_empty());
-
-    h.stripe.lock().unwrap().pay = Pay::Paid;
-    h.run(noticed_at + Duration::days(9) + Duration::hours(1))
-        .await;
-    assert_eq!(status(&pool, PENDING).await, "fee_paid");
-    assert_eq!(stripe_calls(&h), (0, 1, 2, 0, 0));
-    assert!(h.subjects_to(STAFF_EMAIL).is_empty());
-}
-
-#[test_db::test(seed)]
-async fn a_payment_answered_with_an_error_but_paid_is_fee_paid(pool: MySqlPool) {
-    let h = harness(&pool, ON).await;
-    let noticed_at = left_invoiced(&pool, &h, "open").await;
-    h.stripe.lock().unwrap().pay = Pay::PaidButRefused;
-
-    h.run(noticed_at + Duration::days(8)).await;
-
-    assert_eq!(status(&pool, PENDING).await, "fee_paid");
-    assert_eq!(stripe_calls(&h), (0, 0, 1, 0, 0));
-    assert!(h.subjects_to(STAFF_EMAIL).is_empty());
-    assert!(h.telegrams.lock().unwrap().is_empty());
+    let (created, deadline) = clock(&pool).await;
+    request_cancellation(&pool, created + Duration::days(1)).await;
+    h.run(created + Duration::days(2)).await;
+    assert_eq!(status(&pool, PENDING).await, "suspended");
+    settle_cancellation(&pool, "completed", deadline).await;
+    for now in [deadline + Duration::hours(1), deadline + Duration::days(9)] {
+        let run = h.run(now).await;
+        assert_eq!((run.notices, run.advance_items), (0, 0));
+        assert_eq!(status(&pool, PENDING).await, "suspended");
+    }
+    assert!(h.mailbox.lock().unwrap().is_empty());
+    assert!(h.items().is_empty());
 }
 
 #[test_db::test(seed)]

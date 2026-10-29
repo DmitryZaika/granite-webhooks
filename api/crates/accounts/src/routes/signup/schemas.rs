@@ -7,7 +7,9 @@ use crate::signup::consent::{ConsentAcceptance, RenderedConsent};
 use crate::signup::intent::{CompanyDetails, SignupStatus};
 use crate::signup::payment::SavedMethod;
 use crate::signup::provision::BankVerification;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 /// Query of `GET /v1/public/plans`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -61,17 +63,23 @@ pub struct PlansResponse {
     pub addons: Vec<AddonInfo>,
     /// The price of the requested choice.
     pub quote: Quote,
+    /// False while self-serve signup is switched off: every
+    /// `/v1/public/signups*` call answers 503 `signup_unavailable`, so show
+    /// "paused" instead of the form. The plans are listed either way.
+    pub signups_enabled: bool,
 }
 
 /// The owner of the new company, who signs in with these.
 #[derive(Deserialize, ToSchema)]
 pub struct OwnerDetails {
-    /// Full name, up to 100 characters.
+    /// Full name, 2 to 80 characters: starts with a letter, then letters,
+    /// spaces, `'`, `’`, `.` and `-`.
     pub name: String,
-    /// Email, up to 254 bytes. Receives the code; used to sign in.
+    /// Email, up to 254 bytes: an ASCII local part and a dotted domain with
+    /// an alphabetic top-level domain. Receives the code; used to sign in.
     pub email: String,
     /// Password: at least 10 characters and at most 200 bytes (as sign-in
-    /// counts them; surrounding spaces are dropped).
+    /// counts them; surrounding spaces are dropped), not the email.
     pub password: String,
 }
 
@@ -180,6 +188,10 @@ pub struct Completion {
     /// be verified (status `awaiting_bank_verification`): show the verify
     /// panel. Null once the signup is completed.
     pub bank_verification: Option<BankVerification>,
+    /// True when this response signed the owner in (it sets the session
+    /// cookie); false when an earlier completion already did, so a retry
+    /// does not start a second session: send the owner to sign in.
+    pub signed_in: bool,
 }
 
 /// A request that passed validation.
@@ -223,21 +235,131 @@ fn valid_zip(zip: &str) -> bool {
     }
 }
 
-fn valid_phone(phone: &str) -> bool {
-    phone.strip_prefix('+').is_some_and(|digits| {
-        (8..=15).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
-    })
+/// The 50 states and DC.
+const US_STATES: [&str; 51] = [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA",
+    "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM",
+    "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA",
+    "WV", "WI", "WY",
+];
+
+/// Why a phone is not a dialable US/Canada number (`+1` and 10 digits).
+#[derive(Debug, PartialEq, Eq)]
+enum PhoneProblem {
+    Format,
+    /// Starts with 0 or 1, or is N11.
+    Area,
+    /// The exchange starts with 0 or 1.
+    Exchange,
+}
+
+fn phone_problem(phone: &str) -> Option<PhoneProblem> {
+    let digits = phone
+        .strip_prefix("+1")
+        .filter(|digits| digits.len() == 10 && digits.bytes().all(|b| b.is_ascii_digit()));
+    let Some([a, b, c, exchange, ..]) = digits.map(str::as_bytes) else {
+        return Some(PhoneProblem::Format);
+    };
+    if matches!(a, b'0' | b'1') || (*b == b'1' && *c == b'1') {
+        return Some(PhoneProblem::Area);
+    }
+    matches!(exchange, b'0' | b'1').then_some(PhoneProblem::Exchange)
+}
+
+/// As the payments app checks them (`companyForm.ts`).
+static NAME_CHARS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\p{L}[\p{L}\p{M}\s'’.-]*$").expect("valid regex"));
+static CITY_CHARS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[\p{L}\p{M}][\p{L}\p{M}\s'’.-]*$").expect("valid regex"));
+static STREET_CHARS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[\p{L}\p{M}\p{N}\s#/.,'’&-]+$").expect("valid regex"));
+static URL_SCHEME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^[a-z][a-z0-9+.-]*://").expect("valid regex"));
+static WEB_HOST: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$").expect("valid regex")
+});
+
+/// `acme.com` or `https://www.acme.com/about` as an http(s) URL whose host
+/// is a domain name, or `None` (`javascript:x`, `ftp://...`, an IP).
+fn website(site: &str) -> Option<String> {
+    if site.is_empty() || site.contains(char::is_whitespace) {
+        return None;
+    }
+    let with_scheme = if URL_SCHEME.is_match(site) {
+        site.to_string()
+    } else {
+        format!("https://{site}")
+    };
+    let url = url::Url::parse(&with_scheme).ok()?;
+    let web = matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some_and(|host| WEB_HOST.is_match(host))
+        && with_scheme.chars().count() <= 200;
+    web.then_some(with_scheme)
+}
+
+/// Stricter than the shared email check: an ASCII local part (1 to 64,
+/// no leading, trailing or double dot) and a dotted domain of ASCII labels
+/// with an alphabetic top-level domain.
+fn signup_email(email: &str) -> bool {
+    let mut parts = email.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let local_ok = (1..=64).contains(&local.len())
+        && local
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "!#$&'*+/=?^_`{|}~.-".contains(c))
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains("..");
+    let labels: Vec<&str> = domain.split('.').collect();
+    let labels_ok = labels.len() >= 2
+        && labels.iter().all(|label| {
+            (1..=63).contains(&label.len())
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+        });
+    let tld_ok = labels
+        .last()
+        .is_some_and(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()));
+    local_ok && labels_ok && tld_ok
+}
+
+/// Runs of whitespace as one space, trimmed (as the payments app sends it).
+fn clean(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 impl CreateSignupBody {
-    /// Checks and normalizes every field before anything is written.
+    /// Checks and normalizes every field before anything is written, with
+    /// the payments app's rules (`apps/payments/src/lib/companyForm.ts`).
     pub fn validate(self) -> ApiResult<ValidCreate> {
         let company = self.company;
-        let name = required(&company.name, "company name", 100)?;
-        let street = required(&company.street, "street address", 150)?;
-        let city = required(&company.city, "city", 80)?;
+        let name = required(&clean(&company.name), "company name", 100)?;
+        if name.chars().count() < 2 {
+            return Err(bad("Enter the full company name."));
+        }
+        let street = required(&clean(&company.street), "street address", 100)?;
+        if street.chars().count() < 3 || !street.chars().any(char::is_alphabetic) {
+            return Err(bad("Enter the street and number, like 1 Main St."));
+        }
+        if !STREET_CHARS.is_match(&street) {
+            return Err(bad(
+                "The street address can use letters, numbers, spaces and # / - . , ' & only.",
+            ));
+        }
+        let city = required(&clean(&company.city), "city", 50)?;
+        if !CITY_CHARS.is_match(&city) {
+            return Err(bad(
+                "The city can use letters, spaces and ' - . only, like St. Louis.",
+            ));
+        }
+        if city.chars().count() < 2 {
+            return Err(bad("Enter the full city name."));
+        }
         let state = company.state.trim().to_ascii_uppercase();
-        if state.len() != 2 || !state.bytes().all(|b| b.is_ascii_uppercase()) {
+        if !US_STATES.contains(&state.as_str()) {
             return Err(bad("Enter a two-letter state, like IN."));
         }
         let zip = company.zip.trim().to_string();
@@ -245,23 +367,42 @@ impl CreateSignupBody {
             return Err(bad("Enter a ZIP code like 46204 or 46204-1234."));
         }
         let phone = company.phone.trim().to_string();
-        if !valid_phone(&phone) {
-            return Err(bad(
-                "Enter a phone number with the country code, like +13175550100.",
-            ));
+        match phone_problem(&phone) {
+            None => {}
+            Some(PhoneProblem::Format) => {
+                return Err(bad(
+                    "Enter a phone number with the country code, like +13175550100.",
+                ));
+            }
+            Some(PhoneProblem::Area) => {
+                return Err(bad("Enter a phone number with a real area code, like 317."));
+            }
+            Some(PhoneProblem::Exchange) => {
+                return Err(bad("Enter a valid phone number, like +13175550100."));
+            }
         }
         let website = match company.website.as_deref().map(str::trim) {
             None | Some("") => None,
-            Some(site) if site.chars().count() > 200 || site.contains(char::is_whitespace) => {
-                return Err(bad("Enter a valid website or leave it empty."));
+            Some(site) => {
+                Some(website(site).ok_or_else(|| bad("Enter a valid website or leave it empty."))?)
             }
-            Some(site) => Some(site.to_string()),
         };
-        let owner_name = required(&self.owner.name, "owner name", 100)?;
+        let owner_name = required(&clean(&self.owner.name), "owner name", 80)?;
+        if !NAME_CHARS.is_match(&owner_name) {
+            return Err(bad(
+                "The owner name can use letters, spaces and ' - . only.",
+            ));
+        }
+        if owner_name.chars().count() < 2 {
+            return Err(bad("Enter the owner's full name."));
+        }
         let email = checked_email(&self.owner.email)?;
         // Bytes, as sign-in counts them.
         if email.len() > 254 {
             return Err(bad("The email can be up to 254 characters."));
+        }
+        if !signup_email(&email) {
+            return Err(bad("Enter a valid email"));
         }
         let password = self.owner.password.trim().to_string();
         if password.chars().count() < 10 {
@@ -275,6 +416,9 @@ impl CreateSignupBody {
         }
         if password.contains('\0') {
             return Err(bad("Password has a character we cannot accept."));
+        }
+        if password.to_lowercase() == email {
+            return Err(bad("Use a password that is different from your email."));
         }
         Ok(ValidCreate {
             plan: PlanChoice::normalized(self.plan.users, &self.plan.addons),
@@ -356,5 +500,120 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+    }
+
+    /// The good request with one field set to `value`.
+    fn with(field: &str, value: &str) -> CreateSignupBody {
+        body(|b| {
+            let value = value.to_string();
+            match field {
+                "name" => b.company.name = value,
+                "phone" => b.company.phone = value,
+                "website" => b.company.website = Some(value),
+                "street" => b.company.street = value,
+                "city" => b.company.city = value,
+                "state" => b.company.state = value,
+                "zip" => b.company.zip = value,
+                "owner" => b.owner.name = value,
+                "email" => b.owner.email = value,
+                "password" => b.owner.password = value,
+                _ => panic!("unknown field {field}"),
+            }
+        })
+    }
+
+    /// The payments app's rules (`usValidation.ts`, `companyForm.ts`).
+    #[test]
+    fn the_client_rules_hold_on_the_server() {
+        let long = |n: usize| "a".repeat(n);
+        let refused = [
+            ("phone", "+443175550100".into(), "country code"),
+            ("phone", "+1317555010".into(), "country code"),
+            ("phone", "+131755501000".into(), "country code"),
+            ("phone", "3175550100".into(), "country code"),
+            ("phone", "+10175550100".into(), "area code"),
+            ("phone", "+11175550100".into(), "area code"),
+            ("phone", "+19115550100".into(), "area code"),
+            ("phone", "+13170550100".into(), "valid phone"),
+            ("phone", "+13171550100".into(), "valid phone"),
+            ("state", "XX".into(), "state"),
+            ("state", "PR".into(), "state"),
+            ("zip", "4620A".into(), "ZIP"),
+            ("zip", "46204-123".into(), "ZIP"),
+            (
+                "street",
+                format!("1 {}", long(99)),
+                "street address can be up to 100",
+            ),
+            ("street", "1A".into(), "street and number"),
+            ("street", "1234".into(), "street and number"),
+            ("street", "1 Main St <b>".into(), "street address can use"),
+            ("city", long(51), "city can be up to 50"),
+            ("city", "Indy 500".into(), "city can use"),
+            ("city", ".Indy".into(), "city can use"),
+            ("city", "I".into(), "full city"),
+            ("owner", long(81), "owner name can be up to 80"),
+            ("owner", "Ann 2".into(), "owner name can use"),
+            ("owner", "-Ann".into(), "owner name can use"),
+            ("owner", "A".into(), "full name"),
+            ("name", "A".into(), "full company"),
+            ("name", long(101), "company name can be up to 100"),
+            ("name", "Acme\u{7}".into(), "cannot accept"),
+            ("email", "j\u{f6}rg@acme.test".into(), "email"),
+            ("email", "ann@acm\u{e9}.test".into(), "email"),
+            ("email", "ann@acme.123".into(), "email"),
+            ("email", "ann@acme.t".into(), "email"),
+            ("email", "ann..b@acme.test".into(), "email"),
+            ("email", ".ann@acme.test".into(), "email"),
+            ("email", "ann@-acme.test".into(), "email"),
+            ("email", format!("{}@acme.test", long(65)), "email"),
+            ("website", "javascript:x".into(), "website"),
+            ("website", "javascript://acme.com".into(), "website"),
+            ("website", "ftp://acme.com".into(), "website"),
+            ("website", "http://10.0.0.1".into(), "website"),
+            ("website", "localhost".into(), "website"),
+            ("website", format!("acme.com/{}", long(200)), "website"),
+            (
+                "password",
+                "ANN@acme.test".into(),
+                "different from your email",
+            ),
+        ];
+        for (field, value, needle) in refused {
+            let text: String = message(with(field, &value).validate());
+            assert!(text.contains(needle), "{field} {value:?}: {text}");
+        }
+
+        let accepted = [
+            ("state", "dc".to_string()),
+            ("zip", "20001-1234".into()),
+            ("street", "12 O\u{2019}Neil Ave., Suite #4/B & Co-op".into()),
+            ("street", format!("1 {}", long(98))),
+            ("city", "Winston-Salem".into()),
+            ("city", "St. Louis".into()),
+            ("city", "Coeur d'Al\u{e8}ne".into()),
+            ("owner", "Mary-Jane O'Neil Jr.".into()),
+            ("owner", long(80)),
+            ("email", "first.last+tag@sub.acme.co".into()),
+            ("website", "acme.com".into()),
+            ("website", "http://www.acme.com/about".into()),
+            ("phone", "+12125550100".into()),
+        ];
+        for (field, value) in accepted {
+            assert!(with(field, &value).validate().is_ok(), "{field} {value:?}");
+        }
+    }
+
+    #[test]
+    fn text_is_cleaned_and_the_website_gets_a_scheme() {
+        let valid = body(|b| {
+            b.company.name = "  Acme   Stone ".into();
+            b.company.website = Some(" acme.com ".into());
+        })
+        .validate()
+        .ok()
+        .unwrap();
+        assert_eq!(valid.company.name, "Acme Stone");
+        assert_eq!(valid.company.website.as_deref(), Some("https://acme.com"));
     }
 }

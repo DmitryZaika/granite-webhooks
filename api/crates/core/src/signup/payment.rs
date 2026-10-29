@@ -230,12 +230,19 @@ pub fn is_verifying(setup_intent: &Value) -> bool {
         && setup_intent["next_action"]["type"] == "verify_with_microdeposits"
 }
 
+/// When a bank account waiting for micro-deposits must be verified: the
+/// SetupIntent's `created` + [`BANK_VERIFICATION_DAYS`] (Stripe's timeout
+/// runs from there). `None` without a `created`.
+pub fn bank_verification_due(setup_intent: &Value) -> Option<DateTime<Utc>> {
+    let created = DateTime::from_timestamp(setup_intent["created"].as_i64()?, 0)?;
+    Some(created + Duration::days(BANK_VERIFICATION_DAYS))
+}
+
 /// The saved method of a SetupIntent, or `None` when nothing is usable.
 ///
 /// Read with its `payment_method` expanded (`Stripe::setup_intent`):
 /// `ready` when it succeeded, `verifying` while micro-deposits are pending.
-/// A verifying one is due `created` + [`BANK_VERIFICATION_DAYS`]; callers
-/// holding a stored deadline put theirs in `verify_by`.
+/// A verifying one is due [`bank_verification_due`].
 pub fn saved_method(setup_intent: &Value) -> Option<SavedMethod> {
     let status = if setup_intent["status"] == "succeeded" {
         SavedMethodStatus::Ready
@@ -259,11 +266,10 @@ pub fn saved_method(setup_intent: &Value) -> Option<SavedMethod> {
     };
     let (verify_url, verify_by) = if status == SavedMethodStatus::Verifying {
         let microdeposits = &setup_intent["next_action"]["verify_with_microdeposits"];
-        let due = setup_intent["created"]
-            .as_i64()
-            .and_then(|created| DateTime::from_timestamp(created, 0))
-            .map(|created| created + Duration::days(BANK_VERIFICATION_DAYS));
-        (text(&microdeposits["hosted_verification_url"]), due)
+        (
+            text(&microdeposits["hosted_verification_url"]),
+            bank_verification_due(setup_intent),
+        )
     } else {
         (None, None)
     };

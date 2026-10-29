@@ -3,8 +3,8 @@
 //!
 //! In order, each step failing on its own: a daily prune of old Stripe
 //! webhook event ids, a 6-hourly reconciliation of Stripe-billed companies
-//! with Stripe, and the reminder emails to managers (payment failed, asked to
-//! pay, first charge coming). Port of the CRM's
+//! with Stripe, and the reminder emails to managers (payment method hold,
+//! first charge coming, payment failed, asked to pay). Port of the CRM's
 //! `api.subscription-reminders.process.ts`.
 
 use crate::auth::job::JobCaller;
@@ -43,7 +43,6 @@ const WEBHOOK_EVENT_RETENTION_DAYS: u32 = 90;
 /// Well under the 10 s other billing writers wait for the company lock, which
 /// is held while the email is sent.
 const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const DEFAULT_FROM_ADDRESS: &str = "noreply@granite-manager.com";
 /// Companies re-read from Stripe per run, and the time they may take.
 const RECONCILE_BATCH: u32 = 50;
 const RECONCILE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
@@ -361,10 +360,15 @@ async fn reconcile(state: &AppState, now: NaiveDateTime) -> Option<ReconcileRun>
 /// renewal or a first payment asked for (day 0, three days left, paused
 /// tomorrow, paused, settled) and one notice 7 days before the first charge
 /// of a self-serve subscription (dated by Stripe's trial end; none when the
-/// subscription is set to cancel by then). Each recipient gets each reminder
+/// subscription is set to cancel by then), and the hold email of a
+/// self-serve company whose saved payment method stopped working (a blocked
+/// bank account or a dispute: the Stripe webhook sends it first, a run sends
+/// it to the Managers who did not get it). Each recipient gets each reminder
 /// once; a refused email is retried up to 3 times, 5 minutes apart; an email
-/// whose outcome is unknown is never resent. A run sends at most 20 emails
-/// and starts no new company after 14 seconds. Then the amount-change
+/// whose outcome is unknown is never resent, except a hold email (retried
+/// like a refused one). Hold emails and first-charge notices go before the
+/// dunning reminders. A run sends at most 20 emails and starts no new
+/// company after 14 seconds. Then the amount-change
 /// notices (none started after 17 seconds): when a self-serve company's
 /// monthly total changed (users or add-ons), its Managers get one email a day
 /// with the old and new totals and the charge the new total first applies to
@@ -407,11 +411,7 @@ pub async fn run(
     let effects = LiveReminders {
         state: &state,
         started,
-        from_address: std::env::var("BILLING_EMAIL_FROM_ADDRESS")
-            .ok()
-            .map(|address| address.trim().to_string())
-            .filter(|address| !address.is_empty())
-            .unwrap_or_else(|| DEFAULT_FROM_ADDRESS.to_string()),
+        from_address: crate::billing::from_address(),
     };
     let tick = process_billing_reminders(
         &MySqlReminderStore(&state.pool),

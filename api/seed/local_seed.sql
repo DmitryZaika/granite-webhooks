@@ -565,8 +565,8 @@ INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VA
 -- Onboarding call (ids 20400-20499). Both companies are self-serve
 -- (subscription plan); dates are relative to the reset.
 -- 20400 Onboarding Stone: commitment pending, signed up 3 days ago, deadline in
---   27 days, fee $600.00; trialing with cus_seed_onboarding and an
---   onboarding_fee consent.
+--   27 days, advance $300.00 stated at signup; trialing (sub_seed_onboarding)
+--   with cus_seed_onboarding and an onboarding_advance consent.
 -- 20401 Booked Stone: commitment booked, signed up 10 days ago, deadline in 20
 --   days, the call in 5 days 15:00-16:00 UTC.
 -- Users: 20400 Owen Manager (admin, Manager), 20401 Rita Rep (SalesRep),
@@ -594,23 +594,23 @@ INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VA
   ('aaaaaaaa-0000-4000-8000-000000020402', 20402, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
   ('aaaaaaaa-0000-4000-8000-000000020403', 20403, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);
 
-INSERT INTO company_billing (company_id, stripe_customer_id, subscription_status, payment_status, trial_end_at) VALUES
-  (20400, 'cus_seed_onboarding', 'trialing', 'none', UTC_TIMESTAMP() + INTERVAL 87 DAY);
+INSERT INTO company_billing (company_id, stripe_customer_id, stripe_subscription_id, subscription_status, payment_status, trial_end_at) VALUES
+  (20400, 'cus_seed_onboarding', 'sub_seed_onboarding', 'trialing', 'none', UTC_TIMESTAMP() + INTERVAL 87 DAY);
 
 INSERT INTO consent_records (company_id, user_id, source, kind, document_version, checkbox_text, checkbox_sha256, amounts_and_dates, accepted_at) VALUES
-  (20400, 20400, 'self_serve', 'onboarding_fee', 'terms-2026-10-21',
-   'I agree to complete onboarding within 30 days or pay the onboarding fee of $600.00.',
-   SHA2('I agree to complete onboarding within 30 days or pay the onboarding fee of $600.00.', 256),
-   JSON_OBJECT('fee_cents', 60000), UTC_TIMESTAMP() - INTERVAL 3 DAY);
+  (20400, 20400, 'self_serve', 'onboarding_advance', 'onboarding-advance-2026-10-v2',
+   'Onboarding is free. If it is not completed within 30 days, the next charge at least 7 days after a notice also includes the following month in advance ($300.00 plus applicable sales tax).',
+   SHA2('Onboarding is free. If it is not completed within 30 days, the next charge at least 7 days after a notice also includes the following month in advance ($300.00 plus applicable sales tax).', 256),
+   JSON_OBJECT('onboarding_advance_cents', 30000), UTC_TIMESTAMP() - INTERVAL 3 DAY);
 
 INSERT INTO company_onboarding_commitments
-  (company_id, status, deadline_at, original_deadline_at, tolled_days, extension_used, fee_cents,
+  (company_id, status, deadline_at, original_deadline_at, tolled_days, extension_used, signup_advance_cents,
    calendly_invitee_uri, calendly_event_uri, calendly_reschedule_url, calendly_cancel_url,
    booked_start_at, booked_end_at, booked_at, version, created_at, updated_at) VALUES
-  (20400, 'pending', UTC_TIMESTAMP() + INTERVAL 27 DAY, UTC_TIMESTAMP() + INTERVAL 27 DAY, 0, 0, 60000,
+  (20400, 'pending', UTC_TIMESTAMP() + INTERVAL 27 DAY, UTC_TIMESTAMP() + INTERVAL 27 DAY, 0, 0, 30000,
    NULL, NULL, NULL, NULL, NULL, NULL, NULL,
    0, UTC_TIMESTAMP() - INTERVAL 3 DAY, UTC_TIMESTAMP() - INTERVAL 3 DAY),
-  (20401, 'booked', UTC_TIMESTAMP() + INTERVAL 20 DAY, UTC_TIMESTAMP() + INTERVAL 20 DAY, 0, 0, 60000,
+  (20401, 'booked', UTC_TIMESTAMP() + INTERVAL 20 DAY, UTC_TIMESTAMP() + INTERVAL 20 DAY, 0, 0, 30000,
    'https://api.calendly.com/scheduled_events/SEED-EVT-20401/invitees/SEED-INV-20401',
    'https://api.calendly.com/scheduled_events/SEED-EVT-20401',
    'https://calendly.com/reschedulings/SEED-INV-20401',
@@ -621,8 +621,8 @@ INSERT INTO company_onboarding_commitments
    1, UTC_TIMESTAMP() - INTERVAL 10 DAY, UTC_TIMESTAMP() - INTERVAL 2 DAY);
 
 INSERT INTO company_onboarding_commitment_events (company_id, kind, from_status, to_status, deadline_at, actor_user_id, detail, created_at) VALUES
-  (20400, 'created', NULL, 'pending', UTC_TIMESTAMP() + INTERVAL 27 DAY, NULL, JSON_OBJECT('fee_cents', 60000), UTC_TIMESTAMP() - INTERVAL 3 DAY),
-  (20401, 'created', NULL, 'pending', UTC_TIMESTAMP() + INTERVAL 20 DAY, NULL, JSON_OBJECT('fee_cents', 60000), UTC_TIMESTAMP() - INTERVAL 10 DAY),
+  (20400, 'created', NULL, 'pending', UTC_TIMESTAMP() + INTERVAL 27 DAY, NULL, JSON_OBJECT('signup_advance_cents', 30000), UTC_TIMESTAMP() - INTERVAL 3 DAY),
+  (20401, 'created', NULL, 'pending', UTC_TIMESTAMP() + INTERVAL 20 DAY, NULL, JSON_OBJECT('signup_advance_cents', 30000), UTC_TIMESTAMP() - INTERVAL 10 DAY),
   (20401, 'booked', 'pending', 'booked', UTC_TIMESTAMP() + INTERVAL 20 DAY, NULL, JSON_OBJECT('source', 'widget'), UTC_TIMESTAMP() - INTERVAL 2 DAY);
 
 -- Self-serve account page (ids 20500-20599), for the payments app's e2e

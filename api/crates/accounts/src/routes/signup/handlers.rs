@@ -3,6 +3,7 @@ use super::schemas::{
     CreatedSignup, PaymentMode, PaymentSetup, PlansQuery, PlansResponse, ResentCode, Signup,
     VerifyBody,
 };
+use crate::auth::ClientIp;
 use crate::billing::catalog::{
     Catalog, DEFAULT_USERS, FREE_MONTHS, INCLUDED_USERS, MAX_USERS, MIN_USERS, PlanChoice,
     signup_day,
@@ -15,7 +16,7 @@ use crate::routes::auth::{start_session, with_cookies};
 use crate::signup::intent::{self, Intent, NewIntent, SignupStatus};
 use crate::signup::payment::{self, SavedMethod, SavedMethodStatus, Setup};
 use crate::signup::{
-    RequestMeta, consent, email_lock_name, emails, ensure_enabled, funnel, provision,
+    RequestMeta, consent, email_lock_name, emails, ensure_enabled, funnel, notify, provision,
 };
 use crate::state::AppState;
 use axum::Json;
@@ -34,6 +35,14 @@ const RESEND_SECONDS: i64 = 60;
 const MAX_CODES: u8 = 5;
 /// Wrong codes before the signup locks until a new code.
 const MAX_ATTEMPTS: u8 = 5;
+/// Signups one email can start per hour (codes or account-exists emails).
+const SIGNUPS_PER_EMAIL_HOUR: i64 = 3;
+/// Signups one client IP can start per hour.
+const SIGNUPS_PER_IP_HOUR: i64 = 10;
+/// The `code_hash` of a signup whose email already has an account: no code
+/// was sent and none matches (not hex), so verification fails like a wrong
+/// code.
+const NO_CODE: &str = "none";
 
 fn coded(status: StatusCode, code: &'static str, message: &str) -> ApiError {
     ApiError::coded(status, code, message)
@@ -212,7 +221,9 @@ const fn addon_description(key: AddonKey) -> &'static str {
 /// months, user bounds) and a quote for the choice in the query. Money is in
 /// cents, before sales tax. `users` defaults to 5 and is clamped to 1..=500;
 /// repeat `addon` for each add-on and unknown values are ignored. Works even
-/// while signups are switched off. No session needed.
+/// while signups are switched off: `signups_enabled` is false then, and every
+/// `/v1/public/signups*` call answers 503 `signup_unavailable` (show "paused"
+/// before the buyer fills in the form). No session needed.
 #[crate::openapi::path(
     get,
     path = "/v1/public/plans",
@@ -262,6 +273,7 @@ pub async fn plans(
             })
             .collect(),
         quote,
+        signups_enabled: state.signup.enabled,
     }))
 }
 
@@ -272,33 +284,99 @@ fn lock_error(err: LockError) -> ApiError {
     }
 }
 
-/// Which message an existing account's email gets.
-async fn email_conflict(state: &AppState, email: &str) -> ApiResult<Option<ApiError>> {
-    let deleted: Option<bool> = sqlx::query_scalar(
+/// Whether `email` already has an account: `Some(true)` when the only one
+/// is deleted, `None` when it has none.
+async fn existing_account(state: &AppState, email: &str) -> ApiResult<Option<bool>> {
+    Ok(sqlx::query_scalar(
         "SELECT is_deleted FROM users WHERE LOWER(TRIM(email)) = ?
           ORDER BY is_deleted ASC LIMIT 1",
     )
     .bind(email)
     .fetch_optional(&state.pool)
+    .await?)
+}
+
+/// Seconds until the email (and the client IP) may start another signup, or
+/// `None` while under [`SIGNUPS_PER_EMAIL_HOUR`] / [`SIGNUPS_PER_IP_HOUR`].
+/// Counts every signup started in the last hour, whatever became of it.
+/// Never limited with `SIGNUP_RATE_LIMITS=off` and a `sk_test_` key.
+async fn start_limited(
+    state: &AppState,
+    email: &str,
+    ip: Option<&str>,
+    now: NaiveDateTime,
+) -> ApiResult<Option<i64>> {
+    if state.signup.rate_limits_off && state.stripe.is_test_mode() {
+        return Ok(None);
+    }
+    let since = now - chrono::Duration::hours(1);
+    let wait = |(count, oldest): (i64, Option<NaiveDateTime>), limit: i64| {
+        (count >= limit).then(|| {
+            oldest.map_or(3600, |at| {
+                (at + chrono::Duration::hours(1) - now).num_seconds().max(1)
+            })
+        })
+    };
+    let by_email: (i64, Option<NaiveDateTime>) = sqlx::query_as(
+        "SELECT COUNT(*), MIN(created_at) FROM signup_intents
+          WHERE email = ? AND created_at > ?",
+    )
+    .bind(email)
+    .bind(since)
+    .fetch_one(&state.pool)
     .await?;
-    Ok(deleted.map(|deleted| {
-        let message = if deleted {
-            "This email belongs to a deleted account. Use a different email."
-        } else {
-            "An account already uses this email."
-        };
-        coded(StatusCode::CONFLICT, "email_taken", message)
-    }))
+    if let Some(wait) = wait(by_email, SIGNUPS_PER_EMAIL_HOUR) {
+        return Ok(Some(wait));
+    }
+    let Some(ip) = ip else {
+        return Ok(None);
+    };
+    let by_ip: (i64, Option<NaiveDateTime>) = sqlx::query_as(
+        "SELECT COUNT(*), MIN(created_at) FROM signup_intents
+          WHERE ip = ? AND created_at > ?",
+    )
+    .bind(ip)
+    .bind(since)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(wait(by_ip, SIGNUPS_PER_IP_HOUR))
+}
+
+/// 429 `too_many_signups` with `retry_after_seconds` and `Retry-After`.
+fn too_many_signups(wait: i64) -> Response {
+    let mut response = coded(
+        StatusCode::TOO_MANY_REQUESTS,
+        "too_many_signups",
+        "Too many signup attempts. Try again later.",
+    )
+    .with_field("retry_after_seconds", wait)
+    .into_response();
+    response
+        .headers_mut()
+        .insert(axum::http::header::RETRY_AFTER, wait.into());
+    response
+}
+
+/// What the locked part of [`create`] did.
+enum Started {
+    /// Stored; `Some(deleted)` when the email already has an account.
+    Stored(Option<bool>),
+    /// Over the hourly limit: seconds to wait.
+    Limited(i64),
 }
 
 /// Start a signup
 ///
-/// Step 1 of self-serve signup. Checks the company and owner details, refuses
-/// an email that already has an account (deleted accounts included), stores
+/// Step 1 of self-serve signup. Checks the company and owner details, stores
 /// the signup and emails a 6-digit code (valid 15 minutes). The returned `id`
 /// is the secret of the rest of the flow: next call `POST
 /// /v1/public/signups/{id}/verification` with the code. The signup expires
-/// after 24 hours. Answers 503 while signups are switched off.
+/// after 24 hours. Answers the same for every email: when the email already
+/// has an account (deleted ones included), that address gets an email saying
+/// so (with a sign-in link) instead of a code, and the signup can never be
+/// verified (every code is wrong). At most 3 signups per email and 10 per
+/// client IP per hour (429 `too_many_signups` with `retry_after_seconds` and
+/// a `Retry-After` header). Answers 503 while signups are switched off.
 #[crate::openapi::path(
     post,
     path = "/v1/public/signups",
@@ -308,21 +386,35 @@ async fn email_conflict(state: &AppState, email: &str) -> ApiResult<Option<ApiEr
     responses(
         (status = 201, description = "Signup created, code emailed", body = CreatedSignup),
         (status = 400, description = "A field is missing or invalid; the message names it", body = ErrorBody),
-        (status = 409, description = "An account already uses the email (code email_taken)", body = CodedErrorBody),
+        (status = 429, description = "Too many signups from this email or client IP in the last hour (code too_many_signups, retry_after_seconds; Retry-After header)", body = CodedErrorBody),
         (status = 502, description = "The code email could not be sent; the signup was dropped", body = ErrorBody),
         (status = 503, description = "Signups are switched off (code signup_unavailable), another request for this email is running: try again in a moment (code signup_busy), or prices are unavailable (code payments_unavailable)", body = CodedErrorBody),
     )
 )]
 pub async fn create(
     State(state): State<AppState>,
+    ClientIp(client_ip): ClientIp,
     headers: HeaderMap,
     JsonBody(body): JsonBody<CreateSignupBody>,
-) -> ApiResult<(StatusCode, Json<CreatedSignup>)> {
+) -> ApiResult<Response> {
     ensure_enabled(&state.signup)?;
     let valid = body.validate()?;
+    let meta = RequestMeta::from_request(&client_ip, &headers);
+    // Before the catalog read, bcrypt and the email.
+    if let Some(wait) = start_limited(
+        &state,
+        &valid.email,
+        meta.ip.as_deref(),
+        crate::billing::now(),
+    )
+    .await?
+    {
+        return Ok(too_many_signups(wait));
+    }
     // Fails closed (503) before any write when the prices are unavailable or
     // no longer match the consent texts.
     catalog(&state).await?;
+    // Hashed for every email, so an existing account answers as slowly.
     let password = valid.password.clone();
     let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(password, 10))
         .await
@@ -330,52 +422,68 @@ pub async fn create(
         .map_err(|_| ApiError::BadRequest("Password has a character we cannot accept.".into()))?;
     let id = uuid::Uuid::new_v4().to_string();
     let code = new_code()?;
-    let meta = RequestMeta::from_headers(&headers);
 
     let lock = NamedLock::acquire(&state.pool, &email_lock_name(&valid.email), 10)
         .await
         .map_err(lock_error)?;
     let stored = async {
-        if let Some(conflict) = email_conflict(&state, &valid.email).await? {
-            return Err(conflict);
+        let now = crate::billing::now();
+        if let Some(wait) = start_limited(&state, &valid.email, meta.ip.as_deref(), now).await? {
+            return Ok(Started::Limited(wait));
         }
+        let existing = existing_account(&state, &valid.email).await?;
+        let code_hash = if existing.is_some() {
+            NO_CODE.to_string()
+        } else {
+            code_hash(&state, &id, &code)
+        };
         let new = NewIntent {
             id: &id,
             email: &valid.email,
-            code_hash: &code_hash(&state, &id, &code),
+            code_hash: &code_hash,
             company: &valid.company,
             owner_name: &valid.owner_name,
             password_hash: &password_hash,
             plan: &valid.plan,
             ip: meta.ip.as_deref(),
             user_agent: meta.user_agent.as_deref(),
-            now: crate::billing::now(),
+            now,
         };
         intent::insert(&state.pool, &new).await?;
-        Ok(())
+        Ok::<_, ApiError>(Started::Stored(existing))
     }
     .await;
     lock.release().await;
-    stored?;
+    let existing = match stored? {
+        Started::Limited(wait) => return Ok(too_many_signups(wait)),
+        Started::Stored(existing) => existing,
+    };
 
-    if let Err(err) = emails::send_code(&state, &valid.email, &code).await {
+    let sent = match existing {
+        None => emails::send_code(&state, &valid.email, &code).await,
+        Some(deleted) => notify::send_account_exists(&state, &valid.email, deleted).await,
+    };
+    if let Err(err) = sent {
         intent::expire(&state.pool, &id, crate::billing::now()).await?;
         return Err(err);
     }
-    funnel::capture(
-        &state,
-        "signup_started",
-        &id,
-        json!({ "users_estimate": valid.plan.users, "addons": addon_keys(&valid.plan) }),
-    )
-    .await;
+    if existing.is_none() {
+        funnel::capture(
+            &state,
+            "signup_started",
+            &id,
+            json!({ "users_estimate": valid.plan.users, "addons": addon_keys(&valid.plan) }),
+        )
+        .await;
+    }
     Ok((
         StatusCode::CREATED,
         Json(CreatedSignup {
             id,
             resend_in_seconds: RESEND_SECONDS,
         }),
-    ))
+    )
+        .into_response())
 }
 
 /// Read a signup
@@ -461,7 +569,8 @@ pub async fn update_plan(
 /// Emails a new 6-digit code (the old one stops working and the wrong-code
 /// count restarts). Only while the email is not verified yet. At most one per
 /// 60 seconds (429 `resend_limited` with `retry_after_seconds`) and 5 codes per
-/// signup (429 `resend_limited`).
+/// signup (429 `resend_limited`). An email that already has an account gets
+/// the account-exists email again instead, answered the same.
 #[crate::openapi::path(
     post,
     path = "/v1/public/signups/{id}/code",
@@ -488,6 +597,12 @@ pub async fn resend_code(
         return Err(invalid_state("Your email is already verified."));
     }
     let code = new_code()?;
+    let existing = existing_account(&state, &intent.email).await?;
+    let hash = if existing.is_some() {
+        NO_CODE.to_string()
+    } else {
+        code_hash(&state, &intent.id, &code)
+    };
     let now = crate::billing::now();
     let updated = sqlx::query(
         "UPDATE signup_intents
@@ -495,7 +610,7 @@ pub async fn resend_code(
                 code_sent_at = ?, code_expires_at = ?, updated_at = ?
           WHERE id = ? AND status = 'started' AND codes_sent < ? AND code_sent_at <= ?",
     )
-    .bind(code_hash(&state, &intent.id, &code))
+    .bind(hash)
     .bind(now)
     .bind(now + chrono::Duration::minutes(intent::CODE_MINUTES))
     .bind(now)
@@ -524,8 +639,13 @@ pub async fn resend_code(
             "You have asked for 5 codes. Start again or email support@granite-manager.com.",
         ));
     }
-    emails::send_code(&state, &intent.email, &code).await?;
-    funnel::capture(&state, "signup_code_resent", &id, json!({})).await;
+    match existing {
+        None => {
+            emails::send_code(&state, &intent.email, &code).await?;
+            funnel::capture(&state, "signup_code_resent", &id, json!({})).await;
+        }
+        Some(deleted) => notify::send_account_exists(&state, &intent.email, deleted).await?,
+    }
     Ok(Json(ResentCode {
         resend_in_seconds: RESEND_SECONDS,
     }))
@@ -641,7 +761,7 @@ pub async fn verify_code(
 ///
 /// The checkboxes rendered by the server for this signup's plan and dates,
 /// in the order to show them: terms, auto_renewal, per_user_pricing,
-/// onboarding_fee (`payment_method_type` null: always shown), then
+/// onboarding_advance (`payment_method_type` null: always shown), then
 /// card_authorization (`card`) and ach_authorization (`us_bank_account`):
 /// show only the one matching the method selected in the Payment Element
 /// (or the saved `payment_method`). The page shows `text` verbatim and sends
@@ -754,8 +874,8 @@ pub async fn payment_setup(
 /// ach_authorization). The server renders them again and refuses with 409
 /// `consents_changed` when anything differs (fetch the texts again). Then
 /// creates the company, the owner account and the subscription with a free
-/// period, signs the owner in (the session cookie is set on this response)
-/// and returns where to go next. A bank account still waiting for
+/// period, signs the owner in (the session cookie is set on this response,
+/// `signed_in` true) and returns where to go next. A bank account still waiting for
 /// micro-deposits makes the company and signs the owner in, but the
 /// subscription waits for the verification (`bank_verification` set, status
 /// `awaiting_bank_verification`; calling again answers the same without a
@@ -771,7 +891,7 @@ pub async fn payment_setup(
     params(("id" = String, Path, description = "Signup id from `create_signup`")),
     request_body = CompletionBody,
     responses(
-        (status = 200, description = "The company exists; Set-Cookie signs the owner in unless that happened before. `bank_verification` is set while the bank account waits for micro-deposits", body = Completion),
+        (status = 200, description = "The company exists; Set-Cookie signs the owner in unless that happened before (`signed_in` says which). `bank_verification` is set while the bank account waits for micro-deposits", body = Completion),
         (status = 400, description = "Malformed body", body = ErrorBody),
         (status = 404, description = "Unknown signup (code signup_expired)", body = CodedErrorBody),
         (status = 409, description = "Texts changed, wrong state, email taken or payment not ready (codes consents_changed, invalid_state, email_taken, payment_not_ready)", body = CodedErrorBody),
@@ -783,6 +903,7 @@ pub async fn payment_setup(
 pub async fn complete(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    ClientIp(client_ip): ClientIp,
     headers: HeaderMap,
     JsonBody(body): JsonBody<CompletionBody>,
 ) -> ApiResult<Response> {
@@ -791,12 +912,13 @@ pub async fn complete(
         &state,
         &id,
         &body.consents,
-        &RequestMeta::from_headers(&headers),
+        &RequestMeta::from_request(&client_ip, &headers),
     )
     .await?;
     let response = Json(Completion {
         redirect_url: outcome.redirect_url,
         bank_verification: outcome.bank_verification,
+        signed_in: outcome.sign_in.is_some(),
     })
     .into_response();
     match outcome.sign_in {

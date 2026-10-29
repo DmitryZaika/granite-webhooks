@@ -1,6 +1,7 @@
 use crate::ai::Ai;
 use crate::billing::BillingPlan;
 use crate::billing::stripe::Stripe;
+use crate::env_check::{ConfigError, EnvSnapshot, config_problems};
 use crate::maps::Maps;
 use crate::phone_config::PhoneConfig;
 use crate::push::Push;
@@ -110,7 +111,7 @@ pub struct AppState {
     /// Granite Phone settings (`PHONE_*`, `TELNYX_PUBLIC_KEY`,
     /// `TELNYX_FALLBACK_TEXML_URL`).
     pub phone: PhoneConfig,
-    /// Onboarding with Dima: Calendly and `ONBOARDING_FEE_CHARGING`.
+    /// Onboarding with Dima: Calendly and `ONBOARDING_ADVANCE_CHARGING`.
     pub onboarding_call: crate::onboarding_call::Config,
     /// `BILLING_ALERT_EMAIL`: where internal payment notices go (returned
     /// bank debits, blocked accounts, disputes); unset, none are sent.
@@ -196,10 +197,6 @@ impl SignWellWebhookKeys {
         }
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error("SESSION_SECRET environment variable must be set")]
-pub struct MissingSessionSecret;
 
 impl AppState {
     pub fn new(pool: MySqlPool, session_secret: &str, allowed_origins: &str) -> Self {
@@ -458,8 +455,14 @@ impl AppState {
         self
     }
 
-    pub fn from_env(pool: MySqlPool) -> Result<Self, MissingSessionSecret> {
-        let secret = std::env::var("SESSION_SECRET").map_err(|_| MissingSessionSecret)?;
+    /// Fails, naming the variables (never their values), when the environment
+    /// lacks something a switched-on feature needs or holds a malformed value.
+    pub fn from_env(pool: MySqlPool) -> Result<Self, ConfigError> {
+        let problems = config_problems(&EnvSnapshot::from_process());
+        if !problems.is_empty() {
+            return Err(ConfigError(problems));
+        }
+        let secret = std::env::var("SESSION_SECRET").unwrap_or_default();
         let origins = std::env::var("API_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_string());
         let storage = Storage::from_env();
@@ -541,6 +544,8 @@ impl AppState {
                 Method::DELETE,
             ])
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+            // The payments app reads a 429's wait (`too_many_signups`).
+            .expose_headers([header::RETRY_AFTER])
     }
 }
 

@@ -5,7 +5,7 @@
 //! A commitment is written only at the version it was read at: a save that
 //! finds another version is a [`SaveError::Conflict`] the caller handles.
 
-use super::commitment::{Booking, Commitment, Event, Outcome, Status};
+use super::commitment::{AdvanceTerms, Booking, Commitment, Event, Outcome, Status};
 use crate::billing::MANAGER_POSITION;
 use crate::billing::reminders::{
     REMINDER_MAX_ATTEMPTS, REMINDER_RETRY_AFTER_MINUTES, STUCK_SENDING_MINUTES,
@@ -17,8 +17,8 @@ use sqlx::{FromRow, MySqlConnection, MySqlPool};
 
 /// `billing_reminder_emails.cycle_kind` of the onboarding emails.
 pub const EMAIL_CYCLE_KIND: &str = "onboarding";
-/// `billing_reminder_emails.step` of the fee notice.
-pub const NOTICE_STEP: &str = "fee_notice";
+/// `billing_reminder_emails.step` of the advance notice.
+pub const NOTICE_STEP: &str = "advance_notice";
 /// Users the outside-widget booking search asks Calendly about, at most.
 pub const SEARCH_EMAILS: usize = 5;
 
@@ -46,7 +46,7 @@ struct CommitmentRow {
     original_deadline_at: NaiveDateTime,
     tolled_days: i32,
     extension_used: bool,
-    fee_cents: i32,
+    signup_advance_cents: i32,
     calendly_invitee_uri: Option<String>,
     calendly_event_uri: Option<String>,
     calendly_reschedule_url: Option<String>,
@@ -61,8 +61,15 @@ struct CommitmentRow {
     suspended_at: Option<NaiveDateTime>,
     notice_sent_at: Option<NaiveDateTime>,
     notice_cycle_at: Option<NaiveDateTime>,
-    charge_after: Option<NaiveDateTime>,
+    advance_cents: Option<i32>,
+    charge_at: Option<NaiveDateTime>,
+    prepaid_from_at: Option<NaiveDateTime>,
+    prepaid_until_at: Option<NaiveDateTime>,
+    advance_item_id: Option<String>,
     stripe_invoice_id: Option<String>,
+    advance_credit_id: Option<String>,
+    review_hold_at: Option<NaiveDateTime>,
+    review_hold_by: Option<i32>,
     availability_checked_on: Option<NaiveDate>,
     version: i32,
     created_at: NaiveDateTime,
@@ -92,6 +99,22 @@ impl CommitmentRow {
             }
             _ => None,
         };
+        let terms = match (
+            self.advance_cents,
+            self.charge_at,
+            self.prepaid_from_at,
+            self.prepaid_until_at,
+        ) {
+            (Some(cents), Some(charge_at), Some(prepaid_from), Some(prepaid_until)) => {
+                Some(AdvanceTerms {
+                    advance_cents: i64::from(cents),
+                    charge_at,
+                    prepaid_from,
+                    prepaid_until,
+                })
+            }
+            _ => None,
+        };
         Ok(Stored {
             commitment: Commitment {
                 company_id: self.company_id,
@@ -101,7 +124,7 @@ impl CommitmentRow {
                 original_deadline_at: self.original_deadline_at,
                 tolled_days: self.tolled_days,
                 extension_used: self.extension_used,
-                fee_cents: i64::from(self.fee_cents),
+                signup_advance_cents: i64::from(self.signup_advance_cents),
                 booking,
                 completed_at: self.completed_at,
                 completed_by: self.completed_by,
@@ -110,8 +133,12 @@ impl CommitmentRow {
                 suspended_at: self.suspended_at,
                 notice_sent_at: self.notice_sent_at,
                 notice_cycle_at: self.notice_cycle_at,
-                charge_after: self.charge_after,
+                terms,
+                advance_item_id: self.advance_item_id,
                 stripe_invoice_id: self.stripe_invoice_id,
+                advance_credit_id: self.advance_credit_id,
+                review_hold_at: self.review_hold_at,
+                review_hold_by: self.review_hold_by,
                 availability_checked_on: self.availability_checked_on,
             },
             version: self.version,
@@ -120,11 +147,13 @@ impl CommitmentRow {
 }
 
 const COMMITMENT_SELECT: &str = "SELECT company_id, CAST(status AS CHAR) AS status, deadline_at,
-        original_deadline_at, tolled_days, extension_used, fee_cents, calendly_invitee_uri,
-        calendly_event_uri, calendly_reschedule_url, calendly_cancel_url, booked_start_at,
-        booked_end_at, booked_at, completed_at, completed_by, no_show_at, no_show_call_start_at,
-        suspended_at, notice_sent_at, notice_cycle_at, charge_after, stripe_invoice_id,
-        availability_checked_on, version, created_at
+        original_deadline_at, tolled_days, extension_used, signup_advance_cents,
+        calendly_invitee_uri, calendly_event_uri, calendly_reschedule_url, calendly_cancel_url,
+        booked_start_at, booked_end_at, booked_at, completed_at, completed_by, no_show_at,
+        no_show_call_start_at, suspended_at, notice_sent_at, notice_cycle_at, advance_cents,
+        charge_at, prepaid_from_at, prepaid_until_at, advance_item_id, stripe_invoice_id,
+        advance_credit_id, review_hold_at, review_hold_by, availability_checked_on, version,
+        created_at
    FROM company_onboarding_commitments";
 
 /// The company's commitment; `None` for a company without one (legacy, or
@@ -182,7 +211,7 @@ pub async fn insert(
     let inserted = sqlx::query(
         "INSERT IGNORE INTO company_onboarding_commitments
            (company_id, status, deadline_at, original_deadline_at, tolled_days, extension_used,
-            fee_cents, version, created_at, updated_at)
+            signup_advance_cents, version, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
     )
     .bind(c.company_id)
@@ -191,7 +220,7 @@ pub async fn insert(
     .bind(c.original_deadline_at)
     .bind(c.tolled_days)
     .bind(c.extension_used)
-    .bind(c.fee_cents)
+    .bind(c.signup_advance_cents)
     .bind(c.created_at)
     .bind(now)
     .execute(&mut *conn)
@@ -213,17 +242,20 @@ pub async fn save(
 ) -> Result<i32, SaveError> {
     let c = &outcome.commitment;
     let booking = c.booking.as_ref();
+    let terms = c.terms.as_ref();
     let mut tx = pool.begin().await?;
     let updated = sqlx::query(
         "UPDATE company_onboarding_commitments
             SET status = ?, deadline_at = ?, original_deadline_at = ?, tolled_days = ?,
-                extension_used = ?, fee_cents = ?, calendly_invitee_uri = ?,
+                extension_used = ?, signup_advance_cents = ?, calendly_invitee_uri = ?,
                 calendly_event_uri = ?, calendly_reschedule_url = ?, calendly_cancel_url = ?,
                 booked_start_at = ?, booked_end_at = ?, booked_at = ?, completed_at = ?,
                 completed_by = ?, no_show_at = ?, no_show_call_start_at = ?, suspended_at = ?,
-                notice_sent_at = ?,
-                notice_cycle_at = ?, charge_after = ?, stripe_invoice_id = ?,
-                availability_checked_on = ?, updated_at = ?, version = version + 1
+                notice_sent_at = ?, notice_cycle_at = ?, advance_cents = ?, charge_at = ?,
+                prepaid_from_at = ?, prepaid_until_at = ?, advance_item_id = ?,
+                stripe_invoice_id = ?, advance_credit_id = ?, review_hold_at = ?,
+                review_hold_by = ?, availability_checked_on = ?, updated_at = ?,
+                version = version + 1
           WHERE company_id = ? AND version = ?",
     )
     .bind(c.status.as_str())
@@ -231,7 +263,7 @@ pub async fn save(
     .bind(c.original_deadline_at)
     .bind(c.tolled_days)
     .bind(c.extension_used)
-    .bind(c.fee_cents)
+    .bind(c.signup_advance_cents)
     .bind(booking.map(|b| b.invitee_uri.as_str()))
     .bind(booking.map(|b| b.event_uri.as_str()))
     .bind(booking.and_then(|b| b.reschedule_url.as_deref()))
@@ -246,8 +278,15 @@ pub async fn save(
     .bind(c.suspended_at)
     .bind(c.notice_sent_at)
     .bind(c.notice_cycle_at)
-    .bind(c.charge_after)
+    .bind(terms.map(|t| t.advance_cents))
+    .bind(terms.map(|t| t.charge_at))
+    .bind(terms.map(|t| t.prepaid_from))
+    .bind(terms.map(|t| t.prepaid_until))
+    .bind(c.advance_item_id.as_deref())
     .bind(c.stripe_invoice_id.as_deref())
+    .bind(c.advance_credit_id.as_deref())
+    .bind(c.review_hold_at)
+    .bind(c.review_hold_by)
     .bind(c.availability_checked_on)
     .bind(now)
     .bind(c.company_id)
@@ -263,12 +302,12 @@ pub async fn save(
     Ok(version + 1)
 }
 
-/// Fee invoices recorded for the company so far (`invoiced` events): a new
-/// invoice after a withdrawn one gets a new idempotency key.
-pub async fn fee_invoices_recorded(pool: &MySqlPool, company_id: i32) -> sqlx::Result<i64> {
+/// Advance items recorded for the company so far (`advance_scheduled`
+/// events): an item after a withdrawn one gets a new idempotency key.
+pub async fn advance_items_recorded(pool: &MySqlPool, company_id: i32) -> sqlx::Result<i64> {
     sqlx::query_scalar(
         "SELECT COUNT(*) FROM company_onboarding_commitment_events
-          WHERE company_id = ? AND kind = 'invoiced'",
+          WHERE company_id = ? AND kind = 'advance_scheduled'",
     )
     .bind(company_id)
     .fetch_one(pool)
@@ -334,7 +373,8 @@ pub struct NewAvailabilityDay {
     pub error_code: Option<String>,
 }
 
-/// The day's slot check (one row per UTC day, shared by every company).
+/// The day's slot check (one row per local day in `SIGNUP_TZ`, shared by
+/// every company).
 pub async fn availability_day(
     pool: &MySqlPool,
     day: NaiveDate,
@@ -480,11 +520,27 @@ pub async fn subscription_ended(pool: &MySqlPool, company_id: i32) -> sqlx::Resu
     Ok(ended.unwrap_or(true))
 }
 
-/// The company accepted the `onboarding_fee` consent.
+/// The company has a running Stripe subscription (`trialing`, `active` or
+/// `past_due`, as last mirrored from Stripe).
+pub async fn subscription_live(pool: &MySqlPool, company_id: i32) -> sqlx::Result<bool> {
+    let live: Option<bool> = sqlx::query_scalar(
+        "SELECT (c.deleted_at IS NULL AND cb.stripe_subscription_id IS NOT NULL
+                 AND cb.subscription_status IN ('trialing', 'active', 'past_due')) <> 0
+           FROM company c
+           JOIN company_billing cb ON cb.company_id = c.id
+          WHERE c.id = ?",
+    )
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(live.unwrap_or(false))
+}
+
+/// The company accepted the `onboarding_advance` consent.
 pub async fn consent_on_file(pool: &MySqlPool, company_id: i32) -> sqlx::Result<bool> {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM consent_records
-                         WHERE company_id = ? AND kind = 'onboarding_fee') <> 0",
+                         WHERE company_id = ? AND kind = 'onboarding_advance') <> 0",
     )
     .bind(company_id)
     .fetch_one(pool)
@@ -662,8 +718,9 @@ pub async fn sweep_stuck_emails(
     Ok(swept.rows_affected())
 }
 
-/// Companies the daily run may take now: an open commitment (or an invoice
-/// to finish) whose per-company run (`onboarding-commitment:<id>`) is due.
+/// Companies the daily run may take now: an open commitment, or a recorded
+/// invoice item not credited yet, whose per-company run
+/// (`onboarding-commitment:<id>`) is due.
 pub async fn due_companies(
     pool: &MySqlPool,
     cutoff: NaiveDateTime,
@@ -673,7 +730,9 @@ pub async fn due_companies(
         "SELECT oc.company_id
            FROM company_onboarding_commitments oc
            LEFT JOIN job_runs jr ON jr.job_key = CONCAT('onboarding-commitment:', oc.company_id)
-          WHERE oc.status IN ('pending', 'booked', 'suspended', 'notice_sent', 'fee_invoiced')
+          WHERE (oc.status IN ('pending', 'booked', 'suspended', 'notice_sent',
+                               'advance_scheduled')
+                 OR (oc.advance_item_id IS NOT NULL AND oc.advance_credit_id IS NULL))
             AND (jr.last_started_at IS NULL OR jr.last_started_at <= ?)
           ORDER BY oc.company_id
           LIMIT ?",

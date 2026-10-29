@@ -311,4 +311,37 @@ async fn a_paused_companys_device_token_gets_402(pool: MySqlPool) {
             .await
             .assert_status(StatusCode::PAYMENT_REQUIRED);
     }
+    // The bell stays open, as for the CRM session.
+    server
+        .get("/v1/notifications")
+        .add_header(HEADER, token(304))
+        .await
+        .assert_status_ok();
+    server
+        .get("/v1/notifications")
+        .with_session(sessions::REP)
+        .await
+        .assert_status_ok();
+    // The phone's paid admin setup is refused; calls and the app's reads are not.
+    for path in [
+        "/v1/phone/admin/numbers",
+        "/v1/phone/admin/hours",
+        "/v1/phone/admin/tendlc",
+    ] {
+        server
+            .get(path)
+            .with_session(sessions::ADMIN)
+            .await
+            .assert_status(StatusCode::PAYMENT_REQUIRED);
+    }
+    server
+        .get("/v1/phone/admin/devices")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status_ok();
+    server
+        .get("/v1/phone/bootstrap")
+        .add_header(HEADER, token(304))
+        .await
+        .assert_status_ok();
 }

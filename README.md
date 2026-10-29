@@ -114,6 +114,50 @@ The `api/` crate replaces Remix loaders with JSON endpoints. See `api/README.md`
 for the route layout, auth, local setup (`make api-db-reset api-test api-local`)
 and the migration playbook.
 
+### Self-serve billing env
+
+Every variable the self-serve billing feature reads (Stripe, signup, advance
+payment, billing emails). The api checks them at start: an enabled switch with a
+missing dependency, or a malformed value, stops the Lambda with a message that
+names the variable (never its value). `GET /v1/superuser/billing/setup` reports
+the same and the Stripe side. The release steps are in
+`general_datebase/docs/self-serve-release.md`.
+
+`granite-api` (and `granite-api-stream`, same image):
+
+| Name | Required when | Default |
+|---|---|---|
+| `SESSION_SECRET` | always (also keys the signup email codes) | none: the api does not start |
+| `STRIPE_SECRET_KEY` | any billing; `sk_`/`rk_`, a restricted live key in production | unset: Stripe off |
+| `STRIPE_PUBLIC_KEY` | signups and payment method pages; `pk_`, same mode as the secret key | none |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhooks; `whsec_`, from the setup script's secret file | unset: webhooks refused |
+| `STRIPE_BILLING_PLANS` / `STRIPE_PRICE_ID` | legacy (grandfathered) plans only | none |
+| `STRIPE_AUTOMATIC_TAX` | only when tax is turned on (`1`/`true`) | off |
+| `STRIPE_API_BASE` | tests and e2e only; ignored with a live key | `https://api.stripe.com` |
+| `SIGNUP_TEST_PAYMENT_METHOD` | sandbox e2e only; ignored unless the key is `sk_test_` | none |
+| `SIGNUP_RATE_LIMITS` | e2e only: `off` lifts the per-email and per-IP signup limits; ignored unless the key is `sk_test_` | limits on |
+| `SELF_SERVE_SIGNUP_ENABLED` | launch switch (`1`/`true`); needs the three Stripe keys and `WEBHOOKS_URL`/`WEBHOOKS_KEY` | off |
+| `ONBOARDING_ADVANCE_CHARGING` | charges the advance payment (`1`/`true`); needs `STRIPE_SECRET_KEY` and `CALENDLY_API_TOKEN` | off: a passed deadline ends `advance_skipped` |
+| `CALENDLY_API_TOKEN` | the onboarding call step and the deadline tolling | none |
+| `CALENDLY_BASE_URL` | tests only | `https://api.calendly.com` |
+| `CALENDLY_ONBOARDING_URL` | optional; a calendly.com page | the account's own page |
+| `WEBHOOKS_URL`, `WEBHOOKS_KEY` | every billing email; both or neither | unset: emails not sent |
+| `BILLING_EMAIL_FROM_ADDRESS` | optional; a plain address | `noreply@granite-manager.com` |
+| `BILLING_ALERT_EMAIL` | staff notices: disputes, blocked bank accounts, bank returns, advance notices | none: notices dropped |
+| `SIGNUP_NOTIFY_USER_ID`, `SIGNUP_NOTIFY_EMAIL` | optional staff alerts (Telegram user id, email) for signups and stuck provisioning | none |
+| `APP_URL` | optional | `https://granite-manager.com` |
+| `PAYMENTS_APP_URL` | optional | `https://payments.granite-manager.com` |
+| `SESSION_COOKIE_DOMAIN`, `SESSION_COOKIE_SECURE` | optional; the payments app shares the CRM cookie | `.granite-manager.com`, Secure |
+| `API_ALLOWED_ORIGINS` | optional; must include the payments origin when set | `https://granite-manager.com,https://*.granite-manager.com` |
+| `LAMBDA_KEY` | the scheduled jobs; same value as on `time-triggered` | none: jobs refused |
+
+`time-triggered`: `API_URL`, `API_STREAM_URL` and `LAMBDA_KEY` (unchanged). It
+calls the billing jobs `subscription-maintenance`, `billing-reminders` and
+`onboarding-commitments` every tick; its Lambda timeout must be at least 7 minutes.
+
+Front-end build values (`VITE_SELF_SERVE_ENABLED`, `VITE_PAYMENTS_URL`, the
+payments app's `VITE_*`) are in the general_datebase README.
+
 ## Webhooks (third parties' callbacks Lambda)
 
 The `webhooks/` crate and the crates in `webhooks/crates/`. See

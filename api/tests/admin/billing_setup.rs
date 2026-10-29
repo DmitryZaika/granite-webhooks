@@ -146,6 +146,17 @@ async fn a_good_setup_passes_the_stripe_checks(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn the_report_carries_the_startup_configuration_check(pool: MySqlPool) {
+    let f = fake(endpoint(&REQUIRED_EVENTS, API_VERSION), &[]);
+    let checks = report(&server(&pool, f, &[]).await).await;
+    let (ok, detail) = &checks["startup_config"];
+    // The test process lacks the production variables.
+    assert!(!ok);
+    assert!(!detail.is_empty());
+    assert!(!detail.contains("sk_test_fake"));
+}
+
+#[test_db::test(seed)]
 async fn a_wrong_api_version_or_missing_event_fails(pool: MySqlPool) {
     let events: Vec<&str> = REQUIRED_EVENTS
         .into_iter()
@@ -178,4 +189,145 @@ async fn inactive_yearly_and_unknown_prices_fail_one_check_each(pool: MySqlPool)
             .iter()
             .all(|k| !checks[*k].0)
     );
+}
+
+mod release {
+    use super::{WithSession, report, sessions};
+    use crate::common::{ALLOWED_ORIGIN, SECRET};
+    use crate::fake_stripe::{self, FakeStripe, Shared};
+    use api::app;
+    use api::billing::setup::REQUIRED_EVENTS;
+    use api::billing::stripe::API_VERSION;
+    use api::signup::SignupConfig;
+    use api::state::AppState;
+    use axum_test::TestServer;
+    use serde_json::{Value, json};
+    use sqlx::MySqlPool;
+
+    fn configuration(bank: bool) -> Value {
+        json!({ "is_default": true,
+            "card": { "available": true, "display_preference": { "value": "on" } },
+            "us_bank_account": { "available": bank,
+                "display_preference": { "value": if bank { "on" } else { "off" } } } })
+    }
+
+    fn portal(cancel: bool) -> Value {
+        json!({ "id": "bpc_1", "active": true,
+            "metadata": { "app": "granite-manager-no-cancel-v1" },
+            "features": { "subscription_cancel": { "enabled": cancel },
+                "subscription_update": { "enabled": false } } })
+    }
+
+    async fn server(pool: &MySqlPool, shared: &Shared, configured: bool) -> TestServer {
+        sqlx::raw_sql("UPDATE users SET is_superuser = 1 WHERE id = 103")
+            .execute(pool)
+            .await
+            .unwrap();
+        let mut state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+            .with_stripe(fake_stripe::client(shared).await);
+        if configured {
+            state = state
+                .with_onboarding_call(api::onboarding_call::Config {
+                    calendly: api::onboarding_call::calendly::Calendly::new(
+                        Some("tok"),
+                        "http://127.0.0.1:1",
+                        None,
+                    ),
+                    ..api::onboarding_call::Config::disabled()
+                })
+                .with_billing_alert_email("alerts@example.com")
+                .with_stripe_webhook_secret("whsec_x")
+                .with_signup(SignupConfig {
+                    publishable_key: Some("pk_test_x".into()),
+                    notify_email: Some("dima@example.com".into()),
+                    ..SignupConfig::default()
+                });
+        }
+        TestServer::new(app(state))
+    }
+
+    #[test_db::test(seed)]
+    async fn a_ready_release_passes_the_stripe_and_price_checks(pool: MySqlPool) {
+        let shared = FakeStripe::with_catalog();
+        {
+            let mut fake = shared.lock().unwrap();
+            fake.payment_method_configurations.push(configuration(true));
+            fake.portal_configurations.push(portal(false));
+            fake.webhook_endpoints.push(json!({
+                "url": "https://api.granite-manager.com/v1/webhooks/stripe", "status": "enabled",
+                "enabled_events": REQUIRED_EVENTS, "api_version": API_VERSION }));
+        }
+        let checks = report(&server(&pool, &shared, true).await).await;
+        for key in [
+            "webhook_events",
+            "webhook_api_version",
+            "payment_method_types",
+            "portal_configuration",
+            "billing_alert_email",
+            "signup_notify",
+            "signup_dependencies",
+            "signup_price_granite_base_monthly_v1",
+            "signup_price_addon_quickbooks_monthly_v1",
+        ] {
+            assert!(checks[key].0, "{key}: {}", checks[key].1);
+        }
+    }
+
+    #[test_db::test(seed)]
+    async fn the_release_gaps_are_reported(pool: MySqlPool) {
+        let shared = FakeStripe::with_catalog();
+        {
+            let mut fake = shared.lock().unwrap();
+            fake.payment_method_configurations
+                .push(configuration(false));
+            fake.portal_configurations.push(portal(true));
+            fake.prices[0]["tax_behavior"] = json!("unspecified");
+        }
+        let checks = report(&server(&pool, &shared, false).await).await;
+        assert!(checks["payment_method_types"].1.contains("us_bank_account"));
+        assert!(!checks["portal_configuration"].0);
+        assert!(
+            checks["portal_configuration"]
+                .1
+                .contains("subscription_cancel")
+        );
+        assert!(!checks["signup_price_granite_base_monthly_v1"].0);
+        assert!(
+            checks["signup_price_granite_base_monthly_v1"]
+                .1
+                .contains("tax_behavior")
+        );
+        for key in [
+            "billing_alert_email",
+            "signup_notify",
+            "signup_dependencies",
+        ] {
+            assert!(!checks[key].0, "{key}");
+        }
+    }
+
+    #[test_db::test(seed)]
+    async fn a_stripe_error_reads_as_could_not_check(pool: MySqlPool) {
+        let shared = FakeStripe::with_catalog();
+        shared.lock().unwrap().fail(
+            axum::http::Method::GET,
+            "/v1/payment_method_configurations",
+            fake_stripe::FailMode::Before,
+            1,
+        );
+        let checks = report(&server(&pool, &shared, true).await).await;
+        assert!(!checks["payment_method_types"].0);
+        assert!(checks["payment_method_types"].1.contains("could not check"));
+    }
+
+    #[test_db::test(seed)]
+    async fn only_super_admins_see_the_release_checks(pool: MySqlPool) {
+        let shared = FakeStripe::with_catalog();
+        let server = server(&pool, &shared, true).await;
+        server
+            .get("/v1/superuser/billing/setup")
+            .with_session(sessions::ADMIN)
+            .await
+            .assert_status(axum::http::StatusCode::FORBIDDEN);
+    }
 }

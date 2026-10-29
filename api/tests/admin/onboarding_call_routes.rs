@@ -94,7 +94,7 @@ async fn booking_unavailable_says_whether_it_is_not_set_up_or_temporary(pool: My
     // A token but Calendly unreachable: temporary.
     let state = AppState::new(pool, SECRET, ALLOWED_ORIGIN).with_onboarding_call(Config {
         calendly: Calendly::new(Some("fake-token"), "http://127.0.0.1:1", None),
-        fee_charging: false,
+        advance_charging: false,
     });
     let body: Value = TestServer::new(app(state))
         .get("/v1/onboarding-call")

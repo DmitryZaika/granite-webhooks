@@ -409,6 +409,30 @@ async fn a_payment_method_stripe_cannot_read_is_unknown_not_missing(pool: MySqlP
 }
 
 #[test_db::test(seed)]
+async fn a_subscription_method_stripe_cannot_read_is_unknown_not_the_customers(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    // The subscription names a method Stripe fails to read (not expanded);
+    // the customer's default is another one, pm_bank.
+    f.set_subscription(SUBSCRIPTION, "default_payment_method", json!("pm_unread"));
+    {
+        let mut fake = f.stripe.lock().unwrap();
+        fake.customers.get_mut(CUSTOMER).unwrap()["invoice_settings"]["default_payment_method"] =
+            json!("pm_bank");
+        fake.fail(
+            Method::GET,
+            "/v1/payment_methods/pm_unread",
+            FailMode::Before,
+            5,
+        );
+    }
+
+    let view = f.view().await;
+    assert_eq!(view["payment_method"], Value::Null);
+    assert_eq!(view["payment_method_known"], false);
+    assert_eq!(view["status"], "trialing");
+}
+
+#[test_db::test(seed)]
 async fn a_scheduled_cancellation_shows_and_clears_the_next_charge(pool: MySqlPool) {
     let f = fixture(pool).await;
     f.sql(

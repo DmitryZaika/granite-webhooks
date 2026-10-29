@@ -7,7 +7,7 @@
 //! session may act in another company). Open while the company's access is
 //! paused. The token is a bearer secret. See `crate::billing::invites`.
 
-use crate::auth::PositionedUser;
+use crate::auth::{ClientIp, PositionedUser};
 use crate::billing::invites::accept::{self, Caller, InviteOffer};
 use crate::error::{ApiResult, CodedErrorBody, ErrorBody};
 use crate::extract::JsonBody;
@@ -147,6 +147,7 @@ pub async fn accept_plan_invite(
     State(state): State<AppState>,
     PositionedUser(user, positions): PositionedUser,
     Path(token): Path<String>,
+    ClientIp(client_ip): ClientIp,
     headers: HeaderMap,
     JsonBody(body): JsonBody<AcceptanceBody>,
 ) -> ApiResult<Json<AcceptanceDone>> {
@@ -160,7 +161,7 @@ pub async fn accept_plan_invite(
         caller,
         &body.consents,
         body.setup_intent_id.as_deref(),
-        &RequestMeta::from_headers(&headers),
+        &RequestMeta::from_request(&client_ip, &headers),
     )
     .await?;
     Ok(Json(AcceptanceDone {

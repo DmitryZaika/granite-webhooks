@@ -1,11 +1,15 @@
 //! The onboarding emails to a company's Managers: the reminders on days 7,
-//! 21 and 27 and the fee notice (04-legal.md sections 6.5 and Terms 11).
+//! 21 and 27 and the advance payment notice (Terms section 11).
+//!
+//! Onboarding is free. When it is not completed by the deadline, the next
+//! subscription charge at least 7 days after the notice also includes the
+//! following month in advance, which a credit then covers.
 //!
 //! Subjects, HTML (escaped) and plain-text parts, in the billing emails'
 //! look. Each email has one link. Every date is the buyer's calendar day
 //! and a call's time carries its zone (`SIGNUP_TZ`).
 
-use super::commitment::{EXTENSION_DAYS, ReminderStep, SLOT_WINDOW_BUSINESS_DAYS};
+use super::commitment::{EXTENSION_DAYS, NOTICE_DAYS, ReminderStep, SLOT_WINDOW_BUSINESS_DAYS};
 use crate::billing::reminder_emails::{
     RenderedEmail, SUPPORT_EMAIL, company_or_default, escape_html, format_local_date,
     format_local_time, format_money, greeting, html_button, html_paragraph, wrap_html,
@@ -61,7 +65,7 @@ fn render(
     }
 }
 
-/// A reminder on day 7, 21 or 27 after signup.
+/// A reminder on day 7, 21 or 27 after signup (before the deadline only).
 #[derive(Debug, Clone, Copy)]
 pub struct ReminderInput<'a> {
     pub step: ReminderStep,
@@ -69,17 +73,28 @@ pub struct ReminderInput<'a> {
     pub booked: bool,
     /// The booked call's start, when stored.
     pub call_start_at: Option<NaiveDateTime>,
+    /// The booked call's end, when stored: it must end by the deadline.
+    pub call_end_at: Option<NaiveDateTime>,
     pub company_name: &'a str,
     pub user_name: Option<&'a str>,
     pub deadline_at: NaiveDateTime,
-    pub fee_cents: i64,
+    /// The advance the signup consent stated (one month at the plan chosen,
+    /// before tax); the notice fixes the charged amount.
+    pub advance_cents: i64,
     pub app_url: &'a str,
+}
+
+/// What the advance payment is, with the amount the signup stated.
+fn advance_sentence(advance: &str) -> String {
+    format!(
+        "If onboarding is not completed by then, we email a notice, and your next subscription charge at least {NOTICE_DAYS} days after it also includes the following month in advance: one month of your subscription ({advance} with your plan at signup) plus applicable sales tax. That month is then not charged again, so you pay nothing extra, only one month earlier."
+    )
 }
 
 pub fn render_reminder(input: &ReminderInput<'_>) -> RenderedEmail {
     let company = company_or_default(input.company_name);
     let deadline = format_local_date(input.deadline_at);
-    let fee = format_money(input.fee_cents);
+    let advance = format_money(input.advance_cents);
     let url = link(input.app_url, BOOKING_PATH);
     if input.booked {
         let subject = match input.step {
@@ -92,29 +107,55 @@ pub fn render_reminder(input: &ReminderInput<'_>) -> RenderedEmail {
             .call_start_at
             .map(|at| format!(" for {}", format_local_time(at)))
             .unwrap_or_default();
+        let late = input.call_end_at.is_some_and(|end| end > input.deadline_at);
+        let ends = input.call_end_at.map_or_else(
+            || format!("The call must end by {deadline}, your onboarding deadline."),
+            |end| {
+                let relation = if late { "after" } else { "by" };
+                format!(
+                    "Your call ends {}, {relation} your onboarding deadline of {deadline}.",
+                    format_local_time(end)
+                )
+            },
+        );
         return render(
             subject,
             input.user_name,
             company,
             |e| {
-                vec![
+                let mut paragraphs = vec![
                     format!(
                         "The onboarding call for {} is booked{when}. You can see or change it in Granite Manager.",
                         e(company)
                     ),
                     format!(
-                        "Once the call has taken place, the onboarding fee of {fee} is waived. If you need to move it, pick a new time before {deadline}."
+                        "Onboarding is free and complete once your call has taken place. {ends}"
                     ),
-                ]
+                    advance_sentence(&advance),
+                ];
+                if late {
+                    paragraphs.push(
+                        "Because your call ends after the deadline, we will send that notice. Your call still avoids the advance payment if it ends before the charge date in the notice."
+                            .to_string(),
+                    );
+                }
+                paragraphs.push(format!(
+                    "If you need to move your call, pick a new time that ends by {deadline}."
+                ));
+                paragraphs
             },
             "See your call",
             &url,
         );
     }
     let subject = match input.step {
-        ReminderStep::Day7 => "Book your Granite Manager onboarding call".to_string(),
-        ReminderStep::Day21 => format!("Reminder: book your onboarding call by {deadline}"),
-        ReminderStep::Day27 => format!("Last reminder: book your onboarding call by {deadline}"),
+        ReminderStep::Day7 => "Book your free Granite Manager onboarding call".to_string(),
+        ReminderStep::Day21 => {
+            format!("Reminder: complete your free onboarding call by {deadline}")
+        }
+        ReminderStep::Day27 => {
+            format!("Last reminder: complete your free onboarding call by {deadline}")
+        }
     };
     render(
         subject,
@@ -123,18 +164,18 @@ pub fn render_reminder(input: &ReminderInput<'_>) -> RenderedEmail {
         |e| {
             vec![
                 format!(
-                    "The Granite Manager plan for {} includes an onboarding call with our team. Complete it by {deadline} and the onboarding fee of {fee} is waived.",
+                    "The Granite Manager plan for {} includes a free onboarding call with our team. Book a call that ends by {deadline}, your onboarding deadline.",
                     e(company)
                 ),
+                advance_sentence(&advance),
                 format!(
                     "The deadline moves one day later for each day our calendar has no open time within the next {SLOT_WINDOW_BUSINESS_DAYS} business days, and if we cancel or move your call, it moves to match."
                 ),
                 format!(
                     "Need more time? You can ask for one {EXTENSION_DAYS}-day extension: reply to this email or write to {SUPPORT_EMAIL}."
                 ),
-                format!(
-                    "If you request cancellation of your subscription before {deadline}, the onboarding fee is not charged."
-                ),
+                "If you request cancellation of your subscription before your first charge, nothing is charged at all."
+                    .to_string(),
             ]
         },
         "Book your call",
@@ -142,20 +183,25 @@ pub fn render_reminder(input: &ReminderInput<'_>) -> RenderedEmail {
     )
 }
 
-/// The fee notice, at least 7 days before the charge.
+/// The advance payment notice, at least 7 days before the charge.
 #[derive(Debug, Clone, Copy)]
 pub struct NoticeInput<'a> {
     pub company_name: &'a str,
     pub user_name: Option<&'a str>,
-    pub fee_cents: i64,
+    /// The advance: one month of the live subscription, before tax.
+    pub advance_cents: i64,
     /// The deadline that passed.
     pub deadline_at: NaiveDateTime,
-    /// When the fee is charged.
+    /// The subscription charge that also takes the advance.
     pub charge_at: NaiveDateTime,
+    /// The month the advance pays for (credited to the invoice of
+    /// `prepaid_from` once paid).
+    pub prepaid_from: NaiveDateTime,
+    pub prepaid_until: NaiveDateTime,
     /// `Visa ending in 4242`, when known.
     pub payment_method: Option<&'a str>,
     /// A booked call ends at or before `charge_at` (the rules then hold the
-    /// fee and complete the commitment).
+    /// advance and complete the commitment once it took place).
     pub booked_before_charge: bool,
     pub app_url: &'a str,
 }
@@ -165,7 +211,9 @@ pub fn render_notice(input: &NoticeInput<'_>) -> RenderedEmail {
     let deadline = format_local_date(input.deadline_at);
     let charge_date = format_local_date(input.charge_at);
     let charge_time = format_local_time(input.charge_at);
-    let fee = format_money(input.fee_cents);
+    let from = format_local_date(input.prepaid_from);
+    let until = format_local_date(input.prepaid_until);
+    let advance = format_money(input.advance_cents);
     let method = input
         .payment_method
         .map(str::trim)
@@ -173,38 +221,39 @@ pub fn render_notice(input: &NoticeInput<'_>) -> RenderedEmail {
         .unwrap_or("the payment method on file");
     let url = link(input.app_url, TERMS_PATH);
     render(
-        format!("Action needed: onboarding fee of {fee} will be charged on {charge_date}"),
+        format!(
+            "Action needed: your charge on {charge_date} will include a {advance} advance payment"
+        ),
         input.user_name,
         company,
         |e| {
             let mut paragraphs = vec![
                 format!(
-                    "The onboarding call for {} was not completed by {deadline}, the onboarding deadline.",
+                    "Onboarding for {} was not completed by {deadline}, the onboarding deadline.",
                     e(company)
                 ),
                 format!(
-                    "On {charge_date}, the onboarding fee of {fee} plus applicable sales tax will be charged to {}.",
+                    "So your subscription charge on {charge_date} will also include the following month in advance: an advance payment of {advance} plus applicable sales tax, charged to {}. It covers {from} to {until}.",
                     e(method)
                 ),
                 format!(
-                    "To avoid the fee, have an onboarding call that has taken place by {charge_time} (we mark it complete), or request cancellation of your subscription before then."
+                    "You pay nothing extra overall, only one month earlier: once that charge is paid, a credit of the same amount pays your invoice on {from}. If your plan grows by then, only the difference is charged."
+                ),
+                format!(
+                    "To avoid it, have an onboarding call that ends before {charge_time} (book it in Granite Manager; it counts once it has taken place). If you request cancellation of your subscription before then, the subscription ends and that charge, with the advance payment, is not made."
                 ),
             ];
             if input.booked_before_charge {
-                paragraphs.push(format!(
-                    "You have an onboarding call booked. If your call has taken place by {charge_time}, the fee is not charged."
-                ));
+                paragraphs.push(
+                    "You have an onboarding call booked that ends before then. Once it has taken place, the advance payment is not charged."
+                        .to_string(),
+                );
             }
             paragraphs.push(format!(
-                "If you believe this fee is wrong, reply to this email before {charge_date} and we will review it before charging."
+                "If you think the advance payment should not apply, reply to this email or write to {SUPPORT_EMAIL} before {charge_date}, and we will review it before charging."
             ));
             paragraphs.push(
-                "The fee will appear as a separate invoice, not part of your monthly subscription."
-                    .to_string(),
-            );
-            paragraphs.push(
-                "Section 11 of the Terms of Service explains the onboarding commitment."
-                    .to_string(),
+                "Section 11 of the Terms of Service explains the advance payment.".to_string(),
             );
             paragraphs
         },
@@ -228,10 +277,11 @@ mod tests {
             step,
             booked,
             call_start_at: None,
+            call_end_at: None,
             company_name: "Rock & <Stone>",
             user_name: Some("<b>Ann</b>"),
             deadline_at: at("2026-11-20 15:00:00"),
-            fee_cents: 60_000,
+            advance_cents: 60_000,
             app_url: APP_URL,
         })
     }
@@ -240,9 +290,11 @@ mod tests {
         render_notice(&NoticeInput {
             company_name: "Rock & <Stone>",
             user_name: None,
-            fee_cents: 123_450,
+            advance_cents: 123_450,
             deadline_at: at("2026-11-20 15:00:00"),
             charge_at: at("2026-11-27 15:00:00"),
+            prepaid_from: at("2026-12-27 15:00:00"),
+            prepaid_until: at("2027-01-27 15:00:00"),
             payment_method,
             booked_before_charge,
             app_url: APP_URL,
@@ -253,12 +305,14 @@ mod tests {
         format!("{}\n{}\n{}", email.subject, email.html, email.text)
     }
 
+    /// No dash, no onboarding fee (onboarding is free), one link, escaped.
     fn assert_clean(email: &RenderedEmail) {
         let all = all(email);
         assert!(
             !all.contains('\u{2014}') && !all.contains('\u{2013}'),
             "{all}"
         );
+        assert!(!all.to_lowercase().contains("fee"), "{all}");
         assert_eq!(email.html.matches("href=").count(), 1);
         assert_eq!(email.text.matches("https://").count(), 1);
         assert!(!email.html.contains("<Stone>") && !email.html.contains("<b>"));
@@ -267,31 +321,24 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_reminder_states_deadline_fee_tolling_and_the_extension() {
+    fn a_pending_reminder_is_exact() {
         let email = reminder(ReminderStep::Day7, false);
-        assert_eq!(email.subject, "Book your Granite Manager onboarding call");
-        assert!(email.text.starts_with("Hi <b>Ann</b>,"));
+        assert_eq!(
+            email.subject,
+            "Book your free Granite Manager onboarding call"
+        );
+        assert_eq!(
+            email.text,
+            "Hi <b>Ann</b>,\n\n\
+             The Granite Manager plan for Rock & <Stone> includes a free onboarding call with our team. Book a call that ends by November 20, 2026, your onboarding deadline.\n\n\
+             If onboarding is not completed by then, we email a notice, and your next subscription charge at least 7 days after it also includes the following month in advance: one month of your subscription ($600.00 with your plan at signup) plus applicable sales tax. That month is then not charged again, so you pay nothing extra, only one month earlier.\n\n\
+             The deadline moves one day later for each day our calendar has no open time within the next 5 business days, and if we cancel or move your call, it moves to match.\n\n\
+             Need more time? You can ask for one 14-day extension: reply to this email or write to support@granite-manager.com.\n\n\
+             If you request cancellation of your subscription before your first charge, nothing is charged at all.\n\n\
+             Book your call: https://app.example.com/employee?book_onboarding=1\n\n\
+             This email was sent to managers of Rock & <Stone>."
+        );
         assert!(email.html.contains("Hi &lt;b&gt;Ann&lt;/b&gt;,"));
-        assert!(email.text.contains(
-            "Complete it by November 20, 2026 and the onboarding fee of $600.00 is waived."
-        ));
-        assert!(email.text.contains("within the next 5 business days"));
-        assert!(
-            email
-                .text
-                .contains("if we cancel or move your call, it moves to match")
-        );
-        assert!(email.text.contains(
-            "You can ask for one 14-day extension: reply to this email or write to support@granite-manager.com."
-        ));
-        assert!(email.text.contains(
-            "If you request cancellation of your subscription before November 20, 2026, the onboarding fee is not charged."
-        ));
-        assert!(
-            email
-                .text
-                .contains("Book your call: https://app.example.com/employee?book_onboarding=1")
-        );
         assert!(
             email
                 .html
@@ -304,11 +351,11 @@ mod tests {
     fn later_reminders_name_the_deadline_in_the_subject() {
         assert_eq!(
             reminder(ReminderStep::Day21, false).subject,
-            "Reminder: book your onboarding call by November 20, 2026"
+            "Reminder: complete your free onboarding call by November 20, 2026"
         );
         assert_eq!(
             reminder(ReminderStep::Day27, false).subject,
-            "Last reminder: book your onboarding call by November 20, 2026"
+            "Last reminder: complete your free onboarding call by November 20, 2026"
         );
         for step in [ReminderStep::Day7, ReminderStep::Day21, ReminderStep::Day27] {
             assert_clean(&reminder(step, false));
@@ -317,83 +364,91 @@ mod tests {
     }
 
     #[test]
-    fn a_booked_reminder_says_it_is_booked_without_a_time() {
+    fn a_booked_reminder_without_the_call_times_states_the_rule() {
         let email = reminder(ReminderStep::Day21, true);
         assert_eq!(
             email.subject,
             "Reminder: your Granite Manager onboarding call is booked"
         );
-        assert!(email.text.contains(
-            "The onboarding call for Rock & <Stone> is booked. You can see or change it in Granite Manager."
-        ));
-        assert!(
-            email
-                .text
-                .contains("the onboarding fee of $600.00 is waived")
-        );
-        assert!(
-            email
-                .text
-                .contains("See your call: https://app.example.com/employee?book_onboarding=1")
-        );
-        assert!(!email.text.contains("15:00") && !email.text.contains("3:00"));
-        assert_clean(&email);
-    }
-
-    #[test]
-    fn the_notice_states_amount_dates_method_and_how_to_avoid_or_dispute() {
-        let email = notice(Some("Visa ending in 4242"), false);
         assert_eq!(
-            email.subject,
-            "Action needed: onboarding fee of $1,234.50 will be charged on November 27, 2026"
+            email.text,
+            "Hi <b>Ann</b>,\n\n\
+             The onboarding call for Rock & <Stone> is booked. You can see or change it in Granite Manager.\n\n\
+             Onboarding is free and complete once your call has taken place. The call must end by November 20, 2026, your onboarding deadline.\n\n\
+             If onboarding is not completed by then, we email a notice, and your next subscription charge at least 7 days after it also includes the following month in advance: one month of your subscription ($600.00 with your plan at signup) plus applicable sales tax. That month is then not charged again, so you pay nothing extra, only one month earlier.\n\n\
+             If you need to move your call, pick a new time that ends by November 20, 2026.\n\n\
+             See your call: https://app.example.com/employee?book_onboarding=1\n\n\
+             This email was sent to managers of Rock & <Stone>."
         );
-        assert!(email.text.starts_with("Hello,"));
-        assert!(
-            email
-                .text
-                .contains("was not completed by November 20, 2026")
-        );
-        assert!(email.text.contains(
-            "On November 27, 2026, the onboarding fee of $1,234.50 plus applicable sales tax will be charged to Visa ending in 4242."
-        ));
-        assert!(email.text.contains(
-            "have an onboarding call that has taken place by Fri, Nov 27 at 10:00 AM EST (we mark it complete), or request cancellation"
-        ));
-        assert!(
-            email
-                .text
-                .contains("reply to this email before November 27, 2026")
-        );
-        assert!(email.text.contains("separate invoice"));
-        assert!(
-            email
-                .text
-                .contains("Read the Terms, Section 11: https://app.example.com/terms")
-        );
-        assert!(!email.text.contains("You have an onboarding call booked"));
         assert_clean(&email);
     }
 
-    #[test]
-    fn a_booked_reminder_names_the_call_time_in_the_signup_zone() {
-        let email = render_reminder(&ReminderInput {
+    fn booked_at(start: &str, end: &str) -> RenderedEmail {
+        render_reminder(&ReminderInput {
             step: ReminderStep::Day7,
             booked: true,
-            call_start_at: Some(at("2026-11-05 01:00:00")),
+            call_start_at: Some(at(start)),
+            call_end_at: Some(at(end)),
             company_name: "Granite Co",
             user_name: None,
-            deadline_at: at("2026-11-21 03:00:00"),
-            fee_cents: 60_000,
+            deadline_at: at("2026-11-21 04:59:59"),
+            advance_cents: 60_000,
             app_url: APP_URL,
-        });
+        })
+    }
+
+    #[test]
+    fn a_booked_reminder_names_the_call_times_in_the_signup_zone() {
+        let email = booked_at("2026-11-05 01:00:00", "2026-11-05 01:30:00");
         assert!(email.text.contains(
             "The onboarding call for Granite Co is booked for Wed, Nov 4 at 8:00 PM EST."
         ));
+        assert!(email.text.contains(
+            "Onboarding is free and complete once your call has taken place. Your call ends Wed, Nov 4 at 8:30 PM EST, by your onboarding deadline of November 20, 2026."
+        ));
+        assert!(
+            !email
+                .text
+                .contains("Because your call ends after the deadline")
+        );
         assert!(
             email
                 .text
-                .contains("pick a new time before November 20, 2026.")
+                .contains("pick a new time that ends by November 20, 2026.")
         );
+    }
+
+    #[test]
+    fn a_call_ending_after_the_deadline_is_told_it_gets_the_notice_but_still_counts() {
+        let email = booked_at("2026-11-21 04:45:00", "2026-11-21 05:15:00");
+        assert!(email.text.contains(
+            "Your call ends Sat, Nov 21 at 12:15 AM EST, after your onboarding deadline of November 20, 2026."
+        ));
+        assert!(email.text.contains(
+            "Because your call ends after the deadline, we will send that notice. Your call still avoids the advance payment if it ends before the charge date in the notice."
+        ));
+    }
+
+    #[test]
+    fn the_notice_is_exact() {
+        let email = notice(Some("Visa ending in 4242"), false);
+        assert_eq!(
+            email.subject,
+            "Action needed: your charge on November 27, 2026 will include a $1,234.50 advance payment"
+        );
+        assert_eq!(
+            email.text,
+            "Hello,\n\n\
+             Onboarding for Rock & <Stone> was not completed by November 20, 2026, the onboarding deadline.\n\n\
+             So your subscription charge on November 27, 2026 will also include the following month in advance: an advance payment of $1,234.50 plus applicable sales tax, charged to Visa ending in 4242. It covers December 27, 2026 to January 27, 2027.\n\n\
+             You pay nothing extra overall, only one month earlier: once that charge is paid, a credit of the same amount pays your invoice on December 27, 2026. If your plan grows by then, only the difference is charged.\n\n\
+             To avoid it, have an onboarding call that ends before Fri, Nov 27 at 10:00 AM EST (book it in Granite Manager; it counts once it has taken place). If you request cancellation of your subscription before then, the subscription ends and that charge, with the advance payment, is not made.\n\n\
+             If you think the advance payment should not apply, reply to this email or write to support@granite-manager.com before November 27, 2026, and we will review it before charging.\n\n\
+             Section 11 of the Terms of Service explains the advance payment.\n\n\
+             Read the Terms, Section 11: https://app.example.com/terms\n\n\
+             This email was sent to managers of Rock & <Stone>."
+        );
+        assert_clean(&email);
     }
 
     #[test]
@@ -402,30 +457,33 @@ mod tests {
             step: ReminderStep::Day21,
             booked: false,
             call_start_at: None,
+            call_end_at: None,
             company_name: "Granite Co",
             user_name: None,
             deadline_at: at("2026-11-21 03:00:00"),
-            fee_cents: 60_000,
+            advance_cents: 60_000,
             app_url: APP_URL,
         });
         assert_eq!(
             late.subject,
-            "Reminder: book your onboarding call by November 20, 2026"
+            "Reminder: complete your free onboarding call by November 20, 2026"
         );
         assert!(!all(&late).contains("November 21"));
         let notice = render_notice(&NoticeInput {
             company_name: "Granite Co",
             user_name: None,
-            fee_cents: 60_000,
+            advance_cents: 60_000,
             deadline_at: at("2026-11-21 03:00:00"),
             charge_at: at("2026-11-28 02:00:00"),
+            prepaid_from: at("2026-12-28 02:00:00"),
+            prepaid_until: at("2027-01-28 02:00:00"),
             payment_method: None,
             booked_before_charge: false,
             app_url: APP_URL,
         });
         assert_eq!(
             notice.subject,
-            "Action needed: onboarding fee of $600.00 will be charged on November 27, 2026"
+            "Action needed: your charge on November 27, 2026 will include a $600.00 advance payment"
         );
         assert!(
             notice
@@ -435,30 +493,14 @@ mod tests {
         assert!(
             notice
                 .text
-                .contains("On November 27, 2026, the onboarding fee")
+                .contains("It covers December 27, 2026 to January 27, 2027.")
+        );
+        assert!(
+            notice
+                .text
+                .contains("an onboarding call that ends before Fri, Nov 27 at 9:00 PM EST")
         );
         assert!(!all(&notice).contains("November 21") && !all(&notice).contains("November 28"));
-    }
-
-    #[test]
-    fn the_booked_call_line_names_the_local_charge_date() {
-        let email = render_notice(&NoticeInput {
-            company_name: "Granite Co",
-            user_name: None,
-            fee_cents: 60_000,
-            deadline_at: at("2026-11-21 03:00:00"),
-            charge_at: at("2026-11-28 02:00:00"),
-            payment_method: None,
-            booked_before_charge: true,
-            app_url: APP_URL,
-        });
-        assert!(email.text.contains(
-            "If your call has taken place by Fri, Nov 27 at 9:00 PM EST, the fee is not charged."
-        ));
-        assert!(email.html.contains(
-            "If your call has taken place by Fri, Nov 27 at 9:00 PM EST, the fee is not charged."
-        ));
-        assert!(!all(&email).contains("November 28"));
     }
 
     #[test]
@@ -467,10 +509,10 @@ mod tests {
         assert!(
             email
                 .text
-                .contains("will be charged to the payment method on file.")
+                .contains("charged to the payment method on file. It covers")
         );
         assert!(email.text.contains(
-            "You have an onboarding call booked. If your call has taken place by Fri, Nov 27 at 10:00 AM EST, the fee is not charged."
+            "You have an onboarding call booked that ends before then. Once it has taken place, the advance payment is not charged."
         ));
         assert_clean(&email);
         let escaped = notice(Some("<i>Card</i>"), false);

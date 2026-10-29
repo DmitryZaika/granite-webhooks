@@ -21,12 +21,18 @@ use sqlx::MySqlConnection;
 
 /// Legal documents, copied from general_datebase
 /// `app/content/legal/manifest.json` (a new version is a new pair here).
-pub const TERMS_VERSION: &str = "terms-2026-10-v2";
-pub const TERMS_SHA256: &str = "e761f205fff419984c73a149d02225494bbe3d0053a2387939f4225d2e603856";
+pub const TERMS_VERSION: &str = "terms-2026-10-v3";
+pub const TERMS_SHA256: &str = "1733428117cc7509e0035b6ea90758df4e96f424475d8da69cdbd3fa1590ce12";
 pub const PRIVACY_VERSION: &str = "privacy-2026-10-v2";
 pub const PRIVACY_SHA256: &str = "a5c1a5ad7793ad455a709c474429fc1b5ab45829e2bfafd3249a5c90ecd9a2dc";
 pub const DPA_VERSION: &str = "dpa-2026-10-v1";
 pub const DPA_SHA256: &str = "a41370b6f1d617ea63ac1a01918d1bc38d88db13c5f2a62e71f7063c53184dc4";
+
+// Each checkbox version is pinned to the SHA-256 of its text rendered with
+// the unit tests' fixed facts (`every_checkbox_version_pins_its_wording`):
+// a wording change needs a new version and a new pin together.
+#[cfg(test)]
+const TERMS_PIN: &str = "d83a250c182010627a751581496a8ac3be9db1f86437eaa8ca74476d2dc6aa1d";
 
 /// A checkbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -38,8 +44,9 @@ pub enum ConsentKind {
     AutoRenewal,
     /// $30 per active user above 10.
     PerUserPricing,
-    /// The onboarding fee if onboarding is not completed in 30 days.
-    OnboardingFee,
+    /// The onboarding advance: a month paid in advance with the next charge
+    /// if onboarding (free) is not completed in 30 days.
+    OnboardingAdvance,
     /// The ACH debit authorization, when paying by bank account.
     AchAuthorization,
     /// The card authorization, when paying by card.
@@ -52,7 +59,7 @@ impl ConsentKind {
             Self::Terms => "terms",
             Self::AutoRenewal => "auto_renewal",
             Self::PerUserPricing => "per_user_pricing",
-            Self::OnboardingFee => "onboarding_fee",
+            Self::OnboardingAdvance => "onboarding_advance",
             Self::AchAuthorization => "ach_authorization",
             Self::CardAuthorization => "card_authorization",
         }
@@ -101,7 +108,8 @@ pub struct ConsentAcceptance {
 pub struct DocumentLink {
     /// e.g. "Terms of Service".
     pub title: String,
-    /// The page on the main app (`/terms`, `/privacy-policy`, `/dpa`).
+    /// The exact version on the main app (`/terms?v=<version>`,
+    /// `/privacy-policy?v=<version>`, `/dpa?v=<version>`).
     pub url: String,
 }
 
@@ -140,7 +148,7 @@ impl RenderedConsent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsentContext {
     /// Self-serve signup: terms, auto_renewal, per_user_pricing,
-    /// onboarding_fee, then card_authorization and ach_authorization.
+    /// onboarding_advance, then card_authorization and ach_authorization.
     Signup,
     /// A company moved onto a plan by Granite Manager (plan invite): terms,
     /// auto_renewal, per_user_pricing, card_authorization and
@@ -216,15 +224,36 @@ fn recorded_documents(consent: &RenderedConsent) -> Vec<(&'static str, Option<&'
     }
 }
 
-/// The onboarding fee is charged this long after its notice (at the deadline).
-pub const ONBOARDING_FEE_NOTICE_DAYS: u64 = 7;
+/// The onboarding advance is charged no sooner than this after its notice
+/// (at the deadline at the earliest).
+pub const ONBOARDING_ADVANCE_NOTICE_DAYS: u64 = 7;
 
-pub const AUTO_RENEWAL_VERSION: &str = "auto-renewal-2026-10-v1";
+/// The day the advance would be charged if onboarding is not completed by
+/// the deadline: the first charge, or later when that is under 7 days after
+/// the deadline. (The live date is fixed at the notice.)
+pub fn advance_charge_on(quote: &Quote) -> NaiveDate {
+    quote
+        .first_charge_on
+        .max(quote.deadline_on + chrono::Days::new(ONBOARDING_ADVANCE_NOTICE_DAYS))
+}
+
+pub const AUTO_RENEWAL_VERSION: &str = "auto-renewal-2026-10-v2";
 pub const PER_USER_PRICING_VERSION: &str = "per-user-pricing-2026-10-v1";
-pub const ONBOARDING_FEE_VERSION: &str = "onboarding-fee-2026-10-v1";
+pub const ONBOARDING_ADVANCE_VERSION: &str = "onboarding-advance-2026-10-v2";
+#[cfg(test)]
+const AUTO_RENEWAL_PIN: &str = "51bd662ef0f90fbee926cf3b346de2dec1b09d9902962b379090a69e55830909";
+#[cfg(test)]
+const PER_USER_PRICING_PIN: &str =
+    "f301281fd7dfdefa08fc9b2330f46800a0b5929a2600458197dddbfd195fa201";
+#[cfg(test)]
+const ONBOARDING_ADVANCE_PIN: &str =
+    "b9ea66e0412707a55076758fad336ce6d12c2ef3d33f5455a92905c6c928c96b";
 
 /// Version of [`CARD_AUTHORIZATION_TEXT`].
 pub const CARD_AUTHORIZATION_VERSION: &str = "card-authorization-2026-10-v1";
+#[cfg(test)]
+const CARD_AUTHORIZATION_PIN: &str =
+    "2be51453b129d416f835fc3bed60ee24937996c2bfc34e5a6a678c335b905fb4";
 /// The card authorization (04-legal.md section 6.2, "Card consent"), ticked
 /// when paying by card. The same for signups and plan invites.
 pub const CARD_AUTHORIZATION_TEXT: &str = "I authorize Granite Manager and Stripe to charge \
@@ -232,7 +261,13 @@ pub const CARD_AUTHORIZATION_TEXT: &str = "I authorize Granite Manager and Strip
      charges until I cancel.";
 
 /// Version of the ACH debit authorization ([`ach_authorization_text`]).
-pub const ACH_AUTHORIZATION_VERSION: &str = "ach-authorization-2026-10-v1";
+pub const ACH_AUTHORIZATION_VERSION: &str = "ach-authorization-2026-10-v2";
+/// A signup's and an invite's (no (c)).
+#[cfg(test)]
+const ACH_AUTHORIZATION_PINS: [&str; 2] = [
+    "b77b3aa1c0df2ddeb7782bdee2d9b1c9896aef5d61946f8b77f8a2a352c30eac",
+    "fad489d7d5e00833da2a70fe51009c81a742d7b5299dc704b5128427d7c4af73",
+];
 /// The fixed end of the ACH debit authorization (04-legal.md section 6.2).
 ///
 /// Retries (Stripe retries a debit returned for insufficient funds at most
@@ -240,8 +275,8 @@ pub const ACH_AUTHORIZATION_VERSION: &str = "ach-authorization-2026-10-v1";
 /// accounts, and the copy on request.
 pub const ACH_AUTHORIZATION_TERMS: &str = "If a debit is returned for insufficient funds, I \
      authorize Granite Manager to retry it up to 2 times within 40 days, as Nacha rules allow. \
-     This authorization stays in effect until I revoke it by emailing \
-     support@granite-manager.com or using the account page, at least 3 business days before \
+     This authorization stays in effect until I revoke it by replacing the bank account on the \
+     account page or by emailing support@granite-manager.com, at least 3 business days before \
      the next debit. If this is a business account, I agree to be bound by the Nacha Operating \
      Rules for these debits. I confirm that I am authorized to debit this account. I can ask \
      for a copy of this authorization at support@granite-manager.com.";
@@ -251,12 +286,13 @@ pub const ACH_AUTHORIZATION_TERMS: &str = "If a debit is returned for insufficie
 /// It names "the bank account I add on this page": its last 4 and bank are
 /// unknown until the account is linked, so they are recorded with the
 /// acceptance (`amounts_and_dates`, `payment_method_id`,
-/// `stripe_mandate_id`). The onboarding fee debit, (c), is a signup's only.
+/// `stripe_mandate_id`). The advance payment debit, (c), is a signup's only.
 pub fn ach_authorization_text(context: ConsentContext, facts: &ConsentFacts) -> String {
     let quote = &facts.quote;
     let monthly = format!(
-        "(a) {} per month plus $30 for each active user above 10, plus applicable sales tax, \
-         starting {}",
+        "(a) {} per month plus $30 for each active user above 10, plus applicable sales tax, on \
+         {} and then every month on the same day as the first charge (or the last day of a month \
+         that has no such day)",
         money(quote.base_and_addons_cents),
         long_date(quote.first_charge_on),
     );
@@ -264,11 +300,12 @@ pub fn ach_authorization_text(context: ConsentContext, facts: &ConsentFacts) -> 
                    amounts shown to me in the app and by email";
     let debits = match context {
         ConsentContext::Signup => format!(
-            "{monthly}; {changes}; and (c) a one-time onboarding fee of {fee} on {charge_on} if \
-             onboarding is not completed by {deadline}, as described above.",
-            fee = money(quote.fee_cents),
-            charge_on =
-                long_date(quote.deadline_on + chrono::Days::new(ONBOARDING_FEE_NOTICE_DAYS)),
+            "{monthly}; {changes}; and (c) if onboarding is not completed by {deadline}, one month \
+             of the subscription paid in advance, plus applicable sales tax, with the next charge at \
+             least 7 days after the notice email ({advance} on {charge_on} with the plan and dates \
+             of today), as described above.",
+            advance = money(quote.advance_cents),
+            charge_on = long_date(advance_charge_on(quote)),
             deadline = long_date(quote.deadline_on),
         ),
         ConsentContext::Invite => format!("{monthly}; and {changes}."),
@@ -310,16 +347,37 @@ pub fn long_date(day: NaiveDate) -> String {
     day.format("%B %-d, %Y").to_string()
 }
 
+/// The onboarding advance checkbox (Terms 11), a signup's only.
+fn onboarding_advance_text(quote: &Quote) -> String {
+    format!(
+        "I understand that onboarding with Granite Manager is free. If it is not completed by \
+         {deadline} (30 days after signup), Granite Manager will email my company's Managers a \
+         notice at least 7 days before the charge. The next subscription charge at least 7 days \
+         after that notice (with the dates of today, the charge on {charge_on}) then also \
+         includes the following month in advance: one month of the subscription at the time of \
+         the notice, before tax ({advance} with the plan and users I chose), plus applicable \
+         sales tax. That month is then not charged again, so nothing extra is paid, only one \
+         month earlier. An onboarding call booked in the app that ends before the charge date \
+         in the notice still avoids it, and if I request cancellation before that charge, it \
+         is not charged. The deadline moves back one day for each day Granite Manager has no \
+         bookable slot within the next 5 business days, and to match when Granite Manager \
+         cancels or reschedules my call. I can request one 14-day extension.",
+        deadline = long_date(quote.deadline_on),
+        charge_on = long_date(advance_charge_on(quote)),
+        advance = money(quote.advance_cents),
+    )
+}
+
 /// The checkboxes of a signup (04-legal.md sections 6.1 and 6.2).
 ///
-/// In order: terms, auto_renewal, per_user_pricing, onboarding_fee, then
+/// In order: terms, auto_renewal, per_user_pricing, onboarding_advance, then
 /// the payment ones, card_authorization and ach_authorization. `app_url` is
 /// the main app's origin, for the document links.
 pub fn render(facts: &ConsentFacts, app_url: &str) -> Vec<RenderedConsent> {
     render_for(ConsentContext::Signup, facts, app_url)
 }
 
-/// The checkboxes of `context`, in order (an invite has no onboarding_fee);
+/// The checkboxes of `context`, in order (an invite has no onboarding_advance);
 /// the payment ones last.
 pub fn render_for(
     context: ConsentContext,
@@ -336,14 +394,15 @@ pub fn render_for(
     };
     let terms = format!(
         "I am authorized to bind {company}. I agree to the Terms of Service and Subscription \
-         Terms (version {TERMS_VERSION}), the Data Processing Addendum, and the Privacy Policy \
-         (version {PRIVACY_VERSION})."
+         Terms (version {TERMS_VERSION}), the Data Processing Addendum (version {DPA_VERSION}), \
+         and the Privacy Policy (version {PRIVACY_VERSION})."
     );
     let auto_renewal = format!(
-        "I understand that my subscription starts with a free period. On {first_charge}, and \
-         then every month, {company} will be charged {base} per month plus $30 for each active \
-         user above 10 on the charge date, plus applicable sales tax, using the payment method \
-         I provide, until I cancel. With {users} users that is {monthly} per month. I can \
+        "I understand that this subscription is not charged before {first_charge}. On \
+         {first_charge}, and then every month on the same day as the first charge (or the last \
+         day of a month that has no such day), {company} will be charged {base} per month plus \
+         $30 for each active user above 10 on the charge date, plus applicable sales tax, using \
+         the payment method I provide, until I cancel. With {users} users that is {monthly} per month. I can \
          cancel any time with Request cancellation in the app or by emailing \
          support@granite-manager.com. Cancelling before {first_charge} means no charge. I will \
          get a reminder email 7 days before the first charge.",
@@ -356,15 +415,7 @@ pub fn render_for(
                     automatically and prorates the charge when users are added or removed, and \
                     I agree to this."
         .to_string();
-    let onboarding = format!(
-        "I understand that if onboarding with Granite Manager is not completed by {deadline} \
-         (30 days after signup), a one-time onboarding fee of {fee} will be charged to my \
-         payment method as a separate invoice, after a 7-day notice email. The fee is waived \
-         if I complete onboarding by then or cancel before then. The deadline moves if Granite \
-         Manager has no bookable slot, and I can request one 14-day extension.",
-        deadline = long_date(quote.deadline_on),
-        fee = money(quote.fee_cents),
-    );
+    let onboarding = onboarding_advance_text(quote);
     let item = |kind, version: &'static str, text: String, documents| RenderedConsent {
         kind,
         version,
@@ -380,9 +431,12 @@ pub fn render_for(
         TERMS_VERSION,
         terms,
         vec![
-            link("Terms of Service", "/terms"),
-            link("Privacy Policy", "/privacy-policy"),
-            link("Data Processing Addendum", "/dpa"),
+            link("Terms of Service", &format!("/terms?v={TERMS_VERSION}")),
+            link(
+                "Privacy Policy",
+                &format!("/privacy-policy?v={PRIVACY_VERSION}"),
+            ),
+            link("Data Processing Addendum", &format!("/dpa?v={DPA_VERSION}")),
         ],
     );
     terms.document_sha256 = Some(TERMS_SHA256);
@@ -403,8 +457,8 @@ pub fn render_for(
     ];
     if context == ConsentContext::Signup {
         rendered.push(item(
-            ConsentKind::OnboardingFee,
-            ONBOARDING_FEE_VERSION,
+            ConsentKind::OnboardingAdvance,
+            ONBOARDING_ADVANCE_VERSION,
             onboarding,
             Vec::new(),
         ));
@@ -499,11 +553,11 @@ fn amounts_and_dates(
         ConsentOrigin::Signup { .. } => {
             let quote = &facts.quote;
             json!({
-                "onboarding_fee_cents": quote.fee_cents,
+                "onboarding_advance_cents": quote.advance_cents,
                 "onboarding_deadline_on": quote.deadline_on,
                 "onboarding_deadline_at": facts.deadline_at.map(stamp),
-                "onboarding_fee_notice_days": ONBOARDING_FEE_NOTICE_DAYS,
-                "onboarding_fee_charge_on": quote.deadline_on + chrono::Days::new(ONBOARDING_FEE_NOTICE_DAYS),
+                "onboarding_notice_days": ONBOARDING_ADVANCE_NOTICE_DAYS,
+                "onboarding_advance_charge_on": advance_charge_on(quote),
             })
         }
         ConsentOrigin::Invite {
@@ -672,7 +726,7 @@ mod tests {
                 monthly_cents: monthly,
                 due_today_cents: 0,
                 first_charge_on: day(2027, 1, 23),
-                fee_cents: 2 * base,
+                advance_cents: monthly,
                 deadline_on: day(2026, 11, 22),
             },
             trial_end_at: day(2027, 1, 23).and_hms_opt(5, 0, 0).unwrap(),
@@ -712,7 +766,7 @@ mod tests {
                 (ConsentKind::Terms, None),
                 (ConsentKind::AutoRenewal, None),
                 (ConsentKind::PerUserPricing, None),
-                (ConsentKind::OnboardingFee, None),
+                (ConsentKind::OnboardingAdvance, None),
                 (
                     ConsentKind::CardAuthorization,
                     Some(PaymentMethodType::Card)
@@ -725,19 +779,19 @@ mod tests {
         );
         assert_eq!(
             text_of(&rendered, ConsentKind::Terms).text,
-            "I am authorized to bind Acme Stone. I agree to the Terms of Service and Subscription Terms (version terms-2026-10-v2), the Data Processing Addendum, and the Privacy Policy (version privacy-2026-10-v2)."
+            "I am authorized to bind Acme Stone. I agree to the Terms of Service and Subscription Terms (version terms-2026-10-v3), the Data Processing Addendum (version dpa-2026-10-v1), and the Privacy Policy (version privacy-2026-10-v2)."
         );
         assert_eq!(
             text_of(&rendered, ConsentKind::AutoRenewal).text,
-            "I understand that my subscription starts with a free period. On January 23, 2027, and then every month, Acme Stone will be charged $300.00 per month plus $30 for each active user above 10 on the charge date, plus applicable sales tax, using the payment method I provide, until I cancel. With 12 users that is $360.00 per month. I can cancel any time with Request cancellation in the app or by emailing support@granite-manager.com. Cancelling before January 23, 2027 means no charge. I will get a reminder email 7 days before the first charge."
+            "I understand that this subscription is not charged before January 23, 2027. On January 23, 2027, and then every month on the same day as the first charge (or the last day of a month that has no such day), Acme Stone will be charged $300.00 per month plus $30 for each active user above 10 on the charge date, plus applicable sales tax, using the payment method I provide, until I cancel. With 12 users that is $360.00 per month. I can cancel any time with Request cancellation in the app or by emailing support@granite-manager.com. Cancelling before January 23, 2027 means no charge. I will get a reminder email 7 days before the first charge."
         );
         assert_eq!(
             text_of(&rendered, ConsentKind::PerUserPricing).text,
             "I understand that the base price covers up to 10 active users. Each active user above 10 adds $30 per month. Granite Manager counts active users automatically and prorates the charge when users are added or removed, and I agree to this."
         );
         assert_eq!(
-            text_of(&rendered, ConsentKind::OnboardingFee).text,
-            "I understand that if onboarding with Granite Manager is not completed by November 22, 2026 (30 days after signup), a one-time onboarding fee of $600.00 will be charged to my payment method as a separate invoice, after a 7-day notice email. The fee is waived if I complete onboarding by then or cancel before then. The deadline moves if Granite Manager has no bookable slot, and I can request one 14-day extension."
+            text_of(&rendered, ConsentKind::OnboardingAdvance).text,
+            "I understand that onboarding with Granite Manager is free. If it is not completed by November 22, 2026 (30 days after signup), Granite Manager will email my company's Managers a notice at least 7 days before the charge. The next subscription charge at least 7 days after that notice (with the dates of today, the charge on January 23, 2027) then also includes the following month in advance: one month of the subscription at the time of the notice, before tax ($360.00 with the plan and users I chose), plus applicable sales tax. That month is then not charged again, so nothing extra is paid, only one month earlier. An onboarding call booked in the app that ends before the charge date in the notice still avoids it, and if I request cancellation before that charge, it is not charged. The deadline moves back one day for each day Granite Manager has no bookable slot within the next 5 business days, and to match when Granite Manager cancels or reschedules my call. I can request one 14-day extension."
         );
         let card = text_of(&rendered, ConsentKind::CardAuthorization);
         assert_eq!(card.version, "card-authorization-2026-10-v1");
@@ -746,15 +800,63 @@ mod tests {
             "I authorize Granite Manager and Stripe to charge this card for the amounts and dates in the checkboxes above and to save it for future charges until I cancel."
         );
         let ach = text_of(&rendered, ConsentKind::AchAuthorization);
-        assert_eq!(ach.version, "ach-authorization-2026-10-v1");
+        assert_eq!(ach.version, "ach-authorization-2026-10-v2");
         assert_eq!(ach.document_version, ach.version);
         assert_eq!(
             ach.text,
-            "By checking this box I authorize Granite Manager, through its payment processor Stripe, to electronically debit the bank account I add on this page for: (a) $300.00 per month plus $30 for each active user above 10, plus applicable sales tax, starting January 23, 2027; (b) changes to that amount when active users or add-ons change, in the amounts shown to me in the app and by email; and (c) a one-time onboarding fee of $600.00 on November 29, 2026 if onboarding is not completed by November 22, 2026, as described above. If a debit is returned for insufficient funds, I authorize Granite Manager to retry it up to 2 times within 40 days, as Nacha rules allow. This authorization stays in effect until I revoke it by emailing support@granite-manager.com or using the account page, at least 3 business days before the next debit. If this is a business account, I agree to be bound by the Nacha Operating Rules for these debits. I confirm that I am authorized to debit this account. I can ask for a copy of this authorization at support@granite-manager.com."
+            "By checking this box I authorize Granite Manager, through its payment processor Stripe, to electronically debit the bank account I add on this page for: (a) $300.00 per month plus $30 for each active user above 10, plus applicable sales tax, on January 23, 2027 and then every month on the same day as the first charge (or the last day of a month that has no such day); (b) changes to that amount when active users or add-ons change, in the amounts shown to me in the app and by email; and (c) if onboarding is not completed by November 22, 2026, one month of the subscription paid in advance, plus applicable sales tax, with the next charge at least 7 days after the notice email ($360.00 on January 23, 2027 with the plan and dates of today), as described above. If a debit is returned for insufficient funds, I authorize Granite Manager to retry it up to 2 times within 40 days, as Nacha rules allow. This authorization stays in effect until I revoke it by replacing the bank account on the account page or by emailing support@granite-manager.com, at least 3 business days before the next debit. If this is a business account, I agree to be bound by the Nacha Operating Rules for these debits. I confirm that I am authorized to debit this account. I can ask for a copy of this authorization at support@granite-manager.com."
         );
-        for consent in &rendered {
-            assert!(!consent.text.contains('\u{2014}'));
+        assert_no_fee_or_dash(&rendered);
+    }
+
+    /// No customer text speaks of an onboarding fee (onboarding is free) or
+    /// has an em or en dash.
+    fn assert_no_fee_or_dash(rendered: &[RenderedConsent]) {
+        for consent in rendered {
+            let text = consent.text.to_lowercase();
+            assert!(!text.contains("fee"), "{text}");
+            assert!(
+                !text.contains('\u{2014}') && !text.contains('\u{2013}'),
+                "{text}"
+            );
         }
+    }
+
+    #[test]
+    fn every_checkbox_version_pins_its_wording() {
+        let signup = render(&facts(36_000, 30_000), "https://app.example");
+        let invite = render_for(
+            ConsentContext::Invite,
+            &invite_facts(),
+            "https://app.example",
+        );
+        let pin = |rendered: &[RenderedConsent], kind| {
+            let consent = text_of(rendered, kind);
+            (consent.version, consent.sha256.clone())
+        };
+        let pins = [
+            (TERMS_VERSION, TERMS_PIN),
+            (AUTO_RENEWAL_VERSION, AUTO_RENEWAL_PIN),
+            (PER_USER_PRICING_VERSION, PER_USER_PRICING_PIN),
+            (ONBOARDING_ADVANCE_VERSION, ONBOARDING_ADVANCE_PIN),
+            (CARD_AUTHORIZATION_VERSION, CARD_AUTHORIZATION_PIN),
+            (ACH_AUTHORIZATION_VERSION, ACH_AUTHORIZATION_PINS[0]),
+            (ACH_AUTHORIZATION_VERSION, ACH_AUTHORIZATION_PINS[1]),
+        ]
+        .map(|(version, sha)| (version, sha.to_string()));
+        assert_eq!(
+            [
+                pin(&signup, ConsentKind::Terms),
+                pin(&signup, ConsentKind::AutoRenewal),
+                pin(&signup, ConsentKind::PerUserPricing),
+                pin(&signup, ConsentKind::OnboardingAdvance),
+                pin(&signup, ConsentKind::CardAuthorization),
+                pin(&signup, ConsentKind::AchAuthorization),
+                pin(&invite, ConsentKind::AchAuthorization),
+            ],
+            pins,
+            "a checkbox text changed: give it a new version, then pin the new hash"
+        );
     }
 
     #[test]
@@ -774,13 +876,13 @@ mod tests {
                 .map(|d| d.url.as_str())
                 .collect::<Vec<_>>(),
             [
-                "https://app.example/terms",
-                "https://app.example/privacy-policy",
-                "https://app.example/dpa"
+                "https://app.example/terms?v=terms-2026-10-v3",
+                "https://app.example/privacy-policy?v=privacy-2026-10-v2",
+                "https://app.example/dpa?v=dpa-2026-10-v1"
             ]
         );
         let auto = text_of(&rendered, ConsentKind::AutoRenewal);
-        assert_eq!(auto.version, "auto-renewal-2026-10-v1");
+        assert_eq!(auto.version, "auto-renewal-2026-10-v2");
         assert_eq!(auto.document_version, auto.version);
         assert_eq!(auto.document_sha256, None);
         assert!(auto.documents.is_empty());
@@ -792,7 +894,7 @@ mod tests {
         let after = render(&facts(37_500, 31_500), "https://app.example");
         for kind in [
             ConsentKind::AutoRenewal,
-            ConsentKind::OnboardingFee,
+            ConsentKind::OnboardingAdvance,
             ConsentKind::AchAuthorization,
         ] {
             assert_ne!(text_of(&before, kind).sha256, text_of(&after, kind).sha256);
@@ -822,7 +924,7 @@ mod tests {
         assert!(all_accepted(&rendered, &given, card));
         let mut extra = given.clone();
         extra.push(ConsentAcceptance {
-            kind: ConsentKind::OnboardingFee,
+            kind: ConsentKind::OnboardingAdvance,
             version: "x".into(),
             text_sha256: "y".into(),
         });
@@ -870,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn an_invite_renders_no_onboarding_fee() {
+    fn an_invite_renders_no_onboarding_advance() {
         let rendered = render_for(
             ConsentContext::Invite,
             &invite_facts(),
@@ -889,12 +991,13 @@ mod tests {
         );
         assert_eq!(
             text_of(&rendered, ConsentKind::AchAuthorization).text,
-            "By checking this box I authorize Granite Manager, through its payment processor Stripe, to electronically debit the bank account I add on this page for: (a) $375.00 per month plus $30 for each active user above 10, plus applicable sales tax, starting November 23, 2026; and (b) changes to that amount when active users or add-ons change, in the amounts shown to me in the app and by email. If a debit is returned for insufficient funds, I authorize Granite Manager to retry it up to 2 times within 40 days, as Nacha rules allow. This authorization stays in effect until I revoke it by emailing support@granite-manager.com or using the account page, at least 3 business days before the next debit. If this is a business account, I agree to be bound by the Nacha Operating Rules for these debits. I confirm that I am authorized to debit this account. I can ask for a copy of this authorization at support@granite-manager.com."
+            "By checking this box I authorize Granite Manager, through its payment processor Stripe, to electronically debit the bank account I add on this page for: (a) $375.00 per month plus $30 for each active user above 10, plus applicable sales tax, on November 23, 2026 and then every month on the same day as the first charge (or the last day of a month that has no such day); and (b) changes to that amount when active users or add-ons change, in the amounts shown to me in the app and by email. If a debit is returned for insufficient funds, I authorize Granite Manager to retry it up to 2 times within 40 days, as Nacha rules allow. This authorization stays in effect until I revoke it by replacing the bank account on the account page or by emailing support@granite-manager.com, at least 3 business days before the next debit. If this is a business account, I agree to be bound by the Nacha Operating Rules for these debits. I confirm that I am authorized to debit this account. I can ask for a copy of this authorization at support@granite-manager.com."
         );
         assert_eq!(
             text_of(&rendered, ConsentKind::AutoRenewal).text,
-            "I understand that my subscription starts with a free period. On November 23, 2026, and then every month, Acme Stone will be charged $375.00 per month plus $30 for each active user above 10 on the charge date, plus applicable sales tax, using the payment method I provide, until I cancel. With 12 users that is $435.00 per month. I can cancel any time with Request cancellation in the app or by emailing support@granite-manager.com. Cancelling before November 23, 2026 means no charge. I will get a reminder email 7 days before the first charge."
+            "I understand that this subscription is not charged before November 23, 2026. On November 23, 2026, and then every month on the same day as the first charge (or the last day of a month that has no such day), Acme Stone will be charged $375.00 per month plus $30 for each active user above 10 on the charge date, plus applicable sales tax, using the payment method I provide, until I cancel. With 12 users that is $435.00 per month. I can cancel any time with Request cancellation in the app or by emailing support@granite-manager.com. Cancelling before November 23, 2026 means no charge. I will get a reminder email 7 days before the first charge."
         );
+        assert_no_fee_or_dash(&rendered);
         let signup = render(&invite_facts(), "https://app.example");
         for kind in [
             ConsentKind::Terms,
@@ -925,13 +1028,14 @@ mod tests {
         assert_eq!(amounts["legacy_subscription_replaced"], true);
         assert_eq!(amounts["first_charge_on"], "2026-11-23");
         assert_eq!(amounts["monthly_cents"], 43_500);
-        assert!(amounts.get("onboarding_fee_cents").is_none());
+        assert!(amounts.get("onboarding_advance_cents").is_none());
         let signup = amounts_and_dates(
             ConsentOrigin::Signup { signup_id: "s-1" },
             &facts(36_000, 30_000),
             &PaymentFacts::default(),
         );
-        assert_eq!(signup["onboarding_fee_cents"], 60_000);
+        assert_eq!(signup["onboarding_advance_cents"], 36_000);
+        assert_eq!(signup["onboarding_advance_charge_on"], "2027-01-23");
         assert_eq!(signup["onboarding_deadline_at"], "2026-11-22T17:00:00Z");
         assert!(signup.get("plan_invite_id").is_none());
     }

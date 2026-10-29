@@ -1,6 +1,8 @@
-//! The emails of a cancellation request: the confirmation and the withdrawal
-//! notice to the company's Managers (04-legal 6.6, Terms 9 and 17.2), and the
-//! staff notice (email and Telegram).
+//! The emails of a cancellation request (Terms 9, 11.7 and 17.2).
+//!
+//! To the company's Managers: the confirmation, the withdrawal notice, and
+//! the new end date when a paid advance moves the end. To staff: the notice
+//! (email and Telegram).
 //!
 //! Pure: subjects, escaped HTML and text
 //! parts. The reason goes to staff only.
@@ -10,10 +12,13 @@ use super::reminder_emails::{
     format_local_time, greeting, html_button, html_footer, html_paragraph, wrap_html,
 };
 use crate::onboarding_call::commitment::NOTICE_DAYS;
-use chrono::NaiveDateTime;
+use chrono::{Duration, NaiveDateTime};
 
 pub const CONFIRMATION_SUBJECT: &str = "We received your cancellation request";
 pub const WITHDRAWAL_SUBJECT: &str = "Your Granite Manager subscription continues";
+/// `billing_reminder_emails.step` of the new end date email (one per
+/// Manager and request).
+pub const MOVED_STEP: &str = "cancellation_moved";
 const KEEP_LABEL: &str = "Open your account page";
 /// Days after the end date a data export can be asked for (Terms 17.2).
 pub const EXPORT_DAYS: u32 = 30;
@@ -31,52 +36,54 @@ pub struct ConfirmationInput<'a> {
     pub effective_at: NaiveDateTime,
     /// Asked during the free period: nothing is charged at all.
     pub free_period: bool,
-    /// Why the onboarding fee is not charged; `None` when no fee applies.
-    pub onboarding_fee: Option<OnboardingFee>,
+    /// Why the onboarding advance is not charged; `None` when none applies
+    /// (when it was paid, `effective_at` is the end of the prepaid month).
+    pub onboarding_advance: Option<OnboardingAdvance>,
     /// The payments app's account page.
     pub account_url: &'a str,
 }
 
-/// Why a cancellation request avoids the onboarding fee, and what keeping
-/// the subscription means for it (Terms 11.6).
+/// Why a cancellation request avoids the advance payment, and what keeping
+/// the subscription means for it (Terms 11.7 and 11.8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OnboardingFee {
+pub enum OnboardingAdvance {
     /// Requested before the onboarding deadline.
     BeforeDeadline(NaiveDateTime),
-    /// Requested after the deadline, before the fee notice was sent.
+    /// Requested after the deadline, before the advance notice was sent.
     BeforeNotice,
-    /// Requested after the fee notice, before the fee's charge date.
+    /// Requested after the advance notice, before the charge it named.
     BeforeChargeDate(NaiveDateTime),
 }
 
-impl OnboardingFee {
+impl OnboardingAdvance {
     fn sentence(self) -> String {
         match self {
             Self::BeforeDeadline(at) => format!(
-                "You requested cancellation before your onboarding deadline of {}, so the onboarding fee is not charged. If you keep your subscription, the usual onboarding rules apply again, and any onboarding fee comes with a notice at least {NOTICE_DAYS} days before it is charged.",
+                "You requested cancellation before your onboarding deadline of {}, so no advance payment is charged. If you keep your subscription, the onboarding rules apply again: if onboarding is not completed by the deadline, we email a notice at least {NOTICE_DAYS} days before any advance payment is charged.",
                 format_local_date(at)
             ),
             Self::BeforeNotice => format!(
-                "You requested cancellation before we sent the onboarding fee notice, so the onboarding fee is not charged. If you keep your subscription, we first send that notice, at least {NOTICE_DAYS} days before any onboarding fee is charged."
+                "You requested cancellation before we sent the advance payment notice, so no advance payment is charged. If you keep your subscription, we first send that notice, at least {NOTICE_DAYS} days before any advance payment is charged."
             ),
             Self::BeforeChargeDate(at) => {
                 let date = format_local_date(at);
                 format!(
-                    "You requested cancellation before the charge date of the onboarding fee, {date}, so the fee is not charged. If you keep your subscription before {}, the fee is charged on {date}. If you keep it later, we first send a new notice at least {NOTICE_DAYS} days before any charge.",
-                    format_local_time(at)
+                    "You requested cancellation before the charge on {date} that was to include the advance payment, so the advance payment is not charged. If you keep your subscription by {}, the advance payment is charged with the charge on {date}. If you keep it later, we first send a new notice at least {NOTICE_DAYS} days before any charge.",
+                    format_local_time(at - Duration::days(NOTICE_DAYS))
                 )
             }
         }
     }
 }
 
-/// The onboarding fee once a request is withdrawn (Terms 11.6).
+/// The advance payment once a request is withdrawn (Terms 11.8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WithdrawalFee {
-    /// The deadline is ahead: completing onboarding by then avoids the fee.
+pub enum WithdrawalAdvance {
+    /// The deadline is ahead: completing onboarding by then avoids the
+    /// advance payment.
     Deadline(NaiveDateTime),
-    /// Withdrawn before the charge date of the notice sent: the fee is
-    /// charged on it.
+    /// Withdrawn at least 7 days before the charge date of the notice sent:
+    /// the advance payment is charged with it.
     ChargedOn(NaiveDateTime),
     /// Withdrawn after the deadline with no notice out, or on or after the
     /// notice's charge date: a notice comes first.
@@ -85,22 +92,23 @@ pub enum WithdrawalFee {
     Unknown,
 }
 
-impl WithdrawalFee {
+impl WithdrawalAdvance {
     fn sentence(self) -> String {
         match self {
             Self::Deadline(at) => format!(
-                "The onboarding fee is not charged if onboarding is completed by your onboarding deadline of {}.",
+                "Onboarding is free. If it is completed by your onboarding deadline of {}, no advance payment is charged.",
                 format_local_date(at)
             ),
             Self::ChargedOn(at) => format!(
-                "You kept your subscription before the charge date in our onboarding fee notice, so the onboarding fee is charged on {}.",
-                format_local_date(at)
+                "You kept your subscription at least {NOTICE_DAYS} days before the charge date in our advance payment notice, so the advance payment is charged with the charge on {}, as the notice said. An onboarding call that ends before {} still avoids it.",
+                format_local_date(at),
+                format_local_time(at)
             ),
             Self::NewNotice => format!(
-                "Your onboarding deadline has passed, so the onboarding fee applies again. We first send an onboarding fee notice, at least {NOTICE_DAYS} days before the fee is charged."
+                "Your onboarding deadline has passed, so the advance payment applies again. We first send a new notice, at least {NOTICE_DAYS} days before it is charged. An onboarding call that ends before the charge date in that notice still avoids it."
             ),
             Self::Unknown => format!(
-                "If your plan has an onboarding commitment whose deadline has passed, the onboarding fee applies as if cancellation had not been requested, after a notice at least {NOTICE_DAYS} days before it is charged."
+                "If your onboarding deadline has passed and onboarding is not completed, the advance payment applies as if cancellation had not been requested, after a notice at least {NOTICE_DAYS} days before it is charged."
             ),
         }
     }
@@ -115,8 +123,8 @@ pub struct WithdrawalInput<'a> {
     pub withdrawn_by: &'a str,
     /// The next charge, when known.
     pub next_charge_at: Option<NaiveDateTime>,
-    /// What the onboarding fee does now; `None` when no fee is pending.
-    pub onboarding_fee: Option<WithdrawalFee>,
+    /// What the advance payment does now; `None` when none is pending.
+    pub onboarding_advance: Option<WithdrawalAdvance>,
     pub account_url: &'a str,
 }
 
@@ -146,7 +154,7 @@ fn confirmation_paragraphs(input: &ConfirmationInput<'_>, esc: fn(&str) -> Strin
         ),
         charges,
     ];
-    paragraphs.extend(input.onboarding_fee.map(OnboardingFee::sentence));
+    paragraphs.extend(input.onboarding_advance.map(OnboardingAdvance::sentence));
     paragraphs.extend([
         format!(
             "Changed your mind? Before {ends}, use Keep my subscription on your account page, or reply to this email or write to {SUPPORT_EMAIL}."
@@ -196,7 +204,7 @@ fn withdrawal_paragraphs(input: &WithdrawalInput<'_>, esc: fn(&str) -> String) -
             )
         },
     ));
-    paragraphs.extend(input.onboarding_fee.map(WithdrawalFee::sentence));
+    paragraphs.extend(input.onboarding_advance.map(WithdrawalAdvance::sentence));
     paragraphs.push("Questions? Reply to this email.".to_string());
     paragraphs
 }
@@ -219,6 +227,65 @@ pub fn render_withdrawal(input: &WithdrawalInput<'_>) -> RenderedEmail {
     text.push(footer(company));
     RenderedEmail {
         subject: WITHDRAWAL_SUBJECT.to_string(),
+        html: wrap_html(parts),
+        text: text.join("\n\n"),
+    }
+}
+
+/// One Manager's copy of the new end date: a paid advance payment moved the
+/// scheduled end to the end of the month it prepaid.
+#[derive(Debug, Clone, Copy)]
+pub struct MovedInput<'a> {
+    pub company_name: &'a str,
+    pub user_name: Option<&'a str>,
+    /// The end the request had.
+    pub previous_effective_at: NaiveDateTime,
+    /// The end now: the end of the prepaid month.
+    pub effective_at: NaiveDateTime,
+    pub account_url: &'a str,
+}
+
+fn moved_paragraphs(input: &MovedInput<'_>, esc: fn(&str) -> String) -> Vec<String> {
+    let company = esc(company_or_default(input.company_name));
+    let ends = format_local_date(input.effective_at);
+    vec![
+        format!(
+            "The cancellation of the Granite Manager subscription for {company} now takes effect on {ends}, not on {}.",
+            format_local_date(input.previous_effective_at)
+        ),
+        format!(
+            "You paid one month in advance with your advance payment, up to {ends}, so the subscription now runs until then. Everything keeps working as usual for your whole team until that day."
+        ),
+        format!(
+            "That month is covered by the credit of your advance payment, and nothing is charged after {ends}."
+        ),
+        format!(
+            "Changed your mind? Before {ends}, use Keep my subscription on your account page, or reply to this email or write to {SUPPORT_EMAIL}."
+        ),
+    ]
+}
+
+/// The new end date of a cancellation request, for one Manager.
+pub fn render_moved(input: &MovedInput<'_>) -> RenderedEmail {
+    let hello = greeting(input.user_name);
+    let company = company_or_default(input.company_name);
+    let mut parts = vec![html_paragraph(&escape_html(&hello))];
+    parts.extend(
+        moved_paragraphs(input, escape_html)
+            .iter()
+            .map(|p| html_paragraph(p)),
+    );
+    parts.push(html_button(input.account_url, KEEP_LABEL));
+    parts.push(html_footer(&escape_html(company)));
+    let mut text = vec![hello];
+    text.extend(moved_paragraphs(input, str::to_string));
+    text.push(format!("{KEEP_LABEL}: {}", input.account_url));
+    text.push(footer(company));
+    RenderedEmail {
+        subject: format!(
+            "Your Granite Manager subscription now ends on {}",
+            format_local_date(input.effective_at)
+        ),
         html: wrap_html(parts),
         text: text.join("\n\n"),
     }
@@ -334,14 +401,16 @@ mod tests {
             requested_at: at("2026-10-24 15:00:00"),
             effective_at: at("2027-01-21 05:00:00"),
             free_period,
-            onboarding_fee: Some(OnboardingFee::BeforeDeadline(at("2026-11-24 04:59:59"))),
+            onboarding_advance: Some(OnboardingAdvance::BeforeDeadline(at("2026-11-24 04:59:59"))),
             account_url: ACCOUNT,
         }
     }
 
+    /// No dash, and no onboarding fee: onboarding is free.
     fn no_dashes(email: &RenderedEmail) {
         let all = format!("{}\n{}\n{}", email.subject, email.html, email.text);
         assert!(!all.contains('\u{2014}') && !all.contains('\u{2013}'));
+        assert!(!all.to_lowercase().contains("fee"), "{all}");
     }
 
     #[test]
@@ -361,7 +430,7 @@ mod tests {
                 .contains("No further subscription charges are made after January 21, 2027.")
         );
         assert!(email.text.contains(
-            "You requested cancellation before your onboarding deadline of November 23, 2026, so the onboarding fee is not charged."
+            "You requested cancellation before your onboarding deadline of November 23, 2026, so no advance payment is charged."
         ));
         assert!(email.text.contains(
             "Before January 21, 2027, use Keep my subscription on your account page, or reply to this email or write to support@granite-manager.com."
@@ -400,38 +469,41 @@ mod tests {
     fn keeping_the_subscription_before_the_deadline_brings_back_the_usual_rules() {
         let email = render_confirmation(&confirmation(false));
         assert!(email.text.contains(
-            "If you keep your subscription, the usual onboarding rules apply again, and any onboarding fee comes with a notice at least 7 days before it is charged."
+            "If you keep your subscription, the onboarding rules apply again: if onboarding is not completed by the deadline, we email a notice at least 7 days before any advance payment is charged."
         ));
     }
 
     #[test]
-    fn a_request_after_the_deadline_before_the_notice_avoids_the_fee() {
+    fn a_request_after_the_deadline_before_the_notice_avoids_the_advance() {
         let email = render_confirmation(&ConfirmationInput {
-            onboarding_fee: Some(OnboardingFee::BeforeNotice),
+            onboarding_advance: Some(OnboardingAdvance::BeforeNotice),
             ..confirmation(false)
         });
         assert!(email.text.contains(
-            "You requested cancellation before we sent the onboarding fee notice, so the onboarding fee is not charged. If you keep your subscription, we first send that notice, at least 7 days before any onboarding fee is charged."
+            "You requested cancellation before we sent the advance payment notice, so no advance payment is charged. If you keep your subscription, we first send that notice, at least 7 days before any advance payment is charged."
         ));
         assert!(!email.text.contains("onboarding deadline"));
         no_dashes(&email);
     }
 
     #[test]
-    fn the_fee_sentence_names_the_charge_date_after_the_notice_and_is_left_out_without_a_fee() {
+    fn the_advance_sentence_names_the_charge_after_the_notice_and_is_left_out_without_one() {
         let notice = render_confirmation(&ConfirmationInput {
-            onboarding_fee: Some(OnboardingFee::BeforeChargeDate(at("2026-12-01 15:00:00"))),
+            onboarding_advance: Some(OnboardingAdvance::BeforeChargeDate(at(
+                "2026-12-01 15:00:00",
+            ))),
             ..confirmation(false)
         });
         assert!(notice.text.contains(
-            "You requested cancellation before the charge date of the onboarding fee, December 1, 2026, so the fee is not charged."
+            "You requested cancellation before the charge on December 1, 2026 that was to include the advance payment, so the advance payment is not charged."
         ));
+        // The withdrawal keeps the charge only 7 days or more before it.
         assert!(notice.text.contains(
-            "If you keep your subscription before Tue, Dec 1 at 10:00 AM EST, the fee is charged on December 1, 2026. If you keep it later, we first send a new notice at least 7 days before any charge."
+            "If you keep your subscription by Tue, Nov 24 at 10:00 AM EST, the advance payment is charged with the charge on December 1, 2026. If you keep it later, we first send a new notice at least 7 days before any charge."
         ));
         assert!(!notice.text.contains("onboarding deadline"));
         let none = render_confirmation(&ConfirmationInput {
-            onboarding_fee: None,
+            onboarding_advance: None,
             ..confirmation(false)
         });
         assert!(!none.text.contains("onboarding"));
@@ -465,7 +537,7 @@ mod tests {
             user_name: None,
             withdrawn_by: "Dana",
             next_charge_at: Some(at("2027-01-21 05:00:00")),
-            onboarding_fee: None,
+            onboarding_advance: None,
             account_url: ACCOUNT,
         };
         let email = render_withdrawal(&input);
@@ -497,39 +569,67 @@ mod tests {
     }
 
     #[test]
-    fn the_withdrawal_says_when_the_onboarding_fee_is_charged_or_that_a_notice_comes_first() {
-        let input = |fee| WithdrawalInput {
+    fn the_withdrawal_says_when_the_advance_is_charged_or_that_a_notice_comes_first() {
+        let input = |advance| WithdrawalInput {
             company_name: "Rock & Co",
             user_name: None,
             withdrawn_by: "Dana",
             next_charge_at: None,
-            onboarding_fee: Some(fee),
+            onboarding_advance: Some(advance),
             account_url: ACCOUNT,
         };
         let cases = [
             (
-                WithdrawalFee::ChargedOn(at("2026-12-01 15:00:00")),
-                "You kept your subscription before the charge date in our onboarding fee notice, so the onboarding fee is charged on December 1, 2026.",
+                WithdrawalAdvance::ChargedOn(at("2026-12-01 15:00:00")),
+                "You kept your subscription at least 7 days before the charge date in our advance payment notice, so the advance payment is charged with the charge on December 1, 2026, as the notice said. An onboarding call that ends before Tue, Dec 1 at 10:00 AM EST still avoids it.",
             ),
             (
-                WithdrawalFee::NewNotice,
-                "Your onboarding deadline has passed, so the onboarding fee applies again. We first send an onboarding fee notice, at least 7 days before the fee is charged.",
+                WithdrawalAdvance::NewNotice,
+                "Your onboarding deadline has passed, so the advance payment applies again. We first send a new notice, at least 7 days before it is charged. An onboarding call that ends before the charge date in that notice still avoids it.",
             ),
             (
-                WithdrawalFee::Deadline(at("2026-11-24 04:59:59")),
-                "The onboarding fee is not charged if onboarding is completed by your onboarding deadline of November 23, 2026.",
+                WithdrawalAdvance::Deadline(at("2026-11-24 04:59:59")),
+                "Onboarding is free. If it is completed by your onboarding deadline of November 23, 2026, no advance payment is charged.",
             ),
             (
-                WithdrawalFee::Unknown,
-                "If your plan has an onboarding commitment whose deadline has passed, the onboarding fee applies as if cancellation had not been requested, after a notice at least 7 days before it is charged.",
+                WithdrawalAdvance::Unknown,
+                "If your onboarding deadline has passed and onboarding is not completed, the advance payment applies as if cancellation had not been requested, after a notice at least 7 days before it is charged.",
             ),
         ];
-        for (fee, sentence) in cases {
-            let email = render_withdrawal(&input(fee));
-            assert!(email.text.contains(sentence), "{fee:?}");
-            assert!(email.html.contains(sentence), "{fee:?}");
+        for (advance, sentence) in cases {
+            let email = render_withdrawal(&input(advance));
+            assert!(email.text.contains(sentence), "{advance:?}");
+            assert!(email.html.contains(sentence), "{advance:?}");
             no_dashes(&email);
         }
+    }
+
+    #[test]
+    fn the_moved_end_names_the_new_and_old_end_and_how_to_withdraw() {
+        let email = render_moved(&MovedInput {
+            company_name: "Rock & <Roll>",
+            user_name: Some("Ann"),
+            previous_effective_at: at("2027-01-21 05:00:00"),
+            effective_at: at("2027-03-21 04:00:00"),
+            account_url: ACCOUNT,
+        });
+        assert_eq!(
+            email.subject,
+            "Your Granite Manager subscription now ends on March 21, 2027"
+        );
+        assert_eq!(
+            email.text,
+            "Hi Ann,\n\n\
+             The cancellation of the Granite Manager subscription for Rock & <Roll> now takes effect on March 21, 2027, not on January 21, 2027.\n\n\
+             You paid one month in advance with your advance payment, up to March 21, 2027, so the subscription now runs until then. Everything keeps working as usual for your whole team until that day.\n\n\
+             That month is covered by the credit of your advance payment, and nothing is charged after March 21, 2027.\n\n\
+             Changed your mind? Before March 21, 2027, use Keep my subscription on your account page, or reply to this email or write to support@granite-manager.com.\n\n\
+             Open your account page: https://payments.example.com/account\n\n\
+             Sign in with your usual account to open the billing page. This email was sent to managers of Rock & <Roll>."
+        );
+        assert!(email.html.contains("Rock &amp; &lt;Roll&gt;"));
+        assert_eq!(email.html.matches("href=").count(), 1);
+        no_dashes(&email);
     }
 
     fn staff(reason: Option<&str>) -> StaffNoticeInput<'_> {

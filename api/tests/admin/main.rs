@@ -38,4 +38,5 @@ mod questionnaires;
 mod reports;
 mod superuser;
 mod superuser_companies;
+mod stripe_setup;
 mod survey_results;

@@ -1,6 +1,7 @@
 //! The self-serve price list: Stripe prices found by lookup key, and the
-//! quote a buyer sees (base, extra users, add-ons, free period, onboarding
-//! fee). Every total the payments app shows comes from here.
+//! quote a buyer sees.
+//!
+//! Base, extra users, add-ons, free period, onboarding advance. Every total the payments app shows comes from here.
 //!
 //! Prices (03-stripe.md section 4.1): `granite_base_monthly_v1` (up to
 //! [`INCLUDED_USERS`] users), `granite_extra_user_monthly_v1` (each billable
@@ -23,7 +24,7 @@ pub const EXTRA_USER_LOOKUP_KEY: &str = "granite_extra_user_monthly_v1";
 pub const INCLUDED_USERS: i64 = 10;
 /// Months between signup and the first charge.
 pub const FREE_MONTHS: u32 = 3;
-/// Days after signup to complete onboarding before the fee.
+/// Days after signup to complete onboarding before the advance payment.
 pub const ONBOARDING_DEADLINE_DAYS: i64 = 30;
 /// Bounds of the user estimate in step 1.
 pub const MIN_USERS: i64 = 1;
@@ -162,9 +163,12 @@ pub struct Quote {
     pub due_today_cents: i64,
     /// First charge day (`YYYY-MM-DD`): signup day + 3 calendar months.
     pub first_charge_on: NaiveDate,
-    /// Onboarding fee: 2 x `base_and_addons_cents`, waived when onboarding is
-    /// completed by `deadline_on`.
-    pub fee_cents: i64,
+    /// The onboarding advance as of today's plan: one month (`monthly_cents`:
+    /// base, add-ons and the extra users of the estimate), paid with the
+    /// first charge at least 7 days after a notice if onboarding (free) is
+    /// not completed by `deadline_on`, and credited to the next invoice. The
+    /// amount charged is fixed at the notice from the live subscription.
+    pub advance_cents: i64,
     /// Onboarding deadline (`YYYY-MM-DD`): signup day + 30 days.
     pub deadline_on: NaiveDate,
 }
@@ -258,16 +262,17 @@ impl Catalog {
                 amount_cents: price.unit_cents,
             });
         }
+        let monthly_cents = base_and_addons_cents + extra * self.extra_user.unit_cents;
         Quote {
             users: plan.users,
             included_users: INCLUDED_USERS,
             extra_users: extra,
             lines,
             base_and_addons_cents,
-            monthly_cents: base_and_addons_cents + extra * self.extra_user.unit_cents,
+            monthly_cents,
             due_today_cents: 0,
             first_charge_on: first_charge_on(signup_day),
-            fee_cents: 2 * base_and_addons_cents,
+            advance_cents: monthly_cents,
             deadline_on: deadline_on(signup_day),
         }
     }
@@ -390,7 +395,7 @@ mod tests {
         assert_eq!(quote.extra_users, 2);
         assert_eq!(quote.base_and_addons_cents, 37_500);
         assert_eq!(quote.monthly_cents, 43_500);
-        assert_eq!(quote.fee_cents, 75_000);
+        assert_eq!(quote.advance_cents, 43_500);
         assert_eq!(quote.due_today_cents, 0);
         assert_eq!(quote.first_charge_on, day(2027, 1, 23));
         assert_eq!(quote.deadline_on, day(2026, 11, 22));
@@ -415,7 +420,7 @@ mod tests {
         assert_eq!(quote.extra_users, 0);
         assert_eq!(quote.lines.len(), 1);
         assert_eq!(quote.monthly_cents, 30_000);
-        assert_eq!(quote.fee_cents, 60_000);
+        assert_eq!(quote.advance_cents, 30_000);
         let one_extra = catalog().quote(&PlanChoice::normalized(11, &[]), day(2026, 10, 23));
         assert_eq!(one_extra.lines[1].label, "1 extra user");
     }

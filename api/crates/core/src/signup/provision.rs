@@ -260,8 +260,13 @@ async fn accept(
         ));
     }
     let accepted_at = now.naive_utc();
-    let bank_verification_until =
-        verifying.then(|| accepted_at + Duration::days(BANK_VERIFICATION_DAYS));
+    // The date step 3 showed: the SetupIntent's creation + 10 days.
+    let bank_verification_until = verifying.then(|| {
+        payment::bank_verification_due(&setup).map_or_else(
+            || accepted_at + Duration::days(BANK_VERIFICATION_DAYS),
+            |due| due.naive_utc(),
+        )
+    });
     let price_ids = catalog.subscription_price_ids(&intent.plan.addons);
     let price_ids =
         serde_json::to_string(&price_ids).map_err(|err| ApiError::Internal(err.to_string()))?;
@@ -271,7 +276,7 @@ async fn accept(
     let moved = sqlx::query(
         "UPDATE signup_intents
             SET status = 'provisioning', payment_method_id = ?, accepted_at = ?, trial_end_at = ?,
-                fee_cents = ?, deadline_at = ?, price_ids = CAST(? AS JSON), last_error = NULL,
+                advance_cents = ?, deadline_at = ?, price_ids = CAST(? AS JSON), last_error = NULL,
                 bank_verification_until = ?, updated_at = ?
           WHERE id = ? AND status = 'payment_ready' AND expires_at > ?
             AND plan = CAST(? AS JSON)",
@@ -279,7 +284,7 @@ async fn accept(
     .bind(&payment_method_id)
     .bind(accepted_at)
     .bind(facts.trial_end_at.trunc_subsecs(0))
-    .bind(facts.quote.fee_cents)
+    .bind(facts.quote.advance_cents)
     .bind(facts.deadline_at.map(|at| at.trunc_subsecs(0)))
     .bind(&price_ids)
     .bind(bank_verification_until)
@@ -570,6 +575,11 @@ pub async fn resume_verified(
         return Ok(ResumeOutcome::NotAwaiting);
     };
     let signup_id = intent.id.as_str();
+    if crate::billing::cancellation::signup_cancelled(&state.pool, signup_id).await? {
+        // Cancellation was requested while the bank account waited: no
+        // subscription is ever made.
+        return Ok(ResumeOutcome::NotAwaiting);
+    }
     match intent.status {
         SignupStatus::AwaitingBankVerification => {}
         // A resume that stopped after the move: finish it.
@@ -717,9 +727,11 @@ async fn create_company_locked(state: &AppState, signup_id: &str) -> ApiResult<C
         refuse(state, &intent).await?;
         return Ok(Created::Done(RunOutcome::Refused));
     }
-    let (Some(trial_end_at), Some(fee_cents), Some(accepted_at)) =
-        (intent.trial_end_at, intent.fee_cents, intent.accepted_at)
-    else {
+    let (Some(trial_end_at), Some(advance_cents), Some(accepted_at)) = (
+        intent.trial_end_at,
+        intent.advance_cents,
+        intent.accepted_at,
+    ) else {
         return Err(ApiError::Internal(
             "The signup's terms were not frozen.".into(),
         ));
@@ -764,7 +776,7 @@ async fn create_company_locked(state: &AppState, signup_id: &str) -> ApiResult<C
     .bind(signup_id)
     .execute(&mut *tx)
     .await?;
-    create_onboarding_commitment(&mut tx, company_id, fee_cents, accepted_at).await?;
+    create_onboarding_commitment(&mut tx, company_id, advance_cents, accepted_at).await?;
     let linked = sqlx::query(
         "UPDATE signup_intents SET company_id = ?, user_id = ?, updated_at = ?
           WHERE id = ? AND status = 'provisioning' AND company_id IS NULL",
@@ -853,6 +865,7 @@ async fn subscription(
     payment_method: &str,
 ) -> ApiResult<Value> {
     if let Some(id) = intent.stripe_subscription_id.as_deref() {
+        cancel_strays(state, intent, company_id, customer, id).await?;
         return state
             .stripe
             .subscription(id)
@@ -867,7 +880,10 @@ async fn subscription(
             "The signup's terms were not frozen.".into(),
         ));
     };
-    let created = match adopt(state, intent, customer).await? {
+    // Billed at once (the free period passed): sent under another key than
+    // an earlier attempt's dated one, so first look for what that one made.
+    let bills_now = trial_end_at.and_utc().timestamp() <= Utc::now().timestamp();
+    let created = match adopt(state, intent, customer, bills_now).await? {
         Some(existing) => existing,
         None => state
             .stripe
@@ -909,6 +925,7 @@ async fn subscription(
                 company_id,
                 "signup has two subscriptions; keeping the one stored first"
             );
+            cancel_stray(state, company_id, id).await?;
             state
                 .stripe
                 .subscription(&stored)
@@ -919,19 +936,72 @@ async fn subscription(
     }
 }
 
+/// Cancels a subscription of the signup that is not the stored one (two
+/// runs raced), so only one ever bills; already gone is fine.
+async fn cancel_stray(state: &AppState, company_id: i32, id: &str) -> ApiResult<()> {
+    match state.stripe.cancel_subscription(id).await {
+        Ok(_) | Err(StripeError::Missing(_)) => Ok(()),
+        Err(err) => {
+            tracing::error!(
+                company_id,
+                stripe_code = err.code(),
+                "second signup subscription not cancelled"
+            );
+            Err(stripe_failure(&err))
+        }
+    }
+}
+
+/// The signup's subscriptions (`metadata[signup_id]`) other than the stored
+/// one that have not ended, cancelled: a resume after a race finishes what
+/// the racing run could not.
+async fn cancel_strays(
+    state: &AppState,
+    intent: &Intent,
+    company_id: i32,
+    customer: &str,
+    stored: &str,
+) -> ApiResult<()> {
+    let existing = state
+        .stripe
+        .list_subscriptions(customer)
+        .await
+        .map_err(|err| stripe_failure(&err))?;
+    for subscription in existing {
+        let Some(id) = subscription["id"].as_str() else {
+            continue;
+        };
+        if id != stored
+            && subscription["metadata"]["signup_id"].as_str() == Some(&intent.id)
+            && !billing::is_ended_subscription_status(
+                subscription["status"].as_str().unwrap_or_default(),
+            )
+        {
+            cancel_stray(state, company_id, id).await?;
+        }
+    }
+    Ok(())
+}
+
 /// D21: the frozen end of the free period, or `now` once it has passed (a
 /// bank account verified after the first charge day: Stripe bills at once).
 pub fn trial_end(frozen: NaiveDateTime, now: DateTime<Utc>) -> i64 {
     frozen.and_utc().timestamp().max(now.timestamp())
 }
 
-/// Stripe forgets idempotency keys after 24 hours: a late resume first looks
-/// for the subscription an earlier run created (`metadata[signup_id]`).
-async fn adopt(state: &AppState, intent: &Intent, customer: &str) -> ApiResult<Option<Value>> {
+/// Stripe forgets idempotency keys after 24 hours: a late resume, or one
+/// billing at once (`always`, another key), first looks for the subscription
+/// an earlier run created (`metadata[signup_id]`).
+async fn adopt(
+    state: &AppState,
+    intent: &Intent,
+    customer: &str,
+    always: bool,
+) -> ApiResult<Option<Value>> {
     let late = intent
         .accepted_at
         .is_none_or(|at| billing::now() - at >= Duration::hours(IDEMPOTENCY_SAFE_HOURS));
-    if !late {
+    if !late && !always {
         return Ok(None);
     }
     let existing = state
@@ -939,9 +1009,12 @@ async fn adopt(state: &AppState, intent: &Intent, customer: &str) -> ApiResult<O
         .list_subscriptions(customer)
         .await
         .map_err(|err| stripe_failure(&err))?;
-    Ok(existing
-        .into_iter()
-        .find(|subscription| subscription["metadata"]["signup_id"].as_str() == Some(&intent.id)))
+    Ok(existing.into_iter().find(|subscription| {
+        subscription["metadata"]["signup_id"].as_str() == Some(&intent.id)
+            && !billing::is_ended_subscription_status(
+                subscription["status"].as_str().unwrap_or_default(),
+            )
+    }))
 }
 
 /// The subscription into `company_billing` and `company_addons`, under the
@@ -962,17 +1035,25 @@ async fn apply(pool: &MySqlPool, company_id: i32, subscription: &Value) -> ApiRe
 }
 
 /// The company's onboarding commitment, inside the provisioning
-/// transaction: `fee_cents` unless onboarding is done by the day the consent
-/// accepted at `accepted_at` named (until its end in `SIGNUP_TZ`).
+/// transaction.
+///
+/// Unless onboarding is done by the day the consent accepted at
+/// `accepted_at` named (until its end in `SIGNUP_TZ`), a month is paid in
+/// advance; `advance_cents` is the amount the consent stated.
 pub async fn create_onboarding_commitment(
     conn: &mut MySqlConnection,
     company_id: i32,
-    fee_cents: i64,
+    advance_cents: i64,
     accepted_at: NaiveDateTime,
 ) -> sqlx::Result<()> {
     use crate::onboarding_call::commitment::{new_commitment, signup_deadline_at};
     let now = billing::now();
-    let outcome = new_commitment(company_id, now, signup_deadline_at(accepted_at), fee_cents);
+    let outcome = new_commitment(
+        company_id,
+        now,
+        signup_deadline_at(accepted_at),
+        advance_cents,
+    );
     crate::onboarding_call::store::insert(conn, &outcome, now).await?;
     Ok(())
 }

@@ -89,7 +89,13 @@ pub struct BatchClaim {
     pub after: i32,
 }
 
-/// Takes the next batch of `key`'s pass.
+/// How long a batch belongs to the run that took it: a run ends inside 30 s,
+/// so a later tick finding it unfinished after this long may take it again.
+pub const BATCH_LEASE: Duration = Duration::minutes(2);
+
+/// Takes the next batch of `key`'s pass; `None` when the pass is not due, or
+/// when another run took a batch less than [`BATCH_LEASE`] ago and has not
+/// recorded its progress yet.
 pub async fn claim_batch(
     pool: &MySqlPool,
     key: &str,
@@ -101,12 +107,18 @@ pub async fn claim_batch(
         .execute(pool)
         .await?;
     let mut tx = pool.begin().await?;
-    let (finished, cursor): (Option<NaiveDateTime>, Option<i32>) = sqlx::query_as(
-        "SELECT last_finished_at, cursor_id FROM job_runs WHERE job_key = ? FOR UPDATE",
-    )
-    .bind(key)
-    .fetch_one(&mut *tx)
-    .await?;
+    let (finished, cursor, leased): (Option<NaiveDateTime>, Option<i32>, Option<NaiveDateTime>) =
+        sqlx::query_as(
+            "SELECT last_finished_at, cursor_id, leased_until FROM job_runs
+              WHERE job_key = ? FOR UPDATE",
+        )
+        .bind(key)
+        .fetch_one(&mut *tx)
+        .await?;
+    if leased.is_some_and(|until| until > now) {
+        tx.commit().await?;
+        return Ok(None);
+    }
     let after = match cursor {
         Some(after) => after,
         None if finished.is_some_and(|at| at > now - every) => {
@@ -115,12 +127,16 @@ pub async fn claim_batch(
         }
         None => 0,
     };
-    sqlx::query("UPDATE job_runs SET last_started_at = ?, cursor_id = ? WHERE job_key = ?")
-        .bind(now)
-        .bind(after)
-        .bind(key)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE job_runs SET last_started_at = ?, cursor_id = ?, leased_until = ?
+          WHERE job_key = ?",
+    )
+    .bind(now)
+    .bind(after)
+    .bind(now + BATCH_LEASE)
+    .bind(key)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(Some(BatchClaim {
         key: key.to_string(),
@@ -131,6 +147,7 @@ pub async fn claim_batch(
 impl BatchClaim {
     /// Records how far the batch got: the pass ends when `done`, else the
     /// next tick starts after `last_id` (or retries this batch without one).
+    /// Either way the batch is released.
     pub async fn advance(
         self,
         pool: &MySqlPool,
@@ -140,18 +157,22 @@ impl BatchClaim {
     ) -> Result<(), sqlx::Error> {
         if done {
             sqlx::query(
-                "UPDATE job_runs SET cursor_id = NULL, last_finished_at = ? WHERE job_key = ?",
+                "UPDATE job_runs SET cursor_id = NULL, last_finished_at = ?, leased_until = NULL
+                  WHERE job_key = ?",
             )
             .bind(now)
             .bind(&self.key)
             .execute(pool)
             .await?;
-        } else if let Some(last_id) = last_id.filter(|id| *id > self.after) {
-            sqlx::query("UPDATE job_runs SET cursor_id = ? WHERE job_key = ?")
-                .bind(last_id)
-                .bind(&self.key)
-                .execute(pool)
-                .await?;
+        } else {
+            sqlx::query(
+                "UPDATE job_runs SET cursor_id = COALESCE(?, cursor_id), leased_until = NULL
+                  WHERE job_key = ?",
+            )
+            .bind(last_id.filter(|id| *id > self.after))
+            .bind(&self.key)
+            .execute(pool)
+            .await?;
         }
         Ok(())
     }
@@ -234,6 +255,42 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(next.after, 0);
+    }
+
+    #[test_db::test]
+    async fn a_batch_in_progress_is_not_handed_out_again_until_its_lease_ends(pool: MySqlPool) {
+        let every = Duration::hours(6);
+        let first = claim_batch(&pool, "lease", every, at(1))
+            .await
+            .unwrap()
+            .unwrap();
+        // An overlapping tick while the first run works.
+        assert!(
+            claim_batch(&pool, "lease", every, at(1))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // A run that recorded its progress frees the next batch at once.
+        first.advance(&pool, Some(7), false, at(1)).await.unwrap();
+        let second = claim_batch(&pool, "lease", every, at(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.after, 7);
+        // A run that died without recording anything: free once the lease ends.
+        let almost = at(1) + BATCH_LEASE - Duration::seconds(1);
+        assert!(
+            claim_batch(&pool, "lease", every, almost)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let retry = claim_batch(&pool, "lease", every, at(1) + BATCH_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry.after, 7);
     }
 
     #[test_db::test]

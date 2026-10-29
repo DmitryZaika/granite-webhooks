@@ -1,7 +1,7 @@
 //! The billing state machine: Stripe events in, `company_billing` and the
 //! managers' notifications out. The access gate is `gate`.
 
-use super::store::{BillingStore, StoreResult};
+use super::store::{BillingStore, Claim, StoreResult};
 use super::{
     BILLING_PATH, BillingEvent, BillingInvoice, BillingNotification, CompanyBilling,
     InvoiceSnapshot, PAYMENT_REQUIRED_TITLE, PaymentStatus, SubscriptionSnapshot,
@@ -14,8 +14,8 @@ use chrono::NaiveDateTime;
 /// What applying an event did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyResult {
-    /// The event was processed before; nothing changed.
-    pub duplicate: bool,
+    /// `Taken` when this call applied the event; otherwise nothing changed.
+    pub claim: Claim,
     pub company_id: Option<i32>,
     /// Managers who got a new "payment required" notification.
     pub notified_user_ids: Vec<i32>,
@@ -121,6 +121,22 @@ pub(super) fn restore_active(
             record.recovered_at
         },
         ..record.clone()
+    }
+}
+
+/// The record once its subscription ended (`status`): access pauses, unless
+/// a failed payment's grace period is still running.
+fn ended(record: CompanyBilling, status: &str, now: NaiveDateTime) -> CompanyBilling {
+    let in_grace = record.payment_status == PaymentStatus::PastDue
+        && record.grace_period_ends_at.is_some_and(|ends| now < ends);
+    CompanyBilling {
+        subscription_status: status.to_string(),
+        payment_status: if in_grace {
+            record.payment_status
+        } else {
+            PaymentStatus::Suspended
+        },
+        ..record
     }
 }
 
@@ -263,6 +279,38 @@ async fn apply_subscription<S: BillingStore>(
     else {
         return Ok(Vec::new());
     };
+    apply_subscription_to(store, record, snapshot, now, accepting).await
+}
+
+/// Takes the record back to the `legacy` subscription the company stays on.
+///
+/// `made` is the subscription of a plan invite whose switch never committed;
+/// `legacy` is applied as its subscription event would be. Nothing happens
+/// when the record names another subscription.
+pub async fn restore_legacy_record<S: BillingStore>(
+    store: &S,
+    company_id: i32,
+    made: &str,
+    legacy: &SubscriptionSnapshot,
+    now: NaiveDateTime,
+) -> StoreResult<Vec<i32>> {
+    let Some(mut record) = store.by_company(company_id).await? else {
+        return Ok(Vec::new());
+    };
+    if legacy.id.is_empty() || record.stripe_subscription_id.as_deref() != Some(made) {
+        return Ok(Vec::new());
+    }
+    record.stripe_subscription_id = Some(legacy.id.clone());
+    apply_subscription_to(store, record, legacy, now, true).await
+}
+
+async fn apply_subscription_to<S: BillingStore>(
+    store: &S,
+    record: CompanyBilling,
+    snapshot: &SubscriptionSnapshot,
+    now: NaiveDateTime,
+    accepting: bool,
+) -> StoreResult<Vec<i32>> {
     if !accepting
         && awaits_acceptance(
             store,
@@ -306,18 +354,7 @@ async fn apply_subscription<S: BillingStore>(
         };
     }
     if snapshot.deleted || is_ended_subscription_status(status) {
-        let in_grace = merged.payment_status == PaymentStatus::PastDue
-            && merged.grace_period_ends_at.is_some_and(|ends| now < ends);
-        let ended = CompanyBilling {
-            subscription_status: status.to_string(),
-            payment_status: if in_grace {
-                merged.payment_status
-            } else {
-                PaymentStatus::Suspended
-            },
-            ..merged
-        };
-        save_with_outstanding(store, ended).await?;
+        save_with_outstanding(store, ended(merged, status, now)).await?;
         return Ok(Vec::new());
     }
     save_with_outstanding(store, merged).await?;
@@ -354,34 +391,44 @@ pub async fn apply_invoice_change<S: BillingStore>(
             paid_at: paid.then(|| invoice.paid_at.unwrap_or(now)),
         })
         .await?;
-    // An invoice of a subscription a plan move replaced, or of an invite's
-    // subscription before its acceptance: recorded, nothing else.
-    if awaits_acceptance(
-        store,
-        record.company_id,
-        invoice.plan_invite_id.as_deref(),
-        invoice.replaced_by.as_deref(),
-    )
-    .await?
+    // An invoice of no subscription (made by hand in the Dashboard), of a
+    // subscription a plan move replaced, or of an invite's subscription
+    // before its acceptance: recorded, nothing else.
+    if invoice.subscription_id.is_none()
+        || awaits_acceptance(
+            store,
+            record.company_id,
+            invoice.plan_invite_id.as_deref(),
+            invoice.replaced_by.as_deref(),
+        )
+        .await?
         || replaced_by_another(
-        &record,
-        invoice.replaced_by.as_deref(),
-        invoice.subscription_id.as_deref(),
-    ) {
+            &record,
+            invoice.replaced_by.as_deref(),
+            invoice.subscription_id.as_deref(),
+        )
+    {
         save_with_outstanding(store, record).await?;
         return Ok(Vec::new());
     }
     let other_subscription =
         has_live_other_subscription(&record, invoice.subscription_id.as_deref());
-    if paid
-        && matches!(
-            invoice.live_subscription_status.as_deref(),
-            Some("past_due" | "unpaid")
-        )
-    {
+    let live = invoice.live_subscription_status.as_deref();
+    if paid && matches!(live, Some("past_due" | "unpaid")) {
         // An older invoice paid (or a late retry) while a newer one is still
         // unpaid: record the payment, keep the grace period running.
         save_with_outstanding(store, record).await?;
+        return Ok(Vec::new());
+    }
+    if paid && let Some(status) = live.filter(|status| is_ended_subscription_status(status)) {
+        // An old invoice of a subscription that has ended: the payment is
+        // recorded, access stays paused (nothing renews it).
+        let current = if other_subscription {
+            record
+        } else {
+            ended(record, status, now)
+        };
+        save_with_outstanding(store, current).await?;
         return Ok(Vec::new());
     }
     if paid {
@@ -390,6 +437,10 @@ pub async fn apply_invoice_change<S: BillingStore>(
             && !other_subscription
         {
             restored.stripe_subscription_id = Some(subscription_id.clone());
+            // A trial's $0 invoice keeps the subscription `trialing`.
+            if let Some(status) = live.filter(|status| is_paying_subscription_status(status)) {
+                restored.subscription_status = status.to_string();
+            }
         }
         if !invoice.customer_id.is_empty() {
             restored.stripe_customer_id = Some(invoice.customer_id.clone());
@@ -415,6 +466,82 @@ pub async fn apply_invoice_change<S: BillingStore>(
         Some(_) => notify_payment_required(store, &saved).await,
         None => Ok(Vec::new()),
     }
+}
+
+/// Applies an invoice nobody will pay any more (`void` or `uncollectible`):
+/// once no invoice is open and the subscription is not overdue, the failed
+/// payment and its grace period are over.
+pub async fn apply_invoice_closed<S: BillingStore>(
+    store: &S,
+    invoice: &InvoiceSnapshot,
+    status: &str,
+) -> StoreResult<()> {
+    let Some(record) = load_record(
+        store,
+        invoice.company_id,
+        Some(&invoice.customer_id),
+        invoice.subscription_id.as_deref(),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    store
+        .upsert_invoice(&BillingInvoice {
+            company_id: record.company_id,
+            stripe_invoice_id: invoice.id.clone(),
+            status: status.into(),
+            amount_due_cents: invoice.amount_due_cents,
+            amount_paid_cents: invoice.amount_paid_cents,
+            currency: invoice.currency.clone(),
+            hosted_invoice_url: invoice.hosted_invoice_url.clone(),
+            invoice_pdf: invoice.invoice_pdf.clone(),
+            paid_at: None,
+        })
+        .await?;
+    let ours = invoice.subscription_id.is_some()
+        && !has_live_other_subscription(&record, invoice.subscription_id.as_deref())
+        && !replaced_by_another(
+            &record,
+            invoice.replaced_by.as_deref(),
+            invoice.subscription_id.as_deref(),
+        )
+        && !awaits_acceptance(
+            store,
+            record.company_id,
+            invoice.plan_invite_id.as_deref(),
+            invoice.replaced_by.as_deref(),
+        )
+        .await?;
+    let still_open = store
+        .invoices(record.company_id)
+        .await?
+        .iter()
+        .any(|stored| stored.status == "open");
+    let live = invoice
+        .live_subscription_status
+        .clone()
+        .unwrap_or_else(|| record.subscription_status.clone());
+    let settled = is_paying_subscription_status(&live) || is_ended_subscription_status(&live);
+    if !ours || still_open || !settled || record.failed_payment_at.is_none() {
+        save_with_outstanding(store, record).await?;
+        return Ok(());
+    }
+    let mut next = CompanyBilling {
+        failed_payment_at: None,
+        grace_period_ends_at: None,
+        ..record
+    };
+    if is_overdue(&next) {
+        next.payment_status = if is_paying_subscription_status(&live) {
+            PaymentStatus::Active
+        } else {
+            PaymentStatus::Suspended
+        };
+    }
+    let saved = save_with_outstanding(store, next).await?;
+    store.clear_payment_notifications(saved.company_id).await?;
+    Ok(())
 }
 
 async fn apply_claimed<S: BillingStore>(
@@ -467,6 +594,16 @@ async fn apply_claimed<S: BillingStore>(
             let saved = store.by_customer(&invoice.customer_id).await?;
             Ok((saved.map(|record| record.company_id), notified))
         }
+        BillingEvent::InvoiceClosed { kind, invoice, .. } => {
+            let status = if *kind == "invoice.voided" {
+                "void"
+            } else {
+                "uncollectible"
+            };
+            apply_invoice_closed(store, invoice, status).await?;
+            let saved = store.by_customer(&invoice.customer_id).await?;
+            Ok((saved.map(|record| record.company_id), Vec::new()))
+        }
         BillingEvent::PaymentMethodUpdated {
             customer_id,
             payment_method_id,
@@ -500,7 +637,7 @@ pub async fn event_company_id<S: BillingStore>(
             Some(subscription.customer_id.as_str()),
             Some(subscription.id.as_str()),
         ),
-        BillingEvent::Invoice { invoice, .. } => (
+        BillingEvent::Invoice { invoice, .. } | BillingEvent::InvoiceClosed { invoice, .. } => (
             invoice.company_id,
             Some(invoice.customer_id.as_str()),
             invoice.subscription_id.as_deref(),
@@ -524,19 +661,23 @@ pub async fn apply_event<S: BillingStore>(
     event: &BillingEvent,
     now: NaiveDateTime,
 ) -> StoreResult<ApplyResult> {
-    if !store.claim_event(event.id(), event.event_type()).await? {
+    let claim = store.claim_event(event.id(), event.event_type()).await?;
+    if claim != Claim::Taken {
         return Ok(ApplyResult {
-            duplicate: true,
+            claim,
             company_id: None,
             notified_user_ids: Vec::new(),
         });
     }
     match apply_claimed(store, event, now).await {
-        Ok((company_id, notified_user_ids)) => Ok(ApplyResult {
-            duplicate: false,
-            company_id,
-            notified_user_ids,
-        }),
+        Ok((company_id, notified_user_ids)) => {
+            store.finish_event(event.id()).await?;
+            Ok(ApplyResult {
+                claim,
+                company_id,
+                notified_user_ids,
+            })
+        }
         Err(err) => {
             store.release_event(event.id()).await?;
             Err(err)
@@ -845,11 +986,24 @@ mod tests {
         let now = at("2026-09-01 00:00:00");
         let first = apply_event(&store, &event, now).await.unwrap();
         let second = apply_event(&store, &event, now).await.unwrap();
-        assert!(!first.duplicate);
-        assert!(second.duplicate);
+        assert_eq!(first.claim, Claim::Taken);
+        assert_eq!(second.claim, Claim::Done);
         assert_eq!(store.notifications.borrow().len(), 1);
         assert_eq!(store.invoices.borrow().len(), 1);
         assert_eq!(store.record(1).outstanding_balance_cents, 2200);
+    }
+
+    #[tokio::test]
+    async fn an_event_another_delivery_is_applying_is_left_to_a_retry() {
+        let store = Memory::default();
+        store.events.borrow_mut().insert("evt_busy".into(), false);
+        let event = invoice_event("evt_busy", 1, false, 2200);
+        let result = apply_event(&store, &event, at("2026-09-01 00:00:00"))
+            .await
+            .unwrap();
+        assert_eq!(result.claim, Claim::InProgress);
+        assert!(store.records.borrow().is_empty());
+        assert_eq!(store.events.borrow().get("evt_busy"), Some(&false));
     }
 
     #[tokio::test]
@@ -1197,7 +1351,7 @@ mod tests {
         );
         let mut paid = invoice_event("evt_paid", 1, true, 30000);
         if let BillingEvent::Invoice { invoice, .. } = &mut paid {
-            invoice.subscription_id = None;
+            invoice.subscription_id = Some("sub_new".into());
         }
         let checkout = BillingEvent::CheckoutCompleted {
             id: "evt_checkout".into(),
@@ -1370,5 +1524,242 @@ mod tests {
         assert_eq!(record.failed_payment_at, Some(again));
         assert_eq!(record.recovered_failed_at, None);
         assert_eq!(record.recovered_at, None);
+    }
+
+    #[tokio::test]
+    async fn a_finished_event_is_marked_done() {
+        let store = Memory::default();
+        apply_event(
+            &store,
+            &invoice_event("evt_done", 1, false, 1000),
+            at("2026-09-01 00:00:00"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(store.events.borrow().get("evt_done"), Some(&true));
+    }
+
+    #[tokio::test]
+    async fn a_trials_zero_invoice_keeps_the_subscription_trialing() {
+        let store = Memory::default();
+        let now = at("2026-10-21 00:00:00");
+        apply_event(
+            &store,
+            &subscription_event("evt_created", 1, "trialing", false),
+            now,
+        )
+        .await
+        .unwrap();
+        apply_event(
+            &store,
+            &paid_with_live_status("evt_trial", 1, "trialing"),
+            now,
+        )
+        .await
+        .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.subscription_status, "trialing");
+        assert_eq!(record.payment_status, PaymentStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn an_old_invoice_paid_after_the_subscription_ended_keeps_access_paused() {
+        let store = Memory::default();
+        store.users.borrow_mut().push((10, 1, true));
+        let failed_at = at("2026-09-01 00:00:00");
+        apply_event(
+            &store,
+            &invoice_event("evt_failed", 1, false, 30000),
+            failed_at,
+        )
+        .await
+        .unwrap();
+        // The dunning ran out: Stripe cancelled the subscription.
+        apply_event(
+            &store,
+            &subscription_event("evt_ended", 1, "canceled", true),
+            add_grace_days(failed_at),
+        )
+        .await
+        .unwrap();
+        assert_eq!(store.record(1).payment_status, PaymentStatus::Suspended);
+
+        let mut paid = paid_with_live_status("evt_late_paid", 1, "canceled");
+        if let BillingEvent::Invoice { invoice, .. } = &mut paid {
+            invoice.id = "in_evt_failed".into();
+        }
+        apply_event(&store, &paid, at("2026-09-20 00:00:00"))
+            .await
+            .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.payment_status, PaymentStatus::Suspended);
+        assert_eq!(record.subscription_status, "canceled");
+        assert_eq!(record.outstanding_balance_cents, 0);
+        assert_eq!(store.invoices.borrow()[0].status, "paid");
+    }
+
+    #[tokio::test]
+    async fn an_invoice_without_a_subscription_changes_no_status() {
+        let store = Memory::default();
+        store.users.borrow_mut().push((10, 1, true));
+        store.records.borrow_mut().insert(
+            1,
+            CompanyBilling {
+                stripe_subscription_id: Some("sub_1".into()),
+                ..active(1)
+            },
+        );
+        let manual = |id: &str, paid: bool| {
+            let mut event = invoice_event(id, 1, paid, 5000);
+            if let BillingEvent::Invoice { invoice, .. } = &mut event {
+                invoice.id = "in_manual".into();
+                invoice.subscription_id = None;
+            }
+            event
+        };
+        let now = at("2026-09-01 00:00:00");
+        let failed = apply_event(&store, &manual("evt_manual_failed", false), now)
+            .await
+            .unwrap();
+        let record = store.record(1);
+        assert!(failed.notified_user_ids.is_empty());
+        assert_eq!(record.payment_status, PaymentStatus::Active);
+        assert_eq!(record.subscription_status, "active");
+        assert_eq!(record.failed_payment_at, None);
+        assert_eq!(record.outstanding_balance_cents, 5000);
+
+        // Paid: recorded, but it restores nothing either.
+        let suspended = CompanyBilling {
+            payment_status: PaymentStatus::Suspended,
+            subscription_status: "canceled".into(),
+            ..store.record(1)
+        };
+        store.records.borrow_mut().insert(1, suspended);
+        apply_event(&store, &manual("evt_manual_paid", true), now)
+            .await
+            .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.payment_status, PaymentStatus::Suspended);
+        assert_eq!(record.subscription_status, "canceled");
+        assert_eq!(record.outstanding_balance_cents, 0);
+    }
+
+    fn closed(id: &str, invoice_id: &str, kind: &'static str, live: &str) -> BillingEvent {
+        let BillingEvent::Invoice { invoice, .. } = invoice_event(id, 1, false, 30000) else {
+            unreachable!()
+        };
+        BillingEvent::InvoiceClosed {
+            id: id.into(),
+            kind,
+            invoice: InvoiceSnapshot {
+                id: invoice_id.into(),
+                live_subscription_status: Some(live.into()),
+                ..invoice
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn a_voided_invoice_of_an_ended_subscription_clears_the_debt() {
+        let store = Memory::default();
+        store.users.borrow_mut().push((10, 1, true));
+        let failed_at = at("2026-09-01 00:00:00");
+        apply_event(
+            &store,
+            &invoice_event("evt_failed", 1, false, 30000),
+            failed_at,
+        )
+        .await
+        .unwrap();
+        apply_event(
+            &store,
+            &subscription_event("evt_ended", 1, "canceled", true),
+            add_grace_days(failed_at),
+        )
+        .await
+        .unwrap();
+        assert!(crate::billing::invites::owes_for_move(
+            &store.record(1),
+            true
+        ));
+
+        apply_event(
+            &store,
+            &closed("evt_void", "in_evt_failed", "invoice.voided", "canceled"),
+            at("2026-09-20 00:00:00"),
+        )
+        .await
+        .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.outstanding_balance_cents, 0);
+        assert_eq!(record.failed_payment_at, None);
+        assert_eq!(record.grace_period_ends_at, None);
+        assert_eq!(record.payment_status, PaymentStatus::Suspended);
+        assert_eq!(store.invoices.borrow()[0].status, "void");
+        assert!(!crate::billing::invites::owes_for_move(&record, true));
+        assert_eq!(store.open_notifications(1), []);
+    }
+
+    #[tokio::test]
+    async fn an_uncollectible_invoice_ends_the_grace_of_a_paying_subscription_once_none_is_open() {
+        let store = Memory::default();
+        store.users.borrow_mut().push((10, 1, true));
+        let failed_at = at("2026-09-01 00:00:00");
+        for id in ["evt_first", "evt_second"] {
+            apply_event(&store, &invoice_event(id, 1, false, 30000), failed_at)
+                .await
+                .unwrap();
+        }
+        let kind = "invoice.marked_uncollectible";
+        apply_event(
+            &store,
+            &closed("evt_close_1", "in_evt_first", kind, "active"),
+            failed_at,
+        )
+        .await
+        .unwrap();
+        // The other invoice is still open: the grace period runs on.
+        let record = store.record(1);
+        assert_eq!(record.payment_status, PaymentStatus::PastDue);
+        assert_eq!(record.failed_payment_at, Some(failed_at));
+        assert_eq!(record.outstanding_balance_cents, 30000);
+
+        apply_event(
+            &store,
+            &closed("evt_close_2", "in_evt_second", kind, "active"),
+            failed_at,
+        )
+        .await
+        .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.payment_status, PaymentStatus::Active);
+        assert_eq!(record.failed_payment_at, None);
+        assert_eq!(record.grace_period_ends_at, None);
+        assert_eq!(record.outstanding_balance_cents, 0);
+        assert_eq!(store.open_notifications(1), []);
+    }
+
+    #[tokio::test]
+    async fn a_closed_invoice_of_an_overdue_subscription_keeps_the_grace() {
+        let store = Memory::default();
+        let failed_at = at("2026-09-01 00:00:00");
+        apply_event(
+            &store,
+            &invoice_event("evt_failed", 1, false, 30000),
+            failed_at,
+        )
+        .await
+        .unwrap();
+        apply_event(
+            &store,
+            &closed("evt_void", "in_evt_failed", "invoice.voided", "past_due"),
+            failed_at,
+        )
+        .await
+        .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.payment_status, PaymentStatus::PastDue);
+        assert_eq!(record.failed_payment_at, Some(failed_at));
+        assert_eq!(record.outstanding_balance_cents, 0);
     }
 }

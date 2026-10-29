@@ -16,10 +16,13 @@ use axum::extract::State;
 /// 2. Resumes up to 5 plan invites whose acceptance stopped before the
 ///    company switched to its plan, with the same wait; after 26 hours staff
 ///    are alerted instead.
-/// 3. Expires up to 50 abandoned signups (24 hours after they started, or 11
-///    days waiting for bank verification) and deletes their Stripe customers.
-/// 4. Once every 23 hours, pushes each subscription company's extra-user
-///    quantity to Stripe where it differs from its billable users.
+/// 3. Expires up to 50 abandoned signups (24 hours after they started, or when
+///    their bank account was not verified within its 11 day window) and
+///    deletes their Stripe customers.
+/// 4. Pushes each subscription company's extra-user quantity to Stripe where
+///    it differs from its billable users: a pass every 23 hours over all
+///    subscription companies, 25 per run, each run going on after the last
+///    company the previous one reached.
 ///
 /// Returns the counts; `processed` is `resumed` + `invites_resumed` +
 /// `expired`.

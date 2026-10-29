@@ -17,8 +17,12 @@ pub trait BillingStore {
     async fn by_customer(&self, customer_id: &str) -> StoreResult<Option<CompanyBilling>>;
     async fn by_subscription(&self, subscription_id: &str) -> StoreResult<Option<CompanyBilling>>;
     async fn save(&self, record: &CompanyBilling) -> StoreResult<()>;
-    /// Records the event; false when it was already processed.
-    async fn claim_event(&self, event_id: &str, event_type: &str) -> StoreResult<bool>;
+    /// Records the event, unless it was already processed or another
+    /// delivery is processing it. A claim left unfinished for 5 minutes (a
+    /// crash, a timeout) is taken over.
+    async fn claim_event(&self, event_id: &str, event_type: &str) -> StoreResult<Claim>;
+    /// The claimed event's work is done: later deliveries are duplicates.
+    async fn finish_event(&self, event_id: &str) -> StoreResult<()>;
     async fn release_event(&self, event_id: &str) -> StoreResult<()>;
     async fn upsert_invoice(&self, invoice: &BillingInvoice) -> StoreResult<()>;
     async fn invoices(&self, company_id: i32) -> StoreResult<Vec<BillingInvoice>>;
@@ -45,6 +49,22 @@ pub trait BillingStore {
     async fn bank_verification_until(&self, company_id: i32)
     -> StoreResult<Option<NaiveDateTime>>;
 }
+
+/// What [`BillingStore::claim_event`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claim {
+    /// This delivery applies the event.
+    Taken,
+    /// Already processed: a duplicate.
+    Done,
+    /// Another delivery is processing it (or crashed less than
+    /// [`STALE_CLAIM_MINUTES`] ago): Stripe has to retry this one.
+    InProgress,
+}
+
+/// How old an unfinished event claim must be before a new delivery takes it
+/// over (longer than any webhook run).
+pub const STALE_CLAIM_MINUTES: i64 = 5;
 
 /// The MySQL tables.
 pub struct MySqlBillingStore<'a>(pub &'a MySqlPool);
@@ -249,7 +269,7 @@ impl BillingStore for MySqlBillingStore<'_> {
         Ok(())
     }
 
-    async fn claim_event(&self, event_id: &str, event_type: &str) -> StoreResult<bool> {
+    async fn claim_event(&self, event_id: &str, event_type: &str) -> StoreResult<Claim> {
         match sqlx::query(
             "INSERT INTO stripe_webhook_events (stripe_event_id, event_type) VALUES (?, ?)",
         )
@@ -258,10 +278,46 @@ impl BillingStore for MySqlBillingStore<'_> {
         .execute(self.0)
         .await
         {
-            Ok(_) => Ok(true),
-            Err(err) if is_duplicate(&err) => Ok(false),
+            Ok(_) => Ok(Claim::Taken),
+            Err(err) if is_duplicate(&err) => {
+                let taken = sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE stripe_webhook_events SET processed_at = CURRENT_TIMESTAMP
+                      WHERE stripe_event_id = ? AND done_at IS NULL
+                        AND processed_at < CURRENT_TIMESTAMP - INTERVAL {STALE_CLAIM_MINUTES} MINUTE"
+                )))
+                .bind(event_id)
+                .execute(self.0)
+                .await?;
+                if taken.rows_affected() == 1 {
+                    return Ok(Claim::Taken);
+                }
+                let done: Option<bool> = sqlx::query_scalar(
+                    "SELECT done_at IS NOT NULL FROM stripe_webhook_events
+                      WHERE stripe_event_id = ?",
+                )
+                .bind(event_id)
+                .fetch_optional(self.0)
+                .await?;
+                // A row gone meanwhile (the other delivery failed and released
+                // it) is retried as well.
+                Ok(if done == Some(true) {
+                    Claim::Done
+                } else {
+                    Claim::InProgress
+                })
+            }
             Err(err) => Err(err),
         }
+    }
+
+    async fn finish_event(&self, event_id: &str) -> StoreResult<()> {
+        sqlx::query(
+            "UPDATE stripe_webhook_events SET done_at = CURRENT_TIMESTAMP WHERE stripe_event_id = ?",
+        )
+        .bind(event_id)
+        .execute(self.0)
+        .await?;
+        Ok(())
     }
 
     async fn release_event(&self, event_id: &str) -> StoreResult<()> {

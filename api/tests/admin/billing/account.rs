@@ -195,6 +195,65 @@ async fn the_last_payment_is_caught_up_but_never_moved_back(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn the_sync_closes_an_invoice_voided_at_stripe_and_never_reopens_one(pool: MySqlPool) {
+    let stripe = Shared::default();
+    subscribed(&pool, &stripe).await;
+    // `in_open` was voided at Stripe without a webhook reaching us; the
+    // webhook already closed `in_voided`.
+    {
+        let mut fake = stripe.lock().unwrap();
+        fake.invoices.get_mut("in_open").unwrap()["status"] = json!("void");
+        fake.invoices
+            .insert("in_voided".into(), invoice("in_voided", false, 4900));
+        fake.invoices.get_mut("in_voided").unwrap()["status"] = json!("void");
+    }
+    sqlx::raw_sql(
+        "INSERT INTO company_billing_invoices (company_id, stripe_invoice_id, status, amount_due_cents,
+                                               amount_paid_cents)
+         VALUES (100, 'in_open', 'open', 4900, 0), (100, 'in_voided', 'void', 4900, 0);
+         UPDATE company_billing SET outstanding_balance_cents = 4900 WHERE company_id = 100;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(&pool, Some(&stripe)).await;
+    let billing: Value = server
+        .get("/v1/billing?checkout=success")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    let stored: Vec<(String, String)> = sqlx::query_as(
+        "SELECT stripe_invoice_id, CAST(status AS CHAR) FROM company_billing_invoices
+          WHERE company_id = 100 ORDER BY stripe_invoice_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored,
+        [
+            ("in_open".to_string(), "void".to_string()),
+            ("in_paid".to_string(), "paid".to_string()),
+            ("in_voided".to_string(), "void".to_string()),
+        ]
+    );
+    let owed: i32 = sqlx::query_scalar(
+        "SELECT outstanding_balance_cents FROM company_billing WHERE company_id = 100",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(owed, 0);
+    assert!(
+        billing["invoices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|invoice| invoice["status"] != "open")
+    );
+}
+
+#[test_db::test(seed)]
 async fn when_stripe_cannot_be_reached_the_page_shows_what_is_stored(pool: MySqlPool) {
     sqlx::raw_sql(
         "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 5, 100);
@@ -455,4 +514,69 @@ async fn reconciliation_batches_resume_after_the_last_company(pool: MySqlPool) {
         .unwrap()
         .unwrap();
     assert_eq!((spent.last_id, spent.done), (None, false));
+}
+
+#[test_db::test(seed)]
+async fn a_self_serve_company_changes_no_legacy_plan_and_opens_no_portal(pool: MySqlPool) {
+    let stripe = Shared::default();
+    subscribed(&pool, &stripe).await;
+    self_serve(&pool).await;
+    let server = server(&pool, Some(&stripe)).await;
+    let refused = json!({
+        "error": "This company's plan and payment methods are managed on your payments account page.",
+        "code": "self_serve_billing",
+    });
+    let change = server
+        .put("/v1/billing/subscription")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "price_id": "price_plus" }))
+        .await;
+    change.assert_status(StatusCode::CONFLICT);
+    assert_eq!(change.json::<Value>(), refused);
+    let portal = server
+        .post("/v1/billing/portal")
+        .with_session(sessions::MANAGER)
+        .json(&json!({}))
+        .await;
+    portal.assert_status(StatusCode::CONFLICT);
+    assert_eq!(portal.json::<Value>(), refused);
+    assert!(sent(&stripe, "POST", "/v1/subscriptions/sub_100").is_empty());
+    assert!(sent(&stripe, "POST", "/v1/billing_portal/sessions").is_empty());
+}
+
+#[test_db::test(seed)]
+async fn the_billing_page_shows_a_bank_account_and_its_verification_deadline(pool: MySqlPool) {
+    let stripe = Shared::default();
+    subscribed(&pool, &stripe).await;
+    stripe.lock().unwrap().payment_methods.insert(
+        "pm_100".into(),
+        json!({ "id": "pm_100", "object": "payment_method", "type": "us_bank_account",
+                "customer": "cus_100",
+                "us_bank_account": { "bank_name": "STRIPE TEST BANK", "last4": "6789" } }),
+    );
+    sqlx::query(
+        "INSERT INTO signup_intents
+           (id, status, email, company, owner_name, password_hash, plan, company_id,
+            bank_verification_until, created_at, updated_at, expires_at)
+         VALUES ('5b120000-0000-4000-8000-000000000100', 'awaiting_bank_verification',
+                 'owner@acme.test', '{}', 'Olga Owner', '', '{}', 100, '2026-11-05 12:00:00',
+                 UTC_TIMESTAMP(), UTC_TIMESTAMP(), UTC_TIMESTAMP() + INTERVAL 2 DAY)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(&pool, Some(&stripe)).await;
+    let billing: Value = server
+        .get("/v1/billing")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(
+        billing["payment_method"],
+        json!({ "kind": "bank", "label": "STRIPE TEST BANK", "last4": "6789",
+                "exp_month": null, "exp_year": null })
+    );
+    assert_eq!(billing["card"], Value::Null);
+    assert_eq!(billing["bank_verification_until"], "2026-11-05T12:00:00Z");
+    assert_eq!(billing["restricted_reason"], Value::Null);
 }

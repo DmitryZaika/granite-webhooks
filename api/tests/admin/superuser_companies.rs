@@ -179,6 +179,61 @@ async fn the_list_carries_plan_add_ons_managers_and_billing(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn the_list_says_when_a_first_payment_pauses_access(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO company_billing (company_id, subscription_status, payment_status)
+         VALUES (20100, 'active', 'active')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // 20101 never paid and is 10 days in; 20100 pays; 100 is 1 day in.
+    sqlx::query(
+        "UPDATE company SET billing_required = 1,
+                billing_required_at = UTC_TIMESTAMP() - INTERVAL CASE id WHEN 100 THEN 1 ELSE 10 END DAY
+          WHERE id IN (100, 20100, 20101)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let rows: Value = server(&pool)
+        .await
+        .get("/v1/superuser/companies")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    let find = |id: i32| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let never_paid = find(20101);
+    assert_eq!(never_paid["first_payment_paused"], true);
+    let pauses = never_paid["first_payment_pauses_at"].as_str().unwrap();
+    let required = chrono::DateTime::parse_from_rfc3339(
+        never_paid["billing_required_since"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(pauses).unwrap() - required,
+        chrono::Duration::days(api::billing::FIRST_PAYMENT_DAYS)
+    );
+    let paying = find(20100);
+    assert_eq!(paying["first_payment_pauses_at"], Value::Null);
+    assert_eq!(paying["first_payment_paused"], false);
+    let early = find(100);
+    assert!(early["first_payment_pauses_at"].is_string());
+    assert_eq!(early["first_payment_paused"], false);
+    // Payment not required: nothing pauses.
+    let free = find(20500);
+    assert_eq!(free["first_payment_pauses_at"], Value::Null);
+    assert_eq!(free["first_payment_paused"], false);
+}
+
+#[test_db::test(seed)]
 async fn creating_a_company_seeds_it(pool: MySqlPool) {
     let server = server(&pool).await;
     for body in [

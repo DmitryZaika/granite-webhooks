@@ -36,6 +36,29 @@ struct FakeStripe {
     portal_configurations: Vec<Value>,
     /// (method, path, form or query)
     requests: Vec<(String, String, String)>,
+    /// (method, path, `Idempotency-Key`) of every request.
+    keys: Vec<(String, String, Option<String>)>,
+}
+
+/// Keeps each request's `Idempotency-Key`.
+async fn record_key(
+    State(s): State<Shared>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let key = request
+        .headers()
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    s.lock().unwrap().keys.push((
+        request.method().to_string(),
+        percent_encoding::percent_decode_str(request.uri().path())
+            .decode_utf8_lossy()
+            .into_owned(),
+        key,
+    ));
+    next.run(request).await
 }
 
 type Shared = Arc<Mutex<FakeStripe>>;
@@ -250,6 +273,7 @@ async fn fake_stripe(state: Shared) -> String {
                 Json(json!({ "id": id, "object": "customer" }))
             }),
         )
+        .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), record_key))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -707,6 +731,44 @@ async fn a_company_that_is_not_restricted_has_nothing_to_pay(pool: MySqlPool) {
         .json::<Value>();
     assert_eq!(started, json!({ "status": "paid" }));
     assert!(stripe.lock().unwrap().requests.is_empty());
+}
+
+#[test_db::test(seed)]
+async fn every_reactivation_write_carries_the_attempts_idempotency_key(pool: MySqlPool) {
+    let stripe = Shared::default();
+    suspended(&pool, &stripe).await;
+    let server = server(&pool, Some(&stripe)).await;
+    server
+        .post("/v1/billing/reactivation")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "payment_method_id": "pm_new" }))
+        .await
+        .assert_status_ok();
+    let keys: Vec<(String, Option<String>)> = stripe
+        .lock()
+        .unwrap()
+        .keys
+        .iter()
+        .filter(|(method, _, _)| method == "POST")
+        .map(|(_, path, key)| (path.clone(), key.clone()))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            (
+                "/v1/payment_methods/pm_new/attach".to_string(),
+                Some("reactivation:100:sub_old:attach:pm_new".to_string())
+            ),
+            (
+                "/v1/customers/cus_100".to_string(),
+                Some("reactivation:100:sub_old:default:pm_new".to_string())
+            ),
+            (
+                "/v1/subscriptions".to_string(),
+                Some("reactivation:100:sub_old:subscription:pm_new".to_string())
+            ),
+        ]
+    );
 }
 
 #[test_db::test(seed)]

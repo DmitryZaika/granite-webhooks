@@ -65,7 +65,7 @@ fn payment_failed_copy(step: ReminderStep, company: &str, date: &str) -> Option<
             "Action needed: your Granite Manager payment did not go through",
             vec![
                 format!(
-                    "We could not process the latest subscription payment for {company}. Please update your card to keep your account active."
+                    "We could not process the latest subscription payment for {company}. Please update your payment method to keep your account active."
                 ),
                 format!(
                     "If the payment is not completed, access for your team will be paused on {date}."
@@ -79,7 +79,7 @@ fn payment_failed_copy(step: ReminderStep, company: &str, date: &str) -> Option<
                 format!(
                     "The payment for {company} is still outstanding. Access for your team will be paused on {date}."
                 ),
-                "Update your card now to avoid any interruption.".to_string(),
+                "Update your payment method now to avoid any interruption.".to_string(),
             ],
             UPDATE_CARD,
         ),
@@ -89,7 +89,8 @@ fn payment_failed_copy(step: ReminderStep, company: &str, date: &str) -> Option<
                 format!(
                     "The payment for {company} is still outstanding. Access for your team will be paused tomorrow, {date}."
                 ),
-                "Please update your card today to keep working without interruption.".to_string(),
+                "Please update your payment method today to keep working without interruption."
+                    .to_string(),
             ],
             UPDATE_CARD,
         ),
@@ -188,7 +189,7 @@ fn reminder_copy(
     match kind {
         DunningKind::FirstPayment => first_payment_copy(step, company, date),
         DunningKind::PaymentFailed => payment_failed_copy(step, company, date),
-        DunningKind::FirstCharge => None,
+        DunningKind::FirstCharge | DunningKind::MethodHold => None,
     }
 }
 
@@ -307,45 +308,51 @@ pub enum OnboardingLine {
     Booked {
         start_at: Option<NaiveDateTime>,
     },
-    /// Not booked yet: the deadline and the fee it avoids.
+    /// Not booked yet: the deadline and the advance it avoids (as the signup
+    /// consent stated it).
     NotBooked {
         deadline_at: NaiveDateTime,
-        fee_cents: i64,
+        advance_cents: i64,
     },
-    /// The deadline passed and the fee notice went out: the charge date.
+    /// The deadline passed and the advance notice went out: the charge that
+    /// also takes the advance, its amount and the month it pays for.
     NoticeSent {
         charge_at: NaiveDateTime,
-        fee_cents: i64,
+        advance_cents: i64,
+        prepaid_from: NaiveDateTime,
+        prepaid_until: NaiveDateTime,
     },
 }
 
 impl OnboardingLine {
-    /// Completed, booked, pending or notice sent; nothing for other statuses.
+    /// Completed, booked, pending, notice sent or advance scheduled; nothing
+    /// for other statuses.
     pub fn of(commitment: &Commitment) -> Option<Self> {
+        let not_booked = Self::NotBooked {
+            deadline_at: commitment.deadline_at,
+            advance_cents: commitment.signup_advance_cents,
+        };
         match commitment.status {
             Status::Completed => Some(Self::Complete),
             Status::Booked => Some(Self::Booked {
                 start_at: commitment.booking.as_ref().map(|call| call.start_at),
             }),
-            Status::Pending => Some(Self::NotBooked {
-                deadline_at: commitment.deadline_at,
-                fee_cents: commitment.fee_cents,
-            }),
-            Status::NoticeSent => Some(commitment.charge_after.map_or(
-                Self::NotBooked {
-                    deadline_at: commitment.deadline_at,
-                    fee_cents: commitment.fee_cents,
-                },
-                |charge_at| Self::NoticeSent {
-                    charge_at,
-                    fee_cents: commitment.fee_cents,
+            Status::Pending => Some(not_booked),
+            Status::NoticeSent | Status::AdvanceScheduled => Some(commitment.terms.map_or(
+                not_booked,
+                |terms| Self::NoticeSent {
+                    charge_at: terms.charge_at,
+                    advance_cents: terms.advance_cents,
+                    prepaid_from: terms.prepaid_from,
+                    prepaid_until: terms.prepaid_until,
                 },
             )),
             _ => None,
         }
     }
 
-    pub fn text(self) -> String {
+    /// The line in the email of the first charge at `first_charge_at`.
+    pub fn text(self, first_charge_at: NaiveDateTime) -> String {
         match self {
             Self::Complete => "Onboarding: complete.".into(),
             Self::Booked { start_at: None } => "Your onboarding call is booked.".into(),
@@ -357,20 +364,37 @@ impl OnboardingLine {
             ),
             Self::NotBooked {
                 deadline_at,
-                fee_cents,
+                advance_cents,
             } => format!(
-                "Onboarding: not booked yet. Complete it by {} to avoid the onboarding fee of {}.",
+                "Onboarding: not booked yet. Onboarding is free. If it is not completed by {}, a later subscription charge, at least 7 days after a notice email, also includes the following month in advance ({} with your plan at signup, plus applicable sales tax).",
                 format_local_date(deadline_at),
-                format_money(fee_cents)
+                format_money(advance_cents)
             ),
             Self::NoticeSent {
                 charge_at,
-                fee_cents,
-            } => format!(
-                "Onboarding was not completed. The onboarding fee of {} will be charged on {}.",
-                format_money(fee_cents),
-                format_local_date(charge_at)
-            ),
+                advance_cents,
+                prepaid_from,
+                prepaid_until,
+            } => {
+                let month = format!(
+                    "{} to {}",
+                    format_local_date(prepaid_from),
+                    format_local_date(prepaid_until)
+                );
+                let charge = format_local_date(charge_at);
+                if charge == format_local_date(first_charge_at) {
+                    format!(
+                        "Onboarding was not completed by its deadline, so as our notice said, this charge also includes the advance payment of {} plus applicable sales tax for {month}. That month is then not charged again. An onboarding call that ends before {} still avoids it.",
+                        format_money(advance_cents),
+                        format_local_time(charge_at)
+                    )
+                } else {
+                    format!(
+                        "Onboarding was not completed by its deadline, so as our notice said, your charge on {charge} also includes the advance payment of {} plus applicable sales tax for {month}.",
+                        format_money(advance_cents)
+                    )
+                }
+            }
         }
     }
 }
@@ -398,9 +422,20 @@ pub fn render_first_charge_email(input: &FirstChargeEmailInput<'_>) -> RenderedE
         .payment_method
         .as_deref()
         .unwrap_or("the payment method on file");
+    // A company moved onto a plan by Granite Manager has no free period.
+    let opening = if input.quote.plan_invite {
+        "The first charge of the Granite Manager plan for"
+    } else {
+        "Your free period for"
+    };
+    let starts = if input.quote.plan_invite {
+        "is on"
+    } else {
+        "ends on"
+    };
     let intro = |company: &str, method: &str| {
         format!(
-            "Your free period for {company} ends on {date}. On that day, {amount} plus applicable sales tax will be charged to {method}, and then every month on the same day until you cancel."
+            "{opening} {company} {starts} {date}. On that day, {amount} plus applicable sales tax will be charged to {method}, and then every month on the same day until you cancel."
         )
     };
     let per_user = "Each active user above 10 adds $30.00 per month, counted on the charge date.";
@@ -434,7 +469,9 @@ pub fn render_first_charge_email(input: &FirstChargeEmailInput<'_>) -> RenderedE
         .iter()
         .map(|line| format!("- {}: {}", line.label, format_money(line.amount_cents)))
         .collect();
-    let onboarding = input.onboarding.map(OnboardingLine::text);
+    let onboarding = input
+        .onboarding
+        .map(|line| line.text(input.quote.charge_at));
     let mut parts = vec![
         html_paragraph(&escape_html(&hello)),
         html_paragraph(&intro(&company_html, &escape_html(method))),
@@ -597,7 +634,52 @@ mod tests {
                 },
             ],
             payment_method: Some("Visa ending in 4242".into()),
+            plan_invite: false,
         }
+    }
+
+    #[test]
+    fn failed_payment_emails_ask_for_a_payment_method_not_a_card() {
+        for step in [
+            ReminderStep::Started,
+            ReminderStep::ThreeDaysLeft,
+            ReminderStep::PauseTomorrow,
+        ] {
+            let email = render_reminder_email(&ReminderEmailInput {
+                kind: DunningKind::PaymentFailed,
+                step,
+                company_name: "Granite Co",
+                user_name: None,
+                pauses_at: Some(pauses_at()),
+                app_url: APP_URL,
+            })
+            .unwrap();
+            assert!(!email.text.contains("card"), "{}", email.text);
+            assert!(
+                email.text.contains("update your payment method")
+                    || email.text.contains("Update your payment method")
+            );
+        }
+    }
+
+    #[test]
+    fn an_invited_company_is_not_told_about_a_free_period() {
+        let quote = FirstChargeQuote {
+            plan_invite: true,
+            ..quote()
+        };
+        let email = render_first_charge_email(&FirstChargeEmailInput {
+            company_name: "Rock & Co",
+            user_name: None,
+            quote: &quote,
+            app_url: APP_URL,
+            account_url: ACCOUNT_URL,
+            onboarding: None,
+        });
+        assert!(email.text.contains(
+            "The first charge of the Granite Manager plan for Rock & Co is on October 8, 2026. On that day, $1,234.50 plus applicable sales tax will be charged to Visa ending in 4242, and then every month on the same day until you cancel."
+        ));
+        assert!(!email.text.contains("free period") && !email.html.contains("free period"));
     }
 
     #[test]
@@ -717,20 +799,37 @@ mod tests {
         );
         let pending = onboarding_text(Some(OnboardingLine::NotBooked {
             deadline_at: at("2026-11-21 03:00:00"),
-            fee_cents: 60_000,
+            advance_cents: 60_000,
         }));
         assert!(pending.text.contains(
-            "Onboarding: not booked yet. Complete it by November 20, 2026 to avoid the onboarding fee of $600.00."
+            "Onboarding: not booked yet. Onboarding is free. If it is not completed by November 20, 2026, a later subscription charge, at least 7 days after a notice email, also includes the following month in advance ($600.00 with your plan at signup, plus applicable sales tax)."
         ));
         // The billing page button and the Request cancellation link.
         assert_eq!(pending.html.matches("href=").count(), 2);
         let noticed = onboarding_text(Some(OnboardingLine::NoticeSent {
             charge_at: at("2026-11-28 02:00:00"),
-            fee_cents: 60_000,
+            advance_cents: 60_000,
+            prepaid_from: at("2026-12-28 02:00:00"),
+            prepaid_until: at("2027-01-28 02:00:00"),
         }));
         assert!(noticed.text.contains(
-            "Onboarding was not completed. The onboarding fee of $600.00 will be charged on November 27, 2026."
+            "Onboarding was not completed by its deadline, so as our notice said, your charge on November 27, 2026 also includes the advance payment of $600.00 plus applicable sales tax for December 27, 2026 to January 27, 2027."
         ));
+        // The advance on this very charge (the quote's October 8).
+        let this_charge = onboarding_text(Some(OnboardingLine::NoticeSent {
+            charge_at: at("2026-10-08 15:00:00"),
+            advance_cents: 123_450,
+            prepaid_from: at("2026-11-08 16:00:00"),
+            prepaid_until: at("2026-12-08 16:00:00"),
+        }));
+        assert!(this_charge.text.contains(
+            "Onboarding was not completed by its deadline, so as our notice said, this charge also includes the advance payment of $1,234.50 plus applicable sales tax for November 8, 2026 to December 8, 2026. That month is then not charged again. An onboarding call that ends before Thu, Oct 8 at 11:00 AM EDT still avoids it."
+        ));
+        for email in [&complete, &booked, &pending, &noticed, &this_charge] {
+            let all = format!("{}\n{}\n{}", email.subject, email.html, email.text);
+            assert!(!all.to_lowercase().contains("fee"), "{all}");
+            assert!(!all.contains('\u{2014}') && !all.contains('\u{2013}'));
+        }
         let none = onboarding_text(None);
         assert!(!none.text.contains("Onboarding"));
         assert!(!none.html.contains("Onboarding"));
@@ -816,28 +915,33 @@ mod tests {
         );
         let not_booked = Some(OnboardingLine::NotBooked {
             deadline_at: at("2026-10-31 12:00:00"),
-            fee_cents: 60_000,
+            advance_cents: 60_000,
         });
         assert_eq!(OnboardingLine::of(&with(Status::Pending)), not_booked);
         let noticed = Commitment {
-            charge_after: Some(at("2026-11-07 12:00:00")),
+            terms: Some(crate::onboarding_call::commitment::AdvanceTerms {
+                advance_cents: 60_000,
+                charge_at: at("2026-11-07 12:00:00"),
+                prepaid_from: at("2026-12-07 12:00:00"),
+                prepaid_until: at("2027-01-07 12:00:00"),
+            }),
             ..with(Status::NoticeSent)
         };
         assert_eq!(
             OnboardingLine::of(&noticed),
             Some(OnboardingLine::NoticeSent {
                 charge_at: at("2026-11-07 12:00:00"),
-                fee_cents: 60_000
+                advance_cents: 60_000,
+                prepaid_from: at("2026-12-07 12:00:00"),
+                prepaid_until: at("2027-01-07 12:00:00"),
             })
         );
         assert_eq!(OnboardingLine::of(&with(Status::NoticeSent)), not_booked);
         for status in [
             Status::Waived,
             Status::Suspended,
-            Status::FeeInvoiced,
-            Status::FeePaid,
-            Status::FeeFailed,
-            Status::FeeSkipped,
+            Status::AdvancePaid,
+            Status::AdvanceSkipped,
             Status::Void,
         ] {
             assert_eq!(OnboardingLine::of(&with(status)), None);

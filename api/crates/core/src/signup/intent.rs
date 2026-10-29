@@ -10,9 +10,10 @@ use sqlx::MySqlPool;
 
 /// Signups expire this long after they start (unless provisioning).
 pub const EXPIRES_HOURS: i64 = 24;
-/// How long a bank account waiting for micro-deposits has to be verified
-/// (Stripe's micro-deposit timeout): `bank_verification_until` is the
-/// acceptance plus this.
+/// How long a bank account waiting for micro-deposits has to be verified.
+///
+/// Stripe's micro-deposit timeout: `bank_verification_until` is the
+/// SetupIntent's creation plus this (`payment::bank_verification_due`).
 pub const BANK_VERIFICATION_DAYS: i64 = 10;
 
 /// Where a signup is.
@@ -67,19 +68,22 @@ impl SignupStatus {
 /// The company in step 2.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CompanyDetails {
-    /// Company name.
+    /// Company name, 2 to 100 characters.
     pub name: String,
-    /// Phone, E.164 (`+13175550100`).
+    /// Phone, a US/Canada number in E.164 (`+13175550100`): area code and
+    /// exchange not starting with 0 or 1, area code not N11.
     pub phone: String,
-    /// Website, or null.
+    /// Website, an http(s) URL or a bare domain (`acme.com`, stored as
+    /// `https://acme.com`), or null.
     pub website: Option<String>,
-    /// Street address.
+    /// Street address, 3 to 100 characters with a letter: letters, numbers,
+    /// spaces and `# / - . , ' ’ &`.
     pub street: String,
-    /// City.
+    /// City, 2 to 50 characters: letters, spaces, `'`, `’`, `.` and `-`.
     pub city: String,
-    /// Two-letter US state code.
+    /// Two-letter code of one of the 50 states or DC.
     pub state: String,
-    /// ZIP code.
+    /// ZIP code, `46204` or `46204-1234`.
     pub zip: String,
 }
 
@@ -108,7 +112,9 @@ pub struct Intent {
     /// Frozen when the consents were accepted.
     pub accepted_at: Option<NaiveDateTime>,
     pub trial_end_at: Option<NaiveDateTime>,
-    pub fee_cents: Option<i64>,
+    /// The advance payment the consent stated (one month at the plan chosen,
+    /// before tax), frozen with the consents.
+    pub advance_cents: Option<i64>,
     pub deadline_at: Option<NaiveDateTime>,
     pub price_ids: Option<Vec<String>>,
     pub stripe_subscription_id: Option<String>,
@@ -123,7 +129,7 @@ pub struct Intent {
     pub expires_at: NaiveDateTime,
     pub completed_at: Option<NaiveDateTime>,
     /// Set when completion accepted a bank account still waiting for
-    /// micro-deposits (acceptance + [`BANK_VERIFICATION_DAYS`]); stays set
+    /// micro-deposits (SetupIntent creation + [`BANK_VERIFICATION_DAYS`]); stays set
     /// once verified.
     pub bank_verification_until: Option<NaiveDateTime>,
 }
@@ -146,7 +152,7 @@ impl Intent {
 const COLUMNS: &str = "id, CAST(status AS CHAR) AS status, email, code_hash, code_sent_at,
     code_expires_at, code_attempts, codes_sent, verified_at, CAST(company AS CHAR) AS company,
     owner_name, password_hash, CAST(plan AS CHAR) AS plan, stripe_customer_id, setup_intent_id,
-    setup_attempts, payment_method_id, accepted_at, trial_end_at, fee_cents, deadline_at,
+    setup_attempts, payment_method_id, accepted_at, trial_end_at, advance_cents, deadline_at,
     CAST(price_ids AS CHAR) AS price_ids, stripe_subscription_id, provision_attempts,
     last_error, company_id, user_id, ip, user_agent, created_at, updated_at, expires_at,
     completed_at, bank_verification_until";
@@ -172,7 +178,7 @@ struct Row {
     payment_method_id: Option<String>,
     accepted_at: Option<NaiveDateTime>,
     trial_end_at: Option<NaiveDateTime>,
-    fee_cents: Option<i32>,
+    advance_cents: Option<i32>,
     deadline_at: Option<NaiveDateTime>,
     price_ids: Option<String>,
     stripe_subscription_id: Option<String>,
@@ -227,7 +233,7 @@ impl TryFrom<Row> for Intent {
             payment_method_id: row.payment_method_id,
             accepted_at: row.accepted_at,
             trial_end_at: row.trial_end_at,
-            fee_cents: row.fee_cents.map(i64::from),
+            advance_cents: row.advance_cents.map(i64::from),
             deadline_at: row.deadline_at,
             price_ids,
             stripe_subscription_id: row.stripe_subscription_id,

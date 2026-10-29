@@ -25,6 +25,7 @@ pub mod company_create;
 pub mod db;
 pub mod deliverability;
 pub mod entitlements;
+pub mod env_check;
 pub mod error;
 pub mod extract;
 pub mod html;

@@ -5,7 +5,7 @@
 //! the new company. Every send is best effort: a failure is logged with the
 //! company id and nothing else.
 
-use super::consent::long_date;
+use super::consent::{long_date, money};
 use super::intent::Intent;
 use crate::billing::catalog::SIGNUP_TZ;
 use crate::entitlements::AddonKey;
@@ -15,7 +15,6 @@ use chrono::{NaiveDate, NaiveDateTime, TimeZone};
 use lambda_http::tracing;
 use std::fmt::Write as _;
 
-const FROM_ADDRESS: &str = "noreply@granite-manager.com";
 const SUPPORT_EMAIL: &str = "support@granite-manager.com";
 
 fn escape(text: &str) -> String {
@@ -49,7 +48,7 @@ fn addons(intent: &Intent) -> String {
 fn email(to: &str, subject: String, body: String) -> OutgoingEmail {
     OutgoingEmail {
         from_name: Some("Granite Manager".into()),
-        from_address: FROM_ADDRESS.into(),
+        from_address: crate::billing::from_address(),
         to: vec![to.to_string()],
         cc: Vec::new(),
         bcc: Vec::new(),
@@ -237,6 +236,59 @@ pub async fn plan_acceptance_given_up(state: &AppState, company_id: i32, last_er
     }
 }
 
+/// Sent instead of the code when a signup starts with an email that already
+/// has an account: `deleted` when the only one is deleted. No code in it.
+fn account_exists_html(app_url: &str, deleted: bool) -> String {
+    let (title, body) = if deleted {
+        (
+            "This email belonged to a deleted account",
+            format!(
+                r#"<p style="color: #475569; line-height: 1.6;">Someone started a Granite Manager signup with this email. It belonged to an account that was deleted, so it cannot be used for a new account.</p>
+  <p style="color: #475569; line-height: 1.6;">To sign up, start again with a different email.</p>
+  <p style="color: #94a3b8; font-size: 13px; margin-top: 24px;">Questions? Write to <a href="mailto:{SUPPORT_EMAIL}" style="color: #2563eb;">{SUPPORT_EMAIL}</a>. If you did not ask for this, you can safely ignore this email.</p>"#
+            ),
+        )
+    } else {
+        (
+            "You already have an account",
+            format!(
+                r#"<p style="color: #475569; line-height: 1.6;">Someone started a Granite Manager signup with this email. An account already uses it, so no new account was made.</p>
+  <a href="{app_url}/login" style="display: inline-block; background-color: #2563eb; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 16px 0;">Sign in</a>
+  <p style="color: #475569; line-height: 1.6;">Forgot your password? Choose "Forgot password?" on the sign-in page to set a new one.</p>
+  <p style="color: #94a3b8; font-size: 13px; margin-top: 24px;">If you did not ask for this, you can safely ignore this email.</p>"#
+            ),
+        )
+    };
+    format!(
+        r#"<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+  <h2 style="color: #1e293b;">{title}</h2>
+  {body}
+</div>"#
+    )
+}
+
+/// Emails `to` that it already has an account (or a deleted one), in place
+/// of the signup code. Fails like the code email, logged without the address.
+pub async fn send_account_exists(
+    state: &AppState,
+    to: &str,
+    deleted: bool,
+) -> crate::error::ApiResult<()> {
+    let notice = email(
+        to,
+        "Your Granite Manager signup".into(),
+        account_exists_html(&state.app_url, deleted),
+    );
+    state.webhooks.send_email(&notice).await.map_err(|err| {
+        tracing::warn!(
+            kind = failure_kind(&err),
+            "signup account-exists email failed"
+        );
+        crate::error::ApiError::Upstream(super::emails::SEND_FAILED.into())
+    })?;
+    Ok(())
+}
+
 /// The failure without its text, which can quote the recipient's address.
 const fn failure_kind(err: &SendFailure) -> &'static str {
     match err {
@@ -250,14 +302,19 @@ fn welcome_html(intent: &Intent, app_url: &str) -> String {
     let company = escape(&intent.company.name);
     let first_charge = local_day(intent.trial_end_at);
     let deadline = local_day(intent.deadline_at);
+    let month = intent.advance_cents.map_or_else(
+        || "one month of your subscription".to_string(),
+        |cents| format!("{} with your plan at signup", money(cents)),
+    );
     format!(
         r#"<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
   <h2 style="color: #1e293b;">Welcome to Granite Manager</h2>
   <p style="color: #475569; line-height: 1.6;">Hello {name},</p>
   <p style="color: #475569; line-height: 1.6;">{company} is ready. Sign in with your email and the password you chose.</p>
   <a href="{app_url}/login" style="display: inline-block; background-color: #2563eb; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 16px 0;">Sign in</a>
-  <p style="color: #475569; line-height: 1.6;">Your free period runs until {first_charge}. Nothing is charged before that day.</p>
-  <p style="color: #475569; line-height: 1.6;">Book your onboarding call and complete onboarding by {deadline}: <a href="{app_url}/employee?welcome=1" style="color: #2563eb;">book your call</a>.</p>
+  <p style="color: #475569; line-height: 1.6;">Nothing is charged before your first charge on {first_charge}. After that, {company} is charged every month on the same day.</p>
+  <p style="color: #475569; line-height: 1.6;">Onboarding with our team is free. Book your call and complete onboarding by {deadline}: <a href="{app_url}/employee?welcome=1" style="color: #2563eb;">book your call</a>.</p>
+  <p style="color: #475569; line-height: 1.6;">If onboarding is not completed by then, we email a notice, and the next charge at least 7 days after it (normally the first charge) also includes the next month in advance ({month}, plus applicable sales tax). That month is then not charged again, so you pay nothing extra, only one month earlier.</p>
   <p style="color: #94a3b8; font-size: 13px; margin-top: 24px;">Questions? Write to <a href="mailto:{SUPPORT_EMAIL}" style="color: #2563eb;">{SUPPORT_EMAIL}</a>.</p>
 </div>"#
     )
@@ -360,7 +417,7 @@ mod tests {
             trial_end_at: NaiveDate::from_ymd_opt(2027, 1, 24)
                 .unwrap()
                 .and_hms_opt(3, 0, 0),
-            fee_cents: Some(150_000),
+            advance_cents: Some(150_000),
             deadline_at: NaiveDate::from_ymd_opt(2026, 11, 22)
                 .unwrap()
                 .and_hms_opt(15, 0, 0),
@@ -385,11 +442,19 @@ mod tests {
         let html = welcome_html(&intent(), "https://granite-manager.com");
         assert!(html.contains("Hello Olive &quot;O&quot; Owner,"));
         assert!(html.contains("Rock &amp; &lt;Roll&gt; is ready"));
-        assert!(html.contains("until January 23, 2027"));
-        assert!(html.contains("by November 22, 2026"));
+        assert!(html.contains(
+            "Nothing is charged before your first charge on January 23, 2027. After that, Rock &amp; &lt;Roll&gt; is charged every month on the same day."
+        ));
+        assert!(html.contains(
+            "Onboarding with our team is free. Book your call and complete onboarding by November 22, 2026:"
+        ));
+        assert!(html.contains(
+            "If onboarding is not completed by then, we email a notice, and the next charge at least 7 days after it (normally the first charge) also includes the next month in advance ($1,500.00 with your plan at signup, plus applicable sales tax). That month is then not charged again, so you pay nothing extra, only one month earlier."
+        ));
+        assert!(!html.to_lowercase().contains("fee") && !html.contains("free period"));
         assert!(html.contains("https://granite-manager.com/login"));
         assert!(html.contains("https://granite-manager.com/employee?welcome=1"));
-        assert!(!html.contains('\u{2014}'));
+        assert!(!html.contains('\u{2014}') && !html.contains('\u{2013}'));
     }
 
     #[test]
@@ -415,5 +480,28 @@ mod tests {
         let html = staff_html(&intent(), 7, 9);
         assert!(html.contains("owner@stone.test") && html.contains("+13175550100"));
         assert!(html.contains("Rock &amp; &lt;Roll&gt;"));
+    }
+
+    #[test]
+    fn the_account_exists_email_has_a_sign_in_link_and_no_code() {
+        assert_eq!(
+            account_exists_html("https://app.test", false),
+            r#"<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+  <h2 style="color: #1e293b;">You already have an account</h2>
+  <p style="color: #475569; line-height: 1.6;">Someone started a Granite Manager signup with this email. An account already uses it, so no new account was made.</p>
+  <a href="https://app.test/login" style="display: inline-block; background-color: #2563eb; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 16px 0;">Sign in</a>
+  <p style="color: #475569; line-height: 1.6;">Forgot your password? Choose "Forgot password?" on the sign-in page to set a new one.</p>
+  <p style="color: #94a3b8; font-size: 13px; margin-top: 24px;">If you did not ask for this, you can safely ignore this email.</p>
+</div>"#
+        );
+        assert_eq!(
+            account_exists_html("https://app.test", true),
+            r#"<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+  <h2 style="color: #1e293b;">This email belonged to a deleted account</h2>
+  <p style="color: #475569; line-height: 1.6;">Someone started a Granite Manager signup with this email. It belonged to an account that was deleted, so it cannot be used for a new account.</p>
+  <p style="color: #475569; line-height: 1.6;">To sign up, start again with a different email.</p>
+  <p style="color: #94a3b8; font-size: 13px; margin-top: 24px;">Questions? Write to <a href="mailto:support@granite-manager.com" style="color: #2563eb;">support@granite-manager.com</a>. If you did not ask for this, you can safely ignore this email.</p>
+</div>"#
+        );
     }
 }

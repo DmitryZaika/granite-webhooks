@@ -103,7 +103,7 @@ fn random_token() -> Result<String, ApiError> {
 }
 
 /// The client address (in `api_core::auth`, which self-serve signup uses too).
-pub use crate::auth::client_ip;
+pub use crate::auth::{ClientIp, client_ip};
 
 /// The verified session cookie of the request, as every key it holds.
 fn request_session(
@@ -327,7 +327,7 @@ pub async fn record_failed_login(
 )]
 pub async fn login(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     JsonBody(input): JsonBody<LoginInput>,
 ) -> ApiResult<Response> {
     let Some((email, password)) = normalized_credentials(&input.email, &input.password) else {
@@ -337,7 +337,7 @@ pub async fn login(
     };
     let pool = &state.pool;
     let email_hash = sha256_hex(&email);
-    let ip_hash = sha256_hex(&client_ip(&headers));
+    let ip_hash = sha256_hex(&ip);
     if too_many_failures(pool, &email_hash, &ip_hash).await? {
         return Err(ApiError::TooManyRequests(
             "Too many login attempts. Please try again later.".into(),
