@@ -70,7 +70,7 @@ pub struct TargetCompany {
     pub company_id: Option<i32>,
 }
 
-const fn target(user: &crate::auth::session::SessionUser, query: &TargetCompany) -> i32 {
+pub(crate) const fn target(user: &crate::auth::session::SessionUser, query: &TargetCompany) -> i32 {
     match query.company_id {
         Some(id) if user.is_superuser => id,
         _ => user.company_id,

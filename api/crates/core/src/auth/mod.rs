@@ -37,11 +37,18 @@
 //! Without a session cookie, every extractor also takes an agent token
 //! (`Authorization: Bearer agt_...`): the agent then acts as the person who
 //! asked it, read-only, in one company (see [`agent`]).
+//!
+//! Every extractor above also applies the position sections ([`sections`]):
+//! someone holding only Inventory Manager or Scheduling Manager is refused
+//! outside the sections their company gives those positions. Inside them
+//! they pass `EmployeeUser` and `ShopOrEmployeeUser`, and `AdminUser` on an
+//! admin section's routes.
 
 pub mod agent;
 pub mod cookie;
 pub mod device;
 pub mod job;
+pub mod sections;
 pub mod session;
 
 use crate::error::ApiError;
@@ -51,12 +58,54 @@ use axum::http::Method;
 use axum::http::header::COOKIE;
 use axum::http::request::Parts;
 use cookie::{SESSION_COOKIE_NAME, cookie_values, decode_session};
+use sections::Access;
 use session::{SessionUser, effective_user, find_session_user, user_positions};
 
 async fn authenticate(parts: &Parts, state: &AppState) -> Result<SessionUser, ApiError> {
-    authenticate_with_positions(parts, state)
+    authenticate_with_access(parts, state)
         .await
-        .map(|(user, _)| user)
+        .map(|(user, _, _)| user)
+}
+
+async fn authenticate_with_positions(
+    parts: &Parts,
+    state: &AppState,
+) -> Result<(SessionUser, Vec<session::UserPositionRow>), ApiError> {
+    authenticate_with_access(parts, state)
+        .await
+        .map(|(user, positions, _)| (user, positions))
+}
+
+/// Who is asking and what their positions open. A request outside the
+/// sections of a sectioned position is refused here, before any handler.
+async fn authenticate_with_access(
+    parts: &Parts,
+    state: &AppState,
+) -> Result<(SessionUser, Vec<session::UserPositionRow>, Access), ApiError> {
+    let (user, positions) = identify(parts, state).await?;
+    let access = sections::user_access(&state.pool, &user, &positions).await?;
+    if !access.allows(parts.uri.path()) {
+        return Err(sections::outside_sections());
+    }
+    Ok((user, positions, access))
+}
+
+/// [`authenticate_with_access`]'s section check for the phone app's device
+/// token (`device::DeviceUser`, `device::PhoneCaller`).
+async fn check_sections(
+    parts: &Parts,
+    state: &AppState,
+    user: &SessionUser,
+) -> Result<(), ApiError> {
+    let positions = user_positions(&state.pool, user.id).await?;
+    if sections::user_access(&state.pool, user, &positions)
+        .await?
+        .allows(parts.uri.path())
+    {
+        Ok(())
+    } else {
+        Err(sections::outside_sections())
+    }
 }
 
 /// The CRM routes the Granite Phone app also calls with its device token.
@@ -209,7 +258,7 @@ fn device_route(method: &Method, path: &str) -> bool {
         || template_write(method, path)
 }
 
-async fn authenticate_with_positions(
+async fn identify(
     parts: &Parts,
     state: &AppState,
 ) -> Result<(SessionUser, Vec<session::UserPositionRow>), ApiError> {
@@ -257,8 +306,8 @@ impl FromRequestParts<AppState> for EmployeeUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let user = authenticate(parts, state).await?;
-        if user.is_employee || user.is_admin || user.is_superuser {
+        let (user, _, access) = authenticate_with_access(parts, state).await?;
+        if user.is_employee || user.is_admin || user.is_superuser || access != Access::Full {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)
@@ -277,11 +326,12 @@ impl FromRequestParts<AppState> for ShopOrEmployeeUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        let (user, positions, access) = authenticate_with_access(parts, state).await?;
         let shop = positions.iter().any(|row| {
             row.company_id == user.company_id && SHOP_POSITIONS.contains(&row.position_id)
         });
-        if user.is_employee || user.is_admin || user.is_superuser || shop {
+        let sectioned = access != Access::Full;
+        if user.is_employee || user.is_admin || user.is_superuser || shop || sectioned {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)
@@ -317,8 +367,8 @@ impl FromRequestParts<AppState> for AdminUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let user = authenticate(parts, state).await?;
-        if user.is_admin || user.is_superuser {
+        let (user, _, access) = authenticate_with_access(parts, state).await?;
+        if user.is_admin || user.is_superuser || access.allows_admin(parts.uri.path()) {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)

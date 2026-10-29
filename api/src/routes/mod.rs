@@ -92,6 +92,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(billing::router())
         .merge(billing_account::router())
         .merge(integrations::router())
+        .merge(position_sections::router())
         .merge(superuser_companies::router())
         .merge(manual_feedback_reviews::router())
         .merge(signature_requests::router())
