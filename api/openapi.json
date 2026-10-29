@@ -46596,6 +46596,88 @@
         ]
       }
     },
+    "/v1/company/auto-sale": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch the sale form on a win",
+        "description": "Admin › Automations. When on, marking a deal won or a quote sold opens\nthe sale form, filled from the quote (`auto_sale` in\n`GET /v1/company/features`).",
+        "operationId": "save_company_auto_sale",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoSaleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/company/api-token-email": {
       "post": {
         "tags": [
@@ -61837,6 +61919,20 @@
           }
         }
       },
+      "AutoSaleInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/auto-sale`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: marking a deal won or a quote sold opens the sale form."
+          }
+        },
+        "additionalProperties": false
+      },
       "AutocompleteRequest": {
         "allOf": [
           {
@@ -64895,7 +64991,8 @@
           "cloudtalk",
           "ringcentral",
           "telnyx",
-          "telnyx_sms"
+          "telnyx_sms",
+          "auto_sale"
         ],
         "properties": {
           "quickbooks_enabled": {
@@ -64937,6 +65034,10 @@
           "telnyx_sms": {
             "type": "boolean",
             "description": "Texting through Telnyx is on: Granite Phone is on and the company's\nTelnyx messaging profile is set. Users with a Telnyx line text through\nit (`/v1/sms/telnyx/...`)."
+          },
+          "auto_sale": {
+            "type": "boolean",
+            "description": "Marking a deal won or a quote sold opens the sale form, filled from\nthe quote (Admin › Automations, `PUT /v1/company/auto-sale`)."
           }
         }
       },
@@ -67348,7 +67449,8 @@
         "type": "object",
         "description": "A sale to the customer, as the customer view lists it.",
         "required": [
-          "id"
+          "id",
+          "cancelled"
         ],
         "properties": {
           "id": {
@@ -67377,6 +67479,18 @@
               "null"
             ],
             "description": "Seller's name."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The deal the sale is part of."
+          },
+          "cancelled": {
+            "type": "boolean",
+            "description": "Unsold (the slabs went back to stock)."
           }
         }
       },

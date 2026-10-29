@@ -37,4 +37,7 @@ pub struct CompanyFeatures {
     /// Telnyx messaging profile is set. Users with a Telnyx line text through
     /// it (`/v1/sms/telnyx/...`).
     pub telnyx_sms: bool,
+    /// Marking a deal won or a quote sold opens the sale form, filled from
+    /// the quote (Admin › Automations, `PUT /v1/company/auto-sale`).
+    pub auto_sale: bool,
 }
