@@ -8,11 +8,14 @@
 //!   before their appointments (`notifications`)
 //! - `/v1/schedule/settings` → the day the weeks start on and 12- or 24-hour
 //!   times, the company's and each user's (`settings`)
+//! - `/v1/schedule/time-rules`, `job-time`, `auto-plan` → how long jobs take
+//!   from their sales, and proposed times for the waiting ones (`job_time`)
 //!
 //! Replaces the Remix `api.schedule-day-map` and `api.schedule-optimize-route`.
 
 pub mod activity;
 pub mod board;
+pub mod job_time;
 pub mod notifications;
 pub mod route;
 pub mod settings;
@@ -48,6 +51,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(board::set_color))
         .routes(routes!(settings::settings, settings::set_settings))
         .routes(routes!(settings::set_my_settings))
+        .routes(routes!(job_time::time_rules, job_time::set_time_rules))
+        .routes(routes!(job_time::job_time_for))
+        .routes(routes!(job_time::auto_plan))
         .routes(routes!(notifications::list))
         .routes(routes!(notifications::create_template))
         .routes(routes!(
