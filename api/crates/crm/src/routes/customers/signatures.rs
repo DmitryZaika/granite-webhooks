@@ -195,6 +195,35 @@ pub async fn refresh(
     Ok(())
 }
 
+/// What [`view_url`] needs of a signature request.
+pub struct SignedFile<'a> {
+    pub id: i64,
+    pub customer_id: i32,
+    pub provider: &'a str,
+    pub status: &'a str,
+    pub provider_document_id: Option<&'a str>,
+    pub file_url: &'a str,
+}
+
+/// Where to open a signature request's document: the native document or the
+/// signed `SignWell` PDF (API paths), else the original file's URL.
+pub async fn view_url(state: &AppState, file: SignedFile<'_>) -> String {
+    if file.provider == "native" {
+        format!(
+            "/v1/signatures/{}/document?customer_id={}",
+            file.id, file.customer_id
+        )
+    } else if file.status == "signed" && file.provider_document_id.is_some_and(|id| !id.is_empty())
+    {
+        format!("/v1/signature-requests/{}/signed-pdf", file.id)
+    } else {
+        state
+            .storage
+            .readable_url(file.file_url, Some("application/pdf"))
+            .await
+    }
+}
+
 /// List a customer's signature requests
 ///
 /// Documents sent to the customer for e-signature, newest first. Open
@@ -240,24 +269,18 @@ pub async fn signature_requests(
     .await?;
     let mut requests = Vec::with_capacity(rows.len());
     for row in rows {
-        let view_url = if row.provider == "native" {
-            format!(
-                "/v1/signatures/{}/document?customer_id={customer_id}",
-                row.id
-            )
-        } else if row.status == "signed"
-            && row
-                .provider_document_id
-                .as_deref()
-                .is_some_and(|id| !id.is_empty())
-        {
-            format!("/v1/signature-requests/{}/signed-pdf", row.id)
-        } else {
-            state
-                .storage
-                .readable_url(&row.file_url, Some("application/pdf"))
-                .await
-        };
+        let view_url = view_url(
+            &state,
+            SignedFile {
+                id: row.id,
+                customer_id,
+                provider: &row.provider,
+                status: &row.status,
+                provider_document_id: row.provider_document_id.as_deref(),
+                file_url: &row.file_url,
+            },
+        )
+        .await;
         requests.push(SignatureRequest {
             id: row.id,
             filename: row.filename,

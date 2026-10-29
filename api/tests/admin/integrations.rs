@@ -623,3 +623,39 @@ async fn ringcentral_connect_needs_the_app(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+#[test_db::test(seed)]
+async fn managers_switch_the_sale_form_on_a_win(pool: MySqlPool) {
+    let Setup { server, .. } = setup(&pool, false, false).await;
+    let auto_sale = || async {
+        let on: bool = sqlx::query_scalar("SELECT auto_sale <> 0 FROM company WHERE id = 100")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        on
+    };
+    // Off by default; a rep and a non-manager admin may not switch it.
+    assert!(!auto_sale().await);
+    for session in [sessions::REP, sessions::ADMIN] {
+        server
+            .put("/v1/company/auto-sale")
+            .with_session(session)
+            .json(&json!({ "enabled": true }))
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+    admin_manages(&pool).await;
+    server
+        .put("/v1/company/auto-sale")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "enabled": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(auto_sale().await);
+    let features: Value = server
+        .get("/v1/company/features")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(features["auto_sale"], true);
+}
