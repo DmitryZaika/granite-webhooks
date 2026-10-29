@@ -21,6 +21,8 @@ use std::time::Duration;
 const HOMEOWNER: &str = "base-contracts/Contract.pdf";
 const COMMERCIAL: &str = "base-contracts/Contract_commercial.pdf";
 const MAX_ROOMS: usize = 3;
+/// Above this price (USD) the contract asks for half as the deposit, else all of it.
+pub const HALF_DEPOSIT_OVER: f64 = 1000.0;
 
 #[derive(sqlx::FromRow)]
 struct SaleRow {
@@ -249,7 +251,7 @@ fn field_values(
     };
     let full = replace_zero(non_empty(&first.total_price).as_deref().unwrap_or("0"));
     let full_number = full.trim().parse::<f64>().unwrap_or(f64::NAN);
-    let deposit = if full_number > 1000.0 {
+    let deposit = if full_number > HALF_DEPOSIT_OVER {
         (full_number * 0.5).to_string()
     } else {
         full.clone()

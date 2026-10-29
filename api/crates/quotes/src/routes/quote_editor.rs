@@ -12,6 +12,7 @@
 //! - `POST   /v1/quotes/{id}/emails`          → email the customer a link to the quote
 //! - `PATCH  /v1/quotes/{id}/emails/{email_id}` → switch an email's link off or on
 //! - `POST   /v1/quotes/{id}/portal-token`    → the customer link
+//! - `GET    /v1/quotes/{id}/view-link`       → that page to look at, for the app
 //! - `POST   /v1/quotes/{id}/prints`          → record a print
 //! - `GET|POST /v1/me/quote-email-templates`, `PUT|DELETE .../{id}` → the Email dialog's templates
 //!
@@ -29,8 +30,8 @@ use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
-    self, load_company_quote, mark_quote_sold, pricing_for_quote, quote_for_contract_file,
-    with_current_sink_models,
+    self, SaleDeal, load_company_quote, mark_quote_sold, pricing_for_quote,
+    quote_for_contract_file, with_current_sink_models,
 };
 use crate::routes::created::CreatedId;
 use crate::routes::customers::service::IMPORT_PLACEHOLDER;
@@ -65,6 +66,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(email_quote))
         .routes(routes!(set_email_link))
         .routes(routes!(portal_token))
+        .routes(routes!(view_link))
         .routes(routes!(record_print))
         .routes(routes!(my_email_templates, create_my_email_template))
         .routes(routes!(update_my_email_template, delete_my_email_template))
@@ -1862,6 +1864,13 @@ pub async fn update_prices(
 pub struct Sale {
     /// Index of the color option sold.
     pub option: i32,
+    /// The customer's deal to mark won (none: the quote's own deal, else the
+    /// customer's latest open or won one).
+    #[serde(default)]
+    pub deal_id: Option<i64>,
+    /// Make a new won deal instead of using an existing one.
+    #[serde(default)]
+    pub new_deal: bool,
 }
 
 /// What selling did.
@@ -1909,6 +1918,11 @@ pub async fn mark_sold(
         user.company_id,
         Some(input.option),
         Some(user.id),
+        match (input.new_deal, input.deal_id) {
+            (true, _) => SaleDeal::New,
+            (false, Some(deal)) => SaleDeal::Existing(deal),
+            (false, None) => SaleDeal::Auto,
+        },
     )
     .await?
     .ok_or(ApiError::NotFound)?;
@@ -2154,6 +2168,47 @@ pub async fn portal_token(
     let quote = quote_or_404(&state, id, user.company_id).await?;
     Ok(Json(PortalToken {
         token: ensure_portal_token(&state.pool, &quote).await?,
+    }))
+}
+
+/// The quote's page to look at, for the app.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QuoteViewLink {
+    /// The customer's page with `?staff=1`: no Accept & Sign, not counted as a view.
+    pub url: String,
+}
+
+/// Get a link to look at the quote
+///
+/// The page the customer gets, without Accept & Sign. A `GET` so the app's
+/// device token may ask; the customer link is made the first time, as the
+/// `POST` does.
+#[crate::openapi::path(
+    get,
+    path = "/v1/quotes/{id}/view-link",
+    operation_id = "quote_view_link",
+    tag = "quotes",
+    params(("id" = i32, Path, description = "Quote id")),
+    responses(
+        (status = 200, description = "The link", body = QuoteViewLink),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such quote", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn view_link(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<Json<QuoteViewLink>> {
+    let quote = quote_or_404(&state, id, user.company_id).await?;
+    let token = ensure_portal_token(&state.pool, &quote).await?;
+    let subdomain = company_subdomain(&state.pool, user.company_id).await?;
+    let origin = app_origin(&state.app_url, subdomain.as_deref());
+    Ok(Json(QuoteViewLink {
+        url: format!("{origin}/quote-portal/{token}?staff=1"),
     }))
 }
 

@@ -2,7 +2,7 @@
 //! auto-fix pipeline picks them up. Reporting never fails the tick.
 
 use lambda_runtime::tracing;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fmt::Display;
 use std::time::Duration;
 

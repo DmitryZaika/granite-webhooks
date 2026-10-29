@@ -12,7 +12,7 @@
 //! invoices' words ([`super::products`]).
 
 use super::instructions;
-use super::invoice::{EditableInvoice, Line, text};
+use super::invoice::{EditableInvoice, Line, rows, text};
 use super::products::Model;
 use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
@@ -27,7 +27,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::MySqlPool;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 
 /// Outcomes a rule is decided from, newest first.
@@ -210,7 +210,11 @@ pub fn line_rules(
     history
         .iter()
         .filter_map(|(shape, past)| {
-            let latest: Vec<Outcome> = past.iter().take(WINDOW).map(|p| p.outcome.clone()).collect();
+            let latest: Vec<Outcome> = past
+                .iter()
+                .take(WINDOW)
+                .map(|p| p.outcome.clone())
+                .collect();
             let always = decide(&latest).and_then(|(winner, _)| rule_of(&winner));
             let rule = match always {
                 Some(rule) => ShapeRule { rule, when: None },
@@ -369,11 +373,19 @@ fn same(a: &str, b: &str) -> bool {
 /// How a class or CC was set: not at all, to the sales rep (any of `reps`:
 /// the quote's rep, or any employee for an invoice `QuickBooks` already had),
 /// or to a value.
+///
+/// A subclass named after the rep ("Countertops:Tania") is the rep's under
+/// that parent.
 pub fn header_outcome(saved: Option<&str>, reps: &[&str]) -> Outcome {
     match saved.map(str::trim).filter(|s| !s.is_empty()) {
         None => Outcome::new("none", None),
         Some(value) if reps.iter().any(|rep| same(rep, value)) => Outcome::new("sales_rep", None),
-        Some(value) => Outcome::new("value", Some(value)),
+        Some(value) => match value.rsplit_once(':') {
+            Some((parent, leaf)) if reps.iter().any(|rep| same(rep, leaf)) => {
+                Outcome::new("sales_rep", Some(parent.trim()))
+            }
+            _ => Outcome::new("value", Some(value)),
+        },
     }
 }
 
@@ -382,7 +394,12 @@ pub fn header_outcome(saved: Option<&str>, reps: &[&str]) -> Outcome {
 pub fn header_value(rule: Option<&Outcome>, rep: Option<&str>) -> Option<String> {
     let rule = rule?;
     match rule.outcome.as_str() {
-        "sales_rep" => rep.map(str::to_string),
+        "sales_rep" => rep.map(|rep| {
+            rule.value.as_ref().map_or_else(
+                || rep.to_string(),
+                |parent| format!("{parent}:{}", rep.trim()),
+            )
+        }),
         "value" => rule.value.clone(),
         _ => None,
     }
@@ -451,6 +468,103 @@ struct Scan {
     cc: Vec<Seen>,
     item: Vec<Seen>,
     classes: Vec<String>,
+    /// What each invoice filled in (newest first); none in a scan kept
+    /// before fields were read.
+    #[serde(default)]
+    fields: Option<Vec<Filled>>,
+    /// Classes were read from lines too.
+    #[serde(default)]
+    line_classes: bool,
+}
+
+/// What an invoice filled in besides its customer, lines, dates and amounts:
+/// each custom field by its name, every other field by its `QuickBooks` key.
+/// Every company fills different ones, so all are kept.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct Filled {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) custom: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) other: BTreeMap<String, String>,
+}
+
+/// Invoice keys `QuickBooks` fills itself, or that a draft always sets.
+const NOT_FILLED: &[&str] = &[
+    "Id",
+    "SyncToken",
+    "MetaData",
+    "domain",
+    "sparse",
+    "Line",
+    "CustomField",
+    "CustomerRef",
+    "DocNumber",
+    "TxnDate",
+    "DueDate",
+    "TotalAmt",
+    "Balance",
+    "HomeTotalAmt",
+    "HomeBalance",
+    "LinkedTxn",
+    "TxnTaxDetail",
+    "CurrencyRef",
+    "ExchangeRate",
+    "EmailStatus",
+    "PrintStatus",
+    "InvoiceLink",
+    "DeliveryInfo",
+];
+/// Longest value kept, in characters.
+const FILLED_CHARS: usize = 200;
+
+/// A field's value as text; none when empty or false.
+fn filled_text(value: &Value) -> Option<String> {
+    let text = match value {
+        Value::String(text) => text.trim().to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(true) => "Yes".into(),
+        Value::Array(list) => list
+            .iter()
+            .filter_map(filled_text)
+            .collect::<Vec<_>>()
+            .join("; "),
+        Value::Object(fields) => ["name", "Address", "value"]
+            .iter()
+            .find_map(|key| fields.get(*key).and_then(filled_text))
+            .unwrap_or_else(|| {
+                fields
+                    .iter()
+                    .filter(|(key, _)| !matches!(key.as_str(), "Id" | "Lat" | "Long"))
+                    .filter_map(|(_, value)| filled_text(value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }),
+        _ => return None,
+    };
+    (!text.is_empty()).then(|| text.chars().take(FILLED_CHARS).collect())
+}
+
+/// What a `QuickBooks` invoice filled in.
+pub(super) fn filled(invoice: &Value) -> Filled {
+    let custom = rows(&invoice["CustomField"])
+        .iter()
+        .filter_map(|field| {
+            let name = text(&field["Name"])
+                .or_else(|| text(&field["DefinitionId"]).map(|id| format!("Custom field {id}")))?;
+            let value = ["StringValue", "NumberValue", "DateValue", "BooleanValue"]
+                .iter()
+                .find_map(|key| filled_text(&field[*key]))?;
+            Some((name, value))
+        })
+        .collect();
+    let other = invoice
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| !NOT_FILLED.contains(&key.as_str()))
+        .filter_map(|(key, value)| Some((key.clone(), filled_text(value)?)))
+        .collect();
+    Filled { custom, other }
 }
 
 fn seen(outcome: Outcome) -> Seen {
@@ -492,6 +606,17 @@ fn first_item(invoice: &Value) -> Option<Seen> {
     })
 }
 
+/// An invoice's class: its own, or its first priced line's for a company
+/// that sets classes per line.
+fn invoice_class(invoice: &Value) -> Option<String> {
+    text(&invoice["ClassRef"]["name"]).or_else(|| {
+        rows(&invoice["Line"])
+            .iter()
+            .find(|line| line["DetailType"] == "SalesItemLineDetail")
+            .and_then(|line| text(&line["SalesItemLineDetail"]["ClassRef"]["name"]))
+    })
+}
+
 /// Words kept as one text, back as a sorted list.
 fn split_words(text: &str) -> Vec<String> {
     let mut words: Vec<String> = text.split_whitespace().map(str::to_string).collect();
@@ -509,7 +634,7 @@ async fn fresh_scan(state: &AppState, company_id: i32) -> Option<Scan> {
     let access = state.qbo.access(&state.pool, company_id).await.ok()?;
     let invoices = match state
         .qbo
-        .query(
+        .query_with_custom_fields(
             &access,
             &format!("select * from Invoice ORDERBY MetaData.CreateTime DESC MAXRESULTS {SCANNED}"),
             "Invoice",
@@ -548,12 +673,7 @@ async fn fresh_scan(state: &AppState, company_id: i32) -> Option<Scan> {
     let scan = Scan {
         class: invoices
             .iter()
-            .map(|i| {
-                seen(header_outcome(
-                    text(&i["ClassRef"]["name"]).as_deref(),
-                    &names,
-                ))
-            })
+            .map(|i| seen(header_outcome(invoice_class(i).as_deref(), &names)))
             .collect(),
         cc: invoices
             .iter()
@@ -565,6 +685,8 @@ async fn fresh_scan(state: &AppState, company_id: i32) -> Option<Scan> {
             })
             .collect(),
         item: invoices.iter().filter_map(first_item).collect(),
+        fields: Some(invoices.iter().map(filled).collect()),
+        line_classes: true,
         classes: classes
             .iter()
             .filter_map(|c| text(&c["FullyQualifiedName"]).or_else(|| text(&c["Name"])))
@@ -595,10 +717,12 @@ async fn scan(state: &AppState, company_id: i32) -> sqlx::Result<Option<Scan>> {
     .bind(company_id)
     .fetch_optional(&state.pool)
     .await?;
-    // A scan kept before invoices' words were read is read again.
+    // A scan kept before invoices' words, fields or line classes were read
+    // is read again.
     if let Some(scan) = kept
         .and_then(|json| serde_json::from_str::<Scan>(&json).ok())
         .filter(|scan| scan.item.is_empty() || scan.item.iter().any(|seen| !seen.words.is_empty()))
+        .filter(|scan| scan.fields.is_some() && scan.line_classes)
     {
         return Ok(Some(scan));
     }
@@ -691,12 +815,7 @@ async fn item_history(
 
 /// A header field's outcomes on invoices made here, newest first, then the
 /// scanned ones.
-async fn header_history(
-    pool: &MySqlPool,
-    company_id: i32,
-    field: &str,
-    scanned: &[Seen],
-) -> sqlx::Result<Vec<Seen>> {
+async fn header_history(pool: &MySqlPool, company_id: i32, field: &str) -> sqlx::Result<Vec<Seen>> {
     let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT outcome, saved_value, draft_text FROM qbo_invoice_draft_outcomes
           WHERE company_id = ? AND field = ? ORDER BY id DESC LIMIT ?",
@@ -715,13 +834,43 @@ async fn header_history(
             words: Vec::new(),
             pair: false,
         })
-        .chain(scanned.iter().cloned())
         .collect())
 }
 
 fn decided(history: &[Seen]) -> Option<Outcome> {
     let outcomes: Vec<Outcome> = history.iter().map(Seen::outcome).collect();
     decide(&outcomes).map(|(winner, _)| winner)
+}
+
+/// A class or CC from the invoices made here (newest first) followed by the
+/// scanned ones; failing a rule, what at least 2 of 3 scanned invoices did,
+/// unless the newest made here did otherwise (one odd invoice doesn't undo
+/// what the company always does).
+fn decided_header(made: &[Seen], scanned: &[Seen]) -> Option<Outcome> {
+    let history: Vec<Seen> = made.iter().chain(scanned).cloned().collect();
+    decided(&history).or_else(|| {
+        let usual = usual(scanned)?;
+        made.iter()
+            .take(2)
+            .all(|seen| seen.outcome() == usual)
+            .then_some(usual)
+    })
+}
+
+/// What at least 2 of 3 of the outcomes did (at least [`MIN_SEEN`] of them).
+fn usual(seen: &[Seen]) -> Option<Outcome> {
+    let mut counts: Vec<(Outcome, usize)> = Vec::new();
+    for outcome in seen.iter().map(Seen::outcome) {
+        match counts.iter_mut().find(|(known, _)| *known == outcome) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((outcome, 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .filter(|(_, count)| *count >= MIN_SEEN && count * 3 >= seen.len() * 2)
+        .map(|(outcome, _)| outcome)
 }
 
 /// Body of `POST /v1/quotes/{id}/invoice-draft`.
@@ -783,7 +932,12 @@ pub async fn invoice_draft(
         .ok_or(ApiError::NotFound)?;
     let (history, common) = line_history(&state.pool, company_id).await?;
     let rules = line_rules(&history, &common);
-    let draft_words = words(input.lines.iter().filter_map(|line| line.description.as_deref()));
+    let draft_words = words(
+        input
+            .lines
+            .iter()
+            .filter_map(|line| line.description.as_deref()),
+    );
     let texts: Vec<String> = input
         .lines
         .iter()
@@ -794,12 +948,20 @@ pub async fn invoice_draft(
     let told = instructions::holding(&told, &texts);
     let scan = scan(&state, company_id).await?.unwrap_or_default();
     let class_name = header_value(
-        decided(&header_history(&state.pool, company_id, "class", &scan.class).await?).as_ref(),
+        decided_header(
+            &header_history(&state.pool, company_id, "class").await?,
+            &scan.class,
+        )
+        .as_ref(),
         rep.name.as_deref(),
     )
     .filter(|name| scan.classes.is_empty() || scan.classes.iter().any(|c| same(c, name)));
     let bill_email_cc = header_value(
-        decided(&header_history(&state.pool, company_id, "cc", &scan.cc).await?).as_ref(),
+        decided_header(
+            &header_history(&state.pool, company_id, "cc").await?,
+            &scan.cc,
+        )
+        .as_ref(),
         rep.email.as_deref(),
     );
     let class_name = instructions::class(&told).or(class_name);
@@ -970,6 +1132,48 @@ mod tests {
 
     fn o(outcome: &str, value: Option<&str>) -> Outcome {
         Outcome::new(outcome, value)
+    }
+
+    #[test]
+    fn a_scan_keeps_every_field_an_invoice_filled() {
+        let invoice = serde_json::json!({
+            "Id": "9", "SyncToken": "2", "DocNumber": "1001", "TxnDate": "2026-10-01",
+            "CustomerRef": { "value": "42", "name": "Alice" }, "TotalAmt": 120,
+            "Line": [{ "DetailType": "DescriptionOnly", "Description": "Template" }],
+            "CustomField": [
+                { "DefinitionId": "1", "Name": "Room & Color", "Type": "StringType", "StringValue": "Kitchen - Calacatta" },
+                { "DefinitionId": "2", "Name": "Sink & Stove", "Type": "StringType", "StringValue": " " },
+                { "DefinitionId": "3", "Type": "StringType", "StringValue": "Eased" },
+            ],
+            "ClassRef": { "value": "1", "name": "Rita" },
+            "BillEmailCc": { "Address": "office@example.com" },
+            "ShipAddr": { "Id": "7", "Line1": "1 Main", "City": "Carmel", "Lat": "39.9" },
+            "SalesTermRef": { "value": "3" },
+            "AllowOnlineACHPayment": true,
+            "ApplyTaxAfterDiscount": false,
+            "PrivateNote": "",
+        });
+        let fields = filled(&invoice);
+        let pairs =
+            |map: BTreeMap<String, String>| -> Vec<(String, String)> { map.into_iter().collect() };
+        let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(
+            pairs(fields.custom),
+            [
+                pair("Custom field 3", "Eased"),
+                pair("Room & Color", "Kitchen - Calacatta")
+            ]
+        );
+        assert_eq!(
+            pairs(fields.other),
+            [
+                pair("AllowOnlineACHPayment", "Yes"),
+                pair("BillEmailCc", "office@example.com"),
+                pair("ClassRef", "Rita"),
+                pair("SalesTermRef", "3"),
+                pair("ShipAddr", "1 Main, Carmel"),
+            ]
+        );
     }
 
     #[test]
@@ -1144,12 +1348,7 @@ mod tests {
                 }),
             }
         );
-        let draft = |extra: &str| {
-            vec![
-                text("a", "40 sq ft Fabrication"),
-                text("b", extra),
-            ]
-        };
+        let draft = |extra: &str| vec![text("a", "40 sq ft Fabrication"), text("b", extra)];
         let with = draft("10 Cabinets");
         let with_words = words(with.iter().filter_map(|l| l.description.as_deref()));
         let (kept_lines, removed_lines) = apply(with, &rules, &with_words);
@@ -1187,7 +1386,10 @@ mod tests {
         );
         past_outcomes.insert(0, past(&kept, &COUNTERS));
         past_outcomes.insert(0, past(&kept, &COUNTERS));
-        let rules = line_rules(&HashMap::from([(installation.clone(), past_outcomes)]), &common);
+        let rules = line_rules(
+            &HashMap::from([(installation.clone(), past_outcomes)]),
+            &common,
+        );
         assert_eq!(rules.get(&installation), None);
     }
 
@@ -1244,5 +1446,48 @@ mod tests {
         );
         assert_eq!(header_value(Some(&o("none", None)), Some("Dema")), None);
         assert_eq!(header_value(None, Some("Dema")), None);
+        assert_eq!(
+            header_outcome(Some("Countertops:Tania"), &["Dema", "Tania"]),
+            o("sales_rep", Some("Countertops"))
+        );
+        assert_eq!(
+            header_outcome(Some("Cabinets:Tania/Cabinets"), &["Tania"]),
+            o("value", Some("Cabinets:Tania/Cabinets"))
+        );
+        assert_eq!(
+            header_value(Some(&o("sales_rep", Some("Countertops"))), Some("Kyle")).as_deref(),
+            Some("Countertops:Kyle")
+        );
+    }
+
+    #[test]
+    fn a_class_set_per_line_is_the_invoices() {
+        let invoice = serde_json::json!({ "Line": [
+            { "DetailType": "DescriptionOnly", "Description": "Template" },
+            { "DetailType": "SalesItemLineDetail", "SalesItemLineDetail": { "ClassRef": { "value": "5", "name": "Countertops:Tania" } } },
+        ] });
+        assert_eq!(
+            invoice_class(&invoice).as_deref(),
+            Some("Countertops:Tania")
+        );
+        assert_eq!(invoice_class(&serde_json::json!({ "Line": [] })), None);
+    }
+
+    #[test]
+    fn what_scanned_invoices_usually_do_holds_until_invoices_made_here_differ() {
+        let rep = || seen(o("sales_rep", None));
+        let gmail = || seen(o("value", Some("masha@gmail.test")));
+        let mut scanned = vec![gmail()];
+        scanned.extend((0..7).map(|_| rep()));
+        scanned.extend([gmail(), seen(o("none", None))]);
+        assert_eq!(decided(&scanned), None);
+        assert_eq!(decided_header(&[], &scanned), Some(o("sales_rep", None)));
+        assert_eq!(
+            decided_header(&[rep()], &scanned),
+            Some(o("sales_rep", None))
+        );
+        assert_eq!(decided_header(&[seen(o("none", None))], &scanned), None);
+        let mixed = [rep(), rep(), gmail(), gmail(), seen(o("none", None))];
+        assert_eq!(decided_header(&[], &mixed), None);
     }
 }

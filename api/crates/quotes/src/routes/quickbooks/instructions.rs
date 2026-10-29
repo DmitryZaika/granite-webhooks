@@ -40,19 +40,46 @@ const LINE_EXAMPLES: u32 = 60;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
     /// The priced lines get this product.
-    Product { item_id: String, item_name: String },
+    Product {
+        /// QuickBooks item id.
+        item_id: String,
+        /// Its name.
+        item_name: String,
+    },
     /// The priced lines never get this product (another one is learned).
-    AvoidProduct { item_id: String, item_name: String },
+    AvoidProduct {
+        /// QuickBooks item id.
+        item_id: String,
+        /// Its name.
+        item_name: String,
+    },
     /// Text lines with the phrase are left out (the editor offers them back).
-    Hide { line: String },
+    Hide {
+        /// The phrase.
+        line: String,
+    },
     /// The phrase in a line becomes `to`.
-    Rename { line: String, to: String },
+    Rename {
+        /// The phrase.
+        line: String,
+        /// What it becomes.
+        to: String,
+    },
     /// A text line added at the end.
-    AddLine { text: String },
+    AddLine {
+        /// The line.
+        text: String,
+    },
     /// The invoice's class.
-    Class { name: String },
+    Class {
+        /// The QuickBooks class name.
+        name: String,
+    },
     /// The invoice's CC.
-    Cc { email: String },
+    Cc {
+        /// The email address.
+        email: String,
+    },
 }
 
 /// One rule the AI made of the instructions.
@@ -149,12 +176,18 @@ fn has_phrase(texts: &[String], phrase: &str) -> bool {
 }
 
 /// The rules that hold on a quote with these line texts, in order.
-pub(super) fn holding<'a>(rules: &'a [InstructionRule], texts: &[String]) -> Vec<&'a InstructionRule> {
+pub(super) fn holding<'a>(
+    rules: &'a [InstructionRule],
+    texts: &[String],
+) -> Vec<&'a InstructionRule> {
     rules
         .iter()
         .filter(|rule| {
             rule.when_has.iter().all(|phrase| has_phrase(texts, phrase))
-                && !rule.when_lacks.iter().any(|phrase| has_phrase(texts, phrase))
+                && !rule
+                    .when_lacks
+                    .iter()
+                    .any(|phrase| has_phrase(texts, phrase))
         })
         .collect()
 }
@@ -197,7 +230,11 @@ pub(super) fn cc(holding: &[&InstructionRule]) -> Option<String> {
 
 /// The holding rules' line changes: phrases renamed, text lines left out
 /// (into `removed`), text lines added.
-pub(super) fn apply_lines(holding: &[&InstructionRule], lines: &mut Vec<Line>, removed: &mut Vec<Line>) {
+pub(super) fn apply_lines(
+    holding: &[&InstructionRule],
+    lines: &mut Vec<Line>,
+    removed: &mut Vec<Line>,
+) {
     for rule in holding {
         match &rule.action {
             Action::Rename { line: phrase, to } => {
@@ -223,7 +260,10 @@ pub(super) fn apply_lines(holding: &[&InstructionRule], lines: &mut Vec<Line>, r
                 let (hidden, kept): (Vec<Line>, Vec<Line>) =
                     std::mem::take(lines).into_iter().partition(|line| {
                         line.detail_type == "DescriptionOnly"
-                            && line.description.as_deref().is_some_and(|text| re.is_match(text))
+                            && line
+                                .description
+                                .as_deref()
+                                .is_some_and(|text| re.is_match(text))
                     });
                 *lines = kept;
                 removed.extend(hidden);
@@ -249,8 +289,13 @@ pub(super) fn apply_lines(holding: &[&InstructionRule], lines: &mut Vec<Line>, r
 }
 
 fn clean_phrase(value: &Value) -> Option<String> {
-    let phrase = value.as_str()?.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!phrase.is_empty() && phrase.chars().count() <= MAX_PHRASE_CHARS).then(|| phrase.to_lowercase())
+    let phrase = value
+        .as_str()?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!phrase.is_empty() && phrase.chars().count() <= MAX_PHRASE_CHARS)
+        .then(|| phrase.to_lowercase())
 }
 
 fn phrases(value: &Value) -> Vec<String> {
@@ -270,10 +315,19 @@ fn text_of(value: &Value, max: usize) -> Option<String> {
 
 /// The rules in the AI's reply, checked against the company's products and
 /// classes; what fails a check is said in `not_understood`.
-pub(super) fn compile(reply: &Value, items: &[QboItem], classes: &[String]) -> (Vec<InstructionRule>, Vec<String>) {
+pub(super) fn compile(
+    reply: &Value,
+    items: &[QboItem],
+    classes: &[String],
+) -> (Vec<InstructionRule>, Vec<String>) {
     let mut not_understood: Vec<String> = reply["not_understood"]
         .as_array()
-        .map(|list| list.iter().filter_map(|v| text_of(v, 300)).take(10).collect())
+        .map(|list| {
+            list.iter()
+                .filter_map(|v| text_of(v, 300))
+                .take(10)
+                .collect()
+        })
         .unwrap_or_default();
     let item = |name: &str| {
         items
@@ -281,7 +335,12 @@ pub(super) fn compile(reply: &Value, items: &[QboItem], classes: &[String]) -> (
             .find(|item| item.name.trim().eq_ignore_ascii_case(name.trim()))
     };
     let mut rules = Vec::new();
-    for raw in reply["rules"].as_array().into_iter().flatten().take(MAX_RULES) {
+    for raw in reply["rules"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_RULES)
+    {
         let action = &raw["action"];
         let named = |key: &str| action[key].as_str().unwrap_or_default().trim().to_string();
         let action = match action["type"].as_str().unwrap_or_default() {
@@ -312,8 +371,13 @@ pub(super) fn compile(reply: &Value, items: &[QboItem], classes: &[String]) -> (
             },
             "class" => {
                 let name = named("class");
-                match classes.iter().find(|class| class.eq_ignore_ascii_case(&name)) {
-                    Some(class) => Action::Class { name: class.clone() },
+                match classes
+                    .iter()
+                    .find(|class| class.eq_ignore_ascii_case(&name))
+                {
+                    Some(class) => Action::Class {
+                        name: class.clone(),
+                    },
                     None => {
                         not_understood.push(format!("QuickBooks has no class named “{name}”."));
                         continue;
@@ -587,7 +651,10 @@ mod tests {
         let (mut lines, mut removed) = (counters, Vec::new());
         apply_lines(&holding_rules, &mut lines, &mut removed);
         assert!(removed.is_empty());
-        assert_eq!(lines[1].description.as_deref(), Some("73.3 sq ft Fabrication"));
+        assert_eq!(
+            lines[1].description.as_deref(),
+            Some("73.3 sq ft Fabrication")
+        );
     }
 
     #[test]
@@ -596,7 +663,9 @@ mod tests {
             InstructionRule {
                 when_has: vec![],
                 when_lacks: vec![],
-                action: Action::Hide { line: "kitchen".into() },
+                action: Action::Hide {
+                    line: "kitchen".into(),
+                },
             },
             InstructionRule {
                 when_has: vec![],

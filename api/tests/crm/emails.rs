@@ -230,7 +230,7 @@ async fn a_thread_with_its_customer_messages_and_participants(pool: MySqlPool) {
         thread["messages"][2]["attachments"],
         json!([{ "id": 8810, "email_id": 8802, "content_type": "image", "content_subtype": "png",
                  "filename": "sketch.png", "url": "https://example.test/sketch.png",
-                 "signed_url": null, "signature_status": null }])
+                 "is_inline": false, "signed_url": null, "signature_status": null }])
     );
     // BCC never leaves the server.
     let participants = thread["participants"].as_array().unwrap();

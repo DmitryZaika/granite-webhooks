@@ -221,7 +221,7 @@ pub fn rollup_sql(
     let last_at = max_when("s.created_date", None);
     let last_inbound_at = max_when(
         "s.created_date",
-        Some("s.direction = 'inbound' AND s.agent IS NULL AND s.sender10 = s.phone_digits"),
+        Some("s.direction = 'inbound' AND s.sender10 = s.phone_digits"),
     );
     let last_customer_key = max_when(
         &key,
@@ -229,7 +229,9 @@ pub fn rollup_sql(
     );
     let last_non_plain_key = max_when(
         &key,
-        Some("(s.direction = 'outbound' OR (s.direction = 'inbound' AND s.agent IS NOT NULL))"),
+        Some(
+            "(s.direction = 'outbound' OR (s.direction = 'inbound' AND s.agent IS NOT NULL AND s.sender10 <> s.phone_digits))",
+        ),
     );
     let (index_hint, having) = if search.is_active() {
         ("", " HAVING message_count > 0")
@@ -246,7 +248,7 @@ pub fn rollup_sql(
                 {last_non_plain_key} AS last_non_plain_key,
                 MAX(CASE
                       WHEN s.direction = 'outbound' AND s.status IN ('sent', 'pending') THEN s.created_date
-                      WHEN s.direction = 'inbound' AND s.agent IS NOT NULL THEN s.created_date
+                      WHEN s.direction = 'inbound' AND s.agent IS NOT NULL AND s.sender10 <> s.phone_digits THEN s.created_date
                     END) AS last_rep_at
            FROM {sms} s{index_hint}
           WHERE {row_filter}
@@ -279,7 +281,7 @@ pub fn rollup_sql(
                   ELSE (SELECT COUNT(*) FROM {sms} u
                          WHERE u.company_id = ? AND u.is_echo = 0
                            AND u.phone_digits = a.phone_digits
-                           AND u.direction = 'inbound' AND u.agent IS NULL
+                           AND u.direction = 'inbound'
                            AND u.sender10 = u.phone_digits
                            AND u.created_date > GREATEST(COALESCE(r.last_read_at, {EPOCH}),
                                                          COALESCE(a.last_rep_at, {EPOCH})){unread_search})

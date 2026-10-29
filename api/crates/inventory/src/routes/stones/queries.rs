@@ -65,7 +65,7 @@ pub async fn search_stones(
     }
     query.push(" GROUP BY stones.id");
     if !filter.include_sold_out {
-        query.push(" HAVING (slabs_available > 0 OR regular_stock = 1) AND (regular_stock = 1 OR slabs_whole_available > 0)");
+        query.push(" HAVING slabs_available > 0 OR regular_stock = 1");
     }
     query
         .push(" ORDER BY CASE WHEN stones.name LIKE ")

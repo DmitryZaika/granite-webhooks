@@ -29,12 +29,13 @@ struct TemplateRow {
     created_at: Option<DateTime<Utc>>,
     lead_list_id: Option<i32>,
     hour_delay: Option<i32>,
+    sales_rep_ids: Option<String>,
     list_name: Option<String>,
     group_name: Option<String>,
 }
 
 const TEMPLATE_COLUMNS: &str = "id, user_id, template_name, template_subject, template_body, \
-     created_at, lead_list_id, hour_delay, \
+     created_at, lead_list_id, hour_delay, CAST(sales_rep_ids AS CHAR) AS sales_rep_ids, \
      (SELECT dl.name FROM deals_list dl \
        WHERE dl.id = email_templates.lead_list_id AND dl.deleted_at IS NULL) AS list_name, \
      (SELECT gl.name FROM deals_list dl JOIN groups_list gl ON gl.id = dl.group_id AND gl.deleted_at IS NULL \
@@ -59,6 +60,7 @@ fn to_template(
         can_edit: row.user_id == Some(user.id),
         lead_list_id: row.lead_list_id,
         hour_delay: row.hour_delay,
+        sales_rep_ids: super::reps::ids_of(row.sales_rep_ids.as_deref()),
         list_name: row.list_name,
         group_name: row.group_name,
         created_at: row.created_at,
@@ -133,21 +135,25 @@ async fn editable(
     }
 }
 
-/// The checked automation of a company template: list, its group and the delay.
+/// The checked automation of a company template: list, its group, the delay
+/// and the sales reps whose deals get it (empty: every rep's).
 struct Automation {
     list: i32,
     group: i32,
     hours: i32,
+    reps: Vec<i32>,
 }
 
 /// `lead_list_id` and `hour_delay` of a company template: both or neither, a
-/// live deal list the company sees, a free (list, delay) pair.
+/// live deal list the company sees, a (list, delay) pair no other template
+/// uses for the same reps. Left-out reps are `kept_reps`.
 async fn automation(
     pool: &MySqlPool,
     company_id: i32,
     input: &EmailTemplateInput,
     company: bool,
     exclude: Option<i32>,
+    kept_reps: &[i32],
 ) -> ApiResult<Option<Automation>> {
     let bad = |message: &str| Err(ApiError::BadRequest(message.to_string()));
     let Some(list) = input.lead_list_id else {
@@ -179,23 +185,36 @@ async fn automation(
     let Some(group) = group else {
         return bad("Select a valid deal list.");
     };
-    let taken: Option<i32> = sqlx::query_scalar(
-        "SELECT id FROM email_templates
+    let reps = match &input.sales_rep_ids {
+        Some(ids) => super::reps::checked(pool, company_id, ids).await?,
+        None => kept_reps.to_vec(),
+    };
+    let others: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT CAST(sales_rep_ids AS CHAR) FROM email_templates
           WHERE company_id = ? AND user_id IS NULL AND lead_list_id = ? AND hour_delay = ?
-            AND deleted_at IS NULL AND id <> ? LIMIT 1",
+            AND deleted_at IS NULL AND id <> ?",
     )
     .bind(company_id)
     .bind(list)
     .bind(hours)
     .bind(exclude.unwrap_or(0))
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await?;
-    if taken.is_some() {
+    if others
+        .iter()
+        .any(|other| super::reps::overlap(&reps, &super::reps::ids_of(other.as_deref())))
+    {
         return Err(ApiError::Conflict(
-            "Another email template already uses this list and delay.".into(),
+            "Another email template already uses this list and delay for the same sales reps."
+                .into(),
         ));
     }
-    Ok(Some(Automation { list, group, hours }))
+    Ok(Some(Automation {
+        list,
+        group,
+        hours,
+        reps,
+    }))
 }
 
 /// Pending automatic sends of a template are called off.
@@ -365,12 +384,12 @@ pub async fn create(
     if company && !(user.is_admin || user.is_superuser) {
         return Err(ApiError::Forbidden);
     }
-    let automation = automation(&state.pool, user.company_id, &input, company, None).await?;
+    let automation = automation(&state.pool, user.company_id, &input, company, None, &[]).await?;
     let id = sqlx::query(
         "INSERT INTO email_templates
            (template_name, template_subject, template_body, company_id, user_id, created_by,
-            lead_group_id, lead_list_id, hour_delay)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            lead_group_id, lead_list_id, hour_delay, sales_rep_ids)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&clean.name)
     .bind(&clean.subject)
@@ -381,6 +400,11 @@ pub async fn create(
     .bind(automation.as_ref().map(|a| a.group))
     .bind(automation.as_ref().map(|a| a.list))
     .bind(automation.as_ref().map(|a| a.hours))
+    .bind(
+        automation
+            .as_ref()
+            .and_then(|a| super::reps::to_json(&a.reps)),
+    )
     .execute(&state.pool)
     .await?
     .last_insert_id();
@@ -426,12 +450,22 @@ pub async fn update(
     JsonBody(input): JsonBody<EmailTemplateInput>,
 ) -> ApiResult<Json<EmailTemplate>> {
     let clean = clean(&input)?;
-    let company = editable(&state.pool, &user, id).await?.user_id.is_none();
-    let automation = automation(&state.pool, user.company_id, &input, company, Some(id)).await?;
+    let existing = editable(&state.pool, &user, id).await?;
+    let company = existing.user_id.is_none();
+    let kept_reps = super::reps::ids_of(existing.sales_rep_ids.as_deref());
+    let automation = automation(
+        &state.pool,
+        user.company_id,
+        &input,
+        company,
+        Some(id),
+        &kept_reps,
+    )
+    .await?;
     let before = automation_notice::email_template(&state.pool, user.company_id, id).await;
     sqlx::query(
         "UPDATE email_templates SET template_name = ?, template_subject = ?, template_body = ?,
-                lead_group_id = ?, lead_list_id = ?, hour_delay = ?
+                lead_group_id = ?, lead_list_id = ?, hour_delay = ?, sales_rep_ids = ?
          WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(&clean.name)
@@ -440,12 +474,26 @@ pub async fn update(
     .bind(automation.as_ref().map(|a| a.group))
     .bind(automation.as_ref().map(|a| a.list))
     .bind(automation.as_ref().map(|a| a.hours))
+    .bind(
+        automation
+            .as_ref()
+            .and_then(|a| super::reps::to_json(&a.reps)),
+    )
     .bind(id)
     .bind(user.company_id)
     .execute(&state.pool)
     .await?;
-    if automation.is_none() {
-        cancel_pending(&state.pool, id, "Template deleted").await?;
+    match &automation {
+        None => cancel_pending(&state.pool, id, "Template deleted").await?,
+        Some(automation) => {
+            super::reps::cancel_for_other_reps(
+                &state.pool,
+                super::reps::Queue::Emails,
+                id,
+                &automation.reps,
+            )
+            .await?;
+        }
     }
     let after = automation_notice::email_template(&state.pool, user.company_id, id).await;
     automation_notice::notify(&state, &user, &before, &after).await;
@@ -484,10 +532,10 @@ pub async fn delete(
     editable(&state.pool, &user, id).await?;
     let before = automation_notice::email_template(&state.pool, user.company_id, id).await;
     sqlx::query(
-        // The automation goes too: (list, company, delay) is unique, deleted
-        // templates included.
+        // The automation goes too.
         "UPDATE email_templates
-            SET deleted_at = NOW(), lead_group_id = NULL, lead_list_id = NULL, hour_delay = NULL
+            SET deleted_at = NOW(), lead_group_id = NULL, lead_list_id = NULL, hour_delay = NULL,
+                sales_rep_ids = NULL
           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(id)

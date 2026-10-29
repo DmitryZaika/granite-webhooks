@@ -20,8 +20,6 @@ use std::fmt::Write as _;
 const FONT: &str = "font-family:Inter,'Helvetica Neue',Arial,sans-serif;";
 /// Longest message preview, in characters.
 const PREVIEW_CHARS: usize = 700;
-/// SES takes 50 recipients per message.
-const RECIPIENTS_PER_EMAIL: usize = 50;
 
 /// How a message reaches the customer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +35,24 @@ pub struct Drip {
     pub list: String,
     /// Minutes after the deal enters the list.
     pub minutes: i32,
+    /// Sales reps whose deals get it, by name; empty: every rep's.
+    pub reps: Vec<Rep>,
+}
+
+/// A sales rep a drip is limited to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rep {
+    pub id: i32,
+    pub name: String,
+}
+
+/// "every sales rep", or the reps' names.
+fn whose(reps: &[Rep]) -> String {
+    if reps.is_empty() {
+        return "every sales rep".to_string();
+    }
+    let names: Vec<String> = reps.iter().map(|rep| escape_html(&rep.name)).collect();
+    format!("<b>{}</b>", names.join(", "))
 }
 
 /// A company template as customers would get it.
@@ -174,9 +190,14 @@ fn template_notice(
     let message = message_card(
         channel,
         &format!(
-            "{} after a deal enters <b>{}</b>",
+            "{} after a deal enters <b>{}</b>{}",
             duration(drip.minutes, true),
-            escape_html(&drip.list)
+            escape_html(&drip.list),
+            if drip.reps.is_empty() {
+                String::new()
+            } else {
+                format!(", for deals of {}", whose(&drip.reps))
+            }
         ),
         shown.subject.as_deref(),
         &shown.body,
@@ -217,6 +238,13 @@ fn template_changes(before: &Template, after: &Template) -> Vec<String> {
                 "Now sends <b>{}</b> after that (was {}).",
                 duration(now.minutes, false),
                 duration(was.minutes, false)
+            ));
+        }
+        if was.reps != now.reps {
+            changes.push(format!(
+                "Now for deals of {} (was {}).",
+                whose(&now.reps),
+                whose(&was.reps)
             ));
         }
     }
@@ -598,8 +626,10 @@ async fn load_email_template(
         Option<String>,
         Option<i32>,
         Option<i32>,
+        Option<String>,
     )> = sqlx::query_as(
-        "SELECT template_name, template_subject, template_body, lead_list_id, hour_delay
+        "SELECT template_name, template_subject, template_body, lead_list_id, hour_delay,
+                CAST(sales_rep_ids AS CHAR)
                FROM email_templates
               WHERE id = ? AND company_id = ? AND user_id IS NULL AND deleted_at IS NULL",
     )
@@ -607,7 +637,7 @@ async fn load_email_template(
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-    let Some((name, subject, body, list, hours)) = row else {
+    let Some((name, subject, body, list, hours, reps)) = row else {
         return Ok(None);
     };
     Ok(Some(Template {
@@ -615,7 +645,7 @@ async fn load_email_template(
         name: name.unwrap_or_default(),
         subject,
         body: body.unwrap_or_default(),
-        drip: drip(pool, list, hours.map(|hours| hours * 60)).await?,
+        drip: drip(pool, list, hours.map(|hours| hours * 60), reps.as_deref()).await?,
     }))
 }
 
@@ -641,15 +671,24 @@ async fn load_sms_template(
     company_id: i32,
     id: i32,
 ) -> Result<Option<Template>, sqlx::Error> {
-    let row: Option<(String, String, Option<i32>, Option<i32>, i32)> = sqlx::query_as(
-        "SELECT name, body, lead_list_id, hour_delay, minute_delay FROM cloudtalk_sms_templates
-          WHERE id = ? AND company_id = ? AND user_id IS NULL AND deleted_at IS NULL",
+    #[allow(clippy::type_complexity)]
+    let row: Option<(
+        String,
+        String,
+        Option<i32>,
+        Option<i32>,
+        i32,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT name, body, lead_list_id, hour_delay, minute_delay, CAST(sales_rep_ids AS CHAR)
+               FROM cloudtalk_sms_templates
+              WHERE id = ? AND company_id = ? AND user_id IS NULL AND deleted_at IS NULL",
     )
     .bind(id)
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-    let Some((name, body, list, hours, minutes)) = row else {
+    let Some((name, body, list, hours, minutes, reps)) = row else {
         return Ok(None);
     };
     Ok(Some(Template {
@@ -657,7 +696,13 @@ async fn load_sms_template(
         name,
         subject: None,
         body,
-        drip: drip(pool, list, hours.map(|hours| hours * 60 + minutes)).await?,
+        drip: drip(
+            pool,
+            list,
+            hours.map(|hours| hours * 60 + minutes),
+            reps.as_deref(),
+        )
+        .await?,
     }))
 }
 
@@ -665,14 +710,107 @@ async fn drip(
     pool: &MySqlPool,
     list: Option<i32>,
     minutes: Option<i32>,
+    reps: Option<&str>,
 ) -> Result<Option<Drip>, sqlx::Error> {
     match (list, minutes) {
         (Some(list), Some(minutes)) => Ok(Some(Drip {
             list: list_label(pool, list).await?,
             minutes,
+            reps: rep_names(pool, reps).await?,
         })),
         _ => Ok(None),
     }
+}
+
+/// The reps of a stored `sales_rep_ids`, by name; empty: every rep.
+async fn rep_names(pool: &MySqlPool, json: Option<&str>) -> Result<Vec<Rep>, sqlx::Error> {
+    let ids: Vec<i32> = json
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; ids.len()].join(", ");
+    let mut query = sqlx::query_as::<_, (i32, Option<String>)>(sqlx::AssertSqlSafe(format!(
+        "SELECT id, name FROM users WHERE id IN ({placeholders}) ORDER BY name, id"
+    )));
+    for id in &ids {
+        query = query.bind(id);
+    }
+    Ok(query
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|(id, name)| Rep {
+            id,
+            name: name.unwrap_or_default().trim().to_string(),
+        })
+        .collect())
+}
+
+/// Whose deals an automation reaches; `None`: no one (not a drip).
+enum Reach {
+    EveryRep,
+    Reps(Vec<i32>),
+}
+
+fn reach(snapshot: &Snapshot) -> Option<Reach> {
+    match snapshot {
+        Snapshot::Template(template) => {
+            let drip = template.as_ref()?.drip.as_ref()?;
+            Some(if drip.reps.is_empty() {
+                Reach::EveryRep
+            } else {
+                Reach::Reps(drip.reps.iter().map(|rep| rep.id).collect())
+            })
+        }
+        Snapshot::Flow(_) => Some(Reach::EveryRep),
+    }
+}
+
+/// Addresses of the reps the change touches: whose deals got the automation
+/// before or get it now.
+async fn recipients(
+    pool: &MySqlPool,
+    company_id: i32,
+    before: &Snapshot,
+    after: &Snapshot,
+) -> Result<Vec<String>, sqlx::Error> {
+    let mut ids: Vec<i32> = Vec::new();
+    for reach in [reach(before), reach(after)].into_iter().flatten() {
+        match reach {
+            Reach::EveryRep => {
+                return sqlx::query_scalar(
+                    "SELECT DISTINCT TRIM(u.email) FROM users u
+                       JOIN users_positions up
+                         ON up.user_id = u.id AND up.company_id = u.company_id AND up.position_id = ?
+                      WHERE u.company_id = ? AND u.is_deleted = 0
+                        AND u.email IS NOT NULL AND TRIM(u.email) <> ''
+                      ORDER BY 1",
+                )
+                .bind(SALES_REP_POSITION)
+                .bind(company_id)
+                .fetch_all(pool)
+                .await;
+            }
+            Reach::Reps(reps) => ids.extend(reps),
+        }
+    }
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; ids.len()].join(", ");
+    let mut query = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT DISTINCT TRIM(email) FROM users
+          WHERE company_id = ? AND is_deleted = 0 AND id IN ({placeholders})
+            AND email IS NOT NULL AND TRIM(email) <> ''
+          ORDER BY 1"
+    )))
+    .bind(company_id);
+    for id in &ids {
+        query = query.bind(id);
+    }
+    query.fetch_all(pool).await
 }
 
 /// A company flow with its steps' text; `None` for a personal or missing one.
@@ -745,26 +883,19 @@ async fn try_notify(
     let Some(notice) = compose(before, after, &editor, &branding) else {
         return Ok(());
     };
-    let recipients: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT TRIM(u.email) FROM users u
-           JOIN users_positions up
-             ON up.user_id = u.id AND up.company_id = u.company_id AND up.position_id = ?
-          WHERE u.company_id = ? AND u.is_deleted = 0
-            AND u.email IS NOT NULL AND TRIM(u.email) <> ''
-          ORDER BY 1",
-    )
-    .bind(SALES_REP_POSITION)
-    .bind(user.company_id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|err| err.to_string())?;
-    for chunk in recipients.chunks(RECIPIENTS_PER_EMAIL) {
+    let recipients = recipients(&state.pool, user.company_id, before, after)
+        .await
+        .map_err(|err| err.to_string())?;
+    // One email each: inbound mail keeps one copy per message, so a shared
+    // message would reach only one rep's inbox in the app.
+    let mut failed = Vec::new();
+    for recipient in recipients {
         let email = OutgoingEmail {
             from_name: Some(format!("{} automations", branding.company_name)),
             from_address: common::amazon::email::DEFAULT_NOREPLY_EMAIL_ADDRESS.to_string(),
-            to: Vec::new(),
+            to: vec![recipient.clone()],
             cc: Vec::new(),
-            bcc: chunk.to_vec(),
+            bcc: Vec::new(),
             subject: notice.subject.clone(),
             body: notice.html.clone(),
             signature: None,
@@ -774,13 +905,15 @@ async fn try_notify(
             attachments: Vec::new(),
             transactional: true,
         };
-        state
-            .webhooks
-            .send_email(&email)
-            .await
-            .map_err(|err| format!("{err:?}"))?;
+        if let Err(err) = state.webhooks.send_email(&email).await {
+            failed.push(format!("{recipient}: {err:?}"));
+        }
     }
-    Ok(())
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("; "))
+    }
 }
 
 #[cfg(test)]
@@ -809,6 +942,7 @@ mod tests {
         Some(Drip {
             list: "Sales › Contacted".into(),
             minutes: hours * 60,
+            reps: Vec::new(),
         })
     }
 
@@ -862,6 +996,7 @@ mod tests {
                 Some(Drip {
                     list: "Sales › Quoted".into(),
                     minutes: 0,
+                    reps: Vec::new(),
                 }),
                 "Hello",
             )),
@@ -877,6 +1012,41 @@ mod tests {
                 .contains("Now sends <b>right away</b> after that (was 2 hours).")
         );
         assert!(notice.html.contains("The message text changed"));
+    }
+
+    #[test]
+    fn limiting_a_drip_to_reps_names_them() {
+        let mut limited = contacted(2);
+        if let Some(drip) = limited.as_mut() {
+            drip.reps = vec![
+                Rep {
+                    id: 4,
+                    name: "Masha".into(),
+                },
+                Rep {
+                    id: 5,
+                    name: "Dasha".into(),
+                },
+            ];
+        }
+        let before = Some(sms(contacted(2), "Hi"));
+        let after = Some(sms(limited, "Hi"));
+        let notice = notice(before.clone(), after.clone()).unwrap();
+        assert!(
+            notice
+                .html
+                .contains("Now for deals of <b>Masha, Dasha</b> (was every sales rep).")
+        );
+        assert!(notice.html.contains(", for deals of <b>Masha, Dasha</b>"));
+        assert!(matches!(
+            reach(&Snapshot::Template(after)),
+            Some(Reach::Reps(ids)) if ids == vec![4, 5]
+        ));
+        assert!(matches!(
+            reach(&Snapshot::Template(before)),
+            Some(Reach::EveryRep)
+        ));
+        assert!(reach(&Snapshot::Template(Some(sms(None, "Hi")))).is_none());
     }
 
     #[test]

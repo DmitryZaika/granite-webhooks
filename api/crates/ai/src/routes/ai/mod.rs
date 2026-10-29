@@ -17,6 +17,8 @@
 //! - `POST /v1/ai/first-contact-email` → the first email to a new lead
 //! - `POST /v1/ai/chat` → the AI chat's answer, streamed (server-sent events)
 //! - `POST /v1/ai/crm-manual-feedback` → a thumbs-down on a CRM manual answer
+//! - `GET /v1/ai/promises`, `PATCH /v1/ai/promises/{id}` → what the rep
+//!   promised customers, and closing a promise
 //!
 //! Replaces the Remix `api.aiImprove.email` and `api.aiSummarize.callNote` routes.
 
@@ -34,11 +36,13 @@ pub mod first_contact;
 pub mod improve;
 pub mod invoice_edit;
 pub mod manual_feedback;
+pub mod promises;
 pub mod reply_context;
 pub mod signature_fields;
 
 use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
+use axum::extract::DefaultBodyLimit;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -54,12 +58,26 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(design::pictures))
         .routes(routes!(design::deals))
         .routes(routes!(design_render::stones))
-        .routes(routes!(design_render::design))
+        .merge(
+            // A kitchen photo is more than axum's default 2 MB.
+            OpenApiRouter::new()
+                .routes(routes!(design_render::design))
+                .layer(DefaultBodyLimit::max(
+                    crate::kitchen_design::MAX_DESIGN_BODY_BYTES,
+                )),
+        )
         .routes(routes!(compose::inventory_url))
         .routes(routes!(compose::autocomplete))
         .routes(routes!(compose::learn))
         .routes(routes!(first_contact::first_contact_email))
         .routes(routes!(conversation_reply::conversation_reply))
-        .routes(routes!(chat::ask))
+        .merge(
+            // A question with pictures is more than axum's default 2 MB.
+            OpenApiRouter::new()
+                .routes(routes!(chat::ask))
+                .layer(DefaultBodyLimit::max(chat::MAX_CHAT_BODY_BYTES)),
+        )
         .routes(routes!(manual_feedback::feedback))
+        .routes(routes!(promises::list))
+        .routes(routes!(promises::update))
 }

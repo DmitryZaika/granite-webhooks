@@ -7,7 +7,7 @@ use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
-use crate::routes::schedule::notifications;
+use crate::routes::schedule::{board, notifications};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -78,6 +78,16 @@ pub struct EventInput {
     #[serde(default, deserialize_with = "crate::serde_helpers::double_option")]
     #[schema(value_type = Option<i32>)]
     pub customer_id: Option<Option<i32>>,
+    /// Phone for this event only (a spouse, a homeowner on a contractor's
+    /// account), up to 50 characters; empty or null uses the customer's,
+    /// leave out to keep it. Never changes the customer.
+    #[serde(default, deserialize_with = "crate::serde_helpers::double_option")]
+    #[schema(value_type = Option<String>)]
+    pub contact_phone: Option<Option<String>>,
+    /// Email for this event only, up to 255 characters; like `contact_phone`.
+    #[serde(default, deserialize_with = "crate::serde_helpers::double_option")]
+    #[schema(value_type = Option<String>)]
+    pub contact_email: Option<Option<String>>,
     /// Link or unlink the QuickBooks invoice; leave out to keep it.
     #[serde(default)]
     pub qbo_invoice: Option<EventInvoice>,
@@ -140,13 +150,16 @@ pub struct Checked<'a> {
     pub recurrence_until: Option<NaiveDateTime>,
     pub start: NaiveDateTime,
     pub end: NaiveDateTime,
+    /// `None` keeps the saved value; `Some(None)` clears it.
+    pub contact_phone: Option<Option<&'a str>>,
+    pub contact_email: Option<Option<&'a str>>,
 }
 
 fn bad(message: &str) -> ApiError {
     ApiError::BadRequest(message.into())
 }
 
-pub fn check(input: &EventInput) -> ApiResult<Checked<'_>> {
+pub fn check<'a>(input: &'a EventInput) -> ApiResult<Checked<'a>> {
     let length = |text: &str| text.chars().count();
     if input.title.is_empty() {
         return Err(bad("Title is required"));
@@ -165,6 +178,28 @@ pub fn check(input: &EventInput) -> ApiResult<Checked<'_>> {
     let location = non_empty(input.location.as_ref());
     if location.is_some_and(|location| length(location) > 500) {
         return Err(bad("Location must be 500 characters or less"));
+    }
+    let contact = |value: &'a Option<Option<String>>| {
+        value.as_ref().map(|value| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+    };
+    let contact_phone = contact(&input.contact_phone);
+    if contact_phone
+        .flatten()
+        .is_some_and(|phone| length(phone) > 50)
+    {
+        return Err(bad("Phone must be 50 characters or less"));
+    }
+    let contact_email = contact(&input.contact_email);
+    if contact_email
+        .flatten()
+        .is_some_and(|email| length(email) > 255)
+    {
+        return Err(bad("Email must be 255 characters or less"));
     }
     let calendar_id = input
         .calendar_id
@@ -208,6 +243,8 @@ pub fn check(input: &EventInput) -> ApiResult<Checked<'_>> {
         recurrence_until,
         start,
         end,
+        contact_phone,
+        contact_email,
     })
 }
 
@@ -449,11 +486,15 @@ pub async fn create(
     let event = check(&input)?;
     check_calendar(pool, user.company_id, event.calendar_id).await?;
     let customer = check_customer(pool, user.company_id, &input).await?;
+    let assignee = match input.assigned_user_id.filter(|id| *id > 0) {
+        Some(id) => Some(id),
+        None => board::sole_template_maker(pool, event.calendar_id).await?,
+    };
     let id = sqlx::query(
         "INSERT INTO events (title, description, location, start_date, end_date, all_day,
             unscheduled, color, status, notes, created_user_id, assigned_user_id, sale_id,
-            customer_id, calendar_id, rrule, recurrence_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            customer_id, calendar_id, rrule, recurrence_until, contact_phone, contact_email)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(event.title)
     .bind(event.description)
@@ -466,12 +507,14 @@ pub async fn create(
     .bind(event.status)
     .bind(event.notes)
     .bind(user.id)
-    .bind(input.assigned_user_id.filter(|id| *id > 0))
+    .bind(assignee)
     .bind(input.sale_id.filter(|id| *id > 0))
     .bind(customer.flatten())
     .bind(event.calendar_id)
     .bind(event.rrule)
     .bind(event.recurrence_until)
+    .bind(event.contact_phone.flatten())
+    .bind(event.contact_email.flatten())
     .execute(pool)
     .await?
     .last_insert_id();
@@ -582,7 +625,8 @@ pub async fn update(
         "UPDATE events SET title = ?, description = ?, location = ?, start_date = ?, end_date = ?,
             all_day = ?, unscheduled = ?, color = ?, status = ?, notes = ?, assigned_user_id = ?,
             sale_id = ?, customer_id = IF(?, ?, customer_id), calendar_id = ?, rrule = ?,
-            recurrence_until = ?, updated_date = CURRENT_TIMESTAMP
+            recurrence_until = ?, contact_phone = IF(?, ?, contact_phone),
+            contact_email = IF(?, ?, contact_email), updated_date = CURRENT_TIMESTAMP
           WHERE id = ?",
     )
     .bind(event.title)
@@ -602,6 +646,10 @@ pub async fn update(
     .bind(event.calendar_id)
     .bind(event.rrule)
     .bind(event.recurrence_until)
+    .bind(event.contact_phone.is_some())
+    .bind(event.contact_phone.flatten())
+    .bind(event.contact_email.is_some())
+    .bind(event.contact_email.flatten())
     .bind(id)
     .execute(pool)
     .await?;

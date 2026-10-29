@@ -122,6 +122,57 @@ async fn events_are_added_edited_and_deleted(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_new_template_goes_to_the_only_template_maker(pool: MySqlPool) {
+    sqlx::raw_sql(SETUP).execute(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO calendars (id, company_id, name, color, slug) VALUES
+           (8803, 100, 'Templates', 'green', 'templates');
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+           (104, 11, 100), (105, 11, 100);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    let assignee = |body: Value| {
+        let request = server
+            .post("/v1/events")
+            .with_session(sessions::REP)
+            .json(&body);
+        let pool = pool.clone();
+        async move {
+            let res = request.await;
+            res.assert_status(StatusCode::CREATED);
+            let id = res.json::<Value>()["id"].as_i64().unwrap();
+            sqlx::query_scalar::<_, Option<i32>>("SELECT assigned_user_id FROM events WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let template = body(8803, "2026-11-02 15:00:00", "2026-11-02 16:00:00");
+    // 105 is deleted, so 104 is the only one.
+    assert_eq!(assignee(template.clone()).await, Some(104));
+    // A pick wins; other calendars get no one.
+    let mut picked = template.clone();
+    picked["assigned_user_id"] = json!(101);
+    assert_eq!(assignee(picked).await, Some(101));
+    assert_eq!(
+        assignee(body(8800, "2026-11-02 15:00:00", "2026-11-02 16:00:00")).await,
+        None
+    );
+    // Two template makers: no one is guessed.
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 11, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(assignee(template).await, None);
+}
+
+#[test_db::test(seed)]
 async fn events_link_a_customer_apart_from_their_title(pool: MySqlPool) {
     sqlx::raw_sql(SETUP).execute(&pool).await.unwrap();
     let server = server(pool.clone());
@@ -186,6 +237,73 @@ async fn events_link_a_customer_apart_from_their_title(pool: MySqlPool) {
         history(&pool, id).await,
         ["Event created", "Customer changed", "Customer removed"]
     );
+}
+
+#[test_db::test(seed)]
+async fn events_keep_their_own_phone_and_email(pool: MySqlPool) {
+    sqlx::raw_sql(SETUP).execute(&pool).await.unwrap();
+    let server = server(pool.clone());
+    let mut event = body(8801, "2026-11-02 15:00:00", "2026-11-02 16:00:00");
+    event["customer_id"] = json!(1000);
+    event["contact_phone"] = json!(" (317) 555-0199 ");
+    event["contact_email"] = json!("wife@example.com");
+    let id = server
+        .post("/v1/events")
+        .with_session(sessions::REP)
+        .json(&event)
+        .await
+        .json::<Value>()["id"]
+        .as_i64()
+        .unwrap();
+    let contact = || async {
+        let row: (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT contact_phone, contact_email FROM events WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        row
+    };
+    assert_eq!(
+        contact().await,
+        (
+            Some("(317) 555-0199".into()),
+            Some("wife@example.com".into())
+        )
+    );
+    let listed = server
+        .get("/v1/schedule/events?start=2026-11-01T00:00:00Z&end=2026-11-30T00:00:00Z")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    assert_eq!(listed["events"][0]["contact_phone"], "(317) 555-0199");
+    assert_eq!(listed["events"][0]["contact_email"], "wife@example.com");
+    let customer_phone: Option<String> =
+        sqlx::query_scalar("SELECT phone FROM customers WHERE id = 1000")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_ne!(customer_phone.as_deref(), Some("(317) 555-0199"));
+
+    // Left out, they stay; empty goes back to the customer's.
+    let save = |body: Value| {
+        let request = server
+            .put(&format!("/v1/events/{id}"))
+            .with_session(sessions::REP)
+            .json(&body);
+        async move {
+            request.await.assert_status(StatusCode::NO_CONTENT);
+        }
+    };
+    let object = event.as_object_mut().unwrap();
+    object.remove("contact_phone");
+    object.remove("contact_email");
+    save(event.clone()).await;
+    assert_eq!(contact().await.1.as_deref(), Some("wife@example.com"));
+    event["contact_phone"] = json!("");
+    event["contact_email"] = Value::Null;
+    save(event).await;
+    assert_eq!(contact().await, (None, None));
 }
 
 #[test_db::test(seed)]

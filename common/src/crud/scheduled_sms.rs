@@ -30,7 +30,8 @@ pub async fn cancel_pending_scheduled_sms_for_deal(
 }
 
 /// Queues the company SMS drips of `list_id` for the deal. A template goes to
-/// the customer sources it names (none: only leads), once per customer.
+/// the customer sources it names (none: only leads) and to deals of the sales
+/// reps it names (none: every rep's), once per customer.
 pub async fn schedule_sms_templates_for_deal_list(
     pool: &MySqlPool,
     list_id: i32,
@@ -60,6 +61,8 @@ pub async fn schedule_sms_templates_for_deal_list(
           AND IF(customer_sources IS NULL OR JSON_LENGTH(customer_sources) = 0,
                  ? = 'leads',
                  JSON_CONTAINS(customer_sources, JSON_QUOTE(?)))
+          AND (sales_rep_ids IS NULL OR JSON_LENGTH(sales_rep_ids) = 0
+               OR JSON_CONTAINS(sales_rep_ids, CAST(? AS JSON)))
         ORDER BY hour_delay ASC, id ASC
         "#,
     )
@@ -67,6 +70,7 @@ pub async fn schedule_sms_templates_for_deal_list(
     .bind(list_id)
     .bind(&source)
     .bind(&source)
+    .bind(user_id)
     .fetch_all(pool)
     .await?;
 
@@ -254,6 +258,44 @@ mod tests {
         }
         assert_eq!(pending(&pool, lead).await, 0);
         assert_eq!(pending(&pool, walk_in).await, 1);
+    }
+
+    #[test_db::test]
+    async fn drip_sms_follow_the_template_sales_reps(pool: MySqlPool) {
+        let s = setup(&pool).await;
+        let other_rep = s.user_id + 1000;
+        for (minutes, reps) in [
+            (0, format!("[{}]", s.user_id)),
+            (10, format!("[{other_rep}]")),
+            (20, "[]".to_string()),
+        ] {
+            sqlx::query(
+                "INSERT INTO cloudtalk_sms_templates
+                   (company_id, user_id, name, body, lead_list_id, hour_delay, minute_delay, sales_rep_ids)
+                 VALUES (1, NULL, 'Drip', 'Hi', ?, 0, ?, ?)",
+            )
+            .bind(s.list_id)
+            .bind(minutes)
+            .bind(reps)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let (customer_id, deal_id) = insert_customer_deal(&pool, &s, "leads").await;
+
+        schedule_templates_for_deal_list(
+            &pool,
+            s.list_id,
+            1,
+            deal_id,
+            customer_id,
+            s.user_id,
+            true,
+        )
+        .await
+        .unwrap();
+        // Their own template and the every-rep one; not the other rep's.
+        assert_eq!(pending(&pool, customer_id).await, 2);
     }
 
     #[test_db::test]

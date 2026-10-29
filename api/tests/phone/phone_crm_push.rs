@@ -60,12 +60,13 @@ async fn a_crm_notification_is_pushed_and_read_back(pool: MySqlPool) {
         job(&server, "/v1/phone/pushes/notification", body).await,
         json!({ "pushed": 1 })
     );
-    // Ids only, to Rita's phone.
+    // Its id and heading, to Rita's phone.
     assert_eq!(
         pushes(&stubs, "notification"),
         [(
             "push-1".to_string(),
-            json!({ "granite": "1", "type": "notification", "notificationId": "97001" })
+            json!({ "granite": "1", "type": "notification", "notificationId": "97001",
+                    "heading": "Added a Note" })
         )]
     );
 

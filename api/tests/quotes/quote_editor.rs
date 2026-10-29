@@ -348,6 +348,52 @@ async fn the_page_changes_info_settings_and_prices(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_sale_marks_the_deal_the_user_picked(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    let sell = |id: i64, body: Value| {
+        let server = &server;
+        async move {
+            let path = format!("/v1/quotes/{id}");
+            server
+                .put(&format!("{path}/drawing"))
+                .with_session(sessions::REP)
+                .json(&json!({ "doc": doc("Ubatuba") }))
+                .await
+                .assert_status_ok();
+            server
+                .post(&format!("{path}/sale"))
+                .with_session(sessions::REP)
+                .json(&body)
+                .await
+        }
+    };
+    let first = create(&server, json!({ "customer_id": 1004 })).await;
+    let res = sell(first, json!({ "option": 0 })).await;
+    res.assert_status_ok();
+    let first_deal = res.json::<Value>()["deal_id"].as_i64().unwrap();
+
+    // A new deal although the customer already has a won one.
+    let second = create(&server, json!({ "customer_id": 1004 })).await;
+    let res = sell(second, json!({ "option": 0, "new_deal": true })).await;
+    res.assert_status_ok();
+    let second_deal = res.json::<Value>()["deal_id"].as_i64().unwrap();
+    assert_ne!(second_deal, first_deal);
+
+    // The older deal, picked by hand.
+    let third = create(&server, json!({ "customer_id": 1004 })).await;
+    let res = sell(third, json!({ "option": 0, "deal_id": first_deal })).await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>()["deal_id"].as_i64(), Some(first_deal));
+
+    // A deal that is not the customer's is refused.
+    let fourth = create(&server, json!({ "customer_id": 1004 })).await;
+    sell(fourth, json!({ "option": 0, "deal_id": 999_999 }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[test_db::test(seed)]
 async fn quotes_are_sold_copied_and_printed(pool: MySqlPool) {
     let (server, _) = server(&pool).await;
     price_list(&server, &pool).await;
@@ -569,6 +615,40 @@ async fn emailing_sends_the_link_and_moves_the_deal(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn the_view_link_opens_the_customer_page_for_staff(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    let id = create(&server, json!({ "customer_id": 1004 })).await;
+    let path = format!("/v1/quotes/{id}");
+    let url = server
+        .get(&format!("{path}/view-link"))
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>()["url"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let token = server
+        .post(&format!("{path}/portal-token"))
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The same customer link, made on the first ask and kept.
+    assert!(
+        url.ends_with(&format!("/quote-portal/{token}?staff=1")),
+        "{url}"
+    );
+    server
+        .get("/v1/quotes/999999/view-link")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[test_db::test(seed)]
 async fn the_customer_accepts_and_signs(pool: MySqlPool) {
     let (server, _) = server(&pool).await;
     price_list(&server, &pool).await;
@@ -665,4 +745,50 @@ async fn reps_keep_email_templates_of_their_own(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .assert_status(StatusCode::NO_CONTENT);
+}
+
+#[test_db::test(seed)]
+async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    sqlx::query(
+        "INSERT INTO calendars (company_id, name, color, slug) VALUES
+           (100, 'Templates', 'green', 'templates'),
+           (100, 'Installations', 'blue', 'installations')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut counts = Vec::new();
+    for on in [false, true] {
+        sqlx::query("UPDATE company SET auto_unscheduled_jobs = ? WHERE id = 100")
+            .bind(on)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let id = create(&server, json!({ "customer_id": 1004 })).await;
+        let path = format!("/v1/quotes/{id}");
+        server
+            .put(&format!("{path}/drawing"))
+            .with_session(sessions::REP)
+            .json(&json!({ "doc": doc("Ubatuba") }))
+            .await
+            .assert_status_ok();
+        server
+            .post(&format!("{path}/sale"))
+            .with_session(sessions::REP)
+            .json(&json!({ "option": 0 }))
+            .await
+            .assert_status_ok();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM events WHERE quote_id = ? AND unscheduled <> 0",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        counts.push(count);
+    }
+    // Off: nothing added; on: a template and an installation.
+    assert_eq!(counts, [0, 2]);
 }

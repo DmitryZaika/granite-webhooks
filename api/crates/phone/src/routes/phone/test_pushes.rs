@@ -6,12 +6,12 @@ use super::pushes::PushSent;
 use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::crm_push::{LeadKind, push_lead, push_maintenance, push_notification};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::Deserialize;
-use crate::openapi::ToSchema;
 
 /// What `POST /v1/phone/pushes/test` sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]

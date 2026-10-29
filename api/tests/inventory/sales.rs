@@ -127,6 +127,47 @@ async fn sale_count(pool: &MySqlPool) -> i64 {
 // ---- POST /v1/sales
 
 #[test_db::test(seed)]
+async fn a_sale_belongs_to_the_deal_picked(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let rooms = json!([room(ROOM_A, json!([{ "id": 6074, "is_full": true }]), 30.0)]);
+    let mut body = sale(1000, rooms);
+    // Erin's deal is not Alice's.
+    body["deal_id"] = json!(8002);
+    expect_400(&server, "POST", "/v1/sales", &body, "That deal").await;
+    body["deal_id"] = json!(8000);
+    let id = create(&server, &body).await;
+    let deal = || async {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT CAST(deal_id AS SIGNED) FROM sales WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(deal().await, Some(8000));
+
+    // Editing without a deal keeps it; 0 takes the sale out of the deal.
+    body.as_object_mut().unwrap().remove("deal_id");
+    let path = format!("/v1/sales/{id}");
+    server
+        .put(&path)
+        .with_session(sessions::REP)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(deal().await, Some(8000));
+    body["deal_id"] = json!(0);
+    server
+        .put(&path)
+        .with_session(sessions::REP)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(deal().await, None);
+}
+
+#[test_db::test(seed)]
 async fn sells_part_of_a_slab_and_leaves_a_remnant(pool: MySqlPool) {
     let server = server(pool.clone());
     let id = create(
@@ -440,6 +481,7 @@ async fn get_returns_the_sale_as_the_form_shows_it(pool: MySqlPool) {
         json!({
             "id": 7010,
             "customer_id": 1000,
+            "deal_id": null,
             "seller_id": 100,
             "project_address": "1 Main St",
             "notes": "Deliver after 5pm",
@@ -757,4 +799,93 @@ async fn unsell_is_scoped_and_authenticated(pool: MySqlPool) {
         .with_session(sessions::OTHER_COMPANY_REP)
         .await
         .assert_status(StatusCode::NO_CONTENT);
+}
+
+// ---- GET /v1/sales/daily
+
+#[test_db::test(seed)]
+async fn daily_lists_the_days_sales_with_stone_sinks_and_deposit(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let mut kitchen = room(ROOM_A, json!([{ "id": 6070, "is_full": true }]), 45.0);
+    kitchen["sinks"] = json!([{ "type_id": 3100, "price": 199 }]);
+    let id = create(&server, &sale(1000, json!([kitchen]))).await;
+
+    let now = chrono::Utc::now();
+    let range = |from: chrono::DateTime<chrono::Utc>, to: chrono::DateTime<chrono::Utc>| {
+        format!(
+            "/v1/sales/daily?from={}&to={}",
+            from.format("%Y-%m-%dT%H:%M:%SZ"),
+            to.format("%Y-%m-%dT%H:%M:%SZ")
+        )
+    };
+    let today = range(
+        now - chrono::Duration::hours(1),
+        now + chrono::Duration::hours(1),
+    );
+    let res = server.get(&today).with_session(sessions::REP).await;
+    res.assert_status_ok();
+    let sales = res.json::<Value>();
+    let row = sales
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"].as_i64() == Some(id))
+        .expect("the new sale");
+    assert_eq!(row["customer_id"], json!(1000));
+    assert_eq!(row["stones"], json!(["Taj Mahal"]));
+    assert_eq!(
+        row["sinks"],
+        json!([{ "name": "Undermount 3219", "count": 1 }])
+    );
+    assert_eq!(row["price"], json!("1500.00"));
+    // Over $1,000 the sales order asks for half.
+    assert_eq!(row["deposit"], json!("750.00"));
+    assert!(row["seller_name"].is_string());
+
+    // Another day has none of it.
+    let yesterday = range(
+        now - chrono::Duration::hours(30),
+        now - chrono::Duration::hours(2),
+    );
+    let res = server.get(&yesterday).with_session(sessions::REP).await;
+    res.assert_status_ok();
+    assert!(
+        res.json::<Value>()
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"].as_i64() != Some(id))
+    );
+    // Another company does not see it.
+    let res = server
+        .get(&today)
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await;
+    res.assert_status_ok();
+    assert!(
+        res.json::<Value>()
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"].as_i64() != Some(id))
+    );
+}
+
+#[test_db::test(seed)]
+async fn daily_checks_the_range_and_the_session(pool: MySqlPool) {
+    let server = server(pool);
+    server
+        .get("/v1/sales/daily?from=2026-10-28T04:00:00Z&to=2026-10-28T04:00:00Z")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .get("/v1/sales/daily?from=2026-01-01T00:00:00Z&to=2026-03-01T00:00:00Z")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .get("/v1/sales/daily?from=2026-10-28T04:00:00Z&to=2026-10-29T04:00:00Z")
+        .await
+        .assert_status_unauthorized();
 }

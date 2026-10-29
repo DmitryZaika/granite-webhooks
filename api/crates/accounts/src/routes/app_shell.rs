@@ -101,6 +101,12 @@ pub struct AppShell {
     pub is_template_maker: bool,
     /// May send documents for signature.
     pub user_signature_access: bool,
+    /// AI promises is on for the user (`users.ai_promises`): the promise list
+    /// and the promised messages in the composers.
+    pub user_ai_promises: bool,
+    /// The user has the AI personal assistant, on or switched off by them
+    /// (the switch on My Account).
+    pub user_ai_promises_available: bool,
     /// The acting company's switches.
     pub company_features: ShellFeatures,
     /// What the user's home company can do, as the guided tours gate on it.
@@ -232,6 +238,20 @@ pub async fn shell(
             "false" | "0" | "no" | "off"
         )
     });
+    // Best effort: off where the column is missing (before its migration),
+    // so the frame never fails on it.
+    // 1: on; 2: switched off by the user; 0: not theirs.
+    let ai_promises = sqlx::query_scalar::<_, i64>(
+        "SELECT CAST(ai_promises AS SIGNED) FROM users WHERE id = ?",
+    )
+    .bind(user.id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(0);
+    let user_ai_promises = ai_promises == 1;
+    let user_ai_promises_available = matches!(ai_promises, 1 | 2);
     Ok(Json(AppShell {
         user_is_super_admin,
         superadmin_companies,
@@ -256,6 +276,8 @@ pub async fn shell(
         is_shop_manager: here(SHOP_MANAGER),
         is_template_maker: here(TEMPLATE_MAKER),
         user_signature_access: user.is_signature_available,
+        user_ai_promises,
+        user_ai_promises_available,
         company_features: ShellFeatures {
             quickbooks: features.quickbooks_enabled,
             signature: features.e_signature,

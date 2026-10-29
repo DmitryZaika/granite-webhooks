@@ -113,7 +113,7 @@ async fn templates_are_created_with_checks(pool: MySqlPool) {
     taken.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
         taken.json::<Value>()["error"],
-        "Another SMS template already uses this list and delay."
+        "Another SMS template already uses this list and delay for the same sales reps."
     );
     let drip: Value = server
         .post("/v1/sms-templates")

@@ -2,8 +2,9 @@
 //!
 //! A company template can be an automated drip: sent `hour_delay` hours
 //! and `minute_delay` minutes after a deal enters `lead_list_id`, to
-//! customers whose source is in `customer_sources` (default: leads only; one
-//! template per list and delay). Replaces the Remix `api.sms.templates*` routes and their unused
+//! customers whose source is in `customer_sources` (default: leads only), on
+//! deals of the sales reps in `sales_rep_ids` (default: every rep; one
+//! template per list, delay and rep). Replaces the Remix `api.sms.templates*` routes and their unused
 //! `api.{cloudtalk,ringcentral}.sms.templates*` twins.
 
 use super::handlers::template_body_error;
@@ -40,13 +41,15 @@ struct Row {
     hour_delay: Option<i32>,
     minute_delay: i32,
     customer_sources: Option<String>,
+    sales_rep_ids: Option<String>,
     position: i32,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
 }
 
 const COLUMNS: &str = "id, user_id, name, body, lead_list_id, hour_delay, minute_delay, \
-     CAST(customer_sources AS CHAR) AS customer_sources, position, created_at, updated_at";
+     CAST(customer_sources AS CHAR) AS customer_sources, \
+     CAST(sales_rep_ids AS CHAR) AS sales_rep_ids, position, created_at, updated_at";
 
 /// An SMS template.
 #[derive(Debug, Serialize, ToSchema)]
@@ -74,6 +77,8 @@ pub struct SmsTemplate {
     pub minute_delay: i32,
     /// Company drip: customer sources (`customers.source`) that get it.
     pub customer_sources: Vec<String>,
+    /// Company drip: sales reps whose deals get it; empty: every rep's.
+    pub sales_rep_ids: Vec<i32>,
 }
 
 /// A deal list a drip can start from.
@@ -120,15 +125,21 @@ pub struct Drip {
     /// Customer sources that get it; empty or left out: only leads.
     #[serde(default)]
     pub customer_sources: Vec<String>,
+    /// Sales reps whose deals get it; empty: every rep's. Left out keeps the
+    /// template's reps.
+    #[serde(default)]
+    pub sales_rep_ids: Option<Vec<i32>>,
 }
 
-/// A checked drip as stored: list, hours, minutes, sources JSON.
+/// A checked drip as stored: list, hours, minutes, sources JSON and the
+/// sales reps (empty: every rep).
 #[derive(Debug, Clone)]
 struct StoredDrip {
     list: Option<i32>,
     hours: Option<i32>,
     minutes: i32,
     sources: Option<String>,
+    reps: Vec<i32>,
 }
 
 impl StoredDrip {
@@ -137,6 +148,7 @@ impl StoredDrip {
         hours: None,
         minutes: 0,
         sources: None,
+        reps: Vec::new(),
     };
 
     fn of(row: &Row) -> Self {
@@ -145,6 +157,7 @@ impl StoredDrip {
             hours: row.hour_delay,
             minutes: row.minute_delay,
             sources: row.customer_sources.clone(),
+            reps: super::reps::ids_of(row.sales_rep_ids.as_deref()),
         }
     }
 }
@@ -208,6 +221,7 @@ fn to_template(row: Row, user: &SessionUser, company_editable: bool) -> SmsTempl
         hour_delay: row.hour_delay,
         minute_delay: row.minute_delay,
         customer_sources: sources_of(row.customer_sources.as_deref()),
+        sales_rep_ids: super::reps::ids_of(row.sales_rep_ids.as_deref()),
     }
 }
 
@@ -244,7 +258,13 @@ fn checked_text(name: &str, body: &str) -> ApiResult<(String, String)> {
 
 /// A drip needs both a list and a delay in range; without a list there is
 /// none. Sources are trimmed, lowercased and deduped; none means leads.
-fn checked_drip(drip: Drip) -> ApiResult<StoredDrip> {
+/// Left-out reps are `kept_reps`.
+async fn checked_drip(
+    pool: &MySqlPool,
+    company_id: i32,
+    drip: Drip,
+    kept_reps: &[i32],
+) -> ApiResult<StoredDrip> {
     let Some(list) = drip.lead_list_id.filter(|id| *id > 0) else {
         return Ok(StoredDrip::NONE);
     };
@@ -275,15 +295,21 @@ fn checked_drip(drip: Drip) -> ApiResult<StoredDrip> {
     }
     let sources = (!sources.is_empty() && sources != [DEFAULT_SOURCE])
         .then(|| serde_json::to_string(&sources).unwrap_or_default());
+    let reps = match &drip.sales_rep_ids {
+        Some(ids) => super::reps::checked(pool, company_id, ids).await?,
+        None => kept_reps.to_vec(),
+    };
     Ok(StoredDrip {
         list: Some(list),
         hours: Some(hours),
         minutes: drip.minute_delay,
         sources,
+        reps,
     })
 }
 
-/// Another company template already drips on this list and delay.
+/// Another company template already drips on this list and delay for one of
+/// the same sales reps.
 async fn drip_taken(
     pool: &MySqlPool,
     company_id: i32,
@@ -293,22 +319,24 @@ async fn drip_taken(
     let (Some(list), Some(delay)) = (drip.list, drip.hours) else {
         return Ok(());
     };
-    let taken: Option<i32> = sqlx::query_scalar(
-        "SELECT id FROM cloudtalk_sms_templates
+    let others: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT CAST(sales_rep_ids AS CHAR) FROM cloudtalk_sms_templates
           WHERE company_id = ? AND user_id IS NULL AND lead_list_id = ? AND hour_delay = ?
-            AND minute_delay = ? AND deleted_at IS NULL AND id <> ?
-          LIMIT 1",
+            AND minute_delay = ? AND deleted_at IS NULL AND id <> ?",
     )
     .bind(company_id)
     .bind(list)
     .bind(delay)
     .bind(drip.minutes)
     .bind(except.unwrap_or(0))
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await?;
-    if taken.is_some() {
+    if others
+        .iter()
+        .any(|other| super::reps::overlap(&drip.reps, &super::reps::ids_of(other.as_deref())))
+    {
         return Err(ApiError::BadRequest(
-            "Another SMS template already uses this list and delay.".into(),
+            "Another SMS template already uses this list and delay for the same sales reps.".into(),
         ));
     }
     Ok(())
@@ -474,7 +502,7 @@ pub async fn create(
         return Err(ApiError::Forbidden);
     }
     let drip = match input.drip {
-        Some(drip) if company => checked_drip(drip)?,
+        Some(drip) if company => checked_drip(pool, user.company_id, drip, &[]).await?,
         _ => StoredDrip::NONE,
     };
     drip_taken(pool, user.company_id, &drip, None).await?;
@@ -490,8 +518,8 @@ pub async fn create(
     let id = sqlx::query(
         "INSERT INTO cloudtalk_sms_templates
            (company_id, user_id, name, body, lead_list_id, hour_delay, minute_delay,
-            customer_sources, position, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            customer_sources, sales_rep_ids, position, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user.company_id)
     .bind(owner)
@@ -501,6 +529,7 @@ pub async fn create(
     .bind(drip.hours)
     .bind(drip.minutes)
     .bind(&drip.sources)
+    .bind(super::reps::to_json(&drip.reps))
     .bind(position.map_or(0, |max| max + 1))
     .bind(user.id)
     .execute(pool)
@@ -546,9 +575,10 @@ pub async fn update(
     let existing = editable(pool, &user, id).await?;
     let (name, body) = checked_text(&input.name, &input.body)?;
     let company = existing.user_id.is_none();
+    let kept = StoredDrip::of(&existing);
     let drip = match input.drip {
-        Some(drip) if company => checked_drip(drip)?,
-        _ => StoredDrip::of(&existing),
+        Some(drip) if company => checked_drip(pool, user.company_id, drip, &kept.reps).await?,
+        _ => kept,
     };
     if company {
         drip_taken(pool, user.company_id, &drip, Some(id)).await?;
@@ -557,7 +587,7 @@ pub async fn update(
     sqlx::query(
         "UPDATE cloudtalk_sms_templates
             SET name = ?, body = ?, lead_list_id = ?, hour_delay = ?, minute_delay = ?,
-                customer_sources = ?, updated_at = NOW()
+                customer_sources = ?, sales_rep_ids = ?, updated_at = NOW()
           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(&name)
@@ -566,12 +596,15 @@ pub async fn update(
     .bind(drip.hours)
     .bind(drip.minutes)
     .bind(&drip.sources)
+    .bind(super::reps::to_json(&drip.reps))
     .bind(id)
     .bind(user.company_id)
     .execute(pool)
     .await?;
     if company && (drip.list.is_none() || drip.hours.is_none()) {
         cancel_scheduled(pool, id, "Template deleted").await?;
+    } else if company {
+        super::reps::cancel_for_other_reps(pool, super::reps::Queue::Sms, id, &drip.reps).await?;
     }
     let after = automation_notice::sms_template(pool, user.company_id, id).await;
     automation_notice::notify(&state, &user, &before, &after).await;
