@@ -99,6 +99,12 @@ pub struct ScheduleEvent {
     pub customer_id: Option<i32>,
     /// That customer's name.
     pub customer_name: Option<String>,
+    /// Phone for this event only; null uses the customer's.
+    #[sqlx(default)]
+    pub contact_phone: Option<String>,
+    /// Email for this event only; null uses the customer's.
+    #[sqlx(default)]
+    pub contact_email: Option<String>,
     /// Its QuickBooks invoice (only when QuickBooks is connected).
     #[sqlx(skip)]
     pub qbo_invoice: Option<EventInvoice>,
@@ -180,7 +186,8 @@ async fn load_events(
                 DATE_FORMAT(e.recurrence_until, '%Y-%m-%dT%H:%i:%sZ') AS recurrence_until,
                 NULLIF(TRIM(e.recurrence_exdates), '') AS recurrence_exdates,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
-                c.name AS customer_name, u.name AS created_user_name
+                c.name AS customer_name, u.name AS created_user_name,
+                e.contact_phone, e.contact_email
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c
@@ -270,7 +277,8 @@ pub async fn unscheduled(
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
                 e.calendar_id, NULL AS rrule, NULL AS recurrence_until,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
-                c.name AS customer_name, u.name AS created_user_name
+                c.name AS customer_name, u.name AS created_user_name,
+                e.contact_phone, e.contact_email
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c

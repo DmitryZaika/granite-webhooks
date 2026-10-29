@@ -216,6 +216,56 @@ pub async fn set_sidebar_pin(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
+/// Body of `PUT /v1/me/ai-assistant`.
+#[derive(Debug, serde::Deserialize, crate::openapi::ToSchema)]
+pub struct AiAssistantSwitch {
+    /// The AI personal assistant (AI promises) runs for me.
+    pub on: bool,
+}
+
+/// Turn my AI personal assistant on or off
+///
+/// For users who have the AI personal assistant (`users.ai_promises` 1 = on,
+/// 2 = switched off by the user): off stops reading their calls, texts and
+/// emails, the reminders and the morning list, and hides it in the CRM; on
+/// resumes it. Users without it get 403.
+#[crate::openapi::path(
+    put,
+    path = "/v1/me/ai-assistant",
+    operation_id = "set_ai_assistant",
+    tag = "me",
+    request_body = AiAssistantSwitch,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, or has no AI personal assistant", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn set_ai_assistant(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    JsonBody(input): JsonBody<AiAssistantSwitch>,
+) -> ApiResult<axum::http::StatusCode> {
+    let has: Option<i32> =
+        sqlx::query_scalar("SELECT id FROM users WHERE id = ? AND ai_promises IN (1, 2)")
+            .bind(user.id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if has.is_none() {
+        return Err(ApiError::Denied(
+            "The AI personal assistant is not available on your account".into(),
+        ));
+    }
+    sqlx::query("UPDATE users SET ai_promises = ? WHERE id = ?")
+        .bind(if input.on { 1 } else { 2 })
+        .bind(user.id)
+        .execute(&state.pool)
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 /// `positions.id` of an outside marketing agency.
 const EXTERNAL_MARKETING_POSITION: i32 = 7;
 

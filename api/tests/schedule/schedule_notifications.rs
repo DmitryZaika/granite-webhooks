@@ -638,4 +638,15 @@ async fn a_confirmation_goes_out_right_away(pool: MySqlPool) {
         .await
         .assert_status_bad_request();
     assert_eq!(sent.emails.lock().unwrap().len(), 1);
+
+    // The event's own email (a spouse's) gets it instead of the customer's.
+    sqlx::query("UPDATE events SET contact_email = 'wife@example.com' WHERE id = ?")
+        .bind(booked)
+        .execute(&pool)
+        .await
+        .unwrap();
+    confirm(booked, template).await.assert_status_ok();
+    let emails = sent.emails.lock().unwrap().clone();
+    assert_eq!(emails.len(), 2);
+    assert_eq!(emails[1].to, ["wife@example.com"]);
 }

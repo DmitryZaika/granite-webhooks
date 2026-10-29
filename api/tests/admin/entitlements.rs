@@ -49,6 +49,7 @@ async fn legacy_companies_keep_their_features_and_gain_the_new_keys(pool: MySqlP
     let old_shell_features = |leaderboard: bool| json!({ "leaderboard": leaderboard, "onboarding": false, "quickbooks": true, "signature": false });
     let old_features = |cloudtalk: bool, inbound_email: bool, leaderboard: bool| {
         json!({
+            "auto_sale": false, "auto_unscheduled_jobs": false,
             "cloudtalk": cloudtalk, "e_signature": false, "inbound_email": inbound_email,
             "leaderboard": leaderboard, "onboarding": false, "quickbooks_connected": false,
             "quickbooks_enabled": true, "ringcentral": false,

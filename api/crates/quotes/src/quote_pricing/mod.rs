@@ -746,12 +746,21 @@ pub async fn mark_quote_sold(
 
 /// A sold quote's template and installation: one unscheduled event on each
 /// of those calendars, "not ready", for the schedule manager to date. Once
-/// per quote: selling it again adds nothing.
+/// per quote: selling it again adds nothing. Only while the company's switch
+/// is on (`company.auto_unscheduled_jobs`, Admin › Automations).
 async fn add_waiting_jobs(
     pool: &MySqlPool,
     quote: &Quote,
     user_id: Option<i32>,
 ) -> Result<(), sqlx::Error> {
+    let on: Option<bool> =
+        sqlx::query_scalar("SELECT auto_unscheduled_jobs <> 0 FROM company WHERE id = ?")
+            .bind(quote.company_id)
+            .fetch_optional(pool)
+            .await?;
+    if on != Some(true) {
+        return Ok(());
+    }
     let Some(creator) = user_id.or(quote.salesperson_id).or(quote.created_by) else {
         return Ok(());
     };

@@ -42,6 +42,7 @@ pub mod signature_fields;
 
 use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
+use axum::extract::DefaultBodyLimit;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -57,13 +58,25 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(design::pictures))
         .routes(routes!(design::deals))
         .routes(routes!(design_render::stones))
-        .routes(routes!(design_render::design))
+        .merge(
+            // A kitchen photo is more than axum's default 2 MB.
+            OpenApiRouter::new()
+                .routes(routes!(design_render::design))
+                .layer(DefaultBodyLimit::max(
+                    crate::kitchen_design::MAX_DESIGN_BODY_BYTES,
+                )),
+        )
         .routes(routes!(compose::inventory_url))
         .routes(routes!(compose::autocomplete))
         .routes(routes!(compose::learn))
         .routes(routes!(first_contact::first_contact_email))
         .routes(routes!(conversation_reply::conversation_reply))
-        .routes(routes!(chat::ask))
+        .merge(
+            // A question with pictures is more than axum's default 2 MB.
+            OpenApiRouter::new()
+                .routes(routes!(chat::ask))
+                .layer(DefaultBodyLimit::max(chat::MAX_CHAT_BODY_BYTES)),
+        )
         .routes(routes!(manual_feedback::feedback))
         .routes(routes!(promises::list))
         .routes(routes!(promises::update))

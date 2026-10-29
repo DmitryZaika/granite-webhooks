@@ -40,19 +40,46 @@ const LINE_EXAMPLES: u32 = 60;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
     /// The priced lines get this product.
-    Product { item_id: String, item_name: String },
+    Product {
+        /// QuickBooks item id.
+        item_id: String,
+        /// Its name.
+        item_name: String,
+    },
     /// The priced lines never get this product (another one is learned).
-    AvoidProduct { item_id: String, item_name: String },
+    AvoidProduct {
+        /// QuickBooks item id.
+        item_id: String,
+        /// Its name.
+        item_name: String,
+    },
     /// Text lines with the phrase are left out (the editor offers them back).
-    Hide { line: String },
+    Hide {
+        /// The phrase.
+        line: String,
+    },
     /// The phrase in a line becomes `to`.
-    Rename { line: String, to: String },
+    Rename {
+        /// The phrase.
+        line: String,
+        /// What it becomes.
+        to: String,
+    },
     /// A text line added at the end.
-    AddLine { text: String },
+    AddLine {
+        /// The line.
+        text: String,
+    },
     /// The invoice's class.
-    Class { name: String },
+    Class {
+        /// The QuickBooks class name.
+        name: String,
+    },
     /// The invoice's CC.
-    Cc { email: String },
+    Cc {
+        /// The email address.
+        email: String,
+    },
 }
 
 /// One rule the AI made of the instructions.
