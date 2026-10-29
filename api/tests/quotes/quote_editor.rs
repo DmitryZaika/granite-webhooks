@@ -615,6 +615,40 @@ async fn emailing_sends_the_link_and_moves_the_deal(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn the_view_link_opens_the_customer_page_for_staff(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    let id = create(&server, json!({ "customer_id": 1004 })).await;
+    let path = format!("/v1/quotes/{id}");
+    let url = server
+        .get(&format!("{path}/view-link"))
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>()["url"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let token = server
+        .post(&format!("{path}/portal-token"))
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The same customer link, made on the first ask and kept.
+    assert!(
+        url.ends_with(&format!("/quote-portal/{token}?staff=1")),
+        "{url}"
+    );
+    server
+        .get("/v1/quotes/999999/view-link")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[test_db::test(seed)]
 async fn the_customer_accepts_and_signs(pool: MySqlPool) {
     let (server, _) = server(&pool).await;
     price_list(&server, &pool).await;
