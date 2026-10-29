@@ -67137,7 +67137,7 @@
               "string",
               "null"
             ],
-            "description": "What it is: a direct line's own label (null when it has none),\n`RingCentral`, `CloudTalk` or `Mobile` (their own phone)."
+            "description": "What it is: a direct line's own label (null when it has none),\n`Work` (their `RingCentral` number), `Office` (their `CloudTalk`\nnumber) or `Mobile` (their own phone). The app never names the provider."
           }
         }
       },
