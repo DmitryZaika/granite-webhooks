@@ -12,10 +12,13 @@
 //! - `/v1/events/{id}/comments`, `/photos`, `/attachments` → add and remove
 //! - `GET /v1/events/{id}/sale` → the sale its project view shows
 //! - `/v1/events/{id}/project-notes` → notes on the event's sold project
+//! - `POST /v1/events/{id}/crew-status`, `POST /v1/me/location` → the crew's
+//!   On my way, Arrived and Completed (`crew`)
 //!
 //! Replaces the Remix `api.events`, `api.events.search`,
 //! `api.event-details`, `api.event-attachments` and `api.event-images` routes.
 
+pub mod crew;
 pub mod details;
 pub mod estimate;
 pub mod history;
@@ -33,6 +36,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(writes::create))
         .routes(routes!(writes::update, writes::delete))
         .routes(routes!(notifications::send_confirmation))
+        .routes(routes!(crew::set_status))
+        .routes(routes!(crew::location))
         .routes(routes!(estimate::book))
         .routes(routes!(details::search))
         .routes(routes!(details::details))

@@ -7,6 +7,8 @@
 //! - `GET /v1/schedule/notifications` → templates, flows, and whether texting is set up
 //! - `POST /v1/schedule/notifications/templates`, `PUT`/`DELETE …/templates/{id}`
 //! - `POST /v1/schedule/notifications/flows`, `PUT`/`DELETE …/flows/{id}`
+//! - `PUT /v1/schedule/notifications/on-my-way` → what the customer gets when
+//!   the crew taps On my way (sent by `send_on_my_way`)
 //! - `GET /v1/schedule/notifications/active` → the event form's flows. The
 //!   calendar's default flow goes on each of its events unless the event
 //!   turns it off (`event_notification_skips`); the others only go on events
@@ -209,7 +211,24 @@ pub struct NotificationSettings {
     pub flows: Vec<NotificationFlow>,
     /// The company texts through `CloudTalk` or `RingCentral`.
     pub sms_enabled: bool,
+    /// What the customer gets when the crew taps On my way.
+    pub on_my_way: OnMyWayMessage,
 }
+
+/// The On my way message: a text, or an email (with `subject`) when the
+/// company cannot text. Nothing goes out while `message` is null.
+#[derive(Debug, Default, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
+pub struct OnMyWayMessage {
+    /// Email subject (at most 255 characters); null uses "On the way".
+    #[serde(default)]
+    pub subject: Option<String>,
+    /// Up to 1600 characters for a text.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Email subject when the company saved none.
+const ON_MY_WAY_SUBJECT: &str = "On the way";
 
 /// Body of `POST /v1/schedule/notifications/templates` and `PUT …/templates/{id}`.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -686,7 +705,131 @@ pub async fn list(
         templates: load_templates(pool, user.company_id, sms_enabled).await?,
         flows: load_flows(pool, user.company_id, sms_enabled, false).await?,
         sms_enabled,
+        on_my_way: on_my_way_message(pool, user.company_id).await?,
     }))
+}
+
+async fn on_my_way_message(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> Result<OnMyWayMessage, sqlx::Error> {
+    let saved: Option<OnMyWayMessage> = sqlx::query_as(
+        "SELECT on_my_way_subject AS subject, on_my_way_message AS message
+           FROM company WHERE id = ?",
+    )
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(saved.unwrap_or_default())
+}
+
+/// The text trimmed; `None` when blank.
+fn filled(text: Option<String>) -> Option<String> {
+    text.map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+/// Save the On my way message
+///
+/// What the customer gets when the crew taps On my way: a text, or an email
+/// when the company cannot text. An empty message turns it off.
+#[crate::openapi::path(
+    put,
+    path = "/v1/schedule/notifications/on-my-way",
+    operation_id = "set_on_my_way_message",
+    tag = "schedule",
+    request_body = OnMyWayMessage,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 400, description = "Too long", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn set_on_my_way(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    JsonBody(input): JsonBody<OnMyWayMessage>,
+) -> ApiResult<StatusCode> {
+    let pool = &state.pool;
+    let message = filled(input.message);
+    let subject = filled(input.subject);
+    let limit = if sms_enabled(pool, user.company_id).await? {
+        MAX_SMS
+    } else {
+        MAX_EMAIL
+    };
+    if message
+        .as_ref()
+        .is_some_and(|text| text.chars().count() > limit)
+    {
+        return Err(bad(&format!(
+            "The message must be {limit} characters or less"
+        )));
+    }
+    if subject
+        .as_ref()
+        .is_some_and(|text| text.chars().count() > 255)
+    {
+        return Err(bad("The subject must be 255 characters or less"));
+    }
+    sqlx::query("UPDATE company SET on_my_way_message = ?, on_my_way_subject = ? WHERE id = ?")
+        .bind(message)
+        .bind(subject)
+        .bind(user.company_id)
+        .execute(pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Tells the event's customer the crew is on the way, with the company's On
+/// my way message: a text when the company can text, else an email. The
+/// channel it went by, or the code of why it did not go.
+pub async fn send_on_my_way(
+    state: &AppState,
+    company_id: i32,
+    event_id: i32,
+) -> Result<Result<Channel, &'static str>, sqlx::Error> {
+    let pool = &state.pool;
+    let saved = on_my_way_message(pool, company_id).await?;
+    let Some(body) = filled(saved.message) else {
+        return Ok(Err("no_message"));
+    };
+    let event: Appointment = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT e.id, e.start_date, e.end_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
+                e.location, e.created_date, e.created_user_id,
+                CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id,
+                e.contact_phone, e.contact_email
+           FROM events e
+           JOIN users r ON r.id = e.created_user_id
+           {EVENT_CUSTOMER}
+          WHERE e.id = ?"
+    )))
+    .bind(event_id)
+    .fetch_one(pool)
+    .await?;
+    let Some(customer_id) = event.customer_id else {
+        return Ok(Err("no_customer"));
+    };
+    let channel = if sms_enabled(pool, company_id).await? {
+        Channel::Sms
+    } else {
+        Channel::Email
+    };
+    let subject = filled(saved.subject).unwrap_or_else(|| ON_MY_WAY_SUBJECT.into());
+    let message = Outgoing {
+        company_id,
+        channel,
+        subject: Some(&subject),
+        body: &body,
+        idempotency_key: Some(format!("on-my-way-{event_id}-{}", event.start_date)),
+    };
+    Ok(match deliver(state, &message, &event, customer_id).await? {
+        None => Ok(channel),
+        Some(code) => Err(code),
+    })
 }
 
 /// Add a customer notification template

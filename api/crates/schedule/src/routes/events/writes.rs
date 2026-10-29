@@ -687,6 +687,13 @@ pub async fn update(
         )
         .await;
     }
+    // The crew's On my way, Arrived and Completed belong to the job's day.
+    if input.unscheduled
+        || super::crew::job_days(event.start, event.end, input.all_day).0
+            != super::crew::job_days(existing.start_date, existing.end_date, existing.all_day).0
+    {
+        super::crew::clear(pool, id).await?;
+    }
     if input.unscheduled {
         reminders::cancel(pool, id).await?;
     } else if moved {
