@@ -8,6 +8,7 @@ mod common;
 mod calendars;
 mod estimates;
 mod events;
+mod job_time;
 mod schedule;
 mod schedule_board;
 mod schedule_notifications;
