@@ -36770,7 +36770,7 @@
           "schedule"
         ],
         "summary": "Get the schedule settings",
-        "description": "The day the company's schedule starts its weeks on (Sunday unless an\nadmin picked Monday) and the calendar estimates are booked on.",
+        "description": "The day the caller's schedule starts its weeks on (their own choice, else\nthe company's: Sunday unless an admin picked Monday), whether they show\n24-hour times, and the calendar estimates are booked on.",
         "operationId": "get_schedule_settings",
         "responses": {
           "200": {
@@ -36853,6 +36853,66 @@
           },
           "403": {
             "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/settings/me": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Set my schedule settings",
+        "description": "Saves the day the caller's own schedule starts its weeks on and whether\nit shows 24-hour times. Only the caller sees them.",
+        "operationId": "set_my_schedule_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MyScheduleSettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not `sunday` or `monday`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
             "content": {
               "application/json": {
                 "schema": {
@@ -75630,6 +75690,30 @@
           }
         }
       },
+      "MyScheduleSettingsInput": {
+        "type": "object",
+        "description": "`PUT /v1/schedule/settings/me`: only the fields sent change.",
+        "properties": {
+          "week_starts_on": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WeekStart",
+                "description": "The day the caller's week and month views start their weeks on."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "time_24h": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Show times as 13:00 rather than 1:00 PM."
+          }
+        }
+      },
       "MyTemplateInput": {
         "type": "object",
         "description": "One of the caller's own templates.",
@@ -85978,12 +86062,22 @@
         "type": "object",
         "description": "`GET /v1/schedule/settings`.",
         "required": [
-          "week_starts_on"
+          "week_starts_on",
+          "company_week_starts_on",
+          "time_24h"
         ],
         "properties": {
           "week_starts_on": {
             "$ref": "#/components/schemas/WeekStart",
-            "description": "The day the week and month views start their weeks on."
+            "description": "The day the caller's week and month views start their weeks on: their\nown choice, else the company's."
+          },
+          "company_week_starts_on": {
+            "$ref": "#/components/schemas/WeekStart",
+            "description": "The day the company's weeks start on (Admin > Schedule)."
+          },
+          "time_24h": {
+            "type": "boolean",
+            "description": "The caller shows times as 13:00 rather than 1:00 PM."
           },
           "estimates_calendar_id": {
             "type": [

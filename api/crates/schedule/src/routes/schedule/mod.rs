@@ -6,7 +6,8 @@
 //! - `POST /v1/schedule/optimize-route` → reorder a day's stops by drive time
 //! - `/v1/schedule/notifications` → admins' texts and emails to customers
 //!   before their appointments (`notifications`)
-//! - `/v1/schedule/settings` → the day the weeks start on (`settings`)
+//! - `/v1/schedule/settings` → the day the weeks start on and 12- or 24-hour
+//!   times, the company's and each user's (`settings`)
 //!
 //! Replaces the Remix `api.schedule-day-map` and `api.schedule-optimize-route`.
 
@@ -46,6 +47,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(activity::activity))
         .routes(routes!(board::set_color))
         .routes(routes!(settings::settings, settings::set_settings))
+        .routes(routes!(settings::set_my_settings))
         .routes(routes!(notifications::list))
         .routes(routes!(notifications::create_template))
         .routes(routes!(
