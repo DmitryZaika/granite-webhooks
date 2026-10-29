@@ -9281,6 +9281,98 @@
         ]
       }
     },
+    "/v1/sales/daily": {
+      "get": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "List a day's sales",
+        "description": "Returns the company's sales from `from` up to `to` (not cancelled),\nnewest first: customer, sales rep, stone colors, sinks, package, amount,\ndeposit and the signed contract.",
+        "operationId": "list_daily_sales",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First instant counted, e.g. the caller's local midnight in UTC\n(`2026-10-28T04:00:00Z`).",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the range, not counted (the next local midnight). At most 31\ndays after `from`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sales, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DailySale"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`to` is not after `from`, or more than 31 days after it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/suppliers": {
       "get": {
         "tags": [
@@ -94352,6 +94444,135 @@
               "$ref": "#/components/schemas/WorkingDay"
             },
             "description": "The time ranges, any number per weekday (at most 28 in all, at least\none); a weekday without a range is a day off."
+          }
+        }
+      },
+      "DailySale": {
+        "type": "object",
+        "description": "One sale of the day.",
+        "required": [
+          "id",
+          "sale_date",
+          "stones",
+          "sinks"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id; its sales order is `GET /v1/sales/{id}/contract`."
+          },
+          "sale_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was sold."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Null for a sale without a customer."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sales rep who sold it."
+          },
+          "stones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Stone colors of its slabs, by name."
+          },
+          "sinks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SinkCount"
+            },
+            "description": "Sinks sold with it, by model."
+          },
+          "package": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The price list of the deal's quote (the signed one, else the newest);\nnull when the sale's deal has no quote."
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sale amount, decimal string in USD."
+          },
+          "deposit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The deposit its sales order asks for: half of a price over $1,000,\nelse all of it. Decimal string in USD."
+          },
+          "signed_order": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SignedOrder",
+                "description": "The customer's signed contract (the one of the sale's deal first,\nelse the newest); null when nothing was signed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SinkCount": {
+        "type": "object",
+        "description": "Sinks of one model on a sale.",
+        "required": [
+          "name",
+          "count"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SignedOrder": {
+        "type": "object",
+        "description": "A signed contract.",
+        "required": [
+          "filename",
+          "signed_at",
+          "view_url"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string"
+          },
+          "signed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was signed."
+          },
+          "view_url": {
+            "type": "string",
+            "description": "Where to open it: an API path (`/v1/...`) to open on the API's host,\nelse the file's URL."
           }
         }
       }
