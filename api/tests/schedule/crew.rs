@@ -249,6 +249,14 @@ async fn the_phone_marks_arrived_and_on_my_way_but_never_completed(pool: MySqlPo
     };
     let changed = |arrived: Option<i32>, on_my_way: Option<i32>| json!({ "arrived": arrived, "on_my_way": on_my_way });
 
+    // Only installers and template makers report where they are.
+    server
+        .post("/v1/me/location")
+        .with_session(sessions::REP)
+        .json(&json!({ "latitude": SHOP_LAT, "longitude": LNG }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
     // At the shop, then 0.3 mi out: nothing yet.
     assert_eq!(at(0.0, 10.0).await.json::<Value>(), changed(None, None));
     assert_eq!(at(0.3, 10.0).await.json::<Value>(), changed(None, None));

@@ -33,6 +33,10 @@ const ARRIVE_MILES: f64 = 0.1;
 const LEAVE_MILES: f64 = 0.5;
 /// Positions less accurate than this many meters are ignored.
 const MAX_ACCURACY_METERS: f64 = 200.0;
+/// `positions.id` of an installer and of a template maker: the only ones
+/// whose phones report where they are.
+const INSTALLER: i32 = 6;
+const TEMPLATE: i32 = 11;
 const EARTH_MILES: f64 = 3958.8;
 
 /// The crew's progress on a job.
@@ -474,7 +478,8 @@ fn store_day_range(day: NaiveDate) -> (NaiveDateTime, NaiveDateTime) {
 /// address within 0.1 mi) marks it Arrived; getting 0.5 mi away from the
 /// shop or the job they were at marks the first of today's jobs with no
 /// status yet On my way. Nothing is sent to customers, and no job is marked
-/// Completed. Positions less accurate than 200 m are ignored.
+/// Completed. Positions less accurate than 200 m are ignored. Only
+/// installers and template makers report.
 #[crate::openapi::path(
     post,
     path = "/v1/me/location",
@@ -485,6 +490,7 @@ fn store_day_range(day: NaiveDate) -> (NaiveDateTime, NaiveDateTime) {
         (status = 200, description = "What changed", body = LocationResult),
         (status = 400, description = "Not a position on Earth", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Not an installer or template maker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -498,13 +504,27 @@ pub async fn location(
     if !(-90.0..=90.0).contains(&input.latitude) || !(-180.0..=180.0).contains(&input.longitude) {
         return Err(bad("Not a position on Earth"));
     }
+    let pool = &state.pool;
+    let crew: Option<i32> = sqlx::query_scalar(
+        "SELECT user_id FROM users_positions
+          WHERE user_id = ? AND company_id = ? AND position_id IN (?, ?)
+          LIMIT 1",
+    )
+    .bind(user.id)
+    .bind(user.company_id)
+    .bind(INSTALLER)
+    .bind(TEMPLATE)
+    .fetch_optional(pool)
+    .await?;
+    if crew.is_none() {
+        return Err(ApiError::Forbidden);
+    }
     if input
         .accuracy_m
         .is_some_and(|meters| meters > MAX_ACCURACY_METERS)
     {
         return Ok(Json(LocationResult::default()));
     }
-    let pool = &state.pool;
     let here = Point {
         lat: input.latitude,
         lng: input.longitude,
