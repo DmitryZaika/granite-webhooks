@@ -39,8 +39,10 @@ pub struct PromisesQuery {
 
 /// Something on the schedule at a time.
 #[derive(Debug, Clone, Serialize, ToSchema, sqlx::FromRow)]
-pub struct ScheduleEvent {
+pub struct PromiseEvent {
+    /// The event's name.
     pub title: String,
+    /// When it starts.
     pub start: DateTime<Utc>,
 }
 
@@ -48,15 +50,19 @@ pub struct ScheduleEvent {
 /// their quote.
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 pub struct AiPromise {
+    /// Promise id.
     pub id: u64,
     /// `promise`: the rep's; `quote`: a change the customer asked for in
-    /// their quote.
+    /// their quote; `approval`: something the rep sent for the customer's
+    /// approval (due a day later).
     pub kind: String,
     /// Where it was said: `call`, `sms` or `email`.
     pub source: String,
     /// When it was said.
     pub promised_at: DateTime<Utc>,
+    /// The customer; null for a caller whose number is on no customer.
     pub customer_id: Option<i32>,
+    /// That customer's name.
     pub customer_name: Option<String>,
     /// The customer's phone (10 digits), for a call or a text.
     pub customer_digits: Option<String>,
@@ -82,11 +88,11 @@ pub struct AiPromise {
     /// An appointment's event for the customer within 12 hours of it (null:
     /// not on the schedule, or not an appointment).
     #[sqlx(skip)]
-    pub scheduled: Option<ScheduleEvent>,
+    pub scheduled: Option<PromiseEvent>,
     /// Another appointment within the hour: one the rep promised someone
     /// else, or an event assigned to them.
     #[sqlx(skip)]
-    pub clash: Option<ScheduleEvent>,
+    pub clash: Option<PromiseEvent>,
 }
 
 /// A customer whose text waits for the caller's reply.
@@ -94,10 +100,13 @@ pub struct AiPromise {
 pub struct WaitingCustomer {
     /// 10 digits.
     pub phone_digits: String,
+    /// The customer with that phone; null when it is on no customer.
     pub customer_id: Option<i32>,
+    /// That customer's name.
     pub customer_name: Option<String>,
     /// Their last text.
     pub text: String,
+    /// When they sent it.
     pub at: DateTime<Utc>,
 }
 
@@ -292,7 +301,7 @@ async fn check_schedule(
             .find(|(id, other, _)| {
                 *id != promise.id && (*other - due).num_minutes().abs() < CLASH_MINUTES
             })
-            .map(|(_, other, title)| ScheduleEvent {
+            .map(|(_, other, title)| PromiseEvent {
                 title: title.clone(),
                 start: *other,
             });
@@ -315,7 +324,7 @@ async fn check_schedule(
         }
         if promise.clash.is_none() {
             promise.clash = recurring.iter().find_map(|event| {
-                occurrence_over(event, due, tz).map(|start| ScheduleEvent {
+                occurrence_over(event, due, tz).map(|start| PromiseEvent {
                     title: event.title.clone(),
                     start,
                 })

@@ -358,7 +358,7 @@ pub async fn thread_contents(
     });
     let mut attachments: Vec<Attachment> = Sql::new(
         format!(
-            "SELECT id, email_id, content_type, content_subtype, filename, url FROM email_attachments
+            "SELECT id, email_id, content_type, content_subtype, filename, url, is_inline FROM email_attachments
              WHERE email_id IN (SELECT id FROM emails WHERE deleted_at {deleted} AND thread_id = ?{deal_filter})
              ORDER BY id"
         ),

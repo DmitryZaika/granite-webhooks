@@ -6,6 +6,8 @@ pub struct UploadedAttachment {
     pub content_subtype: Option<String>,
     pub filename: String,
     pub url: String,
+    /// Shown inside the body (e.g. a signature logo), not attached as a file.
+    pub is_inline: bool,
 }
 
 /// One address from a `To:` or `Cc:` header, with its display name kept so the

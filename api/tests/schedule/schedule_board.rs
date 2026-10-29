@@ -256,3 +256,35 @@ async fn the_shop_sees_the_schedule(pool: MySqlPool) {
         .await
         .assert_status_ok();
 }
+
+#[test_db::test(seed)]
+async fn each_user_picks_their_own_week_start_and_clock(pool: MySqlPool) {
+    let server = server(pool);
+    let settings = |session: &'static str| {
+        let request = server.get("/v1/schedule/settings").with_session(session);
+        async move { request.await.json::<Value>() }
+    };
+    let rep = settings(sessions::REP).await;
+    assert_eq!(rep["week_starts_on"], "sunday");
+    assert_eq!(rep["time_24h"], false);
+    server
+        .put("/v1/schedule/settings/me")
+        .with_session(sessions::REP)
+        .json(&json!({ "week_starts_on": "friday" }))
+        .await
+        .assert_status_bad_request();
+    server
+        .put("/v1/schedule/settings/me")
+        .with_session(sessions::REP)
+        .json(&json!({ "week_starts_on": "monday", "time_24h": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let rep = settings(sessions::REP).await;
+    assert_eq!(rep["week_starts_on"], "monday");
+    assert_eq!(rep["company_week_starts_on"], "sunday");
+    assert_eq!(rep["time_24h"], true);
+    // The admin of the same company keeps the company's.
+    let admin = settings(sessions::ADMIN).await;
+    assert_eq!(admin["week_starts_on"], "sunday");
+    assert_eq!(admin["time_24h"], false);
+}

@@ -355,6 +355,10 @@ pub struct CustomerSale {
     pub price: Option<String>,
     /// Seller's name.
     pub seller_name: Option<String>,
+    /// The deal the sale is part of.
+    pub deal_id: Option<i64>,
+    /// Unsold (the slabs went back to stock).
+    pub cancelled: bool,
 }
 
 /// List a customer's sales
@@ -385,7 +389,8 @@ pub async fn sales(
         .ok_or(ApiError::NotFound)?;
     Ok(Json(
         sqlx::query_as(
-            "SELECT s.id, s.sale_date, CAST(s.price AS CHAR) AS price, u.name AS seller_name
+            "SELECT s.id, s.sale_date, CAST(s.price AS CHAR) AS price, u.name AS seller_name,
+                    CAST(s.deal_id AS SIGNED) AS deal_id, s.cancelled_date IS NOT NULL AS cancelled
              FROM sales s JOIN users u ON u.id = s.seller_id
              WHERE s.customer_id = ? AND s.company_id = ?
              ORDER BY s.sale_date DESC, s.id DESC",

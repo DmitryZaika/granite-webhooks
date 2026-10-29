@@ -57,6 +57,7 @@ pub struct Attachment {
     content_type: String,
     content_subtype: Option<String>,
     filename: String,
+    is_inline: bool,
     data: Bytes,
 }
 
@@ -79,6 +80,7 @@ impl Attachment {
             content_subtype: self.content_subtype,
             filename: self.filename,
             url,
+            is_inline: self.is_inline,
         }
     }
 }
@@ -235,8 +237,19 @@ pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
         content_type: clean_content_type,
         content_subtype,
         filename,
+        is_inline: is_inline_part(part),
         data,
     })
+}
+
+/// `Content-Disposition: inline`, or no disposition but a `Content-ID`: the
+/// part is drawn inside the body (a signature logo), not sent as a file.
+/// Gmail gives real attachments a `Content-ID` too, but with `attachment`.
+fn is_inline_part(part: &MessagePart) -> bool {
+    match part.content_disposition() {
+        Some(disposition) => disposition.c_type.eq_ignore_ascii_case("inline"),
+        None => part.content_id().is_some(),
+    }
 }
 
 /// Matches a forward-preamble header line: a non-whitespace word followed

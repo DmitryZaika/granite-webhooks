@@ -66,6 +66,7 @@ Rules:
 - Return ONLY the text to append. Never repeat, rewrite, or restart the draft or its current sentence.
 - If the draft ends mid-word, finish THAT word first, keeping the letters already typed (no leading space). If it ends after a full word, start with a space.
 - Stay consistent with the conversation and the rep's tone. Never invent prices, dates, or facts not in the context.
+- Name a stone color or a price only when it is in this customer's QUOTES, CUSTOMER / PROJECT INFO or CONVERSATION. Never take one from the rep's messages to other customers or from general knowledge, and never list price levels or tiers: stop and let the rep type them.
 - When the rep is about to share the inventory / stones page, use the exact customer page URL from CUSTOMER / PROJECT INFO.
 - When the rep asks the customer for their measurements or sends them a link to send us their sizes, use the exact Customer quote URL from CUSTOMER / PROJECT INFO.
 - When the message needs the rep's name, the rep's phone number or the company address, use them from SALES REP and COMPANY.

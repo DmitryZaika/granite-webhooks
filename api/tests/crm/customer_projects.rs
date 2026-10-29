@@ -104,6 +104,7 @@ async fn a_customers_sales_list_their_sellers(pool: MySqlPool) {
     assert_eq!(sales[0]["id"], 7010);
     assert_eq!(sales[0]["price"], "4200.00");
     assert_eq!(sales[0]["seller_name"], "Rita Rep");
+    assert_eq!(sales[0]["cancelled"], false);
     server
         .get("/v1/customers/2000/sales")
         .with_session(sessions::REP)

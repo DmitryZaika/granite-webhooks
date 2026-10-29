@@ -721,6 +721,8 @@ struct FoundRow {
     sale_id: Option<i32>,
     customer_id: Option<i32>,
     customer_name: Option<String>,
+    contact_phone: Option<String>,
+    contact_email: Option<String>,
 }
 
 /// An event found by the search.
@@ -762,6 +764,10 @@ pub struct FoundEvent {
     pub customer_id: Option<i32>,
     /// That customer's name.
     pub customer_name: Option<String>,
+    /// Phone for this event only; null uses the customer's.
+    pub contact_phone: Option<String>,
+    /// Email for this event only; null uses the customer's.
+    pub contact_email: Option<String>,
 }
 
 /// Search events
@@ -797,7 +803,7 @@ pub async fn search(
         "SELECT e.id, e.title, e.description, e.location, e.notes, e.start_date, e.end_date,
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.calendar_id, e.rrule,
                 e.recurrence_until, e.created_user_id, e.assigned_user_id, e.sale_id,
-                e.customer_id, c.name AS customer_name
+                e.customer_id, c.name AS customer_name, e.contact_phone, e.contact_email
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c ON c.id = e.customer_id
@@ -837,6 +843,8 @@ pub async fn search(
                 sale_id: row.sale_id,
                 customer_id: row.customer_id,
                 customer_name: row.customer_name,
+                contact_phone: row.contact_phone,
+                contact_email: row.contact_email,
             })
             .collect(),
     ))
