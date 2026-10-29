@@ -28860,6 +28860,85 @@
         ]
       }
     },
+    "/v1/quotes/{id}/view-link": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get a link to look at the quote",
+        "description": "The page the customer gets, without Accept & Sign. A `GET` so the app's\ndevice token may ask; the customer link is made the first time, as the\n`POST` does.",
+        "operationId": "quote_view_link",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteViewLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quotes/{id}/prints": {
       "post": {
         "tags": [
@@ -34984,7 +35063,7 @@
           "schedule"
         ],
         "summary": "Send a confirmation now",
-        "description": "Sends one of the company's templates to the event's customer right\naway, whenever the appointment is, and notes it in the event's history.",
+        "description": "Sends one of the company's templates to the event's customer right\naway, whenever the appointment is, and notes it in the event's history.\nThe event form offers the `confirmation` templates; any kind is accepted.",
         "operationId": "send_event_confirmation",
         "parameters": [
           {
@@ -37529,7 +37608,7 @@
           "schedule"
         ],
         "summary": "Edit a customer notification template",
-        "description": "The flows using it send the new text from then on.",
+        "description": "The flows using it send the new text from then on. It can't become a\nconfirmation while a flow uses it.",
         "operationId": "update_schedule_notification_template",
         "parameters": [
           {
@@ -37558,7 +37637,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Invalid field, or texting not set up",
+            "description": "Invalid field, texting not set up, or a confirmation a flow uses",
             "content": {
               "application/json": {
                 "schema": {
@@ -72937,7 +73016,7 @@
           "template_id": {
             "type": "integer",
             "format": "int32",
-            "description": "A template of the company."
+            "description": "A reminder template of the company."
           },
           "offset_value": {
             "type": "integer",
@@ -77865,6 +77944,7 @@
         "required": [
           "id",
           "name",
+          "kind",
           "channel",
           "body"
         ],
@@ -77877,6 +77957,10 @@
           "name": {
             "type": "string",
             "description": "What admins call it, e.g. \"Disconnect the sink\"."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TemplateKind",
+            "description": "`reminder` (flows send it) or `confirmation` (sent by hand)."
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -77907,6 +77991,17 @@
           "name": {
             "type": "string",
             "description": "At most 100 characters."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TemplateKind",
+                "description": "`reminder` or `confirmation`. Left out: `reminder` for a new template,\nunchanged on edit. A template a flow uses stays a reminder."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -84723,6 +84818,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "QuoteViewLink": {
+        "type": "object",
+        "description": "The quote's page to look at, for the app.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The customer's page with `?staff=1`: no Accept & Sign, not counted as a view."
+          }
+        }
       },
       "RateLimited": {
         "type": "object",
@@ -91914,6 +92022,14 @@
           }
         },
         "additionalProperties": false
+      },
+      "TemplateKind": {
+        "type": "string",
+        "description": "What a template is for.",
+        "enum": [
+          "reminder",
+          "confirmation"
+        ]
       },
       "TemplateOrder": {
         "type": "object",

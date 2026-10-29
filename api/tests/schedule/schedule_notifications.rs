@@ -263,6 +263,101 @@ async fn admins_manage_templates_and_flows(pool: MySqlPool) {
     assert_eq!(list().await["templates"].as_array().unwrap().len(), 0);
 }
 
+#[test_db::test(seed)]
+async fn confirmations_stay_out_of_flows(pool: MySqlPool) {
+    sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
+    let (server, _) = server(&pool).await;
+    let create = |body: Value| {
+        let server = &server;
+        async move {
+            let created: Value = server
+                .post("/v1/schedule/notifications/templates")
+                .with_session(sessions::ADMIN)
+                .json(&body)
+                .await
+                .json();
+            created["id"].as_i64().unwrap()
+        }
+    };
+    let reminder = create(email_template()).await;
+    let mut body = email_template();
+    body["name"] = json!("Confirmation");
+    body["kind"] = json!("confirmation");
+    let confirmation = create(body.clone()).await;
+    let list: Value = server
+        .get("/v1/schedule/notifications")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(list["templates"][0]["kind"], "reminder");
+    assert_eq!(list["templates"][1]["kind"], "confirmation");
+
+    // A confirmation can't be a step.
+    let refused = server
+        .post("/v1/schedule/notifications/flows")
+        .with_session(sessions::ADMIN)
+        .json(&flow(confirmation, true))
+        .await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        refused.json::<Value>()["error"],
+        "A confirmation can't go in a flow; make the template a reminder first"
+    );
+
+    // A reminder a flow sends can't become a confirmation.
+    server
+        .post("/v1/schedule/notifications/flows")
+        .with_session(sessions::ADMIN)
+        .json(&flow(reminder, true))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let mut edited = email_template();
+    edited["kind"] = json!("confirmation");
+    let refused = server
+        .put(&format!("/v1/schedule/notifications/templates/{reminder}"))
+        .with_session(sessions::ADMIN)
+        .json(&edited)
+        .await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        refused.json::<Value>()["error"],
+        "A confirmation can't go in a flow. Remove it from these flows first: Installation"
+    );
+
+    // Left out, the kind is kept; a confirmation made a reminder can go in a flow.
+    body.as_object_mut().unwrap().remove("kind");
+    server
+        .put(&format!("/v1/schedule/notifications/templates/{confirmation}"))
+        .with_session(sessions::ADMIN)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let kind = || async {
+        sqlx::query_scalar::<_, String>(
+            "SELECT CAST(kind AS CHAR) FROM schedule_notification_templates WHERE id = ?",
+        )
+        .bind(confirmation)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(kind().await, "confirmation");
+    body["kind"] = json!("reminder");
+    server
+        .put(&format!("/v1/schedule/notifications/templates/{confirmation}"))
+        .with_session(sessions::ADMIN)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(kind().await, "reminder");
+    server
+        .post("/v1/schedule/notifications/flows")
+        .with_session(sessions::ADMIN)
+        .json(&flow(confirmation, false))
+        .await
+        .assert_status(StatusCode::CREATED);
+}
+
 /// A flow on the calendar with one step 1 day before, sending a new
 /// template; returns the flow id.
 async fn rule(pool: &MySqlPool, calendar: i32, channel: &str, body: &str, is_default: bool) -> i32 {
