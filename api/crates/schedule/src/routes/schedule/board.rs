@@ -10,7 +10,7 @@
 //! loaders and actions. Repeating events come back once, with their `rrule`:
 //! the page expands them over the range.
 
-use crate::auth::{AdminUser, CurrentUser, EmployeeUser};
+use crate::auth::{AdminUser, CurrentUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::openapi::{IntoParams, ToSchema};
@@ -136,14 +136,14 @@ pub struct ScheduleEvents {
         (status = 200, description = "Events", body = ScheduleEvents),
         (status = 400, description = "Missing or invalid range", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn events(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     MultiQuery(query): MultiQuery<EventsQuery>,
 ) -> ApiResult<Json<ScheduleEvents>> {
     load_events(&state, user.company_id, &query, Scope::Board(user.id))
@@ -261,14 +261,14 @@ async fn load_events(
     responses(
         (status = 200, description = "Events", body = Vec<ScheduleEvent>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn unscheduled(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
 ) -> ApiResult<Json<Vec<ScheduleEvent>>> {
     let events = sqlx::query_as(
         "SELECT e.id, e.title, e.description, e.location,
@@ -399,14 +399,14 @@ fn default_color(user_id: i32) -> &'static str {
     responses(
         (status = 200, description = "People", body = Vec<SchedulePerson>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn people(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
 ) -> ApiResult<Json<Vec<SchedulePerson>>> {
     let rows: Vec<(i32, Option<String>, i32, Option<String>)> = sqlx::query_as(
         "SELECT u.id, u.name, up.position_id, sc.color

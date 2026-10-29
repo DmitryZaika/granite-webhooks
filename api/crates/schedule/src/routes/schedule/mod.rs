@@ -20,7 +20,7 @@ pub mod notifications;
 pub mod route;
 pub mod settings;
 
-use crate::auth::EmployeeUser;
+use crate::auth::ShopOrEmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::maps::Point;
@@ -122,14 +122,14 @@ pub struct DayMap {
     responses(
         (status = 200, description = "Map", body = DayMap),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn day_map(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     MultiQuery(query): MultiQuery<DayMapQuery>,
 ) -> ApiResult<Json<DayMap>> {
     let home_address = company_address(&state.pool, user.company_id).await?;
@@ -218,7 +218,7 @@ fn bad(message: &str) -> ApiError {
         (status = 200, description = "Route", body = OptimizedRoute),
         (status = 400, description = "Fewer than 2 or more than 20 events, events without an address, or no company address", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 502, description = "Google Maps could not build the route", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -226,7 +226,7 @@ fn bad(message: &str) -> ApiError {
 )]
 pub async fn optimize_route(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     JsonBody(input): JsonBody<RouteInput>,
 ) -> ApiResult<Json<OptimizedRoute>> {
     let pool = &state.pool;
