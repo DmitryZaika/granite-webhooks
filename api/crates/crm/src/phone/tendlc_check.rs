@@ -240,47 +240,46 @@ pub const CHECKS: &[Check] = &[
         id: "quote_form_checkbox",
         title: "Opt-in checkbox",
         page: Some(PageKind::QuoteForm),
-        rule: "Agreeing to texts is a checkbox of its own next to the phone number: not checked in \
-               advance, and not required (customers can send the form without agreeing to texts). \
-               It is only about texts: not combined with accepting terms, emails or calls. When \
-               the kinds of texts include marketing, the marketing texts have their own separate \
-               checkbox, also optional and not checked in advance.",
+        rule: "Customers agree to texts with a checkbox that is not checked in advance and not \
+               required (customers can send the form without agreeing to texts), and that is about \
+               texts (not only about accepting the terms). One checkbox for all the kinds of texts \
+               (marketing included) is fine; a separate marketing checkbox is not required. Where \
+               on the form it sits does not matter.",
     },
     Check {
         id: "quote_form_consent_text",
         title: "Opt-in wording on the quote form",
         page: Some(PageKind::QuoteForm),
-        rule: "The words of the texts checkbox (or right next to it) say: the business's name; what \
-               texts customers will get, covering every kind of text of the campaign; that message \
-               frequency varies; that message and data rates may apply; Reply STOP to opt out; \
-               Reply HELP for help. For marketing texts, also that agreeing is not a condition of \
-               purchase.",
+        rule: "The words of the texts checkbox (or near it) name the business, say in general what \
+               texts customers will get, and say how to opt out (STOP). \"Message and data rates \
+               may apply\", message frequency and HELP are expected too, but missing one of them \
+               alone is not a reason to fail. \"Not a condition of purchase\" is not required.",
     },
     Check {
         id: "quote_form_links",
         title: "Policy links on the quote form",
         page: Some(PageKind::QuoteForm),
-        rule: "The quote form page links to the privacy policy and to the terms (in or next to the \
-               opt-in words, or in the page's footer).",
+        rule: "The quote form page links to a privacy policy or to terms anywhere on the page \
+               (opt-in words, footer, menu).",
     },
     Check {
         id: "privacy_opens",
         title: "Privacy policy page",
         page: Some(PageKind::PrivacyPolicy),
-        rule: "The privacy policy link opens a public privacy policy of this business (its name or \
-               website is on it).",
+        rule: "The privacy policy link opens a public page of this business about privacy or \
+               personal data (a privacy policy, privacy choices or cookie and data page all count).",
     },
     Check {
         id: "privacy_no_sharing",
         title: "Privacy policy: phone numbers not shared",
         page: Some(PageKind::PrivacyPolicy),
-        rule: "The privacy policy says that mobile numbers, text message opt-in data and consent are \
-               not shared with or sold to third parties or affiliates for marketing or promotional \
-               purposes. Nothing else in it says the business shares or sells personal information \
-               (phone numbers included) for others' marketing without excluding text messaging data \
-               from that. Wording carriers accept: \"No mobile information will be shared with \
-               third parties or affiliates for marketing or promotional purposes. Text messaging \
-               originator opt-in data and consent will not be shared with any third parties.\"",
+        rule: "Somewhere on the business's pages (the privacy policy, the terms or the quote form) \
+               it says, in any words, that mobile numbers or text messaging opt-in data are not \
+               shared with or sold to third parties for their marketing. General language elsewhere \
+               about sharing personal information does not fail this when that statement is there. \
+               Fail only when no page says it. Wording carriers accept: \"No mobile information \
+               will be shared with third parties or affiliates for marketing or promotional \
+               purposes.\"",
     },
     Check {
         id: "terms_opens",
@@ -292,11 +291,10 @@ pub const CHECKS: &[Check] = &[
         id: "terms_texting",
         title: "Texting terms",
         page: Some(PageKind::Terms),
-        rule: "The terms have a section on text messages that says: the business's name and what \
-               texts customers get; how customers agree (the checkbox on the quote form); message \
-               frequency varies; message and data rates may apply; Reply STOP to opt out (one last \
-               text confirms it); Reply HELP for help, with the business's phone or email; carriers \
-               are not liable for delayed or undelivered messages; and where the privacy policy is.",
+        rule: "The terms have a part about text messages that names the business, says how to opt \
+               out (STOP) and how to get help (HELP or a phone or email), and that message and data \
+               rates may apply. Other details (how customers agree, frequency, carrier liability, \
+               a final STOP confirmation, a privacy link) are nice to have, never a reason to fail.",
     },
     Check {
         id: "website",
@@ -309,60 +307,59 @@ pub const CHECKS: &[Check] = &[
         id: "message_flow",
         title: "How customers opt in",
         page: None,
-        rule: "The form's \"How customers opt in\" text (message flow) describes the real opt-in: the \
-               quote form's address (exactly the quote form link on the form); that customers check \
-               an optional checkbox, not checked in advance, to agree to texts; the opt-in words they \
-               see, quoted; every other way customers agree (by phone, in person, ...) and how that \
-               is recorded; and the privacy policy and terms links. It matches what the quote form \
-               page shows.",
+        rule: "The form's \"How customers opt in\" text (message flow) says how and where customers \
+               agree to texts (a website form with its link, or another way) and that they agree \
+               by checking a box or similar. Quoting the opt-in words is fine but they need not \
+               match the page word for word; a short accurate description is enough.",
     },
     Check {
         id: "description",
         title: "What you text and why",
         page: None,
-        rule: "The form's \"What you text and why\" (description) says who sends the texts (the \
-               business name), to whom (customers who agreed) and what about, matching the chosen \
-               kinds of texts and the sample texts.",
+        rule: "The form's \"What you text and why\" (description) says what the business does and \
+               what the texts are about, in line with the chosen kinds of texts. It need not name \
+               the business or repeat who agreed.",
     },
     Check {
         id: "samples",
         title: "Sample texts",
         page: None,
-        rule: "Each sample text is a realistic text of one of the chosen kinds of texts, and together \
-               they show every chosen kind (a marketing text when marketing is chosen). Each names \
-               the business and says how to opt out (STOP). No link shorteners. They match the \
-               \"texts contain links\" and \"texts contain phone numbers\" answers. Nothing carriers \
-               forbid (sex, hate, alcohol, firearms, tobacco, cannabis, gambling, loans) unless the \
-               form declares it.",
+        rule: "The sample texts are realistic texts of this business for the chosen kinds of texts, \
+               name the business, and at least one says how to opt out (STOP). No link shorteners \
+               (bit.ly and the like). Nothing carriers forbid (sex, hate, alcohol, firearms, \
+               tobacco, cannabis, gambling, loans) unless the form declares it. Not every kind needs \
+               its own sample.",
     },
     Check {
         id: "optin_message",
         title: "Answer to opting in",
         page: None,
-        rule: "The answer to opting in names the business and what texts customers will get, and \
-               says: message frequency varies; message and data rates may apply; Reply HELP for \
-               help; Reply STOP to opt out.",
+        rule: "The answer to opting in names the business and says how to opt out (STOP). Rates, \
+               frequency, HELP and the kinds of texts are expected, but missing one of them alone is \
+               not a reason to fail.",
     },
     Check {
         id: "help_message",
         title: "Answer to HELP",
         page: None,
-        rule: "The answer to HELP names the business, says how to reach it (phone, email or \
-               website) and how to opt out (STOP).",
+        rule: "The answer to HELP names the business and says how to reach it (phone, email or \
+               website). Mentioning STOP is nice to have, never a reason to fail.",
     },
     Check {
         id: "optout_message",
         title: "Answer to STOP",
         page: None,
-        rule: "The answer to STOP names the business and confirms that they are unsubscribed and \
-               will get no more texts.",
+        rule: "The answer to STOP names the business and confirms, in any words, that they will get \
+               no more texts.",
     },
     Check {
         id: "form_choices",
         title: "Choices on the form",
         page: None,
-        rule: "The kinds of texts and the form's answers (texts contain links, texts contain phone \
-               numbers, age-restricted products, loans) match the description and the sample texts.",
+        rule: "The form's answers do not contradict the sample texts: a sample with a link needs \
+               \"texts contain links\" yes; a sample with a phone number needs \"texts contain phone \
+               numbers\" yes; age-restricted products or loans in a sample need that answer yes. \
+               What the description mentions is not a contradiction.",
     },
 ];
 
@@ -460,9 +457,12 @@ fn system_prompt(draft: &TenDlcDraft) -> String {
         "You check a US business's 10DLC texting registration before it goes to The Campaign \
 Registry and the mobile carriers (T-Mobile, AT&T, Verizon), the way their reviewers check it. \
 Carriers reject a registration whose opt-in, privacy policy, terms or texts miss what CTIA's \
-Messaging Principles and Best Practices and the carriers' 10DLC rules require. Find everything a \
-reviewer would reject, and give the business the exact text that fixes it. Be exact both ways: \
-never pass something that is missing, never fail something that is there in other words.
+Messaging Principles and Best Practices and the carriers' 10DLC rules require. Most registrations \
+of small businesses with a working opt-in are approved: fail only what a reviewer would actually \
+reject the registration for, and give the business the exact text that fixes it. Never fail for \
+best practices, extra wording, style or completeness beyond the rule. When the rule is met in \
+other words, or you are not sure a reviewer would reject it, answer pass and put any suggestion \
+in `note`. Never pass something the rule requires that is missing entirely.
 
 You get the registration form (JSON) and the business's pages as they load without JavaScript: \
 the quote form customers fill out (the opt-in) and its iframes, the privacy policy, the texting \
