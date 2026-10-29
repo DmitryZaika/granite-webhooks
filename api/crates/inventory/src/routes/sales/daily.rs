@@ -40,6 +40,7 @@ pub struct DailySale {
     pub sale_date: DateTime<Utc>,
     /// Null for a sale without a customer.
     pub customer_id: Option<i32>,
+    /// The customer's name.
     pub customer_name: Option<String>,
     /// The sales rep who sold it.
     pub seller_name: Option<String>,
@@ -63,13 +64,16 @@ pub struct DailySale {
 /// Sinks of one model on a sale.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SinkCount {
+    /// The sink model.
     pub name: String,
+    /// How many of it were sold.
     pub count: i64,
 }
 
 /// A signed contract.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SignedOrder {
+    /// The file's name.
     pub filename: String,
     /// When it was signed.
     #[serde(serialize_with = "js_date_required")]
