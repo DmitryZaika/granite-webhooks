@@ -338,6 +338,9 @@ async fn due_rules_email_the_customer_once(pool: MySqlPool) {
     // No customer, and booked after its send time: skipped.
     event(&pool, 8830, "Crew meeting", 23, false).await;
     event(&pool, 8830, "1000", 22, true).await;
+    // Its time 4 hours ago (the appointment moved, or the step changed): too
+    // late for "1 day before", skipped.
+    event(&pool, 8830, "1000", 20, false).await;
     let (server, sent) = server(&pool).await;
     let run = || {
         server
@@ -377,6 +380,7 @@ async fn due_rules_email_the_customer_once(pool: MySqlPool) {
         vec![
             "sent:",
             "skipped:booked_after_send_time",
+            "skipped:late",
             "skipped:no_customer"
         ]
     );
