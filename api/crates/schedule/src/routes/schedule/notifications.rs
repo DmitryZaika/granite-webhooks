@@ -53,6 +53,10 @@ const MAX_STEPS: usize = 10;
 /// Steps checked per run, and events per step.
 const RULE_BATCH: i64 = 500;
 const EVENT_BATCH: i64 = 200;
+/// How late a step's message may still go out. Later than this (the
+/// appointment moved or the step changed after its time) it is skipped: "1 day
+/// before" must not reach the customer on the day itself.
+const LATE_GRACE_MINUTES: i64 = 120;
 
 /// How a template reaches the customer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -1534,8 +1538,8 @@ async fn deliver(
 }
 
 /// Sends every flow step's messages that are due. A message whose time
-/// passed before the appointment was booked (or the step was added) is
-/// skipped.
+/// passed before the appointment was booked (or the step was added), or more
+/// than `LATE_GRACE_MINUTES` ago, is skipped.
 pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
     let pool = &state.pool;
     let mut run = RuleRun::default();
@@ -1624,6 +1628,8 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
                 .map_or(rule.created_at, |created| created.max(rule.created_at));
             let skip = if at < booked {
                 Some("booked_after_send_time")
+            } else if now - at > Duration::minutes(LATE_GRACE_MINUTES) {
+                Some("late")
             } else if event.customer_id.is_none() {
                 Some("no_customer")
             } else {
