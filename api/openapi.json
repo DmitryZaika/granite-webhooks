@@ -60278,10 +60278,12 @@
             ],
             "properties": {
               "item_id": {
-                "type": "string"
+                "type": "string",
+                "description": "QuickBooks item id."
               },
               "item_name": {
-                "type": "string"
+                "type": "string",
+                "description": "Its name."
               },
               "type": {
                 "type": "string",
@@ -60301,10 +60303,12 @@
             ],
             "properties": {
               "item_id": {
-                "type": "string"
+                "type": "string",
+                "description": "QuickBooks item id."
               },
               "item_name": {
-                "type": "string"
+                "type": "string",
+                "description": "Its name."
               },
               "type": {
                 "type": "string",
@@ -60323,7 +60327,8 @@
             ],
             "properties": {
               "line": {
-                "type": "string"
+                "type": "string",
+                "description": "The phrase."
               },
               "type": {
                 "type": "string",
@@ -60343,10 +60348,12 @@
             ],
             "properties": {
               "line": {
-                "type": "string"
+                "type": "string",
+                "description": "The phrase."
               },
               "to": {
-                "type": "string"
+                "type": "string",
+                "description": "What it becomes."
               },
               "type": {
                 "type": "string",
@@ -60365,7 +60372,8 @@
             ],
             "properties": {
               "text": {
-                "type": "string"
+                "type": "string",
+                "description": "The line."
               },
               "type": {
                 "type": "string",
@@ -60384,7 +60392,8 @@
             ],
             "properties": {
               "name": {
-                "type": "string"
+                "type": "string",
+                "description": "The QuickBooks class name."
               },
               "type": {
                 "type": "string",
@@ -60403,7 +60412,8 @@
             ],
             "properties": {
               "email": {
-                "type": "string"
+                "type": "string",
+                "description": "The email address."
               },
               "type": {
                 "type": "string",
@@ -61529,6 +61539,7 @@
           "id": {
             "type": "integer",
             "format": "int64",
+            "description": "Promise id.",
             "minimum": 0
           },
           "kind": {
@@ -61549,13 +61560,15 @@
               "integer",
               "null"
             ],
-            "format": "int32"
+            "format": "int32",
+            "description": "The customer; null for a caller whose number is on no customer."
           },
           "customer_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "That customer's name."
           },
           "customer_digits": {
             "type": [
@@ -61623,7 +61636,7 @@
           "scheduled": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ScheduleEvent",
+                "$ref": "#/components/schemas/PromiseEvent",
                 "description": "An appointment's event for the customer within 12 hours of it (null:\nnot on the schedule, or not an appointment)."
               },
               {
@@ -61634,7 +61647,7 @@
           "clash": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ScheduleEvent",
+                "$ref": "#/components/schemas/PromiseEvent",
                 "description": "Another appointment within the hour: one the rep promised someone\nelse, or an event assigned to them."
               },
               {
@@ -68456,7 +68469,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The customer's name."
           },
           "seller_name": {
             "type": [
@@ -82500,6 +82514,25 @@
           }
         }
       },
+      "PromiseEvent": {
+        "type": "object",
+        "description": "Something on the schedule at a time.",
+        "required": [
+          "title",
+          "start"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The event's name."
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it starts."
+          }
+        }
+      },
       "PromiseUpdate": {
         "type": "object",
         "description": "Body of `PATCH /v1/ai/promises/{id}`.",
@@ -88308,7 +88341,8 @@
         ],
         "properties": {
           "filename": {
-            "type": "string"
+            "type": "string",
+            "description": "The file's name."
           },
           "signed_at": {
             "type": "string",
@@ -88582,11 +88616,13 @@
         ],
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "The sink model."
           },
           "count": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "How many of it were sold."
           }
         }
       },
@@ -95144,13 +95180,15 @@
               "integer",
               "null"
             ],
-            "format": "int32"
+            "format": "int32",
+            "description": "The customer with that phone; null when it is on no customer."
           },
           "customer_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "That customer's name."
           },
           "text": {
             "type": "string",
@@ -95158,7 +95196,8 @@
           },
           "at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "When they sent it."
           }
         }
       },
