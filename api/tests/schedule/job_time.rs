@@ -1,16 +1,23 @@
 use crate::common;
 
+use api::app;
+use api::maps::Maps;
+use api::state::AppState;
 use axum::http::StatusCode;
-use common::{WithSession, server, sessions};
+use axum::routing::post;
+use axum::{Json, Router};
+use axum_test::TestServer;
+use common::{ALLOWED_ORIGIN, SECRET, WithSession, server, sessions};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
 
 /// Installations calendar 9800 with installers Mark (101) and Ada (102).
 /// Alice's (1000) sale 9810: 50 sq ft, a kitchen (two slabs, "X 2"
 /// waterfalls, 4" backsplash, one sink) and an island with a cooktop.
-/// Unscheduled: Alice's install (ready), a 2-hour job with no customer
-/// (ready), one not ready, and one with no length (ready). Mark is busy on
-/// Monday 2026-11-02 from 9:00 to 15:00 (EST, UTC-5).
+/// Unscheduled, oldest first: one not ready, Alice's install at Stop B
+/// (ready), a 2-hour job at Stop A (ready), one with no length (ready) and a
+/// 1-hour job at Stop A (ready). Mark is at Stop A on Monday 2026-11-02 from
+/// 9:00 to 15:00 (EST, UTC-5). The shop is at Home.
 async fn seed(pool: &MySqlPool) {
     sqlx::raw_sql(
         "INSERT INTO calendars (id, company_id, name, color, slug) VALUES
@@ -18,6 +25,7 @@ async fn seed(pool: &MySqlPool) {
            (9801, 100, 'Crew', 'red', NULL);
          INSERT INTO users_positions (user_id, position_id, company_id) VALUES
            (101, 6, 100), (102, 6, 100);
+         UPDATE company SET address = 'Home' WHERE id = 100;
          INSERT INTO sales (id, customer_id, seller_id, company_id, price, status, project_address, sale_date, square_feet) VALUES
            (9810, 1000, 100, 100, 5000, 'pending', '1 Main St', '2026-10-01 10:00:00', 50);
          INSERT INTO slab_inventory (id, stone_id, bundle, sale_id, room_uuid, room, waterfall, backsplash, tear_out, stove) VALUES
@@ -25,12 +33,13 @@ async fn seed(pool: &MySqlPool) {
            (98102, 3000, 'JT-2', 9810, UUID_TO_BIN('11111111-1111-4111-8111-111111111111'), 'kitchen', 'X 2', '4 inch', 'no', 'f/s'),
            (98103, 3000, 'JT-3', 9810, UUID_TO_BIN('22222222-2222-4222-8222-222222222222'), 'island', 'no', 'no', 'no', 'c/t');
          INSERT INTO sinks (id, sale_id, slab_id, is_deleted) VALUES (98110, 9810, 98101, 0), (98111, 9810, 98102, 1);
-         INSERT INTO events (id, title, start_date, end_date, created_user_id, calendar_id, customer_id, unscheduled, status, created_date, assigned_user_id) VALUES
-           (9820, 'Alice install', '2026-10-20 12:00:00', '2026-10-20 12:00:00', 100, 9800, 1000, 1, 'ready', '2026-10-20 10:00:00', NULL),
-           (9821, 'Small job', '2026-10-20 12:00:00', '2026-10-20 14:00:00', 100, 9800, NULL, 1, 'ready', '2026-10-21 10:00:00', NULL),
-           (9822, 'Not ready', '2026-10-20 12:00:00', '2026-10-20 14:00:00', 100, 9800, NULL, 1, 'not_ready', '2026-10-19 10:00:00', NULL),
-           (9823, 'No length', '2026-10-20 12:00:00', '2026-10-20 12:00:00', 100, 9800, NULL, 1, 'ready', '2026-10-22 10:00:00', NULL),
-           (9824, 'Mark busy', '2026-11-02 14:00:00', '2026-11-02 20:00:00', 100, 9801, NULL, 0, 'scheduled', '2026-10-22 10:00:00', 101);",
+         INSERT INTO events (id, title, location, start_date, end_date, created_user_id, calendar_id, customer_id, unscheduled, status, created_date, assigned_user_id) VALUES
+           (9820, 'Alice install', 'Stop B', '2026-10-20 12:00:00', '2026-10-20 12:00:00', 100, 9800, 1000, 1, 'ready', '2026-10-20 10:00:00', NULL),
+           (9821, 'Small job', 'Stop A', '2026-10-20 12:00:00', '2026-10-20 14:00:00', 100, 9800, NULL, 1, 'ready', '2026-10-21 10:00:00', NULL),
+           (9822, 'Not ready', NULL, '2026-10-20 12:00:00', '2026-10-20 14:00:00', 100, 9800, NULL, 1, 'not_ready', '2026-10-19 10:00:00', NULL),
+           (9823, 'No length', NULL, '2026-10-20 12:00:00', '2026-10-20 12:00:00', 100, 9800, NULL, 1, 'ready', '2026-10-22 10:00:00', NULL),
+           (9824, 'Mark busy', 'Stop A', '2026-11-02 14:00:00', '2026-11-02 20:00:00', 100, 9801, NULL, 0, 'scheduled', '2026-10-22 10:00:00', 101),
+           (9825, 'Near job', 'Stop A', '2026-10-20 12:00:00', '2026-10-20 13:00:00', 100, 9800, NULL, 1, 'ready', '2026-10-23 10:00:00', NULL);",
     )
     .execute(pool)
     .await
@@ -40,7 +49,7 @@ async fn seed(pool: &MySqlPool) {
 fn install_rules() -> Value {
     json!({
         "base_minutes": 30,
-        "per_sqft_minutes": 3,
+        "per_sqft_minutes": 3.0,
         "per_waterfall_minutes": 30,
         "per_sink_minutes": 20,
         "per_cooktop_minutes": 15,
@@ -146,45 +155,108 @@ async fn a_job_is_sized_from_the_customers_sale(pool: MySqlPool) {
     assert_eq!(time("calendar_id=9800&customer_id=1001").await, Value::Null);
 }
 
+/// Drive minutes: Home to Stop A 20, to Stop B 60, A to B 50; else 30.
+fn drive(from: &str, to: &str) -> u32 {
+    match (from, to) {
+        (a, b) if a == b => 0,
+        ("Home", "Stop A") | ("Stop A", "Home") => 20,
+        ("Home", "Stop B") | ("Stop B", "Home") => 60,
+        ("Stop A", "Stop B") | ("Stop B", "Stop A") => 50,
+        _ => 30,
+    }
+}
+
+/// A server whose Google route matrix answers with [`drive`].
+async fn server_with_drives(pool: MySqlPool) -> TestServer {
+    let router = Router::new().route(
+        "/matrix",
+        post(|Json(body): Json<Value>| async move {
+            let name = |point: &Value| point["waypoint"]["address"].as_str().unwrap().to_string();
+            let origins: Vec<String> = body["origins"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(name)
+                .collect();
+            let destinations: Vec<String> = body["destinations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(name)
+                .collect();
+            let mut elements = Vec::new();
+            for (o, from) in origins.iter().enumerate() {
+                for (d, to) in destinations.iter().enumerate() {
+                    elements.push(json!({
+                        "originIndex": o, "destinationIndex": d, "condition": "ROUTE_EXISTS",
+                        "duration": format!("{}s", drive(from, to) * 60),
+                    }));
+                }
+            }
+            Json(Value::Array(elements))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let base = format!("http://{address}");
+    let state = AppState::new(pool, SECRET, ALLOWED_ORIGIN).with_maps(Maps::new(
+        Some("key"),
+        &format!("{base}/matrix"),
+        &base,
+    ));
+    TestServer::new(app(state))
+}
+
 #[test_db::test(seed)]
-async fn auto_plan_fills_the_installers_days(pool: MySqlPool) {
+async fn auto_plan_fills_one_installers_days_by_drive_time(pool: MySqlPool) {
     seed(&pool).await;
-    let server = server(pool.clone());
+    let server = server_with_drives(pool.clone()).await;
     server
         .put("/v1/schedule/time-rules")
         .json(&json!({ "kind": "installations", "rules": install_rules() }))
         .with_session(sessions::ADMIN)
         .await
         .assert_status(StatusCode::NO_CONTENT);
+    let request = |user: Value| {
+        json!({
+            "calendar_id": 9800, "user_id": user, "start_date": "2026-11-02",
+            "days": 5, "statuses": ["ready"],
+        })
+    };
     let plan = server
         .post("/v1/schedule/auto-plan")
-        .json(&json!({
-            "calendar_id": 9800,
-            "start_date": "2026-11-02",
-            "days": 5,
-            "statuses": ["ready"],
-        }))
+        .json(&request(json!(102)))
         .with_session(sessions::REP)
         .await
         .json::<Value>();
-    // Mark is busy until 15:00, so Ada takes Alice's 4 h 45 min install at
-    // 9:00, then the 2-hour job at 14:15 after 30 minutes of driving.
+    // Ada's Monday opens with the oldest job, Alice's at Stop B: 60 minutes
+    // from the shop, 10:00 to 14:45. After the 50-minute drive to Stop A the
+    // 2-hour job no longer fits, the 1-hour one does (15:45). Tuesday opens
+    // with the 2-hour job, 20 minutes from the shop: 9:30. Mark's day is not
+    // Ada's.
     assert_eq!(
         plan["placements"],
         json!([
             {
                 "event_id": 9820, "title": "Alice install", "customer_name": "Alice Lead",
-                "assigned_user_id": 102,
-                "start_date": "2026-11-02T14:00:00Z", "end_date": "2026-11-02T18:45:00Z",
-                "minutes": 285,
+                "location": "Stop B", "assigned_user_id": 102,
+                "start_date": "2026-11-02T15:00:00Z", "end_date": "2026-11-02T19:45:00Z",
+                "minutes": 285, "drive_minutes": 60,
                 "job": "50 sq ft · 2 waterfalls · 1 sink · 1 cooktop · 4\" backsplash (1 room)",
                 "longer_than_day": false,
             },
             {
+                "event_id": 9825, "title": "Near job", "customer_name": null,
+                "location": "Stop A", "assigned_user_id": 102,
+                "start_date": "2026-11-02T20:45:00Z", "end_date": "2026-11-02T21:45:00Z",
+                "minutes": 60, "drive_minutes": 50, "job": null, "longer_than_day": false,
+            },
+            {
                 "event_id": 9821, "title": "Small job", "customer_name": null,
-                "assigned_user_id": 102,
-                "start_date": "2026-11-02T19:15:00Z", "end_date": "2026-11-02T21:15:00Z",
-                "minutes": 120, "job": null, "longer_than_day": false,
+                "location": "Stop A", "assigned_user_id": 102,
+                "start_date": "2026-11-03T14:30:00Z", "end_date": "2026-11-03T16:30:00Z",
+                "minutes": 120, "drive_minutes": 20, "job": null, "longer_than_day": false,
             },
         ])
     );
@@ -195,25 +267,48 @@ async fn auto_plan_fills_the_installers_days(pool: MySqlPool) {
             "reason": "No sale to size it from, and the event has no length.",
         }])
     );
+    assert_eq!(plan["drive_note"], Value::Null);
     // Nothing was saved.
     let waiting: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM events WHERE id BETWEEN 9820 AND 9823 AND unscheduled = 1",
+        "SELECT COUNT(*) FROM events WHERE id IN (9820, 9821, 9823, 9825) AND unscheduled = 1",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
     assert_eq!(waiting, 4);
 
-    server
+    // Mark is at Stop A until 15:00 on Monday: the 2-hour job there fills
+    // the rest of his day (no drive), and the others go to Tuesday.
+    let mark = server
         .post("/v1/schedule/auto-plan")
-        .json(&json!({ "calendar_id": 9801, "start_date": "2026-11-02", "days": 5, "statuses": ["ready"] }))
+        .json(&request(json!(101)))
         .with_session(sessions::REP)
         .await
-        .assert_status_bad_request();
-    server
-        .post("/v1/schedule/auto-plan")
-        .json(&json!({ "calendar_id": 9800, "start_date": "2026-11-02", "days": 0, "statuses": ["ready"] }))
-        .with_session(sessions::REP)
-        .await
-        .assert_status_bad_request();
+        .json::<Value>();
+    let ids: Vec<i64> = mark["placements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|placement| placement["event_id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, [9821, 9820, 9825]);
+    assert_eq!(mark["placements"][0]["start_date"], "2026-11-02T20:00:00Z");
+    assert_eq!(mark["placements"][0]["drive_minutes"], 0);
+    assert_eq!(mark["placements"][1]["start_date"], "2026-11-03T15:00:00Z");
+
+    for bad in [
+        // No installer picked, someone not an installer, not a job calendar,
+        // no days.
+        request(Value::Null),
+        request(json!(104)),
+        json!({ "calendar_id": 9801, "user_id": 102, "start_date": "2026-11-02", "days": 5, "statuses": ["ready"] }),
+        json!({ "calendar_id": 9800, "user_id": 102, "start_date": "2026-11-02", "days": 0, "statuses": ["ready"] }),
+    ] {
+        server
+            .post("/v1/schedule/auto-plan")
+            .json(&bad)
+            .with_session(sessions::REP)
+            .await
+            .assert_status_bad_request();
+    }
 }

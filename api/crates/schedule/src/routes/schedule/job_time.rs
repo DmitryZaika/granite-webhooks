@@ -677,93 +677,155 @@ pub async fn job_time_for(
 
 // ---- Auto-plan
 
-/// A job to place: its length and, when it has one, its person.
+/// The company's address: point 0 of the drive times.
+pub const SHOP: usize = 0;
+
+/// Something on a person's day: its minutes and where it is (a point of
+/// the drive times; `None` without an address).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DayStop {
+    pub start: u32,
+    pub end: u32,
+    pub place: Option<usize>,
+}
+
+/// A job to place: its length and where it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanJob {
     pub id: i32,
     pub minutes: u32,
-    pub person: Option<i32>,
+    pub place: Option<usize>,
 }
 
-/// Where a job went: the day's index, its person and its minutes of the day.
+/// Where a job went: the day's index and its minutes of the day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slot {
     pub day: usize,
-    pub person: Option<i32>,
     pub start: u32,
     pub end: u32,
 }
 
-/// Busy minutes of the day per person and day index.
-pub type Busy = HashMap<(Option<i32>, usize), Vec<(u32, u32)>>;
-
-/// The earliest start in `window` for `minutes` around the `busy` minutes,
-/// keeping `travel` minutes between jobs. A job longer than the window only
-/// fits a free day, from its start.
-pub fn find_start(
-    busy: &[(u32, u32)],
-    window: (u32, u32),
-    minutes: u32,
-    travel: u32,
-) -> Option<u32> {
-    let (open, close) = window;
-    if minutes > close.saturating_sub(open) {
-        return busy.is_empty().then_some(open);
-    }
-    let mut sorted = busy.to_vec();
-    sorted.sort_unstable();
-    let mut cursor = open;
-    for (start, end) in sorted {
-        if cursor + minutes + travel <= start && cursor + minutes <= close {
-            return Some(cursor);
-        }
-        cursor = cursor.max(end + travel);
-    }
-    (cursor + minutes <= close).then_some(cursor)
+/// Drive minutes between points (`minutes[from][to]`, `None` without a
+/// route); `fallback` where a point or a route is missing.
+pub struct Drives {
+    pub minutes: Vec<Vec<Option<u32>>>,
+    pub fallback: u32,
 }
 
-/// Places `jobs` in order, each on the first day it fits, at the earliest
-/// time; a job without a person goes to whichever of `people` is free
-/// earliest (the least booked on a tie). `None` for a job with no room.
+impl Drives {
+    pub fn between(&self, from: Option<usize>, to: Option<usize>) -> u32 {
+        match (from, to) {
+            (Some(from), Some(to)) if from == to => 0,
+            (Some(from), Some(to)) => self
+                .minutes
+                .get(from)
+                .and_then(|row| row.get(to))
+                .copied()
+                .flatten()
+                .unwrap_or(self.fallback),
+            _ => self.fallback,
+        }
+    }
+}
+
+/// Whole minutes of a drive in seconds; `None` without a route.
+fn drive_minutes(seconds: f64) -> Option<u32> {
+    // Drives take minutes to hours: the cast is safe.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let minutes = seconds
+        .is_finite()
+        .then(|| (seconds / 60.0).ceil().max(0.0) as u32);
+    minutes
+}
+
+const fn round_up(minute: u32) -> u32 {
+    minute.div_ceil(ROUND_TO) * ROUND_TO
+}
+
+/// The earliest start (on a quarter hour) for `job` on a day with `stops`.
+/// The person leaves the shop when the work day starts and drives from
+/// stop to stop; the job must end in time to drive to the next stop and by
+/// the end of the work day. A job longer than the work day only fits a free
+/// day, from its start.
+pub fn earliest_start(
+    stops: &[DayStop],
+    window: (u32, u32),
+    job: &PlanJob,
+    drives: &Drives,
+) -> Option<u32> {
+    let (open, close) = window;
+    if job.minutes > close.saturating_sub(open) {
+        return stops.is_empty().then_some(open);
+    }
+    let mut sorted = stops.to_vec();
+    sorted.sort_by_key(|stop| (stop.start, stop.end));
+    let mut free_from = open;
+    let mut at = Some(SHOP);
+    for stop in sorted {
+        let start = round_up(free_from + drives.between(at, job.place));
+        if start + job.minutes + drives.between(job.place, stop.place) <= stop.start
+            && start + job.minutes <= close
+        {
+            return Some(start);
+        }
+        if stop.end >= free_from {
+            free_from = stop.end;
+            at = stop.place;
+        }
+    }
+    let start = round_up(free_from + drives.between(at, job.place));
+    (start + job.minutes <= close).then_some(start)
+}
+
+/// Places `jobs` (oldest first) on one person's days, `days[i]` holding day
+/// i's stops. A free day opens with the oldest job that fits; then the job
+/// that can start soonest (the nearest to where the person is) goes next,
+/// until nothing fits. Placed jobs are added to `days`.
 pub fn plan(
     jobs: &[PlanJob],
-    people: &[Option<i32>],
-    days: usize,
+    days: &mut [Vec<DayStop>],
     window: (u32, u32),
-    travel: u32,
-    busy: &mut Busy,
-) -> Vec<Option<Slot>> {
-    jobs.iter()
-        .map(|job| {
-            let candidates: Vec<Option<i32>> = match job.person {
-                Some(person) => vec![Some(person)],
-                None if people.is_empty() => vec![None],
-                None => people.to_vec(),
+    drives: &Drives,
+) -> HashMap<i32, Slot> {
+    let mut waiting: Vec<&PlanJob> = jobs.iter().collect();
+    let mut placed = HashMap::new();
+    for (day, stops) in days.iter_mut().enumerate() {
+        let mut opening = stops.is_empty();
+        loop {
+            let fits = waiting.iter().enumerate().filter_map(|(rank, job)| {
+                earliest_start(stops, window, job, drives).map(|start| (rank, start))
+            });
+            let pick = if opening {
+                fits.min_by_key(|(rank, _)| *rank)
+            } else {
+                fits.min_by_key(|(rank, start)| (*start, *rank))
             };
-            let slot = (0..days).find_map(|day| {
-                candidates
-                    .iter()
-                    .filter_map(|person| {
-                        let taken = busy.get(&(*person, day)).map_or(&[][..], Vec::as_slice);
-                        let booked: u32 = taken.iter().map(|(start, end)| end - start).sum();
-                        find_start(taken, window, job.minutes, travel)
-                            .map(|start| (start, booked, *person))
-                    })
-                    .min_by_key(|(start, booked, _)| (*start, *booked))
-                    // A job longer than the day fills it.
-                    .map(|(start, _, person)| Slot {
-                        day,
-                        person,
-                        start,
-                        end: (start + job.minutes).min(window.1),
-                    })
-            })?;
-            busy.entry((slot.person, slot.day))
-                .or_default()
-                .push((slot.start, slot.end));
-            Some(slot)
-        })
-        .collect()
+            let Some((rank, start)) = pick else {
+                break;
+            };
+            let job = waiting.remove(rank);
+            let end = (start + job.minutes).min(window.1);
+            stops.push(DayStop {
+                start,
+                end,
+                place: job.place,
+            });
+            placed.insert(job.id, Slot { day, start, end });
+            opening = false;
+        }
+    }
+    placed
+}
+
+/// Minutes driven to a stop starting at `start`: from the stop before it
+/// that day, else from the shop.
+fn drive_to(stops: &[DayStop], start: u32, place: Option<usize>, drives: &Drives) -> u32 {
+    let before = stops
+        .iter()
+        .filter(|stop| stop.end <= start && stop.start < start)
+        .max_by_key(|stop| stop.end)
+        .map_or(Some(SHOP), |stop| stop.place);
+    drives.between(before, place)
 }
 
 /// The first `count` work days from `from`.
@@ -815,6 +877,10 @@ fn utc_text(at: DateTime<Utc>) -> String {
 pub struct AutoPlanInput {
     /// The Installations or Templates calendar.
     pub calendar_id: i32,
+    /// The installer (Installations) or template maker (Templates) to plan
+    /// for. Leave it out only when the company has no one in that role.
+    #[serde(default)]
+    pub user_id: Option<i32>,
     /// The first day to fill (shop time).
     pub start_date: NaiveDate,
     /// How many work days to fill, 1 to 30.
@@ -832,7 +898,9 @@ pub struct Placement {
     pub title: String,
     /// Its customer's name.
     pub customer_name: Option<String>,
-    /// The installer or template maker; null when the company has none.
+    /// Its address.
+    pub location: Option<String>,
+    /// The person planned for; null when the company has no one in the role.
     pub assigned_user_id: Option<i32>,
     /// Start (UTC, ISO 8601).
     pub start_date: String,
@@ -840,6 +908,8 @@ pub struct Placement {
     pub end_date: String,
     /// The job's length.
     pub minutes: u32,
+    /// Minutes of driving to it from the stop before (or the shop).
+    pub drive_minutes: u32,
     /// What the sale holds when the length came from it; null when the
     /// event's own length was used.
     pub job: Option<String>,
@@ -865,14 +935,18 @@ pub struct AutoPlan {
     pub placements: Vec<Placement>,
     /// The events left out.
     pub skipped: Vec<Skipped>,
+    /// Why some drives are the job time rules' drive time rather than
+    /// Google's (no company address, no Google Maps, or too many stops);
+    /// null when every drive between addresses is Google's.
+    pub drive_note: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
 struct WaitingRow {
     id: i32,
     title: String,
+    location: Option<String>,
     customer_name: Option<String>,
-    assigned_user_id: Option<i32>,
     sale_id: Option<i32>,
     customer_id: Option<i32>,
     start_date: NaiveDateTime,
@@ -883,20 +957,43 @@ struct WaitingRow {
 
 #[derive(sqlx::FromRow)]
 struct BusyRow {
-    assigned_user_id: Option<i32>,
-    calendar_id: Option<i32>,
+    location: Option<String>,
     start_date: NaiveDateTime,
     end_date: NaiveDateTime,
 }
 
-/// Auto-plan unscheduled jobs
+/// The drive-time points of `addresses`: the first `MAX_ROUTE_STOPS`
+/// distinct ones get points 1..; the rest none.
+fn address_points(addresses: &[Option<&str>]) -> (Vec<String>, Vec<Option<usize>>) {
+    let mut distinct: Vec<String> = Vec::new();
+    let points = addresses
+        .iter()
+        .map(|address| {
+            let address = address.map(str::trim).filter(|text| !text.is_empty())?;
+            let key = address.to_lowercase();
+            if let Some(index) = distinct.iter().position(|seen| seen.to_lowercase() == key) {
+                return Some(index + 1);
+            }
+            if distinct.len() >= MAX_ROUTE_STOPS {
+                return None;
+            }
+            distinct.push(address.to_string());
+            Some(distinct.len())
+        })
+        .collect();
+    (distinct, points)
+}
+
+/// Auto-plan one person's unscheduled jobs
 ///
-/// Proposes a day, time and person for each unscheduled event of the
-/// Installations or Templates calendar with one of the statuses, oldest
-/// first. Each job's length comes from its sale and the job time rules (else
-/// the event's own length); it goes on the first work day where a person has
-/// room around their other events, keeping the drive time between jobs. An
-/// event with a person keeps them. Nothing is saved.
+/// Proposes a day and time for the unscheduled events of the Installations
+/// or Templates calendar with one of the statuses that are the person's or
+/// no one's, around the person's other events (on any calendar). Each job's
+/// length comes from its sale and the job time rules (else the event's own
+/// length). The person leaves the shop when the work day starts; a free day
+/// opens with the oldest job, then the nearest job by Google drive time goes
+/// next, keeping the drive between stops. Nothing is saved: save the kept
+/// ones with `PUT /v1/events/{id}`.
 #[crate::openapi::path(
     post,
     path = "/v1/schedule/auto-plan",
@@ -905,7 +1002,7 @@ struct BusyRow {
     request_body = AutoPlanInput,
     responses(
         (status = 200, description = "Plan", body = AutoPlan),
-        (status = 400, description = "Not the Installations or Templates calendar, or days not 1 to 30", body = ErrorBody),
+        (status = 400, description = "Not the Installations or Templates calendar, days not 1 to 30, or no person of that role picked", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -931,13 +1028,39 @@ pub async fn auto_plan(
             "Plan 1 to {MAX_PLAN_DAYS} work days."
         )));
     }
+    let people: Vec<i32> = sqlx::query_scalar(
+        "SELECT DISTINCT u.id FROM users u JOIN users_positions up ON up.user_id = u.id
+          WHERE up.company_id = ? AND up.position_id = ? AND u.is_deleted = 0",
+    )
+    .bind(company_id)
+    .bind(kind.position())
+    .fetch_all(pool)
+    .await?;
+    let role = match kind {
+        JobKind::Installations => "installer",
+        JobKind::Templates => "template maker",
+    };
+    match input.user_id {
+        Some(person) if !people.contains(&person) => {
+            return Err(ApiError::BadRequest(format!(
+                "That person is not a {role} of this company."
+            )));
+        }
+        None if !people.is_empty() => {
+            return Err(ApiError::BadRequest(format!(
+                "Pick the {role} to plan for."
+            )));
+        }
+        _ => {}
+    }
+    let person = input.user_id;
     let rules = load_rules(pool, company_id, kind).await?;
     let days = work_days(&rules, input.start_date, input.days);
     let window = (rules.day_start_minute, rules.day_end_minute);
 
     let waiting: Vec<WaitingRow> = sqlx::query_as(
-        "SELECT e.id, e.title, c.name AS customer_name, e.assigned_user_id, e.sale_id,
-                e.customer_id, e.start_date, e.end_date,
+        "SELECT e.id, e.title, NULLIF(TRIM(e.location), '') AS location,
+                c.name AS customer_name, e.sale_id, e.customer_id, e.start_date, e.end_date,
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.status
            FROM events e
            JOIN users u ON e.created_user_id = u.id
@@ -945,10 +1068,12 @@ pub async fn auto_plan(
              ON c.id = e.customer_id AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL AND e.unscheduled = 1
             AND e.calendar_id = ?
+            AND (e.assigned_user_id IS NULL OR e.assigned_user_id = ?)
           ORDER BY e.created_date, e.id",
     )
     .bind(company_id)
     .bind(input.calendar_id)
+    .bind(person)
     .fetch_all(pool)
     .await?;
     let waiting: Vec<WaitingRow> = waiting
@@ -959,15 +1084,30 @@ pub async fn auto_plan(
         })
         .collect();
 
-    let people: Vec<i32> = sqlx::query_scalar(
-        "SELECT DISTINCT u.id FROM users u JOIN users_positions up ON up.user_id = u.id
-          WHERE up.company_id = ? AND up.position_id = ? AND u.is_deleted = 0
-          ORDER BY u.id",
-    )
-    .bind(company_id)
-    .bind(kind.position())
-    .fetch_all(pool)
-    .await?;
+    // The person's events, or without people the calendar's unassigned ones.
+    let busy: Vec<BusyRow> = match days.first().zip(days.last()) {
+        Some((first, last)) => {
+            sqlx::query_as(
+                "SELECT NULLIF(TRIM(e.location), '') AS location, e.start_date, e.end_date
+                   FROM events e JOIN users u ON e.created_user_id = u.id
+                  WHERE u.company_id = ? AND e.deleted_date IS NULL AND e.unscheduled = 0
+                    AND NULLIF(TRIM(e.rrule), '') IS NULL
+                    AND e.start_date < ? AND e.end_date > ?
+                    AND (e.assigned_user_id = ?
+                         OR (? IS NULL AND e.assigned_user_id IS NULL AND e.calendar_id = ?))
+                  ORDER BY e.start_date",
+            )
+            .bind(company_id)
+            .bind(shop_to_utc(*last + Duration::days(1), 0).naive_utc())
+            .bind(shop_to_utc(*first, 0).naive_utc())
+            .bind(person)
+            .bind(person)
+            .bind(input.calendar_id)
+            .fetch_all(pool)
+            .await?
+        }
+        None => Vec::new(),
+    };
 
     let mut jobs = Vec::new();
     let mut sized: HashMap<i32, Option<JobTime>> = HashMap::new();
@@ -998,64 +1138,83 @@ pub async fn auto_plan(
             }
         };
         sized.insert(event.id, time);
-        jobs.push(PlanJob {
-            id: event.id,
-            minutes,
-            person: event.assigned_user_id,
-        });
+        jobs.push((event, minutes));
     }
 
-    let mut busy = Busy::new();
-    if let (Some(first), Some(last)) = (days.first(), days.last()) {
-        let range_start = shop_to_utc(*first, 0).naive_utc();
-        let range_end = shop_to_utc(*last + Duration::days(1), 0).naive_utc();
-        let rows: Vec<BusyRow> = sqlx::query_as(
-            "SELECT e.assigned_user_id, e.calendar_id, e.start_date, e.end_date
-               FROM events e JOIN users u ON e.created_user_id = u.id
-              WHERE u.company_id = ? AND e.deleted_date IS NULL AND e.unscheduled = 0
-                AND NULLIF(TRIM(e.rrule), '') IS NULL
-                AND e.start_date < ? AND e.end_date > ?
-                AND (e.assigned_user_id IS NOT NULL OR e.calendar_id = ?)",
-        )
-        .bind(company_id)
-        .bind(range_end)
-        .bind(range_start)
-        .bind(input.calendar_id)
-        .fetch_all(pool)
-        .await?;
-        for row in rows {
-            // Without people, the calendar's events share one crew; with
-            // people, an unassigned event belongs to no one.
-            let track = match row.assigned_user_id {
-                Some(person) => Some(person),
-                None if people.is_empty() && row.calendar_id == Some(input.calendar_id) => None,
-                None => continue,
-            };
-            for (index, date) in days.iter().enumerate() {
-                if let Some(minutes) = minutes_of_day(*date, row.start_date, row.end_date) {
-                    busy.entry((track, index)).or_default().push(minutes);
-                }
+    // Drive-time points: the waiting jobs first, then the person's events.
+    let addresses: Vec<Option<&str>> = jobs
+        .iter()
+        .map(|(event, _)| event.location.as_deref())
+        .chain(busy.iter().map(|row| row.location.as_deref()))
+        .collect();
+    let (stops, points) = address_points(&addresses);
+    let mut drive_note = None;
+    let mut drives = Drives {
+        minutes: Vec::new(),
+        fallback: rules.travel_minutes,
+    };
+    let fallback = rules.travel_minutes;
+    if !stops.is_empty() {
+        match super::company_address(pool, company_id).await? {
+            None => {
+                drive_note = Some(format!(
+                    "Add the company address in settings for real drive times; each drive counts as {fallback} minutes."
+                ));
             }
+            Some(home) => match state.maps.drive_times(&home, &stops).await {
+                Ok(cost) => {
+                    drives.minutes = cost
+                        .iter()
+                        .map(|row| row.iter().copied().map(drive_minutes).collect())
+                        .collect();
+                }
+                Err(reason) => {
+                    drive_note = Some(format!("{reason} Each drive counts as {fallback} minutes."));
+                }
+            },
+        }
+        if drive_note.is_none()
+            && points
+                .iter()
+                .zip(&addresses)
+                .any(|(point, address)| point.is_none() && address.is_some())
+        {
+            drive_note = Some(format!(
+                "Only the first {MAX_ROUTE_STOPS} addresses get Google drive times; the rest count as {fallback} minutes."
+            ));
         }
     }
 
-    let candidates: Vec<Option<i32>> = people.iter().copied().map(Some).collect();
-    let slots = plan(
-        &jobs,
-        &candidates,
-        days.len(),
-        window,
-        rules.travel_minutes,
-        &mut busy,
-    );
+    let plan_jobs: Vec<PlanJob> = jobs
+        .iter()
+        .zip(&points)
+        .map(|((event, minutes), place)| PlanJob {
+            id: event.id,
+            minutes: *minutes,
+            place: *place,
+        })
+        .collect();
+    let busy_points = &points[jobs.len()..];
+    let mut day_stops: Vec<Vec<DayStop>> = vec![Vec::new(); days.len()];
+    for (row, place) in busy.iter().zip(busy_points) {
+        for (index, date) in days.iter().enumerate() {
+            if let Some((start, end)) = minutes_of_day(*date, row.start_date, row.end_date) {
+                day_stops[index].push(DayStop {
+                    start,
+                    end,
+                    place: *place,
+                });
+            }
+        }
+    }
+    let slots = plan(&plan_jobs, &mut day_stops, window, &drives);
+
     let mut placements = Vec::new();
-    for (job, slot) in jobs.iter().zip(slots) {
-        let event = waiting.iter().find(|event| event.id == job.id);
-        let title = event.map(|event| event.title.clone()).unwrap_or_default();
-        let Some(slot) = slot else {
+    for (job, (event, _)) in plan_jobs.iter().zip(&jobs) {
+        let Some(slot) = slots.get(&job.id) else {
             skipped.push(Skipped {
                 event_id: job.id,
-                title,
+                title: event.title.clone(),
                 reason: format!("No room in the next {} work days.", days.len()),
             });
             continue;
@@ -1063,12 +1222,18 @@ pub async fn auto_plan(
         let date = days[slot.day];
         placements.push(Placement {
             event_id: job.id,
-            title,
-            customer_name: event.and_then(|event| event.customer_name.clone()),
-            assigned_user_id: slot.person,
+            title: event.title.clone(),
+            customer_name: event.customer_name.clone(),
+            location: event.location.clone(),
+            assigned_user_id: person,
             start_date: utc_text(shop_to_utc(date, slot.start)),
             end_date: utc_text(shop_to_utc(date, slot.end)),
             minutes: job.minutes,
+            drive_minutes: if job.minutes > window.1 - window.0 {
+                0
+            } else {
+                drive_to(&day_stops[slot.day], slot.start, job.place, &drives)
+            },
             job: sized
                 .get(&job.id)
                 .and_then(Option::as_ref)
@@ -1080,6 +1245,7 @@ pub async fn auto_plan(
     Ok(Json(AutoPlan {
         placements,
         skipped,
+        drive_note,
     }))
 }
 
@@ -1151,78 +1317,148 @@ mod tests {
         assert!(job_time(&TimeRules::default(), &size).is_none());
     }
 
-    #[test]
-    fn a_start_fits_around_busy_time_with_travel() {
-        let day = (540, 1020);
-        assert_eq!(find_start(&[], day, 120, 30), Some(540));
-        // 9:00-11:00 busy: next at 11:30.
-        assert_eq!(find_start(&[(540, 660)], day, 120, 30), Some(690));
-        // Room before a 13:00 job: 9:00 + 2 h + 30 min <= 13:00.
-        assert_eq!(find_start(&[(780, 900)], day, 120, 30), Some(540));
-        // No room left.
-        assert_eq!(find_start(&[(540, 960)], day, 120, 30), None);
-        // Longer than the day: only on a free day.
-        assert_eq!(find_start(&[], day, 600, 30), Some(540));
-        assert_eq!(find_start(&[(540, 600)], day, 600, 30), None);
+    fn drives() -> Drives {
+        // Shop 0, A 1, B 2: A is 20 minutes from the shop, B 60; A-B 50.
+        let table = [[0, 20, 60], [20, 0, 50], [60, 50, 0]];
+        Drives {
+            minutes: table
+                .iter()
+                .map(|row| row.iter().map(|minutes| Some(*minutes)).collect())
+                .collect(),
+            fallback: 30,
+        }
+    }
+
+    fn job(id: i32, minutes: u32, place: Option<usize>) -> PlanJob {
+        PlanJob { id, minutes, place }
     }
 
     #[test]
-    fn jobs_go_to_the_earliest_free_person_and_keep_their_own() {
-        let mut busy = Busy::new();
-        busy.insert((Some(1), 0), vec![(540, 900)]);
-        let jobs = [
-            PlanJob {
-                id: 10,
-                minutes: 240,
-                person: None,
-            },
-            PlanJob {
-                id: 11,
-                minutes: 240,
-                person: None,
-            },
-            PlanJob {
-                id: 12,
-                minutes: 120,
-                person: Some(1),
-            },
-        ];
-        let slots = plan(&jobs, &[Some(1), Some(2)], 2, (540, 1020), 30, &mut busy);
-        // Person 1 is busy until 15:00, so person 2 takes the first job.
+    fn a_start_leaves_room_to_drive() {
+        let day = (540, 1020);
+        let drives = drives();
+        // From the shop to A: 9:20, rounded to 9:30.
         assert_eq!(
-            slots[0],
-            Some(Slot {
-                day: 0,
-                person: Some(2),
-                start: 540,
-                end: 780
-            })
+            earliest_start(&[], day, &job(1, 120, Some(1)), &drives),
+            Some(570)
         );
-        // Neither has 4 hours left on day 0; on day 1 both are free.
+        // After a stop at B until 11:00: 50 minutes to A, 11:50 -> 12:00.
+        let at_b = [DayStop {
+            start: 600,
+            end: 660,
+            place: Some(2),
+        }];
         assert_eq!(
-            slots[1],
-            Some(Slot {
-                day: 1,
-                person: Some(1),
-                start: 540,
-                end: 780
-            })
+            earliest_start(&at_b, day, &job(1, 120, Some(1)), &drives),
+            Some(720)
         );
-        // Person 1's own job: no room on day 0, after the other job on day 1.
+        // Room before a 13:00 stop at B: 9:30 + 2 h + 50 min <= 13:00.
+        let later = [DayStop {
+            start: 780,
+            end: 900,
+            place: Some(2),
+        }];
         assert_eq!(
-            slots[2],
-            Some(Slot {
-                day: 1,
-                person: Some(1),
-                start: 810,
-                end: 930
-            })
+            earliest_start(&later, day, &job(1, 120, Some(1)), &drives),
+            Some(570)
         );
+        // No address: the rules' 30 minutes.
         assert_eq!(
-            plan(&jobs[..1], &[], 1, (540, 1020), 30, &mut Busy::new())[0]
-                .unwrap()
-                .person,
+            earliest_start(&[], day, &job(1, 120, None), &drives),
+            Some(570)
+        );
+        // No room left.
+        let full = [DayStop {
+            start: 540,
+            end: 960,
+            place: None,
+        }];
+        assert_eq!(
+            earliest_start(&full, day, &job(1, 120, None), &drives),
             None
         );
+        // Longer than the day: only on a free day, from its start.
+        assert_eq!(
+            earliest_start(&[], day, &job(1, 600, None), &drives),
+            Some(540)
+        );
+        assert_eq!(
+            earliest_start(&at_b, day, &job(1, 600, None), &drives),
+            None
+        );
+    }
+
+    #[test]
+    fn a_day_opens_with_the_oldest_job_then_the_nearest() {
+        let drives = drives();
+        // Oldest first: far B, then near A, then another near A.
+        let jobs = [
+            job(10, 120, Some(2)),
+            job(11, 120, Some(1)),
+            job(12, 60, Some(1)),
+        ];
+        let mut days = vec![Vec::new(), Vec::new()];
+        let slots = plan(&jobs, &mut days, (540, 1020), &drives);
+        // B opens day 0 at 10:00 (60 min drive); then A 12:00 + 50 -> 12:50 -> 13:00.
+        assert_eq!(
+            slots[&10],
+            Slot {
+                day: 0,
+                start: 600,
+                end: 720
+            }
+        );
+        assert_eq!(
+            slots[&11],
+            Slot {
+                day: 0,
+                start: 780,
+                end: 900
+            }
+        );
+        // The second A job: same place, right after.
+        assert_eq!(
+            slots[&12],
+            Slot {
+                day: 0,
+                start: 900,
+                end: 960
+            }
+        );
+        assert_eq!(drive_to(&days[0], 780, Some(1), &drives), 50);
+        assert_eq!(drive_to(&days[0], 600, Some(2), &drives), 60);
+    }
+
+    #[test]
+    fn busy_days_push_jobs_later() {
+        let drives = drives();
+        let mut days = vec![
+            vec![DayStop {
+                start: 0,
+                end: 1440,
+                place: None,
+            }],
+            Vec::new(),
+        ];
+        let slots = plan(&[job(1, 120, Some(1))], &mut days, (540, 1020), &drives);
+        assert_eq!(
+            slots[&1],
+            Slot {
+                day: 1,
+                start: 570,
+                end: 690
+            }
+        );
+        let none = plan(
+            &[job(2, 120, Some(1))],
+            &mut [vec![DayStop {
+                start: 0,
+                end: 1440,
+                place: None,
+            }]],
+            (540, 1020),
+            &drives,
+        );
+        assert!(none.is_empty());
     }
 }
