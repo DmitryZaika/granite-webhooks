@@ -212,6 +212,8 @@ pub struct InvoiceRow {
 
 /// A whole invoice.
 #[derive(Debug, Clone, Serialize, ToSchema)]
+// Billing's Stripe `Invoice` already has that schema name.
+#[schema(as = CrmInvoice)]
 pub struct Invoice {
     /// Invoice id.
     pub id: i32,
