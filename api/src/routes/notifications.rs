@@ -372,15 +372,18 @@ fn type_title(kind: &str) -> Option<&'static str> {
         PHONE_PORT => "Number Port",
         PROMISE_DUE => "Promise Reminder",
         PROMISE_DIGEST => "Morning List",
+        PROMISE_APPROVAL => "Approval Reminder",
         _ => return None,
     })
 }
 
-/// AI promises' notifications (`crate::promises`): a promise came due, and
-/// the morning list. They may name a customer but no deal, and open the rep's
-/// promise list.
+/// AI promises' notifications (`crate::promises`): a promise came due, the
+/// morning list, and an approval got no reply. They may name a customer but
+/// no deal, and open the rep's promise list.
 const PROMISE_DUE: &str = "ai_promise_due";
 const PROMISE_DIGEST: &str = "ai_promise_digest";
+/// Something sent for a customer's approval got no reply in a day.
+const PROMISE_APPROVAL: &str = "ai_promise_approval";
 const PROMISES_HREF: &str = "/employee/promises";
 
 /// `notifications.notification_type` of a 911 alert (`phone::alerts`): it
@@ -533,7 +536,8 @@ async fn activity(
             -- number ports' and AI promises' (they name no deal).
             AND ((d.id IS NOT NULL AND c.id IS NOT NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
-                                            'phone_port', 'ai_promise_due', 'ai_promise_digest'))
+                                            'phone_port', 'ai_promise_due', 'ai_promise_digest',
+                                            'ai_promise_approval'))
             -- Signature status is emailed to the sender, so it is not listed here.
             AND (n.notification_type IS NULL OR n.notification_type NOT IN
                  ('signature_viewed', 'signature_signed', 'signature_declined'))
@@ -560,7 +564,7 @@ async fn activity(
             let alert = kind == Some(E911_ALERT);
             let texting = matches!(kind, Some(TENDLC_READY | TENDLC_STATUS));
             let port = kind == Some(PHONE_PORT);
-            let promise = matches!(kind, Some(PROMISE_DUE | PROMISE_DIGEST));
+            let promise = matches!(kind, Some(PROMISE_DUE | PROMISE_DIGEST | PROMISE_APPROVAL));
             let customer = row.customer_name.unwrap_or_default();
             let href = match (row.deal_id, row.customer_id) {
                 _ if alert => E911_ALERT_HREF.to_string(),

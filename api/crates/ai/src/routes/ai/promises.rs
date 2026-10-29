@@ -50,7 +50,8 @@ pub struct ScheduleEvent {
 pub struct AiPromise {
     pub id: u64,
     /// `promise`: the rep's; `quote`: a change the customer asked for in
-    /// their quote.
+    /// their quote; `approval`: something the rep sent for the customer's
+    /// approval (due a day later).
     pub kind: String,
     /// Where it was said: `call`, `sms` or `email`.
     pub source: String,
