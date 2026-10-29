@@ -24304,6 +24304,483 @@
         ]
       }
     },
+    "/v1/invoices": {
+      "get": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "List the company's invoices",
+        "description": "Returns the invoices the CRM keeps itself (not QuickBooks invoices, which\nare at `GET /v1/customers/{id}/qbo-invoices`), highest number first, at\nmost 500, with `next_number`: the number a new invoice gets. Filters\ncombine: `customer_id`, `quote_id`, `status`, and `search` (an invoice\nnumber, or part of the bill-to name, email or project address). Open one\nwith `GET /v1/invoices/{id}`.",
+        "operationId": "list_invoices",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "Only this customer's invoices.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "quote_id",
+            "in": "query",
+            "description": "Only invoices made from this quote.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only invoices with this status.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/InvoiceStatus"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Matches the invoice number exactly, or part of the bill-to name,\nemail or project address.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching invoices and the next number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A filter is not valid (unknown status, non-numeric id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Create an invoice",
+        "description": "Saves a new invoice as a `draft`, for companies that invoice without\nQuickBooks. Line amounts, the subtotal and the total (subtotal + tax)\nare computed here. Without `invoice_number` it takes the company's next\nnumber. With a `quote_id` and no `customer_id`, the quote's customer is\nbilled. Nothing is sent: email it to the customer with `POST /v1/emails`\n(the invoice PDF attached), then mark it sent with\n`PUT /v1/invoices/{id}/status`.",
+        "operationId": "create_invoice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, bad date or email, no priced line, or an unknown customer or quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The invoice number is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/invoices/{id}": {
+      "get": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Get one invoice",
+        "description": "Returns the whole invoice: its lines, totals, status, customer and\nquote. Only the caller's company's invoices are found.",
+        "operationId": "get_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Edit an invoice",
+        "description": "Replaces the invoice's number, customer, quote, dates, bill-to, lines,\ntax and notes with the body (same rules as `POST /v1/invoices`; leaving\nout `invoice_number` keeps the current one). The status is not changed:\nuse `PUT /v1/invoices/{id}/status`. Returns the saved invoice.",
+        "operationId": "update_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, bad date or email, no priced line, or an unknown customer or quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The invoice number is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/invoices/{id}/status": {
+      "put": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Change an invoice's status",
+        "description": "Marks the invoice `draft`, `sent`, `paid` or `void`. `sent` (and `paid`)\nrecord when it was first sent; `paid` records when it was paid, and any\nother status clears that. Call it with `sent` after emailing the invoice\nto the customer. Returns the invoice.",
+        "operationId": "set_invoice_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceStatusInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The invoice with its new status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/shop/maintenance": {
       "get": {
         "tags": [
@@ -28808,6 +29285,85 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PortalToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/view-link": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get a link to look at the quote",
+        "description": "The page the customer gets, without Accept & Sign. A `GET` so the app's\ndevice token may ask; the customer link is made the first time, as the\n`POST` does.",
+        "operationId": "quote_view_link",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteViewLink"
                 }
               }
             }
@@ -34984,7 +35540,7 @@
           "schedule"
         ],
         "summary": "Send a confirmation now",
-        "description": "Sends one of the company's templates to the event's customer right\naway, whenever the appointment is, and notes it in the event's history.",
+        "description": "Sends one of the company's templates to the event's customer right\naway, whenever the appointment is, and notes it in the event's history.\nThe event form offers the `confirmation` templates; any kind is accepted.",
         "operationId": "send_event_confirmation",
         "parameters": [
           {
@@ -37529,7 +38085,7 @@
           "schedule"
         ],
         "summary": "Edit a customer notification template",
-        "description": "The flows using it send the new text from then on.",
+        "description": "The flows using it send the new text from then on. It can't become a\nconfirmation while a flow uses it.",
         "operationId": "update_schedule_notification_template",
         "parameters": [
           {
@@ -37558,7 +38114,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Invalid field, or texting not set up",
+            "description": "Invalid field, texting not set up, or a confirmation a flow uses",
             "content": {
               "application/json": {
                 "schema": {
@@ -47036,6 +47592,88 @@
         ]
       }
     },
+    "/v1/company/auto-unscheduled-jobs": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch a sold quote's jobs in Unscheduled",
+        "description": "Admin › Automations. When on, marking a quote sold adds a template and an\ninstallation event to the schedule's Unscheduled list\n(`auto_unscheduled_jobs` in `GET /v1/company/features`).",
+        "operationId": "save_company_auto_unscheduled_jobs",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoUnscheduledJobsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/company/api-token-email": {
       "post": {
         "tags": [
@@ -47717,6 +48355,247 @@
           },
           "403": {
             "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/position-sections": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "List position access",
+        "description": "Every section of the app, and for Inventory Manager and Scheduling\nManager the sections they open in the company, their defaults and\nwhether the company changed them. Someone who holds only these positions\nreaches only their sections (with several, all of them together); any\nother position except the portal ones keeps the whole app. Superusers and\ncompany managers (admins with the Manager position); superusers may pass\n`company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
+        "operationId": "list_position_sections",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sections and each position's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionAccess"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/position-sections/{position_id}": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Save a position's sections",
+        "description": "Replaces the sections the position opens in the company, from then on\nfor every user holding it (their next request). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
+        "operationId": "save_position_sections",
+        "parameters": [
+          {
+            "name": "position_id",
+            "in": "path",
+            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionSectionsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not a sectioned position, or an unknown section",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Reset a position's sections",
+        "description": "The position opens its default sections again in the company.",
+        "operationId": "reset_position_sections",
+        "parameters": [
+          {
+            "name": "position_id",
+            "in": "path",
+            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Back to the defaults"
+          },
+          "400": {
+            "description": "Not a sectioned position",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
             "content": {
               "application/json": {
                 "schema": {
@@ -61924,6 +62803,16 @@
             ],
             "description": "That portal's start page."
           },
+          "sections": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The sections of the app the user reaches, when a sectioned position\n(Inventory Manager, Scheduling Manager) limits them: keys such as\n`inventory`, `inventory_admin`, `customers`, `schedule`\n(`GET /v1/company/position-sections` lists them all). The API refuses\nthe rest. Null when they reach the whole app."
+          },
           "has_cloudtalk_api": {
             "type": "boolean",
             "description": "The company has CloudTalk."
@@ -62406,6 +63295,20 @@
           "enabled": {
             "type": "boolean",
             "description": "On: marking a deal won or a quote sold opens the sale form."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AutoUnscheduledJobsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/auto-unscheduled-jobs`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: marking a quote sold adds its template and installation to\nUnscheduled."
           }
         },
         "additionalProperties": false
@@ -65469,7 +66372,8 @@
           "ringcentral",
           "telnyx",
           "telnyx_sms",
-          "auto_sale"
+          "auto_sale",
+          "auto_unscheduled_jobs"
         ],
         "properties": {
           "quickbooks_enabled": {
@@ -65515,6 +66419,10 @@
           "auto_sale": {
             "type": "boolean",
             "description": "Marking a deal won or a quote sold opens the sale form, filled from\nthe quote (Admin › Automations, `PUT /v1/company/auto-sale`)."
+          },
+          "auto_unscheduled_jobs": {
+            "type": "boolean",
+            "description": "Marking a quote sold adds its template and installation to the\nschedule's Unscheduled list (Admin › Automations,\n`PUT /v1/company/auto-unscheduled-jobs`)."
           }
         }
       },
@@ -66957,7 +67865,7 @@
               "string",
               "null"
             ],
-            "description": "What it is: a direct line's own label (null when it has none),\n`RingCentral`, `CloudTalk` or `Mobile` (their own phone)."
+            "description": "What it is: a direct line's own label (null when it has none),\n`Work` (their `RingCentral` number), `Office` (their `CloudTalk`\nnumber) or `Mobile` (their own phone). The app never names the provider."
           }
         }
       },
@@ -67300,6 +68208,171 @@
           "state": {
             "$ref": "#/components/schemas/OnboardingState",
             "description": "The saved state after the credit."
+          }
+        }
+      },
+      "CrmInvoice": {
+        "type": "object",
+        "description": "A whole invoice.",
+        "required": [
+          "id",
+          "invoice_number",
+          "status",
+          "invoice_date",
+          "bill_to_name",
+          "lines",
+          "subtotal",
+          "tax",
+          "total"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Invoice id."
+          },
+          "invoice_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Invoice number, unique in the company."
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvoiceStatus",
+            "description": "`draft`, `sent`, `paid` or `void`."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The CRM customer billed; null when the invoice bills someone else."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That customer's current name in the CRM; null without a customer."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The quote it was made from; null for an invoice made by hand."
+          },
+          "quote_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That quote's name; null without a quote."
+          },
+          "invoice_date": {
+            "type": "string",
+            "description": "Invoice date, `YYYY-MM-DD`."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Due date, `YYYY-MM-DD`; null when due on receipt."
+          },
+          "bill_to_name": {
+            "type": "string",
+            "description": "Name under \"Bill to\"."
+          },
+          "bill_to_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email it is sent to; null when none."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job site address; null when none."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceLine"
+            },
+            "description": "The lines, in order."
+          },
+          "subtotal": {
+            "type": "number",
+            "format": "double",
+            "description": "Sum of the line amounts, in dollars."
+          },
+          "tax": {
+            "type": "number",
+            "format": "double",
+            "description": "Sales tax, in dollars."
+          },
+          "total": {
+            "type": "number",
+            "format": "double",
+            "description": "`subtotal` + `tax`, in dollars."
+          },
+          "customer_memo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Message to the customer printed on the invoice; null when none."
+          },
+          "private_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal note, never printed; null when none."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was first sent (ISO 8601, UTC); null while a draft."
+          },
+          "paid_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was marked paid (ISO 8601, UTC); null unless `paid`."
+          },
+          "created_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the user who created it; null when unknown."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was created (ISO 8601, UTC)."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it last changed (ISO 8601, UTC)."
           }
         }
       },
@@ -72836,7 +73909,7 @@
           "template_id": {
             "type": "integer",
             "format": "int32",
-            "description": "A template of the company."
+            "description": "A reminder template of the company."
           },
           "offset_value": {
             "type": "integer",
@@ -74669,6 +75742,99 @@
           }
         }
       },
+      "InvoiceInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/invoices` and `PUT /v1/invoices/{id}`: the whole\ninvoice as the editor shows it. Totals are computed by the API.",
+        "required": [
+          "invoice_date",
+          "bill_to_name",
+          "lines"
+        ],
+        "properties": {
+          "invoice_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Invoice number, unique in the company. Leave it out on create to\ntake the next one (`next_number` of `GET /v1/invoices`); on update,\nleaving it out keeps the current number."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The CRM customer billed (`GET /v1/customers`). Null bills someone\nwho is not a customer record; with a `quote_id` and no customer, the\nquote's customer is used."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The quote the invoice was made from, if any. It must be one of the\ncompany's quotes, and of `customer_id` when both are given."
+          },
+          "invoice_date": {
+            "type": "string",
+            "description": "Invoice date, `YYYY-MM-DD`."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Due date, `YYYY-MM-DD`, on or after `invoice_date`; null or empty for\nnone (due on receipt)."
+          },
+          "bill_to_name": {
+            "type": "string",
+            "description": "Name printed under \"Bill to\"; required."
+          },
+          "bill_to_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email the invoice is sent to; null or empty for none."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job site address printed on the invoice, on one line."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceLine"
+            },
+            "description": "The lines, in order; at least one must have a price. Blank lines\n(no text, no price) are dropped. At most 200."
+          },
+          "tax": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sales tax in dollars, added to the subtotal; 0 when left out."
+          },
+          "customer_memo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Message to the customer printed on the invoice."
+          },
+          "private_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal note; never printed or sent."
+          }
+        }
+      },
       "InvoiceInstructions": {
         "type": "object",
         "description": "`GET`/`PUT /v1/qbo/invoice-instructions`.",
@@ -74690,6 +75856,88 @@
               "type": "string"
             },
             "description": "What could not be made into a rule, and why."
+          }
+        }
+      },
+      "InvoiceLine": {
+        "type": "object",
+        "description": "One line of an invoice, in the order it is printed.\n\nA line with a `unit_price` is priced: `amount` = `qty` × `unit_price`,\nrounded to cents (a negative price makes a discount). A line without a\n`unit_price` is text only (a note under the line above) and has no `qty`\nor `amount`.",
+        "required": [
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "What was sold, or the note's text."
+          },
+          "qty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Quantity; 1 when a priced line leaves it out. Null on a text line."
+          },
+          "unit_price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Price of one unit, in dollars. Null makes the line text only."
+          },
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "`qty` × `unit_price` in dollars, rounded to cents. Computed by the\nAPI: a value sent in a request is ignored. Null on a text line."
+          }
+        }
+      },
+      "InvoiceList": {
+        "type": "object",
+        "description": "`GET /v1/invoices`.",
+        "required": [
+          "invoices",
+          "next_number"
+        ],
+        "properties": {
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceSummary"
+            },
+            "description": "Matching invoices, highest number first; at most 500."
+          },
+          "next_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number the next new invoice gets when none is given."
+          }
+        }
+      },
+      "InvoiceStatus": {
+        "type": "string",
+        "description": "Where an invoice stands.\n\n- `draft`: saved, not emailed to the customer yet\n- `sent`: emailed to the customer (or handed over), not paid\n- `paid`: the customer paid it\n- `void`: cancelled; kept so its number is not reused",
+        "enum": [
+          "draft",
+          "sent",
+          "paid",
+          "void"
+        ]
+      },
+      "InvoiceStatusInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/invoices/{id}/status`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/InvoiceStatus",
+            "description": "The new status. `sent` records when it was first sent; `paid` records\nwhen it was paid (cleared again by any other status)."
           }
         }
       },
@@ -77764,6 +79012,7 @@
         "required": [
           "id",
           "name",
+          "kind",
           "channel",
           "body"
         ],
@@ -77776,6 +79025,10 @@
           "name": {
             "type": "string",
             "description": "What admins call it, e.g. \"Disconnect the sink\"."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TemplateKind",
+            "description": "`reminder` (flows send it) or `confirmation` (sent by hand)."
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -77806,6 +79059,17 @@
           "name": {
             "type": "string",
             "description": "At most 100 characters."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TemplateKind",
+                "description": "`reminder` or `confirmation`. Left out: `reminder` for a new template,\nunchanged on edit. A template a flow uses stays a reminder."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -81628,6 +82892,30 @@
           }
         }
       },
+      "PositionAccess": {
+        "type": "object",
+        "description": "`GET /v1/company/position-sections`.",
+        "required": [
+          "sections",
+          "positions"
+        ],
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SectionInfo"
+            },
+            "description": "Every section, in the order to show them."
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PositionSections"
+            },
+            "description": "Each sectioned position. My Account and Report a Bug always stay open."
+          }
+        }
+      },
       "PositionRow": {
         "type": "object",
         "description": "A position the user holds in the current company.",
@@ -81641,6 +82929,58 @@
             "description": "`positions.id`, e.g. 1 = sales rep, 9 = super admin."
           }
         }
+      },
+      "PositionSections": {
+        "type": "object",
+        "description": "One sectioned position in the company.",
+        "required": [
+          "position_id",
+          "sections",
+          "default_sections",
+          "customized"
+        ],
+        "properties": {
+          "position_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`positions.id`: 12 Inventory Manager, 13 Scheduling Manager."
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The sections it opens in this company, in [`SectionInfo`] order."
+          },
+          "default_sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The sections it opens in a company that has not changed it."
+          },
+          "customized": {
+            "type": "boolean",
+            "description": "The company changed it (false: it uses the defaults)."
+          }
+        }
+      },
+      "PositionSectionsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/position-sections/{position_id}`.",
+        "required": [
+          "sections"
+        ],
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Section keys the position opens (may be empty: then only My Account)."
+          }
+        },
+        "additionalProperties": false
       },
       "PrepareAttachments": {
         "type": "object",
@@ -84623,6 +85963,19 @@
         },
         "additionalProperties": false
       },
+      "QuoteViewLink": {
+        "type": "object",
+        "description": "The quote's page to look at, for the app.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The customer's page with `?staff=1`: no Accept & Sign, not counted as a view."
+          }
+        }
+      },
       "RateLimited": {
         "type": "object",
         "description": "`429`: wait before trying again.",
@@ -87104,6 +88457,29 @@
             ],
             "format": "int32",
             "description": "A calendar of the caller's company."
+          }
+        }
+      },
+      "SectionInfo": {
+        "type": "object",
+        "description": "A part of the app a position may open.",
+        "required": [
+          "key",
+          "label",
+          "admin"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable key (`inventory`, `customers`, `schedule`, ...)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its name on the Company page."
+          },
+          "admin": {
+            "type": "boolean",
+            "description": "Opens admin pages (e.g. the admin inventory) without making the user\na company admin."
           }
         }
       },
@@ -91814,6 +93190,14 @@
         },
         "additionalProperties": false
       },
+      "TemplateKind": {
+        "type": "string",
+        "description": "What a template is for.",
+        "enum": [
+          "reminder",
+          "confirmation"
+        ]
+      },
       "TemplateOrder": {
         "type": "object",
         "description": "The caller's sorting of one picker.",
@@ -95698,6 +97082,10 @@
     {
       "name": "quickbooks",
       "description": "QuickBooks Online invoices and customers"
+    },
+    {
+      "name": "invoices",
+      "description": "Invoices the CRM keeps itself, for companies without QuickBooks"
     },
     {
       "name": "followups",

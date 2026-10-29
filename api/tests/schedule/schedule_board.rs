@@ -235,6 +235,29 @@ async fn admins_pick_the_day_weeks_start_on(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn the_shop_sees_the_schedule(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let april = "/v1/schedule/events?start=2026-04-01T00:00:00Z&end=2026-04-30T23:59:59Z";
+    // Vic (104) is not an employee.
+    server
+        .get(april)
+        .with_session(sessions::VIEWER)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (104, 4, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    server
+        .get(april)
+        .with_session(sessions::VIEWER)
+        .await
+        .assert_status_ok();
+}
+
+#[test_db::test(seed)]
 async fn each_user_picks_their_own_week_start_and_clock(pool: MySqlPool) {
     let server = server(pool);
     let settings = |session: &'static str| {

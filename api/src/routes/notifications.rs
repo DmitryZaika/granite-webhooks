@@ -204,6 +204,13 @@ pub async fn done(
     if !input.clear_all && input.items.is_empty() {
         return Err(ApiError::BadRequest("notification target required".into()));
     }
+    // Read before the transaction: the Lambda pool has one connection, which
+    // the transaction holds until it commits.
+    let listed = if input.hide_only && input.clear_all {
+        unread_email(&state, &user).await?
+    } else {
+        Vec::new()
+    };
     let mut tx = state.pool.begin().await?;
     if input.clear_all || !phone_calls.is_empty() {
         let mut builder = QueryBuilder::<MySql>::new(
@@ -250,9 +257,7 @@ pub async fn done(
         builder.build().execute(&mut *tx).await?;
     }
     if input.hide_only {
-        let listed;
         let threads: Vec<&str> = if input.clear_all {
-            listed = unread_email(&state, &user).await?;
             listed.iter().map(|item| item.id.as_str()).collect()
         } else {
             threads

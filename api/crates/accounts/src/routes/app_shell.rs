@@ -74,6 +74,12 @@ pub struct AppShell {
     pub portal: Option<String>,
     /// That portal's start page.
     pub portal_home: Option<String>,
+    /// The sections of the app the user reaches, when a sectioned position
+    /// (Inventory Manager, Scheduling Manager) limits them: keys such as
+    /// `inventory`, `inventory_admin`, `customers`, `schedule`
+    /// (`GET /v1/company/position-sections` lists them all). The API refuses
+    /// the rest. Null when they reach the whole app.
+    pub sections: Option<Vec<String>>,
     /// The company has CloudTalk.
     pub has_cloudtalk_api: bool,
     /// The company has RingCentral.
@@ -232,6 +238,9 @@ pub async fn shell(
         crate::routes::onboarding::team::capabilities(pool, home.unwrap_or(user.company_id))
             .await?;
     let portal = portal(&user, user_is_super_admin, &all);
+    let sections = crate::auth::sections::user_access(pool, &user, &rows)
+        .await?
+        .keys();
     let sms_images_enabled = !std::env::var("SMS_IMAGES_ENABLED").is_ok_and(|value| {
         matches!(
             value.trim().to_lowercase().as_str(),
@@ -241,15 +250,14 @@ pub async fn shell(
     // Best effort: off where the column is missing (before its migration),
     // so the frame never fails on it.
     // 1: on; 2: switched off by the user; 0: not theirs.
-    let ai_promises = sqlx::query_scalar::<_, i64>(
-        "SELECT CAST(ai_promises AS SIGNED) FROM users WHERE id = ?",
-    )
-    .bind(user.id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(0);
+    let ai_promises =
+        sqlx::query_scalar::<_, i64>("SELECT CAST(ai_promises AS SIGNED) FROM users WHERE id = ?")
+            .bind(user.id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(0);
     let user_ai_promises = ai_promises == 1;
     let user_ai_promises_available = matches!(ai_promises, 1 | 2);
     Ok(Json(AppShell {
@@ -264,6 +272,7 @@ pub async fn shell(
         },
         portal_home: portal.as_ref().map(|(_, home)| home.clone()),
         portal: portal.map(|(name, _)| name),
+        sections,
         has_cloudtalk_api: features.cloudtalk,
         has_ringcentral_api: features.ringcentral,
         has_telnyx_api: features.telnyx,

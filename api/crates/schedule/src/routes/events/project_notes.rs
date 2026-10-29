@@ -4,7 +4,7 @@
 //! site. The notes belong to the sale, so its template and install events
 //! show the same ones.
 
-use crate::auth::EmployeeUser;
+use crate::auth::ShopOrEmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
@@ -94,7 +94,7 @@ pub struct EventSale {
     responses(
         (status = 200, description = "The sale, or null", body = EventSale),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -102,7 +102,7 @@ pub struct EventSale {
 )]
 pub async fn sale(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<EventSale>> {
     let sale_id = find_event_sale(&state.pool, user.company_id, id).await?;
@@ -121,7 +121,7 @@ pub async fn sale(
     responses(
         (status = 200, description = "Notes", body = Vec<ProjectNote>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event with a sale in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -129,7 +129,7 @@ pub async fn sale(
 )]
 pub async fn list(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<Vec<ProjectNote>>> {
     let sale_id = event_sale(&state.pool, user.company_id, id).await?;
@@ -162,7 +162,7 @@ pub async fn list(
         (status = 201, description = "Added"),
         (status = 400, description = "Empty, too long or an unknown audience", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event with a sale in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -170,7 +170,7 @@ pub async fn list(
 )]
 pub async fn add(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<ProjectNoteInput>,
 ) -> ApiResult<StatusCode> {
@@ -219,7 +219,7 @@ pub async fn add(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "Not the caller's note on this project", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -227,7 +227,7 @@ pub async fn add(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, note_id)): Path<(i32, i32)>,
 ) -> ApiResult<StatusCode> {
     let sale_id = event_sale(&state.pool, user.company_id, id).await?;

@@ -659,3 +659,40 @@ async fn managers_switch_the_sale_form_on_a_win(pool: MySqlPool) {
         .json();
     assert_eq!(features["auto_sale"], true);
 }
+
+#[test_db::test(seed)]
+async fn managers_switch_sold_quote_jobs_in_unscheduled(pool: MySqlPool) {
+    let Setup { server, .. } = setup(&pool, false, false).await;
+    let on = || async {
+        let on: bool =
+            sqlx::query_scalar("SELECT auto_unscheduled_jobs <> 0 FROM company WHERE id = 100")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        on
+    };
+    // Off by default; a rep and a non-manager admin may not switch it.
+    assert!(!on().await);
+    for session in [sessions::REP, sessions::ADMIN] {
+        server
+            .put("/v1/company/auto-unscheduled-jobs")
+            .with_session(session)
+            .json(&json!({ "enabled": true }))
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+    admin_manages(&pool).await;
+    server
+        .put("/v1/company/auto-unscheduled-jobs")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "enabled": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(on().await);
+    let features: Value = server
+        .get("/v1/company/features")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(features["auto_unscheduled_jobs"], true);
+}

@@ -15,6 +15,7 @@ pub mod delayed;
 pub mod integrations;
 pub mod maintenance;
 pub mod marketing;
+pub mod position_sections;
 pub mod posthog_autofix;
 pub mod questionnaires;
 pub mod reports;
