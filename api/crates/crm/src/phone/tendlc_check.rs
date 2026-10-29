@@ -30,7 +30,7 @@ use super::tendlc::{
 use super::tendlc_pages::{Fetched, Page, PageKind, comparable, read_pages};
 use super::tendlc_registry as registry;
 use super::wire_enum;
-use crate::ai::{AiError, Caller, LARGE_MODEL, MINI_MODEL};
+use crate::ai::{AiError, Caller, LARGE_FALLBACK_MODEL, LARGE_MODEL};
 use crate::app_origin::{app_origin, company_subdomain};
 use crate::html::escape;
 use crate::openapi::ToSchema;
@@ -1026,8 +1026,8 @@ async fn report(
     let mut model = LARGE_MODEL;
     for strict in [true, false] {
         let text = match ask(state, caller, model, &messages).await {
-            Err(err) if err.is_model_permission() && model != MINI_MODEL => {
-                model = MINI_MODEL;
+            Err(err) if err.is_model_permission() && model != LARGE_FALLBACK_MODEL => {
+                model = LARGE_FALLBACK_MODEL;
                 ask(state, caller, model, &messages).await?
             }
             result => result?,

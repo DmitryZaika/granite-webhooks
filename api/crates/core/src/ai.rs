@@ -18,6 +18,8 @@ pub const MINI_FALLBACK_MODEL: &str = "gpt-5.4-mini-2026-03-17";
 /// use the customer's details (the AI Reply button; the follow-up writer's
 /// `AI_FOLLOWUP_MODEL`). It rejects `reasoning_effort: none`.
 pub const LARGE_MODEL: &str = "gpt-6.1-sol";
+/// When the key may not use [`LARGE_MODEL`] (the 10DLC check and its chat).
+pub const LARGE_FALLBACK_MODEL: &str = "gpt-6.1-terra";
 /// AI Design's kitchen pictures (`OPENAI_IMAGE_MODEL`).
 pub const IMAGE_MODEL: &str = "gpt-image-2.5-sunburst";
 
