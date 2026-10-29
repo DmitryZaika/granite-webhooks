@@ -9,6 +9,7 @@ mod common;
 mod commissions;
 mod customer_view;
 mod invoice_queue;
+mod invoices;
 mod online_quotes;
 mod quickbooks;
 mod quote_editor;
