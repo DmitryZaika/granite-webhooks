@@ -7,7 +7,7 @@ use api::ringcentral_connect::RingCentralApp;
 use api::state::AppState;
 use api::storage::Storage;
 use axum::http::StatusCode;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_test::TestServer;
 use common::{ALLOWED_ORIGIN, SECRET, WithSession, png, sessions};
@@ -606,6 +606,184 @@ async fn ringcentral_connects_and_disconnects(pool: MySqlPool) {
             .await
             .unwrap();
     assert_eq!(left, None);
+}
+
+/// `RingCentral` for a rep's own sign-in: `code=rep` signs in extension 555
+/// of account 42 (the company's), `code=stranger` a user of account 77; the
+/// company's own token comes from its JWT.
+async fn rep_stub() -> String {
+    let bearer = |headers: &axum::http::HeaderMap| {
+        headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let router = Router::new()
+        .route(
+            "/restapi/oauth/token",
+            post(|body: String| async move {
+                let (access, owner) = if body.contains("code=rep") {
+                    ("rep-access", "555")
+                } else if body.contains("code=stranger") {
+                    ("stranger-access", "556")
+                } else if body.contains("jwt-bearer") {
+                    ("company-access", "1")
+                } else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "invalid_grant" })),
+                    );
+                };
+                (
+                    StatusCode::OK,
+                    // A minute and a second: the JWT cache keeps it a second.
+                    Json(json!({ "access_token": access, "refresh_token": format!("{access}-refresh"),
+                                 "expires_in": 61, "refresh_token_expires_in": 604_800,
+                                 "owner_id": owner })),
+                )
+            }),
+        )
+        .route(
+            "/restapi/v1.0/account/~",
+            get(move |headers: axum::http::HeaderMap| async move {
+                assert_eq!(bearer(&headers), "Bearer company-access");
+                Json(json!({ "id": 42 }))
+            }),
+        )
+        .route(
+            "/restapi/v1.0/account/~/extension/~",
+            get(move |headers: axum::http::HeaderMap| async move {
+                if bearer(&headers) == "Bearer rep-access" {
+                    Json(json!({ "id": 555, "account": { "id": 42 } }))
+                } else {
+                    Json(json!({ "id": 556, "account": { "id": 77 } }))
+                }
+            }),
+        )
+        .route(
+            "/restapi/v1.0/account/~/extension/~/phone-number",
+            get(|| async {
+                Json(json!({ "records": [
+                    { "phoneNumber": "+13175550000", "usageType": "MainCompanyNumber", "features": ["CallerId"] },
+                    { "phoneNumber": "+13177087664", "usageType": "DirectNumber", "features": ["SmsSender", "CallerId"] },
+                ] }))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    base
+}
+
+#[test_db::test(seed)]
+async fn a_rep_connects_their_own_ringcentral(pool: MySqlPool) {
+    let base = rep_stub().await;
+    sqlx::query(
+        "UPDATE company SET ringcentral_client_id = 'i', ringcentral_client_secret = 's',
+                ringcentral_jwt = 'j', ringcentral_server_url = ?
+          WHERE id = 100",
+    )
+    .bind(&base)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+        .with_app_url(APP_URL)
+        .with_ringcentral_app(RingCentralApp::new(
+            "rc-client",
+            "rc-secret",
+            &base,
+            Some(KEY),
+        ));
+    let server = TestServer::new(app(state));
+    let account = |server: &TestServer| server.get("/v1/me/account").with_session(sessions::REP);
+    assert_eq!(
+        account(&server).await.json::<Value>()["ringcentral_signed_in"],
+        false
+    );
+
+    let link: Value = server
+        .post("/v1/me/ringcentral/start")
+        .with_session(sessions::REP)
+        .json(&json!({}))
+        .await
+        .json();
+    let params = query(link["url"].as_str().unwrap());
+    assert_eq!(
+        params["redirect_uri"],
+        format!("{APP_URL}/redirects/ringcentral/user-auth")
+    );
+    let rep_state = params["state"].clone();
+    assert!(rep_state.starts_with("ringcentral-rep."));
+
+    // The company's connect state does not finish a rep's sign-in.
+    let company: Value = server
+        .post("/v1/ringcentral/connection/start")
+        .with_session(sessions::REP)
+        .json(&json!({}))
+        .await
+        .json();
+    let company_state = query(company["url"].as_str().unwrap())["state"].clone();
+    server
+        .post("/v1/me/ringcentral")
+        .with_session(sessions::REP)
+        .json(&json!({ "state": company_state, "code": "rep" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let stranger = server
+        .post("/v1/me/ringcentral")
+        .with_session(sessions::REP)
+        .json(&json!({ "state": rep_state, "code": "stranger" }))
+        .await;
+    stranger.assert_status(StatusCode::BAD_REQUEST);
+    assert!(
+        stranger
+            .text()
+            .contains("isn't in your company's RingCentral account")
+    );
+
+    let connected: Value = server
+        .post("/v1/me/ringcentral")
+        .with_session(sessions::REP)
+        .json(&json!({ "state": rep_state, "code": "rep" }))
+        .await
+        .json();
+    assert_eq!(connected["ringcentral_phone_number"], "3177087664");
+    let (extension, access): (String, Vec<u8>) = sqlx::query_as(
+        "SELECT extension_id, access_token FROM ringcentral_user_logins WHERE user_id = 100",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(extension, "555");
+    assert_eq!(decrypt(&KEY, &access).as_deref(), Some("rep-access"));
+    let line: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT ringcentral_extension_id, ringcentral_phone_number FROM users WHERE id = 100",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(line, (Some("555".into()), Some("3177087664".into())));
+    assert_eq!(
+        account(&server).await.json::<Value>()["ringcentral_signed_in"],
+        true
+    );
+
+    server
+        .delete("/v1/me/ringcentral")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ringcentral_user_logins")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+    assert_eq!(
+        account(&server).await.json::<Value>()["ringcentral_signed_in"],
+        false
+    );
 }
 
 #[test_db::test(seed)]

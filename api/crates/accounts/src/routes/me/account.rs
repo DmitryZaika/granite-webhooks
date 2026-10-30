@@ -53,6 +53,10 @@ pub struct Account {
     pub ringcentral_extension_id: Option<String>,
     /// `RingCentral` line (10 digits).
     pub ringcentral_phone_number: Option<String>,
+    /// Texts from the CRM go out as the user through `RingCentral`: they
+    /// connected their own `RingCentral` (`/v1/me/ringcentral`), or theirs is
+    /// the login the company connected with.
+    pub ringcentral_signed_in: bool,
     /// The home company has `CloudTalk`.
     pub has_cloudtalk_api: bool,
     /// The home company has `RingCentral`.
@@ -119,7 +123,7 @@ pub struct AccountSaved {
 }
 
 #[derive(Debug, Default, sqlx::FromRow)]
-struct Stored {
+pub(super) struct Stored {
     name: Option<String>,
     email: Option<String>,
     phone_number: Option<String>,
@@ -133,7 +137,7 @@ struct Stored {
 
 impl Stored {
     /// The stored texting line.
-    fn line(&self) -> texting_history::Line {
+    pub(super) fn line(&self) -> texting_history::Line {
         texting_history::Line {
             cloudtalk_agent: self.cloudtalk_agent_id.clone(),
             cloudtalk_phone: line10(self.cloudtalk_phone_number.as_deref()),
@@ -143,7 +147,7 @@ impl Stored {
     }
 }
 
-async fn stored(pool: &MySqlPool, actor: store::Actor) -> ApiResult<Stored> {
+pub(super) async fn stored(pool: &MySqlPool, actor: store::Actor) -> ApiResult<Stored> {
     sqlx::query_as(
         "SELECT name, email, phone_number, email_name, email_signature,
                 cloudtalk_agent_id, cloudtalk_phone_number,
@@ -157,7 +161,7 @@ async fn stored(pool: &MySqlPool, actor: store::Actor) -> ApiResult<Stored> {
     .ok_or_else(|| ApiError::Unauthenticated("Sign in again.".into()))
 }
 
-async fn home_actor(pool: &MySqlPool, user_id: i32) -> ApiResult<store::Actor> {
+pub(super) async fn home_actor(pool: &MySqlPool, user_id: i32) -> ApiResult<store::Actor> {
     store::actor(pool, user_id)
         .await?
         .ok_or_else(|| ApiError::Unauthenticated("Sign in again.".into()))
@@ -218,6 +222,8 @@ pub async fn account(
     };
     let recording_voice =
         phone_settings::recording_voice(pool, actor.user_id, actor.company_id).await?;
+    let ringcentral_signed_in = features.ringcentral
+        && crate::ringcentral_connect::texts_as_user(pool, actor.company_id, actor.user_id).await?;
     Ok(Json(Account {
         user_id: actor.user_id,
         name: row.name,
@@ -229,6 +235,7 @@ pub async fn account(
         cloudtalk_phone_number: row.cloudtalk_phone_number,
         ringcentral_extension_id: row.ringcentral_extension_id,
         ringcentral_phone_number: row.ringcentral_phone_number,
+        ringcentral_signed_in,
         has_cloudtalk_api: features.cloudtalk,
         has_ringcentral_api: features.ringcentral,
         shows_email_signature: !shop,
