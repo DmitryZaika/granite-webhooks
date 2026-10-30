@@ -1,8 +1,9 @@
 //! Card and bank account payment methods (step 13): `POST /v1/billing/payment-setup`,
 //! `/payment-method`, `/invoice-payment`, the new Stripe webhook events, holds, the
-//! gate's bank verification window and the account page's new fields, against a
-//! fake Stripe and a fake email sink. Companies 20750 (Pm Stone, paying) and 20751
-//! (Pm Other Stone, no Stripe customer), inserted here.
+//! gate's bank verification window and the account page's new fields, disputes
+//! one by one and a superuser lifting a hold, against a fake Stripe and a fake
+//! email sink. Companies 20750 (Pm Stone, paying) and 20751 (Pm Other Stone, no
+//! Stripe customer, with superuser 20753), inserted here.
 
 use crate::common::{ALLOWED_ORIGIN, SECRET, WithSession};
 use crate::{fake_stripe, fake_webhooks};
@@ -26,6 +27,7 @@ const OTHER_COMPANY: i32 = 20751;
 const MANAGER: &str = "aaaaaaaa-0000-4000-8000-000000020750";
 const REP: &str = "aaaaaaaa-0000-4000-8000-000000020751";
 const OTHER_MANAGER: &str = "aaaaaaaa-0000-4000-8000-000000020752";
+const SUPERUSER: &str = "aaaaaaaa-0000-4000-8000-000000020753";
 const MANAGER_EMAIL: &str = "manager@pm.test";
 const ALERT_EMAIL: &str = "ops@example.test";
 const CUSTOMER: &str = "cus_pm";
@@ -63,13 +65,15 @@ async fn seed(pool: &MySqlPool) {
          INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
            (20750, 'manager@pm.test', 'x', 'Dana Manager', 1, 1, 0, 0, 20750),
            (20751, 'rep@pm.test',     'x', 'Remy Rep',     1, 0, 0, 0, 20750),
-           (20752, 'manager@pm-other.test', 'x', 'Otto Manager', 1, 1, 0, 0, 20751);
+           (20752, 'manager@pm-other.test', 'x', 'Otto Manager', 1, 1, 0, 0, 20751),
+           (20753, 'staff@pm-other.test', 'x', 'Sam Staff', 1, 1, 1, 0, 20751);
          INSERT INTO users_positions (user_id, position_id, company_id) VALUES
            (20750, 5, 20750), (20751, 1, 20750), (20752, 5, 20751);
          INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
            ('aaaaaaaa-0000-4000-8000-000000020750', 20750, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
            ('aaaaaaaa-0000-4000-8000-000000020751', 20751, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
-           ('aaaaaaaa-0000-4000-8000-000000020752', 20752, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);",
+           ('aaaaaaaa-0000-4000-8000-000000020752', 20752, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+           ('aaaaaaaa-0000-4000-8000-000000020753', 20753, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);",
     )
     .execute(pool)
     .await
@@ -244,12 +248,57 @@ impl Fixture {
     }
 
     fn dispute_charge(&self) {
+        self.charge("ch_1", "pm_old");
+        self.dispute("dp_1", "ch_1", "needs_response");
+    }
+
+    /// A succeeded card charge of the customer with `method`.
+    fn charge(&self, id: &str, method: &str) {
         self.fake().charges.insert(
-            "ch_1".into(),
-            json!({ "id": "ch_1", "object": "charge", "customer": CUSTOMER, "status": "succeeded",
-                "payment_method": "pm_old", "amount": 37_500, "created": 1_790_000_000,
+            id.into(),
+            json!({ "id": id, "object": "charge", "customer": CUSTOMER, "status": "succeeded",
+                "payment_method": method, "amount": 37_500, "created": 1_790_000_000,
                 "payment_method_details": { "type": "card" } }),
         );
+    }
+
+    /// Stripe's dispute `id` of `charge`, now in `status`; answers the
+    /// object an event carries.
+    fn dispute(&self, id: &str, charge: &str, status: &str) -> Value {
+        let dispute = json!({ "id": id, "object": "dispute", "charge": charge,
+            "reason": "fraudulent", "amount": 37_500, "status": status, "created": 1_790_100_000 });
+        self.fake().disputes.insert(id.into(), dispute.clone());
+        dispute
+    }
+
+    async fn hold(&self) -> Option<String> {
+        self.methods().await.method_hold
+    }
+
+    async fn clear_hold(&self, session: &str, company: i32) -> TestResponse {
+        self.server
+            .post(&format!(
+                "/v1/superuser/companies/{company}/billing/payment-hold/clear"
+            ))
+            .with_session(session)
+            .await
+    }
+
+    /// A suspended self-serve company paying with its bank account (Stripe
+    /// agrees: the subscription is unpaid), invoice `in_1` open.
+    async fn suspended_on_bank(&self) {
+        {
+            let mut fake = self.fake();
+            fake.subscriptions.get_mut(SUBSCRIPTION).unwrap()["status"] = json!("unpaid");
+            fake.invoices = vec![invoice("in_1", 100)];
+        }
+        self.sql(
+            "UPDATE company_billing SET payment_status = 'suspended', subscription_status = 'unpaid',
+                    failed_payment_at = UTC_TIMESTAMP() - INTERVAL 20 DAY,
+                    stripe_payment_method_id = 'pm_bank'
+              WHERE company_id = 20750",
+        )
+        .await;
     }
 
     async fn past_due(&self) {
@@ -689,8 +738,10 @@ async fn processing_is_marked_only_while_stripe_says_so(pool: MySqlPool) {
     let f = fixture(pool).await;
     let intent = |status: &str| {
         json!({ "id": "pi_1", "object": "payment_intent", "status": status, "customer": CUSTOMER,
-            "payment_method_types": ["card", "us_bank_account"] })
+            "payment_method": "pm_bank", "payment_method_types": ["card", "us_bank_account"] })
     };
+    f.fake().invoice_payments.push(json!({ "object": "invoice_payment", "invoice": "in_1",
+        "payment": { "type": "payment_intent", "payment_intent": "pi_1" } }));
     // Out of order: it already succeeded when `processing` arrives.
     f.fake().payment_intents.insert("pi_1".into(), intent("succeeded"));
     f.post_event(&event("evt_proc_late", "payment_intent.processing", intent("processing")))
@@ -927,45 +978,468 @@ async fn a_hold_never_lands_on_a_method_saved_meanwhile(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn a_won_dispute_lifts_its_hold_and_a_lost_one_keeps_it(pool: MySqlPool) {
+async fn a_won_dispute_lifts_its_hold(pool: MySqlPool) {
     let f = fixture(pool).await;
     f.dispute_charge();
-    let dispute = |status: &str| {
-        json!({ "id": "dp_1", "object": "dispute", "charge": "ch_1", "reason": "fraudulent",
-            "amount": 37_500, "status": status })
-    };
-    f.post_event(&event("evt_dispute", "charge.dispute.created", dispute("needs_response")))
+    let open = f.dispute("dp_1", "ch_1", "needs_response");
+    f.post_event(&event("evt_dispute", "charge.dispute.created", open))
         .await
         .assert_status_ok();
-    f.post_event(&event("evt_lost", "charge.dispute.closed", dispute("lost")))
-        .await
-        .assert_status_ok();
-    assert_eq!(f.methods().await.method_hold.as_deref(), Some("disputed"));
-    // A won dispute of another charge lifts nothing.
-    let other = json!({ "id": "dp_2", "object": "dispute", "charge": "ch_2", "status": "won" });
-    f.fake().charges.insert(
-        "ch_2".into(),
-        json!({ "id": "ch_2", "object": "charge", "customer": CUSTOMER, "status": "succeeded",
-            "payment_method": "pm_old", "amount": 100 }),
-    );
-    f.post_event(&event("evt_other", "charge.dispute.closed", other))
-        .await
-        .assert_status_ok();
-    assert_eq!(f.methods().await.method_hold.as_deref(), Some("disputed"));
+    assert_eq!(f.hold().await.as_deref(), Some("disputed"));
 
-    f.post_event(&event("evt_won", "charge.dispute.closed", dispute("won")))
+    let won = f.dispute("dp_1", "ch_1", "won");
+    f.post_event(&event("evt_won", "charge.dispute.closed", won))
         .await
         .assert_status_ok();
     let methods = f.methods().await;
     assert_eq!(methods.method_hold, None);
     assert_eq!(methods.method_hold_until, None);
-    let notices = subjects(&f.emails_to(ALERT_EMAIL));
-    assert_eq!(
-        notices.iter().filter(|s| *s == "Billing alert: Dispute closed: Pm Stone").count(),
-        3
-    );
     let last = f.emails_to(ALERT_EMAIL).pop().unwrap();
-    assert!(last["body"].as_str().unwrap().contains("its hold was lifted"));
+    assert_eq!(last["subject"], "Billing alert: Dispute closed: Pm Stone");
+    assert!(
+        last["body"]
+            .as_str()
+            .unwrap()
+            .contains("its hold was lifted")
+    );
+}
+
+#[test_db::test(seed)]
+async fn winning_one_of_two_disputes_keeps_the_hold_while_the_other_is_open(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.dispute_charge();
+    f.charge("ch_2", "pm_old");
+    let first = f.dispute("dp_1", "ch_1", "needs_response");
+    let second = f.dispute("dp_2", "ch_2", "needs_response");
+    f.post_event(&event("evt_d1", "charge.dispute.created", first))
+        .await
+        .assert_status_ok();
+    f.post_event(&event("evt_d2", "charge.dispute.created", second))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.hold().await.as_deref(), Some("disputed"));
+
+    let won = f.dispute("dp_1", "ch_1", "won");
+    f.post_event(&event("evt_d1_won", "charge.dispute.closed", won))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.hold().await.as_deref(), Some("disputed"));
+    let notice = f.emails_to(ALERT_EMAIL).pop().unwrap();
+    assert!(
+        notice["body"]
+            .as_str()
+            .unwrap()
+            .contains("Access: unchanged")
+    );
+
+    // The second one lost: still held, until a superuser lifts it.
+    let lost = f.dispute("dp_2", "ch_2", "lost");
+    f.post_event(&event("evt_d2_lost", "charge.dispute.closed", lost))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.hold().await.as_deref(), Some("disputed"));
+    let statuses: Vec<(String, String)> = sqlx::query_as(
+        "SELECT stripe_dispute_id, status FROM billing_disputes WHERE company_id = 20750
+          ORDER BY stripe_dispute_id",
+    )
+    .fetch_all(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        statuses,
+        [
+            ("dp_1".into(), "won".into()),
+            ("dp_2".into(), "lost".into())
+        ]
+    );
+}
+
+#[test_db::test(seed)]
+async fn a_dispute_on_a_replaced_method_holds_too(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    // Charged with a card the company has since replaced by pm_old.
+    f.charge("ch_1", "pm_gone");
+    let open = f.dispute("dp_1", "ch_1", "needs_response");
+    f.post_event(&event("evt_dispute", "charge.dispute.created", open))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.hold().await.as_deref(), Some("disputed"));
+}
+
+#[test_db::test(seed)]
+async fn a_new_card_keeps_a_dispute_hold(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.dispute_charge();
+    let open = f.dispute("dp_1", "ch_1", "needs_response");
+    f.post_event(&event("evt_dispute", "charge.dispute.created", open))
+        .await
+        .assert_status_ok();
+    let until = f.methods().await.method_hold_until;
+    f.add_setup(
+        "seti_card",
+        "payment_method_update",
+        "succeeded",
+        Some("pm_card"),
+    );
+    assert_eq!(
+        f.apply(MANAGER, "seti_card").await.json::<Value>()["status"],
+        "saved"
+    );
+    let methods = f.methods().await;
+    assert_eq!(methods.stripe_payment_method_id.as_deref(), Some("pm_card"));
+    assert_eq!(methods.method_hold.as_deref(), Some("disputed"));
+    assert_eq!(methods.method_hold_until, until);
+}
+
+#[test_db::test(seed)]
+async fn a_dispute_turns_a_blocked_hold_into_one_a_new_card_keeps(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    let now = chrono::Utc::now().naive_utc();
+    assert!(
+        set_hold(
+            &f.pool,
+            COMPANY,
+            Some("pm_old"),
+            MethodHold::Blocked,
+            None,
+            now
+        )
+        .await
+        .unwrap()
+    );
+    let until = f.methods().await.method_hold_until;
+    f.dispute_charge();
+    let open = f.dispute("dp_1", "ch_1", "needs_response");
+    f.post_event(&event("evt_dispute", "charge.dispute.created", open.clone()))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.hold().await.as_deref(), Some("disputed"));
+    // The Managers learn it is a dispute now (a new card no longer lifts
+    // it); the pause date they were told stays.
+    assert_eq!(subjects(&f.emails_to(MANAGER_EMAIL)), ["A payment was disputed"]);
+    assert_eq!(f.methods().await.method_hold_until, until);
+    // A replay converts nothing and sends nothing again.
+    f.post_event(&event("evt_dispute_again", "charge.dispute.created", open))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.emails_to(MANAGER_EMAIL).len(), 1);
+    f.add_setup(
+        "seti_card",
+        "payment_method_update",
+        "succeeded",
+        Some("pm_card"),
+    );
+    f.apply(MANAGER, "seti_card").await.assert_status_ok();
+    assert_eq!(f.hold().await.as_deref(), Some("disputed"));
+}
+
+#[test_db::test(seed)]
+async fn a_lost_dispute_holds_until_a_superuser_lifts_it_for_good(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.dispute_charge();
+    let open = f.dispute("dp_1", "ch_1", "needs_response");
+    f.post_event(&event(
+        "evt_dispute",
+        "charge.dispute.created",
+        open.clone(),
+    ))
+    .await
+    .assert_status_ok();
+    let lost = f.dispute("dp_1", "ch_1", "lost");
+    f.post_event(&event("evt_lost", "charge.dispute.closed", lost.clone()))
+        .await
+        .assert_status_ok();
+    f.sql("UPDATE company_billing SET method_hold_until = UTC_TIMESTAMP() - INTERVAL 1 MINUTE WHERE company_id = 20750")
+        .await;
+    assert_eq!(f.customers_status(REP).await, StatusCode::PAYMENT_REQUIRED);
+
+    // The superuser list shows the hold.
+    let companies: Value = f
+        .server
+        .get("/v1/superuser/companies")
+        .with_session(SUPERUSER)
+        .await
+        .json();
+    let row = companies
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|company| company["id"] == COMPANY)
+        .unwrap();
+    assert_eq!(row["payment_hold"]["reason"], "disputed");
+    assert!(row["payment_hold"]["since"].is_string());
+    assert!(row["payment_hold"]["until"].is_string());
+    assert_eq!(row["payment_hold"]["open_disputes"], 1);
+
+    let res = f.clear_hold(SUPERUSER, COMPANY).await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>(), json!({ "cleared": true }));
+    assert_eq!(f.hold().await, None);
+    assert_eq!(f.customers_status(REP).await, StatusCode::OK);
+    let (by, resolved_by): (Option<i32>, Option<i32>) = sqlx::query_as(
+        "SELECT cb.method_hold_cleared_by, d.resolved_by_user_id
+           FROM company_billing cb JOIN billing_disputes d ON d.company_id = cb.company_id
+          WHERE cb.company_id = 20750",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!((by, resolved_by), (Some(20753), Some(20753)));
+    let notice = f.emails_to(ALERT_EMAIL).pop().unwrap();
+    assert_eq!(
+        notice["subject"],
+        "Billing alert: Payment hold lifted by staff: Pm Stone"
+    );
+
+    // Retried deliveries of the same dispute never hold it again.
+    f.post_event(&event("evt_dispute_again", "charge.dispute.created", open))
+        .await
+        .assert_status_ok();
+    f.post_event(&event("evt_lost_again", "charge.dispute.closed", lost))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.hold().await, None);
+    let companies: Value = f
+        .server
+        .get("/v1/superuser/companies")
+        .with_session(SUPERUSER)
+        .await
+        .json();
+    let row = companies
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == COMPANY)
+        .unwrap();
+    assert_eq!(row["payment_hold"], Value::Null);
+    // Nothing left to lift.
+    assert_eq!(
+        f.clear_hold(SUPERUSER, COMPANY).await.json::<Value>(),
+        json!({ "cleared": false })
+    );
+}
+
+#[test_db::test(seed)]
+async fn only_a_superuser_lifts_a_hold(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.dispute_charge();
+    let open = f.dispute("dp_1", "ch_1", "needs_response");
+    f.post_event(&event("evt_dispute", "charge.dispute.created", open))
+        .await
+        .assert_status_ok();
+    f.clear_hold(MANAGER, COMPANY)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    f.clear_hold(REP, COMPANY)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    f.server
+        .post(&format!(
+            "/v1/superuser/companies/{COMPANY}/billing/payment-hold/clear"
+        ))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    f.clear_hold(SUPERUSER, 99_999)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(f.hold().await.as_deref(), Some("disputed"));
+}
+
+#[test_db::test(seed)]
+async fn a_created_delivered_after_closed_never_holds(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.dispute_charge();
+    // Stripe has it won already when the retried `created` arrives.
+    let won = f.dispute("dp_1", "ch_1", "won");
+    f.post_event(&event("evt_won", "charge.dispute.closed", won))
+        .await
+        .assert_status_ok();
+    let stale = json!({ "id": "dp_1", "object": "dispute", "charge": "ch_1",
+        "status": "needs_response", "amount": 37_500 });
+    f.post_event(&event(
+        "evt_created_late",
+        "charge.dispute.created",
+        stale.clone(),
+    ))
+    .await
+    .assert_status_ok();
+    assert_eq!(f.hold().await, None);
+    // Even a stale read of Stripe (still open) never reopens a closed dispute.
+    f.dispute("dp_1", "ch_1", "needs_response");
+    f.post_event(&event("evt_created_stale", "charge.dispute.created", stale))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.hold().await, None);
+    assert!(f.emails_to(MANAGER_EMAIL).is_empty());
+}
+
+#[test_db::test(seed)]
+async fn a_dispute_of_no_company_still_tells_staff(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.fake().charges.insert(
+        "ch_x".into(),
+        json!({ "id": "ch_x", "object": "charge", "customer": "cus_unknown", "status": "succeeded",
+            "payment_method": "pm_x", "amount": 900 }),
+    );
+    let dispute = f.dispute("dp_x", "ch_x", "needs_response");
+    f.post_event(&event("evt_dx", "charge.dispute.created", dispute))
+        .await
+        .assert_status_ok();
+    let notices = f.emails_to(ALERT_EMAIL);
+    assert_eq!(
+        subjects(&notices),
+        ["Billing alert: Payment disputed: no company"]
+    );
+    assert!(notices[0]["body"].as_str().unwrap().contains("cus_unknown"));
+}
+
+#[test_db::test(seed)]
+async fn paying_skips_an_older_invoice_of_another_subscription(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.past_due().await;
+    let mut legacy = invoice("in_legacy", 50);
+    legacy["parent"] = Value::Null;
+    legacy["subscription"] = json!("sub_legacy");
+    f.fake().invoices = vec![legacy, invoice("in_current", 100)];
+    assert_eq!(f.pay(UUID).await.json::<Value>()["status"], "paid");
+    assert!(
+        f.fake()
+            .calls("POST", "/v1/invoices/in_legacy/pay")
+            .is_empty()
+    );
+    assert_eq!(
+        f.fake().calls("POST", "/v1/invoices/in_current/pay").len(),
+        1
+    );
+}
+
+#[test_db::test(seed)]
+async fn a_second_bank_payment_after_a_failed_one_lifts_no_pause(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.suspended_on_bank().await;
+    assert_eq!(f.customers_status(REP).await, StatusCode::PAYMENT_REQUIRED);
+
+    // The first bank payment of in_1 lifts the pause while on its way.
+    assert_eq!(f.pay(UUID).await.json::<Value>()["status"], "processing");
+    assert_eq!(f.customers_status(REP).await, StatusCode::OK);
+
+    // It came back.
+    f.fake().charges.insert(
+        "ch_ach".into(),
+        json!({ "id": "ch_ach", "object": "charge", "customer": CUSTOMER, "status": "failed",
+            "failure_code": "insufficient_funds", "amount": 37_500, "payment_intent": "pi_in_1",
+            "payment_method_details": { "type": "us_bank_account" } }),
+    );
+    f.post_event(&event(
+        "evt_ach_fail",
+        "charge.failed",
+        json!({ "id": "ch_ach" }),
+    ))
+    .await
+    .assert_status_ok();
+    assert_eq!(f.customers_status(REP).await, StatusCode::PAYMENT_REQUIRED);
+
+    // A new bank attempt for the same invoice: on its way, still paused.
+    let second = "9f1c1d1e-2a3b-4c5d-8e9f-0a1b2c3d4e5f";
+    assert_eq!(f.pay(second).await.json::<Value>()["status"], "processing");
+    f.post_event(&event(
+        "evt_proc_2",
+        "payment_intent.processing",
+        json!({ "id": "pi_in_1" }),
+    ))
+    .await
+    .assert_status_ok();
+    assert_eq!(f.methods().await.payment_processing_at, None);
+    assert_eq!(f.customers_status(REP).await, StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(f.gate(REP).await["restricted"], true);
+}
+
+#[test_db::test(seed)]
+async fn a_processing_event_read_before_the_invoice_was_paid_never_lands_after(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.past_due().await;
+    f.sql(
+        "UPDATE company_billing SET stripe_payment_method_id = 'pm_bank' WHERE company_id = 20750",
+    )
+    .await;
+    f.fake().invoices = vec![invoice("in_1", 100)];
+    f.pay(UUID).await.assert_status_ok();
+    // invoice.paid is applied first (and ends the payment in flight)...
+    let mut paid = invoice("in_1", 100);
+    paid["status"] = json!("paid");
+    paid["amount_paid"] = json!(37_500);
+    paid["amount_remaining"] = json!(0);
+    f.fake().invoices = vec![paid.clone()];
+    f.post_event(&event("evt_paid", "invoice.paid", paid))
+        .await
+        .assert_status_ok();
+    assert_eq!(f.methods().await.payment_processing_at, None);
+    // ...then a `processing` whose Stripe read is still `processing`.
+    f.post_event(&event(
+        "evt_proc_late",
+        "payment_intent.processing",
+        json!({ "id": "pi_in_1" }),
+    ))
+    .await
+    .assert_status_ok();
+    assert_eq!(f.methods().await.payment_processing_at, None);
+}
+
+#[test_db::test(seed)]
+async fn processing_follows_the_method_used_not_the_types_allowed(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    {
+        let mut fake = f.fake();
+        fake.payment_intents.insert(
+            "pi_card".into(),
+            json!({ "id": "pi_card", "object": "payment_intent", "status": "processing",
+                "customer": CUSTOMER, "payment_method": "pm_card",
+                "payment_method_types": ["card", "us_bank_account"] }),
+        );
+        fake.invoice_payments
+            .push(json!({ "object": "invoice_payment", "invoice": "in_1",
+            "payment": { "type": "payment_intent", "payment_intent": "pi_card" } }));
+    }
+    f.post_event(&event(
+        "evt_proc_card",
+        "payment_intent.processing",
+        json!({ "id": "pi_card" }),
+    ))
+    .await
+    .assert_status_ok();
+    assert_eq!(f.methods().await.payment_processing_at, None);
+}
+
+#[test_db::test(seed)]
+async fn only_the_customers_default_method_is_stored_from_an_update(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    let mut other = card("pm_card", "visa", "4242");
+    other["customer"] = json!(CUSTOMER);
+    f.fake().payment_methods.insert("pm_card".into(), other);
+    let updated = |id: &str| {
+        event(
+            id,
+            "payment_method.updated",
+            json!({ "id": "pm_card", "object": "payment_method", "customer": CUSTOMER }),
+        )
+    };
+    f.post_event(&updated("evt_pm_other"))
+        .await
+        .assert_status_ok();
+    assert_eq!(
+        f.methods().await.stripe_payment_method_id.as_deref(),
+        Some("pm_old")
+    );
+
+    f.fake().customers.get_mut(CUSTOMER).unwrap()["invoice_settings"]["default_payment_method"] =
+        json!("pm_card");
+    f.post_event(&updated("evt_pm_default"))
+        .await
+        .assert_status_ok();
+    assert_eq!(
+        f.methods().await.stripe_payment_method_id.as_deref(),
+        Some("pm_card")
+    );
 }
 
 #[test_db::test(seed)]

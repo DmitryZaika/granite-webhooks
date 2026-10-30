@@ -550,16 +550,67 @@ impl FromRequestParts<AppState> for CompanyManager {
     }
 }
 
-/// The client address, for consent records and the login throttle.
+/// The origin custom header CloudFront adds to every request it forwards.
 ///
-/// The api runs behind CloudFront in front of its Lambda function URL.
-/// CloudFront appends the viewer's address to `X-Forwarded-For`, and the
-/// function URL may append its own caller, CloudFront (`source_ip`, the
-/// request context's `sourceIp`). Entries the client sent come first and are
+/// Set by `infra/api-domain.yaml` (parameter `OriginVerifySecret`). A viewer
+/// cannot set it: CloudFront replaces a viewer header of that name.
+pub const ORIGIN_VERIFY_HEADER: &str = "x-granite-origin-verify";
+
+/// `CLOUDFRONT_ORIGIN_SECRET`, the value CloudFront sends in
+/// [`ORIGIN_VERIFY_HEADER`]; read once. Unset: every request is trusted to
+/// come through CloudFront (the behaviour before the header existed).
+pub fn origin_secret() -> Option<&'static str> {
+    static SECRET: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| {
+        let secret = std::env::var("CLOUDFRONT_ORIGIN_SECRET")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if secret.is_none() {
+            tracing::warn!("{}", crate::env_check::ORIGIN_SECRET_WARNING);
+        }
+        secret
+    });
+    SECRET.as_deref()
+}
+
+/// Whether the request carries CloudFront's origin secret. Compared as
+/// SHA-256 digests in constant time, so neither the value nor its length
+/// leaks.
+fn from_cloudfront(headers: &axum::http::HeaderMap, secret: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    headers.get(ORIGIN_VERIFY_HEADER).is_some_and(|value| {
+        constant_time_eq(
+            &Sha256::digest(value.as_bytes()),
+            &Sha256::digest(secret.as_bytes()),
+        )
+    })
+}
+
+/// The client address, for consent records, the login throttle and the
+/// per-IP signup limit.
+///
+/// The api runs behind CloudFront in front of its Lambda function URL, but
+/// the function URL is public too. With `origin_secret` set
+/// ([`origin_secret`]), `X-Forwarded-For` is read only when the request
+/// carries that secret in [`ORIGIN_VERIFY_HEADER`]; any other request is a
+/// direct call and its client is `source_ip` (the request context's
+/// `sourceIp`), else "unknown". Without the secret every request is read as
+/// coming through CloudFront (rollout compatibility; `env_check` warns).
+///
+/// Through CloudFront: CloudFront appends the viewer's address to
+/// `X-Forwarded-For`, and the function URL may append its own caller,
+/// CloudFront (`source_ip`). Entries the client sent come first and are
 /// never trusted: the address is the right-most entry once trailing copies of
-/// `source_ip` are dropped, else `source_ip` (a direct call), else "unknown".
-pub fn client_ip_from(source_ip: Option<&str>, headers: &axum::http::HeaderMap) -> String {
+/// `source_ip` are dropped, else `source_ip`, else "unknown".
+pub fn client_ip_from(
+    source_ip: Option<&str>,
+    headers: &axum::http::HeaderMap,
+    origin_secret: Option<&str>,
+) -> String {
     let source = source_ip.map(str::trim).filter(|ip| !ip.is_empty());
+    if origin_secret.is_some_and(|secret| !from_cloudfront(headers, secret)) {
+        return source.unwrap_or("unknown").to_string();
+    }
     let forwarded: Vec<&str> = headers
         .get_all("x-forwarded-for")
         .iter()
@@ -584,16 +635,20 @@ pub fn client_ip_from(source_ip: Option<&str>, headers: &axum::http::HeaderMap) 
 /// The `sourceIp` of the Lambda request context, when there is one.
 pub fn source_ip(extensions: &axum::http::Extensions) -> Option<String> {
     match extensions.get::<lambda_http::request::RequestContext>()? {
-        lambda_http::request::RequestContext::ApiGatewayV2(context) => context.http.source_ip.clone(),
+        lambda_http::request::RequestContext::ApiGatewayV2(context) => {
+            context.http.source_ip.clone()
+        }
         _ => None,
     }
 }
 
-/// [`client_ip_from`] without the request context: the right-most
-/// `X-Forwarded-For` entry. Prefer [`ClientIp`], which also drops the
-/// function URL's own hop.
+/// [`client_ip_from`] without the request context.
+///
+/// The right-most `X-Forwarded-For` entry of a request that came through
+/// CloudFront. Prefer [`ClientIp`], which also drops the function URL's own
+/// hop and knows a direct call's address.
 pub fn client_ip(headers: &axum::http::HeaderMap) -> String {
-    client_ip_from(None, headers)
+    client_ip_from(None, headers, origin_secret())
 }
 
 /// [`client_ip_from`] of a request: the client address, as a handler
@@ -608,6 +663,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
         Ok(Self(client_ip_from(
             source_ip(&parts.extensions).as_deref(),
             &parts.headers,
+            origin_secret(),
         )))
     }
 }
@@ -688,39 +744,90 @@ mod tests {
             "/v1/phone/admin/connect",
         ] {
             assert!(phone_admin_paused(path), "{path}");
-            assert!(!open_while_paused(&Method::POST, path), "{path} should be paused");
+            assert!(
+                !open_while_paused(&Method::POST, path),
+                "{path} should be paused"
+            );
         }
         assert!(!phone_admin_paused("/v1/phone/adminx"));
         assert!(phone_admin_paused("/v1/phone/admin/devicesx"));
     }
 
+    fn forwarded(forwarded: &str, origin: Option<&str>) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", forwarded.parse().unwrap());
+        if let Some(origin) = origin {
+            headers.insert(ORIGIN_VERIFY_HEADER, origin.parse().unwrap());
+        }
+        headers
+    }
+
     #[test]
     fn the_client_address_is_the_hop_cloudfront_added() {
-        let headers = |forwarded: &str| {
-            let mut headers = axum::http::HeaderMap::new();
-            headers.insert("x-forwarded-for", forwarded.parse().unwrap());
-            headers
-        };
+        let headers = |value: &str| forwarded(value, None);
         let cloudfront = Some("130.176.1.1");
+        // No origin secret configured: every request is read as CloudFront's.
         // The client's own entry is skipped; the function URL's hop dropped.
         assert_eq!(
-            client_ip_from(cloudfront, &headers("6.6.6.6, 203.0.113.9, 130.176.1.1")),
+            client_ip_from(
+                cloudfront,
+                &headers("6.6.6.6, 203.0.113.9, 130.176.1.1"),
+                None
+            ),
             "203.0.113.9"
         );
         assert_eq!(
-            client_ip_from(cloudfront, &headers("6.6.6.6, 203.0.113.9")),
+            client_ip_from(cloudfront, &headers("6.6.6.6, 203.0.113.9"), None),
             "203.0.113.9"
         );
-        assert_eq!(client_ip_from(None, &headers("6.6.6.6, 203.0.113.9")), "203.0.113.9");
+        assert_eq!(
+            client_ip_from(None, &headers("6.6.6.6, 203.0.113.9"), None),
+            "203.0.113.9"
+        );
         // A direct call: its source address.
         assert_eq!(
-            client_ip_from(Some("198.51.100.4"), &axum::http::HeaderMap::new()),
+            client_ip_from(Some("198.51.100.4"), &axum::http::HeaderMap::new(), None),
             "198.51.100.4"
         );
-        assert_eq!(client_ip_from(None, &axum::http::HeaderMap::new()), "unknown");
+        assert_eq!(
+            client_ip_from(None, &axum::http::HeaderMap::new(), None),
+            "unknown"
+        );
         let mut real_ip = axum::http::HeaderMap::new();
         real_ip.insert("x-real-ip", "6.6.6.6".parse().unwrap());
-        assert_eq!(client_ip_from(None, &real_ip), "unknown");
+        assert_eq!(client_ip_from(None, &real_ip, None), "unknown");
+    }
+
+    #[test]
+    fn forwarded_for_is_read_only_with_the_origin_secret() {
+        let secret = Some("origin-secret-value");
+        let cloudfront = Some("130.176.1.1");
+        // Through CloudFront: the header matches, the viewer's hop is read.
+        assert_eq!(
+            client_ip_from(
+                cloudfront,
+                &forwarded(
+                    "6.6.6.6, 203.0.113.9, 130.176.1.1",
+                    Some("origin-secret-value")
+                ),
+                secret,
+            ),
+            "203.0.113.9"
+        );
+        // A direct call to the function URL forging X-Forwarded-For: its
+        // source address, whatever the forged entries say.
+        let attacker = Some("198.51.100.4");
+        for origin in [None, Some("guess"), Some("origin-secret-valuX"), Some("")] {
+            assert_eq!(
+                client_ip_from(attacker, &forwarded("203.0.113.9", origin), secret),
+                "198.51.100.4",
+                "{origin:?}"
+            );
+        }
+        assert_eq!(
+            client_ip_from(None, &forwarded("203.0.113.9", Some("guess")), secret),
+            "unknown"
+        );
     }
 
     #[test]

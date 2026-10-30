@@ -148,7 +148,8 @@ pub struct MethodState {
     /// A bank account a Manager added that waits for micro-deposits.
     pub pending_setup_intent_id: Option<String>,
     /// The saved method stopped working; access pauses at `hold_until`
-    /// unless a new method is saved.
+    /// unless a new method is saved (a blocked account) or until no dispute
+    /// of the company is open or lost (a dispute).
     pub hold: Option<MethodHold>,
     pub hold_at: Option<NaiveDateTime>,
     pub hold_until: Option<NaiveDateTime>,

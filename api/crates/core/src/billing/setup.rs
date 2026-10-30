@@ -576,6 +576,10 @@ pub struct ReleaseFacts<'a> {
     pub signup_notify_email_set: bool,
     pub onboarding_advance_charging: bool,
     pub calendly_token_set: bool,
+    /// `STRIPE_AUTOMATIC_TAX` as the api reads it.
+    pub automatic_tax: bool,
+    /// `CLOUDFRONT_ORIGIN_SECRET` is set (`auth::client_ip_from`).
+    pub origin_secret_set: bool,
 }
 
 /// The startup configuration check (`env_check::config_problems`): the
@@ -664,6 +668,8 @@ pub fn release_checks(facts: &ReleaseFacts) -> Vec<SetupCheck> {
                 "ONBOARDING_ADVANCE_CHARGING is off: a passed onboarding deadline adds nothing to any charge"
             },
         ),
+        tax_check(facts.automatic_tax),
+        origin_secret_check(facts.origin_secret_set),
         check(
             "signup_enabled",
             "Self-serve signup switch",
@@ -685,6 +691,62 @@ pub fn release_checks(facts: &ReleaseFacts) -> Vec<SetupCheck> {
             },
         ),
     ]
+}
+
+/// `STRIPE_AUTOMATIC_TAX` on or off; always ok (Stripe Tax is [`stripe_tax_check`]).
+fn tax_check(on: bool) -> SetupCheck {
+    check(
+        "automatic_tax",
+        "Automatic sales tax",
+        true,
+        if on {
+            "STRIPE_AUTOMATIC_TAX is on: subscriptions compute sales tax (Stripe Tax must be active)"
+        } else {
+            "STRIPE_AUTOMATIC_TAX is off: subscriptions compute no sales tax"
+        },
+    )
+}
+
+/// `CLOUDFRONT_ORIGIN_SECRET` is set (`auth::client_ip_from`).
+fn origin_secret_check(set: bool) -> SetupCheck {
+    check(
+        "cloudfront_origin_secret",
+        "CloudFront origin secret",
+        set,
+        if set {
+            "set: X-Forwarded-For is read only on requests that came through CloudFront"
+        } else {
+            crate::env_check::ORIGIN_SECRET_WARNING
+        },
+    )
+}
+
+/// Whether Stripe Tax is active (`GET /v1/tax/settings`), checked while
+/// `STRIPE_AUTOMATIC_TAX` is on: Stripe refuses a subscription with
+/// automatic tax until it is.
+pub fn stripe_tax_check(settings: Result<&Value, &str>) -> SetupCheck {
+    const KEY: &str = "stripe_tax";
+    const LABEL: &str = "Stripe Tax";
+    match settings {
+        Err(error) => check(KEY, LABEL, false, format!("could not check: {error}")),
+        Ok(settings) => {
+            let status = settings["status"].as_str().unwrap_or("unknown");
+            if status == "active" {
+                check(KEY, LABEL, true, "active")
+            } else {
+                check(
+                    KEY,
+                    LABEL,
+                    false,
+                    format!(
+                        "Stripe Tax is {status} while STRIPE_AUTOMATIC_TAX is on: new subscriptions \
+                         would be refused. Finish Stripe Tax in the Dashboard (Tax, head office \
+                         address and registrations) or set STRIPE_AUTOMATIC_TAX=0"
+                    ),
+                )
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1030,13 +1092,27 @@ mod tests {
             signup_notify_email_set: true,
             onboarding_advance_charging: false,
             calendly_token_set: true,
+            automatic_tax: false,
+            origin_secret_set: true,
         };
         assert!(release_checks(&facts).iter().all(|c| c.ok));
+        assert!(
+            by_key(&release_checks(&facts), "automatic_tax")
+                .detail
+                .contains("off")
+        );
+        let taxed = release_checks(&ReleaseFacts {
+            automatic_tax: true,
+            ..facts
+        });
+        let tax = by_key(&taxed, "automatic_tax");
+        assert!(tax.ok && tax.detail.contains("STRIPE_AUTOMATIC_TAX is on"));
         let bad = release_checks(&ReleaseFacts {
             billing_alert_email_set: false,
             payments_app_url: "http://x",
             signup_notify_email_set: false,
             calendly_token_set: false,
+            origin_secret_set: false,
             ..facts
         });
         for key in [
@@ -1045,6 +1121,7 @@ mod tests {
             "signup_notify",
             "calendly_token",
             "signup_dependencies",
+            "cloudfront_origin_secret",
         ] {
             assert!(!by_key(&bad, key).ok, "{key}");
         }
@@ -1053,6 +1130,15 @@ mod tests {
                 .detail
                 .contains("CALENDLY_API_TOKEN")
         );
+    }
+
+    #[test]
+    fn stripe_tax_must_be_active() {
+        assert!(stripe_tax_check(Ok(&json!({ "status": "active" }))).ok);
+        let pending = stripe_tax_check(Ok(&json!({ "status": "pending" })));
+        assert!(!pending.ok && pending.detail.contains("Stripe Tax is pending"));
+        assert!(!stripe_tax_check(Ok(&json!({}))).ok);
+        assert!(!stripe_tax_check(Err("boom")).ok);
     }
 
     #[test]

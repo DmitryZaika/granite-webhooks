@@ -37,7 +37,8 @@ pub struct HoldInput<'a> {
     pub disputed: Option<DisputedPayment>,
     pub company_name: &'a str,
     pub user_name: Option<&'a str>,
-    /// When access pauses unless a new method is saved.
+    /// When access pauses: unless a new method is saved (a blocked
+    /// account), or until the dispute is resolved (a dispute).
     pub pauses_at: NaiveDateTime,
     /// The payments app's account page.
     pub account_url: &'a str,
@@ -85,20 +86,35 @@ pub enum InternalEvent<'a> {
     DisputeClosed {
         status: Option<&'a str>,
         amount_cents: Option<i64>,
-        /// Its hold was lifted (a dispute the company won).
+        /// The company's dispute hold was lifted (it won and no other
+        /// dispute holds it).
         hold_cleared: bool,
+    },
+    /// A superuser lifted the company's payment method hold.
+    HoldCleared {
+        /// The superuser's user id.
+        by_user_id: i32,
+        /// The hold that was lifted (`blocked`, `disputed`), `None` when none
+        /// ran (or a new dispute keeps it).
+        cleared: Option<&'a str>,
+        /// Open or lost disputes marked resolved by staff.
+        disputes_resolved: u64,
     },
 }
 
 /// What an event did to the company's access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoldOutcome {
-    /// A new hold: access pauses in `HOLD_DAYS` unless a new method is saved.
+    /// A new hold: access pauses in `HOLD_DAYS` unless a new method is saved
+    /// (a blocked account) or the dispute is won.
     Set,
-    /// A hold runs already, or the method was replaced since.
+    /// A hold runs already (or, for a blocked account, the method was
+    /// replaced since).
     Unchanged,
     /// A legacy company: never held, staff follow up.
     Legacy,
+    /// No company has the Stripe customer: nothing held.
+    NoCompany,
 }
 
 impl HoldOutcome {
@@ -107,6 +123,9 @@ impl HoldOutcome {
             Self::Set => "pauses in 7 days unless a new method is saved",
             Self::Unchanged => "unchanged (a hold runs already, or the method was replaced)",
             Self::Legacy => "not paused (legacy plan): follow up with the company",
+            Self::NoCompany => {
+                "nothing paused (no company matches): look the customer up in Stripe"
+            }
         }
     }
 }
@@ -114,8 +133,11 @@ impl HoldOutcome {
 #[derive(Debug, Clone, Copy)]
 pub struct InternalNotice<'a> {
     pub event: InternalEvent<'a>,
-    pub company_id: i32,
+    /// `None`: no company has the Stripe customer (`stripe_customer`).
+    pub company_id: Option<i32>,
     pub company_name: &'a str,
+    /// The Stripe customer, named when no company matches it.
+    pub stripe_customer: Option<&'a str>,
 }
 
 fn render(
@@ -169,11 +191,16 @@ pub fn render_hold(input: &HoldInput<'_>) -> RenderedEmail {
                 vec![
                     what,
                     format!(
-                        "Add a payment method by {date} to keep access, or email {SUPPORT_EMAIL}."
+                        "Access pauses on {date} until the dispute is closed in your favor. Email {SUPPORT_EMAIL} to resolve it sooner."
                     ),
                 ],
             )
         }
+    };
+    // A new payment method does not lift a dispute hold.
+    let action = match input.hold {
+        MethodHold::Blocked => UPDATE_LABEL,
+        MethodHold::Disputed => ACCOUNT_LABEL,
     };
     render(
         subject,
@@ -181,7 +208,7 @@ pub fn render_hold(input: &HoldInput<'_>) -> RenderedEmail {
         input.company_name,
         &paragraphs,
         input.account_url,
-        UPDATE_LABEL,
+        action,
     )
 }
 
@@ -221,19 +248,22 @@ impl InternalNotice<'_> {
             InternalEvent::Blocked { .. } => "Bank account blocked",
             InternalEvent::Dispute { .. } => "Payment disputed",
             InternalEvent::DisputeClosed { .. } => "Dispute closed",
+            InternalEvent::HoldCleared { .. } => "Payment hold lifted by staff",
         }
     }
 
     fn rows(&self) -> Vec<(&'static str, String)> {
         let money = |cents: Option<i64>| cents.map_or_else(|| "unknown".to_string(), format_money);
-        let mut rows = vec![(
-            "Company",
-            format!(
-                "{} (id {})",
-                company_or_default(self.company_name),
-                self.company_id
-            ),
-        )];
+        let company = self.company_id.map_or_else(
+            || {
+                format!(
+                    "none matches Stripe customer {}",
+                    self.stripe_customer.unwrap_or("unknown")
+                )
+            },
+            |id| format!("{} (id {id})", company_or_default(self.company_name)),
+        );
+        let mut rows = vec![("Company", company)];
         match self.event {
             InternalEvent::AchReturn {
                 failure_code,
@@ -253,7 +283,14 @@ impl InternalNotice<'_> {
             } => {
                 rows.push(("Reason", reason.unwrap_or("none given").to_string()));
                 rows.push(("Amount", money(amount_cents)));
-                rows.push(("Access", hold.access().into()));
+                let access = match hold {
+                    HoldOutcome::Set => {
+                        "pauses in 7 days and stays paused until the dispute is won or staff lift the hold"
+                    }
+                    HoldOutcome::Unchanged => "unchanged (a hold runs already)",
+                    HoldOutcome::Legacy | HoldOutcome::NoCompany => hold.access(),
+                };
+                rows.push(("Access", access.into()));
             }
             InternalEvent::DisputeClosed {
                 status,
@@ -268,6 +305,19 @@ impl InternalNotice<'_> {
                     "unchanged"
                 };
                 rows.push(("Access", access.into()));
+            }
+            InternalEvent::HoldCleared {
+                by_user_id,
+                cleared,
+                disputes_resolved,
+            } => {
+                rows.push(("By", format!("superuser id {by_user_id}")));
+                let hold = cleared.map_or_else(
+                    || "none lifted (no hold ran, or a new dispute keeps it)".to_string(),
+                    |hold| format!("{hold} hold lifted"),
+                );
+                rows.push(("Hold", hold));
+                rows.push(("Disputes resolved", disputes_resolved.to_string()));
             }
         }
         rows
@@ -291,7 +341,11 @@ pub fn render_internal_notice(input: &InternalNotice<'_>) -> RenderedEmail {
         subject: format!(
             "Billing alert: {}: {}",
             input.title(),
-            company_or_default(input.company_name)
+            if input.company_id.is_some() {
+                company_or_default(input.company_name)
+            } else {
+                "no company"
+            }
         ),
         html: wrap_html(parts),
         text: text.join("\n"),
@@ -338,8 +392,8 @@ mod tests {
         assert_eq!(
             disputed.text,
             "Hello,\n\nYour payment of $375.00 on October 1, 2026 was disputed with your card issuer or bank.\n\n\
-             Add a payment method by November 5, 2026 to keep access, or email support@granite-manager.com.\n\n\
-             Update payment method: https://payments.example.com/account\n\n"
+             Access pauses on November 5, 2026 until the dispute is closed in your favor. Email support@granite-manager.com to resolve it sooner.\n\n\
+             Open your account page: https://payments.example.com/account\n\n"
                 .to_string()
                 + &footer("Acme")
         );
@@ -372,8 +426,9 @@ mod tests {
                 failure_code: Some("insufficient_funds"),
                 amount_cents: Some(37_500),
             },
-            company_id: 20750,
+            company_id: Some(20750),
             company_name: "Acme",
+            stripe_customer: None,
         });
         assert_eq!(notice.subject, "Billing alert: Bank debit returned: Acme");
         assert!(notice.text.contains("Company: Acme (id 20750)"));
@@ -385,8 +440,9 @@ mod tests {
                 amount_cents: None,
                 hold: HoldOutcome::Legacy,
             },
-            company_id: 1,
+            company_id: Some(1),
             company_name: "",
+            stripe_customer: None,
         });
         assert!(dispute.text.contains("Reason: fraudulent"));
         assert!(dispute.text.contains("your company (id 1)"));
@@ -397,10 +453,49 @@ mod tests {
                 amount_cents: Some(37_500),
                 hold_cleared: true,
             },
-            company_id: 1,
+            company_id: Some(1),
             company_name: "Acme",
+            stripe_customer: None,
         });
         assert_eq!(closed.subject, "Billing alert: Dispute closed: Acme");
-        assert!(closed.text.contains("Outcome: won") && closed.text.contains("its hold was lifted"));
+        assert!(
+            closed.text.contains("Outcome: won") && closed.text.contains("its hold was lifted")
+        );
+        let unmatched = render_internal_notice(&InternalNotice {
+            event: InternalEvent::Dispute {
+                reason: None,
+                amount_cents: Some(100),
+                hold: HoldOutcome::Unchanged,
+            },
+            company_id: None,
+            company_name: "",
+            stripe_customer: Some("cus_gone"),
+        });
+        assert_eq!(
+            unmatched.subject,
+            "Billing alert: Payment disputed: no company"
+        );
+        assert!(
+            unmatched
+                .text
+                .contains("Company: none matches Stripe customer cus_gone")
+        );
+        let lifted = render_internal_notice(&InternalNotice {
+            event: InternalEvent::HoldCleared {
+                by_user_id: 7,
+                cleared: Some("disputed"),
+                disputes_resolved: 2,
+            },
+            company_id: Some(1),
+            company_name: "Acme",
+            stripe_customer: None,
+        });
+        assert_eq!(
+            lifted.subject,
+            "Billing alert: Payment hold lifted by staff: Acme"
+        );
+        assert!(lifted.text.contains("By: superuser id 7"));
+        assert!(lifted.text.contains("Hold: disputed hold lifted"));
+        assert!(lifted.text.contains("Disputes resolved: 2"));
     }
 }

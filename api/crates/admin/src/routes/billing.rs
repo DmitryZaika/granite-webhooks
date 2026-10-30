@@ -231,8 +231,12 @@ pub struct WebhookReceived {
 /// `payment_method.automatically_updated`) are re-read from Stripe: a
 /// verified bank account becomes the default (or completes the signup
 /// waiting on it), a failed one is reported to the Managers, a bank payment
-/// in flight keeps access on, a blocked account or a dispute starts a 7-day
-/// hold. A paid
+/// in flight keeps access on (once per invoice: not after a bank payment of
+/// that invoice failed), a blocked account or a dispute starts a 7-day hold
+/// (a dispute's lasts until no dispute of the company is open or lost; a
+/// closed one, `charge.dispute.closed`, may lift it). A
+/// `payment_method.updated` is applied only for the customer's default
+/// method. A paid
 /// subscription invoice that carried the onboarding advance (its invoice
 /// item, `metadata.kind = onboarding_advance`) credits that month back to
 /// the customer's balance, once. Needs a valid `Stripe-Signature` for
@@ -320,6 +324,24 @@ pub async fn stripe_webhook(
                 (company_id, &latest)
             {
                 sync_subscription_items(&state, &store, company_id, subscription).await?;
+                // An ended subscription takes the onboarding advance off its
+                // unpaid invoice now, not at the next daily run; a failure
+                // here leaves it to that run.
+                if subscription.deleted
+                    || matches!(subscription.status.as_str(), "canceled" | "incomplete_expired")
+                {
+                    let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                    if let Err(err) = crate::onboarding_call::advance::settle_item_locked(
+                        &state,
+                        company_id,
+                        billing::now(),
+                        until,
+                    )
+                    .await
+                    {
+                        tracing::warn!(company_id, code = %err.code(), "onboarding advance not settled after the subscription ended");
+                    }
+                }
             }
             // A paid or failed invoice ends the bank payment in flight.
             if let (Some(company_id), BillingEvent::Invoice { .. }) = (company_id, &latest) {
@@ -359,7 +381,7 @@ pub async fn stripe_webhook(
     }
 }
 
-/// Another delivery of the event holds its claim: a 503 Stripe retries
+/// Another delivery of the event holds its claim: a 409 Stripe retries
 /// (a 2xx would end Stripe's retries, and the event could be lost).
 fn event_in_progress() -> ApiError {
     ApiError::coded(

@@ -4,6 +4,7 @@
 //! [`config_problems`] is pure over an [`EnvSnapshot`]; it names variables,
 //! never their values. `AppState::from_env` refuses to start when it finds a
 //! problem, and the superuser billing setup check can list the same problems.
+//! [`config_warnings`] are logged and listed but never stop the api.
 
 use crate::billing::setup::key_mode;
 use crate::onboarding_call::calendly::scheduling_url;
@@ -11,7 +12,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Every variable [`config_problems`] looks at.
-const WATCHED: [&str; 22] = [
+const WATCHED: [&str; 23] = [
     "SESSION_SECRET",
     "SELF_SERVE_SIGNUP_ENABLED",
     "STRIPE_SECRET_KEY",
@@ -34,6 +35,7 @@ const WATCHED: [&str; 22] = [
     "SESSION_COOKIE_DOMAIN",
     "LAMBDA_KEY",
     "API_ALLOWED_ORIGINS",
+    "CLOUDFRONT_ORIGIN_SECRET",
 ];
 
 /// The watched variables as the process has them (blank ones left out).
@@ -222,6 +224,21 @@ pub fn config_problems(env: &EnvSnapshot) -> Vec<String> {
     problems
 }
 
+/// The warning when `CLOUDFRONT_ORIGIN_SECRET` is unset.
+pub const ORIGIN_SECRET_WARNING: &str = "CLOUDFRONT_ORIGIN_SECRET is not set: X-Forwarded-For \
+     is trusted on direct calls to the function URL, so the per-IP signup limit and login \
+     throttle can be bypassed";
+
+/// What is weaker than it should be but does not stop the api, one sentence
+/// each, naming variables only.
+pub fn config_warnings(env: &EnvSnapshot) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if env.get("CLOUDFRONT_ORIGIN_SECRET").is_none() {
+        warnings.push(ORIGIN_SECRET_WARNING.to_string());
+    }
+    warnings
+}
+
 /// Why the api does not start: the problems of [`config_problems`].
 #[derive(Debug)]
 pub struct ConfigError(pub Vec<String>);
@@ -381,6 +398,15 @@ mod tests {
             ])
             .is_empty()
         );
+    }
+
+    #[test]
+    fn a_missing_origin_secret_is_a_warning_not_a_problem() {
+        let env = EnvSnapshot::from_pairs(&BASE);
+        assert!(config_problems(&env).is_empty());
+        assert_eq!(config_warnings(&env), [ORIGIN_SECRET_WARNING]);
+        let env = EnvSnapshot::from_pairs(&[("CLOUDFRONT_ORIGIN_SECRET", "secret-value")]);
+        assert!(config_warnings(&env).is_empty());
     }
 
     #[test]

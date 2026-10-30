@@ -48,6 +48,9 @@ pub enum SetupError {
 pub struct Options {
     /// Write to Stripe; otherwise only read and report.
     pub apply: bool,
+    /// `--live`: confirms that `apply` with a live key writes to the
+    /// production account. `apply` with a live key is refused without it.
+    pub live: bool,
     /// The webhook endpoint's URL.
     pub webhook_url: String,
     /// Where a newly created endpoint's signing secret is written (mode 0600).
@@ -77,6 +80,7 @@ impl Options {
             .unwrap_or_else(|| "https://granite-manager.com".into());
         Self {
             apply,
+            live: false,
             webhook_url: webhook_url.unwrap_or_else(Self::default_webhook_url),
             secret_file,
             payments_app_url: super::payments_app_url(),
@@ -345,8 +349,10 @@ fn same_url(a: &str, b: &str) -> bool {
     a.trim().trim_end_matches('/') == b.trim().trim_end_matches('/')
 }
 
-/// Creates the (empty) secret file with mode 0600, failing when it exists, so
-/// a signing secret never lands in a file that cannot take it.
+/// Reserves the secret file before any write, so a signing secret never
+/// lands in a file that cannot take it: creates it empty with mode 0600, or
+/// takes an empty regular file an earlier failed run left (made 0600). A
+/// file with contents (or anything else at the path) is refused.
 fn reserve_secret_file(path: &Path) -> std::io::Result<()> {
     let mut open = std::fs::OpenOptions::new();
     open.write(true).create_new(true);
@@ -355,7 +361,41 @@ fn reserve_secret_file(path: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         open.mode(0o600);
     }
-    open.open(path).map(drop)
+    match open.open(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let meta = std::fs::symlink_metadata(path)?;
+            if !meta.is_file() || meta.len() != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "it exists and is not an empty file",
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Removes the reserved secret file when the run wrote no secret to it, so
+/// a failed run does not block the next one. Never a file with contents.
+fn release_secret_file(path: &Path) {
+    let empty = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() == 0);
+    if empty {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Whether an archived price holding a lookup key is one this script made
+/// for `spec`: same amount and same product name (the product is expanded).
+pub fn archived_is_ours(spec: &PriceSpec, price: &Value) -> bool {
+    price["unit_amount"].as_i64() == Some(spec.cents)
+        && price["product"]["name"].as_str() == Some(spec.product_name.as_str())
 }
 
 enum WebhookPlan {
@@ -398,27 +438,38 @@ impl Run<'_> {
         let specs = price_specs();
         let keys: Vec<&str> = specs.iter().map(|spec| spec.lookup_key).collect();
         let existing = self.stripe.prices_by_lookup_keys(&keys).await?;
+        let archived = self.stripe.archived_prices_by_lookup_keys(&keys).await?;
         for spec in &specs {
             let label = format!("{} {} USD", spec.lookup_key, money(spec.cents));
             let Some(price) = existing
                 .iter()
                 .find(|price| price["lookup_key"] == spec.lookup_key)
             else {
-                let created = if self.options.apply {
-                    let form = price_form(spec);
-                    let key = format!("setup:{}:v1", spec.lookup_key);
-                    Some(self.stripe.create_price_keyed(&form, &key).await?)
-                } else {
-                    None
-                };
-                let id = created
-                    .as_ref()
-                    .and_then(|price| price["id"].as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                self.change("created", "would create", &format!("{label} {id}"))?;
-                if !id.is_empty() {
-                    self.outcome.price_ids.push((spec.lookup_key.into(), id));
+                let held = archived
+                    .iter()
+                    .find(|price| price["lookup_key"] == spec.lookup_key);
+                match held {
+                    None => self.create_price(spec, &label, None).await?,
+                    Some(held) if archived_is_ours(spec, held) => {
+                        let held_id = held["id"].as_str().unwrap_or_default();
+                        self.create_price(spec, &label, Some(held_id)).await?;
+                    }
+                    Some(held) => {
+                        let held_id = held["id"].as_str().unwrap_or_default();
+                        self.problem(&format!(
+                            "{label}: the lookup key is held by archived price {held_id} ({} cents, product {}), \
+                             which is not this price, so nothing was created. In the Dashboard, either \
+                             reactivate {held_id} if it is right, or remove its lookup key once nothing \
+                             depends on it; then run this script again.",
+                            held["unit_amount"]
+                                .as_i64()
+                                .map_or_else(|| "unset".into(), |cents| cents.to_string()),
+                            held["product"]["name"]
+                                .as_str()
+                                .or_else(|| held["product"].as_str())
+                                .unwrap_or("unknown"),
+                        ))?;
+                    }
                 }
                 continue;
             };
@@ -442,6 +493,43 @@ impl Run<'_> {
                     metadata.join("; ")
                 ))?;
             }
+            self.outcome.price_ids.push((spec.lookup_key.into(), id));
+        }
+        Ok(())
+    }
+
+    /// Creates the price of `spec`, or says `--apply` would. `transfer_from`:
+    /// an archived price of ours holds the lookup key, which moves to the new
+    /// price (`transfer_lookup_key`).
+    async fn create_price(
+        &mut self,
+        spec: &PriceSpec,
+        label: &str,
+        transfer_from: Option<&str>,
+    ) -> Result<(), SetupError> {
+        let created = if self.options.apply {
+            let mut form = price_form(spec);
+            if transfer_from.is_some() {
+                form.push(("transfer_lookup_key", "true".into()));
+            }
+            let key = transfer_from.map_or_else(
+                || format!("setup:{}:v1", spec.lookup_key),
+                |held| format!("setup:{}:transfer-{held}:v1", spec.lookup_key),
+            );
+            Some(self.stripe.create_price_keyed(&form, &key).await?)
+        } else {
+            None
+        };
+        let id = created
+            .as_ref()
+            .and_then(|price| price["id"].as_str())
+            .unwrap_or_default()
+            .to_string();
+        let moved = transfer_from.map_or_else(String::new, |held| {
+            format!(" (lookup key moved from archived price {held}, same product and amount)")
+        });
+        self.change("created", "would create", &format!("{label} {id}{moved}"))?;
+        if !id.is_empty() {
             self.outcome.price_ids.push((spec.lookup_key.into(), id));
         }
         Ok(())
@@ -597,7 +685,16 @@ impl Run<'_> {
                 "the endpoint was created but no --secret-file was given".into(),
             ));
         };
-        std::fs::write(&path, format!("{secret}\n"))?;
+        // The reserved file, written only while still empty.
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
+        if file.metadata()?.len() != 0 {
+            return Err(SetupError::Refused(format!(
+                "the endpoint was created but {} is no longer empty and was left alone: roll \
+                 the endpoint's signing secret in the Dashboard",
+                path.display()
+            )));
+        }
+        file.write_all(format!("{secret}\n").as_bytes())?;
         self.say(
             "secret",
             &format!("{} written to {}", mask_secret(secret), path.display()),
@@ -606,7 +703,7 @@ impl Run<'_> {
         Ok(())
     }
 
-    fn environment(&mut self, mode: KeyMode) -> Result<(), SetupError> {
+    fn environment(&mut self, mode: KeyMode, stripe_tax: &str) -> Result<(), SetupError> {
         let public = match mode {
             KeyMode::Live => "pk_live_",
             KeyMode::Test => "pk_test_",
@@ -675,6 +772,13 @@ impl Run<'_> {
                 "1 only after the sandbox fee run".into(),
             ),
             (
+                "STRIPE_AUTOMATIC_TAX",
+                format!(
+                    "1 to compute sales tax on subscriptions, only once Stripe Tax is active \
+                     (Stripe Tax is {stripe_tax} on this account); 0 or unset: no tax"
+                ),
+            ),
+            (
                 "SELF_SERVE_SIGNUP_ENABLED",
                 "1 last, once GET /v1/superuser/billing/setup shows every check ok".into(),
             ),
@@ -725,6 +829,13 @@ pub async fn run(
     options: &Options,
     out: &mut dyn Write,
 ) -> Result<Outcome, SetupError> {
+    if options.apply && mode == KeyMode::Live && !options.live {
+        return Err(SetupError::Refused(
+            "--apply with a live key writes to the production Stripe account: run without --apply \
+             to review, then add --live to confirm; nothing was changed"
+                .into(),
+        ));
+    }
     writeln!(out, "Stripe key mode: {}", mode.name().to_uppercase())?;
     check_livemode(stripe, mode, out).await?;
     writeln!(
@@ -757,7 +868,8 @@ pub async fn run(
     let plan = matching.first().map_or(WebhookPlan::Create, |endpoint| {
         WebhookPlan::Existing((*endpoint).clone())
     });
-    if options.apply && matches!(plan, WebhookPlan::Create) {
+    let reserved = options.apply && matches!(plan, WebhookPlan::Create);
+    if reserved {
         let Some(path) = &options.secret_file else {
             return Err(SetupError::Refused(
                 "the webhook endpoint must be created and Stripe shows its signing secret once: \
@@ -773,6 +885,28 @@ pub async fn run(
         })?;
     }
 
+    let result = steps(stripe, mode, options, out, &endpoints, plan).await;
+    let written = result
+        .as_ref()
+        .is_ok_and(|outcome| outcome.secret_file_written.is_some());
+    if reserved
+        && !written
+        && let Some(path) = &options.secret_file
+    {
+        release_secret_file(path);
+    }
+    result
+}
+
+/// The run once the account was read and the secret file reserved.
+async fn steps(
+    stripe: &Stripe,
+    mode: KeyMode,
+    options: &Options,
+    out: &mut dyn Write,
+    endpoints: &[Value],
+    plan: WebhookPlan,
+) -> Result<Outcome, SetupError> {
     let mut run = Run {
         stripe,
         options,
@@ -802,7 +936,11 @@ pub async fn run(
             ),
         )?;
     }
-    run.environment(mode)?;
+    let stripe_tax = match stripe.tax_settings().await {
+        Ok(settings) => settings["status"].as_str().unwrap_or("unknown").to_string(),
+        Err(error) => format!("unreadable ({})", error.code()),
+    };
+    run.environment(mode, &stripe_tax)?;
 
     let outcome = std::mem::take(&mut run.outcome);
     let summary = match (options.apply, outcome.changes, outcome.problems) {

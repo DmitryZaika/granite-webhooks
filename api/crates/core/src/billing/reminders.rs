@@ -2690,7 +2690,7 @@ mod tests {
         assert_eq!(fake.subjects(), pair("A payment was disputed"));
         let sent = fake.sent.borrow();
         assert!(sent[0].text.contains("Your payment of $375.00 on September 15, 2026"));
-        assert!(sent[0].text.contains("by October 8, 2026"));
+        assert!(sent[0].text.contains("Access pauses on October 8, 2026 until the dispute is closed"));
         assert_eq!(
             fake.statuses(),
             [(10, ReminderStatus::Sent, 2), (11, ReminderStatus::Sent, 2)]

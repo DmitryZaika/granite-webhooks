@@ -42435,7 +42435,7 @@
           "onboarding-call"
         ],
         "summary": "Record a booked onboarding call",
-        "description": "Call after the Calendly widget reports `calendly.event_scheduled`, with\nits `payload.invitee.uri`. The booking is read back from Calendly: it\nmust be active and carry this company's tag (`utm_campaign` and\n`utm_content` from `booking_url` of `GET /v1/onboarding-call`). A new\nbooking replaces the one stored (a reschedule). A call at or before a\nrecorded no-show is refused: book a new time. Managers and Admins of the\nacting company only (Granite superusers get 403). Returns the onboarding call as\n`GET /v1/onboarding-call` does.",
+        "description": "Call after the Calendly widget reports `calendly.event_scheduled`, with\nits `payload.invitee.uri`. The booking is read back from Calendly: it\nmust be active and carry this company's tag (`utm_campaign` and\n`utm_content` from `booking_url` of `GET /v1/onboarding-call`). A new\nbooking replaces the one stored (a reschedule). A call at or before a\nrecorded no-show is refused: book a new time. A call that ends before the\nadvance's charge date takes a pending advance invoice item out of Stripe\nat once. Managers and Admins of the acting company only (Granite\nsuperusers get 403). Returns the onboarding call as\n`GET /v1/onboarding-call` does.",
         "operationId": "create_onboarding_call_booking",
         "requestBody": {
           "content": {
@@ -42619,7 +42619,7 @@
           "superuser"
         ],
         "summary": "Extend, waive, complete, mark a no-show on, hold or release a company's onboarding commitment",
-        "description": "`extend`: the one 14-day extension (refused when used, or when the\ndeadline would still be in the past). `waive`: no advance. `complete`:\nonboarding done. `no_show`: the customer missed the booked call (only\nonce it started and within 48 hours after it ended). `hold`: hold the\nadvance for review (no notice, no invoice item; a pending one is\ndeleted). `release`: end the hold (fewer than 7 days to the charge: a\nnew notice names the next eligible charge). All are refused once the\ncommitment is settled or the advance is on a subscription invoice (it is\ncredited back once paid). `allowed_actions` of the GET says which apply\nnow. A pending invoice item no longer wanted is deleted in Stripe right\nafter (else by the daily run). Each is stored on the timeline with the\nacting superuser and the time. Returns the commitment as\n`GET /v1/superuser/companies/{id}/onboarding-commitment` does.",
+        "description": "`extend`: the one 14-day extension (refused when used, or when the\ndeadline would still be in the past). `waive`: no advance. `complete`:\nonboarding done. `no_show`: the customer missed the booked call (only\nonce it started and within 48 hours after it ended). `hold`: hold the\nadvance for review (no notice, no invoice item; a pending one is\ndeleted). `release`: end the hold (fewer than 7 days to the charge: a\nnew notice names the next eligible charge). All are refused once the\ncommitment is settled or the advance is on a subscription invoice (it is\ncredited back once paid); before `extend`, `waive`, `complete` or `hold`\nthe advance's invoice item is read from Stripe, and one already on a\nfinalized invoice is recorded and the action refused (409).\n`allowed_actions` of the GET says which apply now. A pending invoice\nitem no longer wanted is deleted in Stripe right after (else by the\ndaily run). Each is stored on the timeline with the\nacting superuser and the time. Returns the commitment as\n`GET /v1/superuser/companies/{id}/onboarding-commitment` does.",
         "operationId": "update_company_onboarding_commitment",
         "parameters": [
           {
@@ -42695,7 +42695,7 @@
             }
           },
           "409": {
-            "description": "Refused: already extended, held or not held, settled, the advance is on an invoice, not booked, or the extension would leave the deadline in the past",
+            "description": "Refused: already extended, held or not held, settled, the advance is on a finalized invoice, not booked, or the extension would leave the deadline in the past",
             "content": {
               "application/json": {
                 "schema": {
@@ -42706,6 +42706,16 @@
           },
           "500": {
             "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Stripe could not be reached to check the advance's invoice item",
             "content": {
               "application/json": {
                 "schema": {
@@ -48530,7 +48540,7 @@
           "billing"
         ],
         "summary": "Receive a Stripe event",
-        "description": "Stripe's webhook endpoint: checkout, subscription, invoice and payment\nmethod events update the company's billing (each event once); a plan\ninvite's subscription (`metadata.plan_invite_id`) only once the invite\nis accepted. Card and bank account events (`setup_intent.succeeded`,\n`setup_intent.setup_failed`, `payment_intent.processing`,\n`charge.failed`, `charge.dispute.created`,\n`payment_method.automatically_updated`) are re-read from Stripe: a\nverified bank account becomes the default (or completes the signup\nwaiting on it), a failed one is reported to the Managers, a bank payment\nin flight keeps access on, a blocked account or a dispute starts a 7-day\nhold. A paid\nsubscription invoice that carried the onboarding advance (its invoice\nitem, `metadata.kind = onboarding_advance`) credits that month back to\nthe customer's balance, once. Needs a valid `Stripe-Signature` for\n`STRIPE_WEBHOOK_SECRET`; no session.",
+        "description": "Stripe's webhook endpoint: checkout, subscription, invoice and payment\nmethod events update the company's billing (each event once); a plan\ninvite's subscription (`metadata.plan_invite_id`) only once the invite\nis accepted. Card and bank account events (`setup_intent.succeeded`,\n`setup_intent.setup_failed`, `payment_intent.processing`,\n`charge.failed`, `charge.dispute.created`,\n`payment_method.automatically_updated`) are re-read from Stripe: a\nverified bank account becomes the default (or completes the signup\nwaiting on it), a failed one is reported to the Managers, a bank payment\nin flight keeps access on (once per invoice: not after a bank payment of\nthat invoice failed), a blocked account or a dispute starts a 7-day hold\n(a dispute's lasts until no dispute of the company is open or lost; a\nclosed one, `charge.dispute.closed`, may lift it). A\n`payment_method.updated` is applied only for the customer's default\nmethod. A paid\nsubscription invoice that carried the onboarding advance (its invoice\nitem, `metadata.kind = onboarding_advance`) credits that month back to\nthe customer's balance, once. Needs a valid `Stripe-Signature` for\n`STRIPE_WEBHOOK_SECRET`; no session.",
         "operationId": "receive_stripe_webhook",
         "parameters": [
           {
@@ -50990,7 +51000,7 @@
           "superuser"
         ],
         "summary": "List the companies",
-        "description": "Every live company, most users first: users counting toward the limit,\ntours progress, connected integrations, feature switches and whether\nStripe payment is required, plus its plan, usable and free add-ons, Manager\ncount, stored subscription and live plan invite (details with\n`get_platform_company_plan_move`). The slower checks are per company:\n`/domain-trust`, `/ses-inbound`, `/setup-checklist`.",
+        "description": "Every live company, most users first: users counting toward the limit,\ntours progress, connected integrations, feature switches and whether\nStripe payment is required, plus its plan, usable and free add-ons, Manager\ncount, stored subscription, payment method hold and live plan invite (details with\n`get_platform_company_plan_move`). The slower checks are per company:\n`/domain-trust`, `/ses-inbound`, `/setup-checklist`.",
         "operationId": "list_platform_companies",
         "responses": {
           "200": {
@@ -52105,6 +52115,85 @@
         ]
       }
     },
+    "/v1/superuser/companies/{id}/billing/payment-hold/clear": {
+      "post": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Lift a company's payment method hold",
+        "description": "Ends its hold (a blocked bank account or a dispute) so access does not\npause, or comes back if it already did. Its open and lost disputes are\nmarked resolved by the caller and never hold it again (a new dispute\ndoes); who lifted it and when are recorded, and staff get the internal\nbilling alert. No body. Answers `cleared: false` when no hold ran (also\nwhen a dispute opened in the same instant keeps it). The hold shows as\n`payment_hold` in `GET /v1/superuser/companies`.",
+        "operationId": "clear_platform_company_payment_hold",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether a hold was lifted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentHoldCleared"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/superuser/companies/{id}/plan-move": {
       "get": {
         "tags": [
@@ -52744,7 +52833,7 @@
           "superuser"
         ],
         "summary": "Check the Stripe billing setup",
-        "description": "Reports whether billing is set up correctly: the Stripe secret and\npublishable keys (only whether they are set and live or test, never their\nvalues), the webhook signing secret, the configured plans, `APP_URL`,\nemail sending and the scheduled jobs key, then what Stripe itself reports\nfor the webhook endpoint (exactly one enabled endpoint for\n`/v1/webhooks/stripe`, with every handled event and the api's Stripe API\nversion), for the default payment method configuration (card and bank\ndebit enabled), for the customer portal configuration the api uses (it\nexists, cancelling and plan changes off), the billing alert email,\npayments app URL, signup notification target, Calendly token, onboarding\nadvance charging and the signup switch with what it depends on, and for each configured plan price (active, monthly, USD, same\nmode as the key), each self-serve price by lookup key (same checks, per\nunit) and whether those prices still match what the signup consent texts\nstate (signup refuses with 503 when not). A Stripe call that fails becomes\na failed check, not an error. Stripe checks are skipped without `STRIPE_SECRET_KEY`.\nThe report is cached for 5 minutes. Super admins only.",
+        "description": "Reports whether billing is set up correctly: the Stripe secret and\npublishable keys (only whether they are set and live or test, never their\nvalues), the webhook signing secret, the configured plans, `APP_URL`,\nemail sending and the scheduled jobs key, then what Stripe itself reports\nfor the webhook endpoint (exactly one enabled endpoint for\n`/v1/webhooks/stripe`, with every handled event and the api's Stripe API\nversion), for the default payment method configuration (card and bank\ndebit enabled), for the customer portal configuration the api uses (it\nexists, cancelling and plan changes off), the billing alert email,\npayments app URL, signup notification target, Calendly token, onboarding\nadvance charging, automatic sales tax (`STRIPE_AUTOMATIC_TAX`, and while\nit is on whether Stripe Tax is active: `stripe_tax`), whether\n`CLOUDFRONT_ORIGIN_SECRET` is set (without it the per-IP limits trust a\nforged `X-Forwarded-For`) and the signup switch with what it depends on, and for each configured plan price (active, monthly, USD, same\nmode as the key), each self-serve price by lookup key (same checks, per\nunit) and whether those prices still match what the signup consent texts\nstate (signup refuses with 503 when not). A Stripe call that fails becomes\na failed check, not an error. Stripe checks are skipped without `STRIPE_SECRET_KEY`.\nThe report is cached for 5 minutes. Super admins only.",
         "operationId": "get_billing_setup",
         "responses": {
           "200": {
@@ -71208,6 +71297,39 @@
           }
         }
       },
+      "CompanyPaymentHold": {
+        "type": "object",
+        "description": "A company's payment method hold: access pauses at `until`.",
+        "required": [
+          "reason",
+          "since",
+          "open_disputes"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "`blocked` (the bank blocked debits from its saved account: lifted when\na Manager saves a new method) or `disputed` (a payment was disputed:\nlifted when no dispute is open or lost, or by a superuser; a new\nmethod does not lift it)."
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the hold started (ISO 8601, UTC)."
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When access pauses, or paused (ISO 8601, UTC); null if unknown."
+          },
+          "open_disputes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Disputes still holding the company: open, or lost and not yet\ncleared by a superuser. 0 for a blocked-account hold."
+          }
+        }
+      },
       "CompanyPlanInvite": {
         "type": "object",
         "description": "A company's live plan invite.",
@@ -71525,6 +71647,17 @@
               {
                 "$ref": "#/components/schemas/CompanyPlanInvite",
                 "description": "Its live plan invite (open and not expired, or being accepted), or\nnull."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payment_hold": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CompanyPaymentHold",
+                "description": "Its payment method hold (a blocked bank account or a dispute), or\nnull when none runs. Lift it with\n`POST /v1/superuser/companies/{id}/billing/payment-hold/clear`."
               },
               {
                 "type": "null"
@@ -84763,7 +84896,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The end of that month: a cancellation after the advance is paid ends\nthe subscription here; null before the notice."
           }
         }
       },
@@ -86409,6 +86543,19 @@
           "paused": {
             "type": "boolean",
             "description": "Access is paused now."
+          }
+        }
+      },
+      "PaymentHoldCleared": {
+        "type": "object",
+        "description": "Whether a payment method hold was lifted.",
+        "required": [
+          "cleared"
+        ],
+        "properties": {
+          "cleared": {
+            "type": "boolean",
+            "description": "True when a hold ran and was lifted; false when the company had none\n(its open and lost disputes are marked resolved either way)."
           }
         }
       },

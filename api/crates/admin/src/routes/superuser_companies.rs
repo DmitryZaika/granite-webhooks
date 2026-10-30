@@ -13,12 +13,15 @@
 //! - `PUT    /v1/superuser/companies/{id}/features/{feature}` → switch a feature
 //! - `PUT    /v1/superuser/companies/{id}/addons/{key}`      → grant or take back a free add-on
 //! - `PUT    /v1/superuser/companies/{id}/billing-required`   → require Stripe payment
+//! - `POST   /v1/superuser/companies/{id}/billing/payment-hold/clear` → lift its payment method hold
 //!
 //! Superusers only. Replaces the Remix `admin.superuser-dashboard.companies*`
 //! routes.
 
 use crate::auth::CurrentUser;
 use crate::auth::session::SessionUser;
+use crate::billing::MethodHold;
+use crate::billing::methods::{HOLDING_DISPUTE, clear_hold_by_staff};
 use crate::billing::seats::COUNTS_TOWARD_LIMIT;
 use crate::company_create::{
     CompanyInit, PlanSource, RESERVED_SUBDOMAINS, create_company_tx, valid_subdomain,
@@ -55,6 +58,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(switch_feature))
         .routes(routes!(switch_addon))
         .routes(routes!(set_billing_required))
+        .routes(routes!(clear_payment_hold))
 }
 
 const CHECK_IN: i32 = 8;
@@ -152,7 +156,28 @@ pub struct CompanySummary {
     /// Its live plan invite (open and not expired, or being accepted), or
     /// null.
     pub plan_invite: Option<CompanyPlanInvite>,
+    /// Its payment method hold (a blocked bank account or a dispute), or
+    /// null when none runs. Lift it with
+    /// `POST /v1/superuser/companies/{id}/billing/payment-hold/clear`.
+    pub payment_hold: Option<CompanyPaymentHold>,
     pub features: Features,
+}
+
+/// A company's payment method hold: access pauses at `until`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CompanyPaymentHold {
+    /// `blocked` (the bank blocked debits from its saved account: lifted when
+    /// a Manager saves a new method) or `disputed` (a payment was disputed:
+    /// lifted when no dispute is open or lost, or by a superuser; a new
+    /// method does not lift it).
+    pub reason: String,
+    /// When the hold started (ISO 8601, UTC).
+    pub since: DateTime<Utc>,
+    /// When access pauses, or paused (ISO 8601, UTC); null if unknown.
+    pub until: Option<DateTime<Utc>>,
+    /// Disputes still holding the company: open, or lost and not yet
+    /// cleared by a superuser. 0 for a blocked-account hold.
+    pub open_disputes: i64,
 }
 
 /// A company's live plan invite.
@@ -258,6 +283,38 @@ async fn plan_invites_by_company(
         .collect())
 }
 
+/// Every running payment method hold, by company.
+async fn payment_holds_by_company(
+    pool: &sqlx::MySqlPool,
+) -> ApiResult<HashMap<i32, CompanyPaymentHold>> {
+    let rows: Vec<(i32, String, NaiveDateTime, Option<NaiveDateTime>, i64)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT cb.company_id, CAST(cb.method_hold AS CHAR), cb.method_hold_at,
+                    cb.method_hold_until,
+                    (SELECT CAST(COUNT(*) AS SIGNED) FROM billing_disputes
+                      WHERE billing_disputes.company_id = cb.company_id AND {HOLDING_DISPUTE})
+               FROM company_billing cb
+              WHERE cb.method_hold IS NOT NULL AND cb.method_hold_at IS NOT NULL"
+        )))
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(company_id, reason, since, until, open_disputes)| {
+            let reason = MethodHold::parse(&reason)?;
+            Some((
+                company_id,
+                CompanyPaymentHold {
+                    reason: reason.as_str().to_string(),
+                    since: since.and_utc(),
+                    until: until.map(|d| d.and_utc()),
+                    open_disputes,
+                },
+            ))
+        })
+        .collect())
+}
+
 /// Every stored subscription, by company.
 async fn billing_by_company(
     pool: &sqlx::MySqlPool,
@@ -291,7 +348,7 @@ async fn billing_by_company(
 /// Every live company, most users first: users counting toward the limit,
 /// tours progress, connected integrations, feature switches and whether
 /// Stripe payment is required, plus its plan, usable and free add-ons, Manager
-/// count, stored subscription and live plan invite (details with
+/// count, stored subscription, payment method hold and live plan invite (details with
 /// `get_platform_company_plan_move`). The slower checks are per company:
 /// `/domain-trust`, `/ses-inbound`, `/setup-checklist`.
 #[crate::openapi::path(
@@ -349,6 +406,7 @@ pub async fn list_companies(
     let mut active = active_addons(&state.pool).await?;
     let mut billing = billing_by_company(&state.pool).await?;
     let mut plan_invites = plan_invites_by_company(&state.pool).await?;
+    let mut payment_holds = payment_holds_by_company(&state.pool).await?;
     let now = crate::billing::now();
     Ok(Json(
         rows.into_iter()
@@ -403,6 +461,7 @@ pub async fn list_companies(
                     first_payment_paused: paused,
                     billing,
                     plan_invite: plan_invites.remove(&row.id),
+                    payment_hold: payment_holds.remove(&row.id),
                     features: row.features,
                 }
             })
@@ -1431,4 +1490,54 @@ pub async fn set_billing_required(
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether a payment method hold was lifted.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaymentHoldCleared {
+    /// True when a hold ran and was lifted; false when the company had none
+    /// (its open and lost disputes are marked resolved either way).
+    pub cleared: bool,
+}
+
+/// Lift a company's payment method hold
+///
+/// Ends its hold (a blocked bank account or a dispute) so access does not
+/// pause, or comes back if it already did. Its open and lost disputes are
+/// marked resolved by the caller and never hold it again (a new dispute
+/// does); who lifted it and when are recorded, and staff get the internal
+/// billing alert. No body. Answers `cleared: false` when no hold ran (also
+/// when a dispute opened in the same instant keeps it). The hold shows as
+/// `payment_hold` in `GET /v1/superuser/companies`.
+#[crate::openapi::path(
+    post,
+    path = "/v1/superuser/companies/{id}/billing/payment-hold/clear",
+    operation_id = "clear_platform_company_payment_hold",
+    tag = "superuser",
+    params(("id" = i32, Path, description = "Company id")),
+    responses(
+        (status = 200, description = "Whether a hold was lifted", body = PaymentHoldCleared),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a superuser", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn clear_payment_hold(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<i32>,
+) -> ApiResult<Json<PaymentHoldCleared>> {
+    superuser(&user)?;
+    company_exists(&state, id).await?;
+    let cleared = clear_hold_by_staff(&state, id, user.id).await?;
+    crate::posthog::capture(
+        &state.telephony_http,
+        "company_payment_hold_cleared",
+        &user.id.to_string(),
+        serde_json::json!({ "company_id": id, "cleared": cleared, "superuser_id": user.id }),
+    )
+    .await;
+    Ok(Json(PaymentHoldCleared { cleared }))
 }

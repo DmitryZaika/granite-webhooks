@@ -72,7 +72,9 @@ pub fn valid_session_id(value: &str) -> bool {
 /// `company.billing_required` is on and the company's access is paused: its
 /// payment is suspended (unless a bank payment is on its way: set
 /// `payment_processing_at` less than `PROCESSING_DAYS` ago, for a
-/// subscription that has not ended), its saved
+/// subscription that has not ended; `billing::methods::mark_processing`
+/// never sets it for an invoice already paid or whose bank payment failed
+/// before), its saved
 /// payment method's hold ended (`method_hold_until`, `billing::methods`), or
 /// it never paid and its first-payment window (`FIRST_PAYMENT_DAYS` from
 /// `billing_required_at`) ended, unless its signup's bank account is still

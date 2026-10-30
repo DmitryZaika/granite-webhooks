@@ -60,7 +60,13 @@ impl SignupConfig {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
         };
-        let on = |name: &str| text(name).is_some_and(|value| value == "1" || value == "true");
+        // The parser `env_check` validates with, so a value that passes the
+        // startup check (`TRUE`) is on here too.
+        let on = |name: &str| {
+            text(name)
+                .and_then(|value| crate::env_check::parse_flag(&value))
+                .unwrap_or(false)
+        };
         Self {
             enabled: on("SELF_SERVE_SIGNUP_ENABLED"),
             test_payment_method: text("SIGNUP_TEST_PAYMENT_METHOD").map(Arc::from),
@@ -117,6 +123,22 @@ pub fn email_lock_name(email: &str) -> String {
         .iter()
         .take(20)
         .fold(String::from("signup_email:"), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
+
+/// The named lock serializing new signups from one client IP (the per-IP
+/// limit's count and insert): `signup_ip:<first 40 hex of SHA-256(ip)>`.
+/// Taken before [`email_lock_name`]'s, never after.
+pub fn ip_lock_name(ip: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(ip.trim().as_bytes());
+    digest
+        .iter()
+        .take(20)
+        .fold(String::from("signup_ip:"), |mut out, byte| {
             let _ = write!(out, "{byte:02x}");
             out
         })

@@ -1345,6 +1345,22 @@ async fn the_item_is_added_once_in_the_last_three_days_keyed_on_the_subscription
     assert_eq!(item["customer"], CUSTOMER);
     assert_eq!(item["amount"], 30_000);
     assert_eq!(item["currency"], "usd");
+    // Priced like the catalog: on the base product, tax exclusive.
+    let sent = h.stripe.lock().unwrap().calls("POST", "/v1/invoiceitems")[0].clone();
+    assert_eq!(
+        sent.field("price_data[product]").as_deref(),
+        Some("prod_base")
+    );
+    assert_eq!(
+        sent.field("price_data[unit_amount]").as_deref(),
+        Some("30000")
+    );
+    assert_eq!(sent.field("price_data[currency]").as_deref(), Some("usd"));
+    assert_eq!(
+        sent.field("price_data[tax_behavior]").as_deref(),
+        Some("exclusive")
+    );
+    assert_eq!(sent.field("amount"), None);
     assert_eq!(item["metadata"]["kind"], "onboarding_advance");
     assert_eq!(item["metadata"]["company_id"], "20400");
     assert!(
@@ -1397,8 +1413,10 @@ async fn a_lost_save_finds_the_item_again_instead_of_adding_a_second(pool: MySql
 async fn a_paid_invoice_credits_the_month_once_and_replays_change_nothing(pool: MySqlPool) {
     let h = harness(&pool, ON).await;
     let charge_at = scheduled(&h, &pool).await;
+    // The renewal charges the plan's month and the next one in advance:
+    // $600 on a $300 plan.
     let invoice = h.renew("in_advance_1", "paid");
-    assert_eq!(invoice["amount_due"], 30_000);
+    assert_eq!(invoice["amount_due"], 60_000);
     post_event(&h.server, &paid_event("evt_adv_1", &invoice))
         .await
         .assert_status_ok();
@@ -1430,6 +1448,10 @@ async fn a_paid_invoice_credits_the_month_once_and_replays_change_nothing(pool: 
     let run = h.run(charge_at + Duration::days(1)).await;
     assert_eq!(run.companies, 0);
     assert_eq!(h.credits().len(), 1);
+    // The credit pays the following renewal in full.
+    let next = h.renew("in_next", "paid");
+    assert_eq!(next["total"], 30_000);
+    assert_eq!(next["amount_due"], 0);
 }
 
 #[test_db::test(seed)]
@@ -1438,7 +1460,7 @@ async fn with_automatic_tax_the_credit_returns_the_advance_line_with_its_tax(poo
     scheduled(&h, &pool).await;
     h.stripe.lock().unwrap().line_tax_percent = 7;
     let invoice = h.renew("in_advance_1", "paid");
-    assert_eq!(invoice["amount_due"], 30_000 + 2_100);
+    assert_eq!(invoice["amount_due"], 2 * (30_000 + 2_100));
     post_event(&h.server, &paid_event("evt_adv_1", &invoice))
         .await
         .assert_status_ok();
@@ -1520,9 +1542,208 @@ async fn completing_waiving_or_holding_while_pending_deletes_the_item(pool: MySq
         assert_eq!(status(&pool, PENDING).await, after, "{action}");
         assert!(h.items().is_empty(), "{action}: the item must be gone");
         assert_eq!(commitment(&pool, PENDING).await.advance_item_id, None);
-        // Stripe's renewal now charges no advance.
-        assert_eq!(h.renew("in_after", "paid")["amount_due"], 0);
+        // Stripe's renewal now charges the plan's month only.
+        assert_eq!(h.renew("in_after", "paid")["amount_due"], 30_000);
     }
+}
+
+#[test_db::test(seed)]
+async fn a_call_booked_after_the_item_to_end_before_the_charge_deletes_it_at_once(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    let charge_at = scheduled(&h, &pool).await;
+    assert_eq!(h.items().len(), 1);
+    // Booked in the widget: the call ends the day before the charge.
+    let uri = add_call(
+        &h.cal,
+        3,
+        "manager@onboarding.test",
+        tag(PENDING),
+        charge_at - Duration::days(1),
+    );
+    h.book(OWEN, &uri).await.assert_status_ok();
+    // No daily run needed: the item is out of Stripe before it can be swept.
+    assert!(h.items().is_empty());
+    let c = commitment(&pool, PENDING).await;
+    assert_eq!(c.status.as_str(), "notice_sent");
+    assert_eq!(c.advance_item_id, None);
+    // Booked, the advance taken back (`call_booked`), the item deleted.
+    let kinds = event_kinds(&pool, PENDING).await;
+    assert_eq!(
+        kinds[kinds.len() - 3..],
+        ["booked", "advance_withdrawn", "advance_withdrawn"]
+    );
+    assert_eq!(h.renew("in_after", "paid")["amount_due"], 30_000);
+    // Nor does the next run add one back while that call is booked.
+    assert_eq!(
+        h.run(charge_at - Duration::hours(12)).await.advance_items,
+        0
+    );
+    assert_eq!(h.calls("POST", "/v1/invoiceitems"), 1);
+}
+
+#[test_db::test(seed)]
+async fn waiving_an_advance_on_a_finalized_invoice_is_refused_and_the_invoice_recorded(
+    pool: MySqlPool,
+) {
+    make_superuser(&pool).await;
+    let h = harness(&pool, ON).await;
+    scheduled(&h, &pool).await;
+    // Stripe swept and finalized the renewal before any run recorded it.
+    h.renew("in_advance_1", "open");
+    for action in ["waive", "complete", "hold"] {
+        let res = h.superuser(action).await;
+        res.assert_status(StatusCode::CONFLICT);
+        let body: Value = res.json();
+        assert!(
+            body.to_string()
+                .contains("already on a subscription invoice"),
+            "{action}: {body}"
+        );
+    }
+    let c = commitment(&pool, PENDING).await;
+    assert_eq!(c.status.as_str(), "advance_scheduled");
+    assert_eq!(c.stripe_invoice_id.as_deref(), Some("in_advance_1"));
+    assert_eq!(h.items().len(), 1);
+    let view: Value = h
+        .server
+        .get("/v1/superuser/companies/20400/onboarding-commitment")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(view["commitment"]["allowed_actions"], json!([]));
+}
+
+#[test_db::test(seed)]
+async fn waiving_an_advance_on_a_draft_invoice_deletes_it(pool: MySqlPool) {
+    make_superuser(&pool).await;
+    let h = harness(&pool, ON).await;
+    scheduled(&h, &pool).await;
+    h.renew("in_draft", "draft");
+    h.superuser("waive").await.assert_status_ok();
+    assert_eq!(status(&pool, PENDING).await, "waived");
+    assert!(h.items().is_empty());
+    assert_eq!(commitment(&pool, PENDING).await.advance_item_id, None);
+}
+
+/// Stripe ends the subscription at once (dunning, a superuser).
+fn end_subscription(h: &Harness) {
+    h.stripe
+        .lock()
+        .unwrap()
+        .subscriptions
+        .get_mut(SUBSCRIPTION)
+        .unwrap()["status"] = json!("canceled");
+}
+
+#[test_db::test(seed)]
+async fn a_subscription_ending_with_the_advance_unpaid_credits_its_line_off_the_invoice(
+    pool: MySqlPool,
+) {
+    let h = harness(&pool, ON).await;
+    let charge_at = scheduled(&h, &pool).await;
+    h.stripe.lock().unwrap().line_tax_percent = 7;
+    let invoice = h.renew("in_advance_1", "open");
+    assert_eq!(invoice["amount_due"], 2 * 32_100);
+    end_subscription(&h);
+
+    h.run(charge_at + Duration::hours(2)).await;
+
+    let notes = h.stripe.lock().unwrap().credit_notes.clone();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["invoice"], "in_advance_1");
+    assert_eq!(notes[0]["total"], 32_100);
+    assert_eq!(
+        notes[0]["metadata"]["kind"],
+        "onboarding_advance_credit_note"
+    );
+    assert_eq!(
+        h.stripe.lock().unwrap().keys("POST", "/v1/credit_notes"),
+        ["onboarding-advance:20400:in_advance_1:credit-note"]
+    );
+    let open = h.stripe.lock().unwrap().invoices[0].clone();
+    assert_eq!(open["amount_due"], 32_100);
+    let c = commitment(&pool, PENDING).await;
+    assert_eq!(c.status.as_str(), "void");
+    assert_eq!(c.advance_item_id, None);
+    assert!(h.credits().is_empty());
+    assert_eq!(
+        h.subjects_to(ALERT_EMAIL).last().map(String::as_str),
+        Some("Onboarding advance credited off: Onboarding Stone")
+    );
+    // Done once: later runs leave it alone.
+    h.run(charge_at + Duration::days(1) + Duration::hours(3))
+        .await;
+    assert_eq!(h.calls("POST", "/v1/credit_notes"), 1);
+}
+
+#[test_db::test(seed)]
+async fn the_subscription_ended_webhook_credits_the_unpaid_advance_off_at_once(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    scheduled(&h, &pool).await;
+    h.renew("in_advance_1", "open");
+    end_subscription(&h);
+    let subscription = h.stripe.lock().unwrap().subscriptions[SUBSCRIPTION].clone();
+
+    post_event(
+        &h.server,
+        &json!({ "id": "evt_sub_end", "object": "event",
+            "type": "customer.subscription.deleted", "data": { "object": subscription } }),
+    )
+    .await
+    .assert_status_ok();
+
+    // No daily run needed.
+    assert_eq!(h.calls("POST", "/v1/credit_notes"), 1);
+    assert_eq!(commitment(&pool, PENDING).await.status.as_str(), "void");
+}
+
+#[test_db::test(seed)]
+async fn an_advance_paid_after_the_subscription_ended_is_credited_and_staff_review_it(
+    pool: MySqlPool,
+) {
+    let h = harness(&pool, ON).await;
+    scheduled(&h, &pool).await;
+    let invoice = h.renew("in_advance_1", "paid");
+    end_subscription(&h);
+    post_event(&h.server, &paid_event("evt_adv_1", &invoice))
+        .await
+        .assert_status_ok();
+    assert_eq!(status(&pool, PENDING).await, "advance_paid");
+    assert_eq!(h.credits().len(), 1);
+    assert_eq!(h.calls("POST", "/v1/credit_notes"), 0);
+    assert_eq!(
+        h.subjects_to(ALERT_EMAIL).last().map(String::as_str),
+        Some("Onboarding advance paid after the subscription ended: Onboarding Stone")
+    );
+    let body = h.bodies_to(ALERT_EMAIL).last().cloned().unwrap();
+    assert!(body.contains("Nothing was refunded"));
+}
+
+#[test_db::test(seed)]
+async fn the_credit_finds_the_advance_line_past_the_first_ten_lines(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    scheduled(&h, &pool).await;
+    // Eleven subscription lines come before the advance's.
+    {
+        let mut fake = h.stripe.lock().unwrap();
+        fake.line_tax_percent = 7;
+        for _ in 0..10 {
+            let extra = fake.item("price_extra_user", 1, SUBSCRIPTION);
+            fake.subscriptions.get_mut(SUBSCRIPTION).unwrap()["items"]["data"]
+                .as_array_mut()
+                .unwrap()
+                .push(extra);
+        }
+    }
+    let invoice = h.renew("in_advance_1", "paid");
+    assert_eq!(invoice["lines"]["data"].as_array().unwrap().len(), 10);
+    assert_eq!(invoice["lines"]["has_more"], true);
+    post_event(&h.server, &paid_event("evt_adv_1", &invoice))
+        .await
+        .assert_status_ok();
+    assert_eq!(status(&pool, PENDING).await, "advance_paid");
+    // The advance line with its tax, read from the second page.
+    assert_eq!(h.credits()[0]["amount"], -32_100);
 }
 
 #[test_db::test(seed)]
@@ -1576,7 +1797,7 @@ async fn a_cancellation_request_while_pending_deletes_the_item_and_nothing_is_ch
     assert!(h.items().is_empty());
     let subscription = h.stripe.lock().unwrap().subscriptions[SUBSCRIPTION].clone();
     assert_eq!(subscription["cancel_at_period_end"], true);
-    assert_eq!(h.renew("in_after", "paid")["amount_due"], 0);
+    assert_eq!(h.renew("in_after", "paid")["amount_due"], 30_000);
 }
 
 #[test_db::test(seed)]

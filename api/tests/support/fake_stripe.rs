@@ -14,11 +14,17 @@
 //! methods (step 13): SetupIntent cancel and micro-deposit states
 //! (`pend_microdeposits`, `fail_setup_intent`), payment method detach,
 //! `POST /v1/invoices/{id}/pay` (paid, a bank debit processing, a decline,
-//! 3D Secure), charges and PaymentIntents by id. The onboarding advance:
-//! invoice items (`POST`, `GET`, list with `pending`, `DELETE` while pending
-//! or on a draft), [`FakeStripe::sweep_items`] (the renewal invoice taking
-//! the pending items), customer balance transactions, and `cancel_at` on a
-//! subscription (an empty value removes it). Include it with
+//! 3D Secure), charges and PaymentIntents by id (the payment method
+//! expanded on request), invoice payments by PaymentIntent, disputes by id.
+//! The onboarding advance:
+//! invoice items (`POST` with `amount` or `price_data`, `GET`, list with
+//! `pending`, `DELETE` while pending or on a draft),
+//! [`FakeStripe::sweep_items`] (the renewal invoice: the subscription's own
+//! lines, the pending items, the customer's balance applied), every line of
+//! an invoice (`GET /v1/invoices/{id}/lines`, 10 per invoice object, paged),
+//! credit notes on an invoice line (`POST`, list by `invoice`), customer
+//! balance transactions, and `cancel_at` on a subscription (an empty value
+//! removes it). Include it with
 //! `#[path = "../support/fake_stripe.rs"] mod fake_stripe;` in the area's `main.rs`.
 #![allow(dead_code)]
 
@@ -96,10 +102,21 @@ pub struct FakeStripe {
     pub line_tax_percent: i64,
     /// Charge objects by id (`GET /v1/charges/{id}`).
     pub charges: HashMap<String, Value>,
-    /// PaymentIntent objects by id (`GET /v1/payment_intents/{id}`).
+    /// PaymentIntent objects by id (`GET /v1/payment_intents/{id}`;
+    /// `expand[]=payment_method` expands it from `payment_methods`).
     pub payment_intents: HashMap<String, Value>,
+    /// Invoice payment objects (`GET /v1/invoice_payments`, filtered by
+    /// `payment[payment_intent]`): `{ "invoice", "payment": { "payment_intent" } }`.
+    pub invoice_payments: Vec<Value>,
+    /// Dispute objects by id (`GET /v1/disputes/{id}`).
+    pub disputes: HashMap<String, Value>,
     /// Invoice item objects (`/v1/invoiceitems`); a deleted one is removed.
     pub invoice_items: Vec<Value>,
+    /// Every line of each invoice [`FakeStripe::sweep_items`] made, by
+    /// invoice id (the invoice object carries the first 10).
+    pub invoice_lines: HashMap<String, Vec<Value>>,
+    /// Credit note objects (`/v1/credit_notes`).
+    pub credit_notes: Vec<Value>,
     /// Customer balance transactions (`/v1/customers/{id}/balance_transactions`).
     pub balance_transactions: Vec<Value>,
     /// The next `POST /v1/invoices/{id}/pay` is declined (402 `card_error`).
@@ -112,6 +129,8 @@ pub struct FakeStripe {
     pub webhook_endpoints: Vec<Value>,
     pub portal_configurations: Vec<Value>,
     pub payment_method_configurations: Vec<Value>,
+    /// `GET /v1/tax/settings`; `None` answers `{"status": "pending"}`.
+    pub tax_settings: Option<Value>,
     pub requests: Vec<Seen>,
     idempotent: HashMap<String, (String, String, StatusCode, Value)>,
     failures: Vec<Failure>,
@@ -132,6 +151,7 @@ pub fn catalog_prices() -> Vec<Value> {
     .into_iter()
     .map(|(id, key, cents)| {
         let mut price = price(id, key, cents);
+        price["product"] = json!(id.replacen("price_", "prod_", 1));
         price["metadata"] = match key {
             "granite_base_monthly_v1" => json!({ "kind": "base" }),
             "granite_extra_user_monthly_v1" => json!({ "kind": "seat" }),
@@ -245,46 +265,96 @@ impl FakeStripe {
     }
 
     /// Stripe's renewal of `subscription`: a new invoice `invoice_id` in
-    /// `status` with a line per pending item of it (dahlia's
-    /// `parent.invoice_item_details`, the item's metadata), the items then on
-    /// that invoice. Answers the invoice (also in `invoices`).
+    /// `status` with a line per subscription item (unit amount x quantity)
+    /// and one per pending item of it (dahlia's `parent.*_details`, the
+    /// item's metadata), the items then on that invoice; tax per line at
+    /// `line_tax_percent`. Unless a draft, the customer's balance (credits)
+    /// is applied to it (a balance transaction `applied_to_invoice`). The
+    /// invoice object carries the first 10 lines (`has_more`); every line is
+    /// in `invoice_lines`. Answers the invoice (also in `invoices`).
     pub fn sweep_items(&mut self, subscription: &str, invoice_id: &str, status: &str) -> Value {
-        let mut lines = Vec::new();
-        let mut customer = Value::Null;
-        let mut tax = 0;
+        let tax_percent = self.line_tax_percent;
+        let with_tax = |mut line: Value| {
+            if tax_percent > 0 {
+                let tax = line["amount"].as_i64().unwrap_or_default() * tax_percent / 100;
+                line["taxes"] = json!([{ "amount": tax, "tax_behavior": "exclusive",
+                    "taxability_reason": "standard_rated", "type": "tax_rate_details" }]);
+            }
+            line
+        };
+        let sub = self
+            .subscriptions
+            .get(subscription)
+            .cloned()
+            .unwrap_or_default();
+        let mut lines: Vec<Value> = sub["items"]["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                let quantity = item["quantity"].as_i64().unwrap_or(1);
+                with_tax(json!({
+                    "id": format!("il_{}_{invoice_id}", item["id"].as_str().unwrap_or_default()),
+                    "object": "line_item", "quantity": quantity,
+                    "amount": item["price"]["unit_amount"].as_i64().unwrap_or_default() * quantity,
+                    "metadata": {},
+                    "parent": { "type": "subscription_item_details",
+                        "subscription_item_details": { "subscription": subscription,
+                            "subscription_item": item["id"] } },
+                    "pricing": { "price_details": { "price": item["price"]["id"] } },
+                }))
+            })
+            .collect();
+        let mut customer = sub["customer"].clone();
         for item in &mut self.invoice_items {
             if item["subscription"] == subscription && item["invoice"].is_null() {
                 item["invoice"] = json!(invoice_id);
-                customer = item["customer"].clone();
-                let mut line = json!({
+                if customer.is_null() {
+                    customer = item["customer"].clone();
+                }
+                lines.push(with_tax(json!({
                     "id": format!("il_{}", item["id"].as_str().unwrap_or_default()),
-                    "object": "line_item", "amount": item["amount"],
+                    "object": "line_item", "amount": item["amount"], "quantity": 1,
                     "description": item["description"], "metadata": item["metadata"],
                     "parent": { "type": "invoice_item_details",
                         "invoice_item_details": { "invoice_item": item["id"] } },
-                });
-                if self.line_tax_percent > 0 {
-                    let line_tax =
-                        item["amount"].as_i64().unwrap_or_default() * self.line_tax_percent / 100;
-                    tax += line_tax;
-                    line["taxes"] = json!([{ "amount": line_tax, "tax_behavior": "exclusive",
-                        "taxability_reason": "standard_rated", "type": "tax_rate_details" }]);
-                }
-                lines.push(line);
+                })));
             }
         }
-        let total: i64 =
-            lines.iter().filter_map(|line| line["amount"].as_i64()).sum::<i64>() + tax;
+        let total: i64 = lines.iter().map(line_total).sum();
+        let balance: i64 = self
+            .balance_transactions
+            .iter()
+            .filter(|txn| txn["customer"] == customer)
+            .filter_map(|txn| txn["amount"].as_i64())
+            .sum();
+        let applied = if status == "draft" {
+            0
+        } else {
+            (-balance).clamp(0, total)
+        };
+        if applied > 0 {
+            let id = self.id("cbtxn");
+            self.balance_transactions.push(json!({
+                "id": id, "object": "customer_balance_transaction", "customer": customer,
+                "amount": applied, "currency": "usd", "type": "applied_to_invoice",
+                "invoice": invoice_id, "metadata": {},
+            }));
+        }
+        let due = total - applied;
+        let shown: Vec<Value> = lines.iter().take(10).cloned().collect();
         let invoice = json!({
             "id": invoice_id, "object": "invoice", "customer": customer, "status": status,
-            "amount_due": total, "amount_paid": if status == "paid" { total } else { 0 },
+            "total": total, "starting_balance": balance,
+            "amount_due": due, "amount_paid": if status == "paid" { due } else { 0 },
+            "amount_remaining": if status == "paid" { 0 } else { due },
             "currency": "usd",
             "parent": { "type": "subscription_details",
                 "subscription_details": { "subscription": subscription,
-                    "metadata": self.subscriptions.get(subscription)
-                        .map_or(Value::Null, |sub| sub["metadata"].clone()) } },
-            "lines": { "object": "list", "data": lines, "has_more": false },
+                    "metadata": sub["metadata"].clone() } },
+            "lines": { "object": "list", "data": shown, "has_more": lines.len() > 10 },
         });
+        self.invoice_lines.insert(invoice_id.to_string(), lines);
         self.invoices.push(invoice.clone());
         invoice
     }
@@ -348,11 +418,13 @@ impl FakeStripe {
                     .filter(|(key, _)| key == "lookup_keys[]")
                     .map(|(_, value)| value.clone())
                     .collect();
+                // `active=false`: archived prices only; otherwise active ones.
+                let active = one("active").as_deref() != Some("false");
                 let data: Vec<Value> = self
                     .prices
                     .iter()
                     .filter(|price| {
-                        price["active"] == true
+                        price["active"] == active
                             && keys.iter().any(|key| price["lookup_key"] == key.as_str())
                     })
                     .cloned()
@@ -438,7 +510,38 @@ impl FakeStripe {
                 None => missing(),
             },
             ("GET", ["v1", "payment_intents", id]) => match self.payment_intents.get(*id) {
-                Some(intent) => ok(intent.clone()),
+                Some(intent) => {
+                    let mut intent = intent.clone();
+                    let expand = params
+                        .iter()
+                        .any(|(key, value)| key == "expand[]" && value == "payment_method");
+                    if expand
+                        && let Some(method) = intent["payment_method"]
+                            .as_str()
+                            .and_then(|id| self.payment_methods.get(id))
+                    {
+                        intent["payment_method"] = method.clone();
+                    }
+                    ok(intent)
+                }
+                None => missing(),
+            },
+            ("GET", ["v1", "invoice_payments"]) => {
+                let intent = one("payment[payment_intent]");
+                let data: Vec<Value> = self
+                    .invoice_payments
+                    .iter()
+                    .filter(|payment| {
+                        intent
+                            .as_deref()
+                            .is_none_or(|pi| payment["payment"]["payment_intent"] == pi)
+                    })
+                    .cloned()
+                    .collect();
+                ok(json!({ "object": "list", "data": data, "has_more": false }))
+            }
+            ("GET", ["v1", "disputes", id]) => match self.disputes.get(*id) {
+                Some(dispute) => ok(dispute.clone()),
                 None => missing(),
             },
             ("GET", ["v1", "invoices", id]) => {
@@ -448,6 +551,69 @@ impl FakeStripe {
                 }
             }
             ("POST", ["v1", "invoices", id, "pay"]) => self.pay(id, one("payment_method")),
+            ("GET", ["v1", "invoices", id, "lines"]) => {
+                let Some(lines) = self.invoice_lines.get(*id) else {
+                    return missing();
+                };
+                let limit = one("limit").and_then(|l| l.parse().ok()).unwrap_or(10);
+                let after = one("starting_after");
+                let start = after
+                    .and_then(|after| lines.iter().position(|line| line["id"] == after.as_str()))
+                    .map_or(0, |index| index + 1);
+                let page: Vec<Value> = lines.iter().skip(start).take(limit).cloned().collect();
+                let more = start + page.len() < lines.len();
+                ok(json!({ "object": "list", "data": page, "has_more": more }))
+            }
+            ("POST", ["v1", "credit_notes"]) => {
+                let invoice_id = one("invoice").unwrap_or_default();
+                let line_id = one("lines[0][invoice_line_item]").unwrap_or_default();
+                let Some(line) = self
+                    .invoice_lines
+                    .get(&invoice_id)
+                    .and_then(|lines| lines.iter().find(|line| line["id"] == line_id.as_str()))
+                else {
+                    return missing();
+                };
+                let amount = line_total(line);
+                let Some(invoice) = self
+                    .invoices
+                    .iter_mut()
+                    .find(|i| i["id"] == invoice_id.as_str())
+                else {
+                    return missing();
+                };
+                if invoice["status"] != "open" {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json!({ "error": { "type": "invalid_request_error",
+                            "message": "This fake credits open invoices only" } }),
+                    );
+                }
+                let due = invoice["amount_due"].as_i64().unwrap_or_default() - amount;
+                invoice["amount_due"] = json!(due);
+                invoice["amount_remaining"] = json!(due);
+                let id = self.id("cn");
+                let note = json!({
+                    "id": id, "object": "credit_note", "invoice": invoice_id,
+                    "status": "issued", "total": amount, "amount": amount,
+                    "memo": one("memo"), "metadata": metadata(&params),
+                    "lines": { "object": "list", "data": [
+                        { "type": "invoice_line_item", "invoice_line_item": line_id,
+                          "amount": amount } ] },
+                });
+                self.credit_notes.push(note.clone());
+                ok(note)
+            }
+            ("GET", ["v1", "credit_notes"]) => {
+                let invoice = one("invoice");
+                let data: Vec<Value> = self
+                    .credit_notes
+                    .iter()
+                    .filter(|note| invoice.as_deref().is_none_or(|i| note["invoice"] == i))
+                    .cloned()
+                    .collect();
+                ok(json!({ "object": "list", "data": data, "has_more": false }))
+            }
             ("GET", ["v1", "setup_intents", id]) => {
                 let Some(mut intent) = self.setup_intents.get(*id).cloned() else {
                     return missing();
@@ -618,11 +784,15 @@ impl FakeStripe {
             },
             ("POST", ["v1", "invoiceitems"]) => {
                 let id = self.id("ii");
+                let amount = one("amount")
+                    .or_else(|| one("price_data[unit_amount]"))
+                    .and_then(|a| a.parse::<i64>().ok());
                 let item = json!({
                     "id": id, "object": "invoiceitem", "customer": one("customer"),
-                    "subscription": one("subscription"),
-                    "amount": one("amount").and_then(|a| a.parse::<i64>().ok()),
-                    "currency": one("currency"), "description": one("description"),
+                    "subscription": one("subscription"), "amount": amount, "quantity": 1,
+                    "currency": one("currency").or_else(|| one("price_data[currency]")),
+                    "description": one("description"),
+                    "pricing": { "price_details": { "product": one("price_data[product]") } },
                     "metadata": metadata(&params), "invoice": null,
                 });
                 self.invoice_items.push(item.clone());
@@ -788,9 +958,14 @@ impl FakeStripe {
             self.payment_intents.insert(
                 intent.clone(),
                 json!({ "id": intent, "object": "payment_intent", "status": "processing",
-                    "customer": customer, "amount": amount,
+                    "customer": customer, "amount": amount, "payment_method": payment_method,
                     "payment_method_types": ["card", "us_bank_account"] }),
             );
+            self.invoice_payments.push(json!({
+                "id": format!("inpay_{id}"), "object": "invoice_payment", "invoice": id,
+                "status": "open",
+                "payment": { "type": "payment_intent", "payment_intent": intent },
+            }));
             return ok(self.invoices[index].clone());
         }
         let due = invoice["amount_remaining"]
@@ -918,6 +1093,10 @@ impl FakeStripe {
         };
         Some(match (method.as_str(), segments) {
             ("GET", ["v1", "balance"]) => ok(json!({ "object": "balance", "livemode": false })),
+            ("GET", ["v1", "tax", "settings"]) => ok(self
+                .tax_settings
+                .clone()
+                .unwrap_or_else(|| json!({ "object": "tax.settings", "status": "pending" }))),
             ("GET", ["v1", "payment_method_configurations"]) => {
                 list(&self.payment_method_configurations)
             }
@@ -938,6 +1117,24 @@ impl FakeStripe {
                         .find(|(key, _)| key == name)
                         .map(|(_, value)| value.clone())
                 };
+                // A lookup key held by any price (archived too) moves only
+                // with `transfer_lookup_key=true`, as in Stripe.
+                let key = one("lookup_key");
+                let holder = key.as_ref().and_then(|key| {
+                    self.prices
+                        .iter()
+                        .position(|price| price["lookup_key"] == key.as_str())
+                });
+                if let Some(holder) = holder {
+                    if one("transfer_lookup_key").as_deref() != Some("true") {
+                        return Some((
+                            StatusCode::BAD_REQUEST,
+                            json!({ "error": { "type": "invalid_request_error",
+                                "message": "A price already uses that lookup key." } }),
+                        ));
+                    }
+                    self.prices[holder]["lookup_key"] = Value::Null;
+                }
                 let id = self.id("price");
                 let price = json!({
                     "id": id, "object": "price", "active": true, "livemode": false,
@@ -1019,6 +1216,18 @@ impl FakeStripe {
             _ => return None,
         })
     }
+}
+
+/// An invoice line's amount plus its exclusive tax.
+fn line_total(line: &Value) -> i64 {
+    let tax: i64 = line["taxes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|tax| tax["tax_behavior"] != "inclusive")
+        .filter_map(|tax| tax["amount"].as_i64())
+        .sum();
+    line["amount"].as_i64().unwrap_or_default() + tax
 }
 
 fn ok(value: Value) -> (StatusCode, Value) {

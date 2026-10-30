@@ -127,6 +127,8 @@ pub struct OnboardingCommitment {
     /// The month the advance pays for (credited to the invoice of
     /// `prepaid_from_at`); null before the notice.
     pub prepaid_from_at: Option<String>,
+    /// The end of that month: a cancellation after the advance is paid ends
+    /// the subscription here; null before the notice.
     pub prepaid_until_at: Option<String>,
 }
 
@@ -275,6 +277,29 @@ fn refused(refusal: Refusal) -> ApiError {
     ApiError::Conflict(refusal.message().into())
 }
 
+/// Deletes a pending advance item the commitment no longer wants right
+/// away (else the daily run does), and takes one back once a booked call
+/// ends by the charge date. The settlement waits for the company lock, so
+/// an item an add in flight just made is taken back too. True when it ran.
+async fn settle_unwanted_item(
+    state: &AppState,
+    company_id: i32,
+    c: &Commitment,
+    now: NaiveDateTime,
+) -> bool {
+    let unwanted = item_open(c) && c.status != Status::AdvanceScheduled;
+    if !unwanted && !commitment::call_avoids_advance(c) {
+        return false;
+    }
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    if let Err(err) =
+        crate::onboarding_call::advance::settle_item(state, company_id, now, until).await
+    {
+        tracing::warn!(company_id, code = %err.code(), "onboarding advance item not settled");
+    }
+    true
+}
+
 /// Applies a change to the company's commitment, read again once on a
 /// version conflict.
 async fn change(
@@ -366,8 +391,10 @@ fn calendly_failure(err: &CalendlyError) -> ApiError {
 /// must be active and carry this company's tag (`utm_campaign` and
 /// `utm_content` from `booking_url` of `GET /v1/onboarding-call`). A new
 /// booking replaces the one stored (a reschedule). A call at or before a
-/// recorded no-show is refused: book a new time. Managers and Admins of the
-/// acting company only (Granite superusers get 403). Returns the onboarding call as
+/// recorded no-show is refused: book a new time. A call that ends before the
+/// advance's charge date takes a pending advance invoice item out of Stripe
+/// at once. Managers and Admins of the acting company only (Granite
+/// superusers get 403). Returns the onboarding call as
 /// `GET /v1/onboarding-call` does.
 #[crate::openapi::path(
     post,
@@ -424,10 +451,15 @@ pub async fn create_onboarding_call_booking(
     }
     let now = billing::now();
     let booking = calendly::booking(&invitee, &event, now);
-    let stored = change(&state, company_id, now, |c| {
+    let mut stored = change(&state, company_id, now, |c| {
         commitment::record_booking(c, booking.clone(), now)
     })
     .await?;
+    if settle_unwanted_item(&state, company_id, &stored.commitment, now).await {
+        stored = store::load(&state.pool, company_id)
+            .await?
+            .ok_or(ApiError::NotFound)?;
+    }
     Ok(Json(
         call_view(&state, &user, Some(&stored.commitment), true).await,
     ))
@@ -698,9 +730,12 @@ pub async fn get_company_onboarding_commitment(
 /// deleted). `release`: end the hold (fewer than 7 days to the charge: a
 /// new notice names the next eligible charge). All are refused once the
 /// commitment is settled or the advance is on a subscription invoice (it is
-/// credited back once paid). `allowed_actions` of the GET says which apply
-/// now. A pending invoice item no longer wanted is deleted in Stripe right
-/// after (else by the daily run). Each is stored on the timeline with the
+/// credited back once paid); before `extend`, `waive`, `complete` or `hold`
+/// the advance's invoice item is read from Stripe, and one already on a
+/// finalized invoice is recorded and the action refused (409).
+/// `allowed_actions` of the GET says which apply now. A pending invoice
+/// item no longer wanted is deleted in Stripe right after (else by the
+/// daily run). Each is stored on the timeline with the
 /// acting superuser and the time. Returns the commitment as
 /// `GET /v1/superuser/companies/{id}/onboarding-commitment` does.
 #[crate::openapi::path(
@@ -716,8 +751,9 @@ pub async fn get_company_onboarding_commitment(
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "The company has no onboarding commitment", body = ErrorBody),
-        (status = 409, description = "Refused: already extended, held or not held, settled, the advance is on an invoice, not booked, or the extension would leave the deadline in the past", body = ErrorBody),
+        (status = 409, description = "Refused: already extended, held or not held, settled, the advance is on a finalized invoice, not booked, or the extension would leave the deadline in the past", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
+        (status = 503, description = "Stripe could not be reached to check the advance's invoice item", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
@@ -730,20 +766,32 @@ pub async fn update_company_onboarding_commitment(
     superuser(&user)?;
     let action = Action::from(input.action);
     let now = billing::now();
+    // These take the advance away: only while its item can still be
+    // deleted (Stripe has not finalized the invoice it is on).
+    let takes_advance = matches!(
+        action,
+        Action::Waive | Action::Complete | Action::Hold | Action::Extend
+    );
+    let open = store::load(&state.pool, id)
+        .await?
+        .is_some_and(|stored| item_open(&stored.commitment));
+    if takes_advance && open {
+        match crate::onboarding_call::advance::item_removable(&state, id, now).await {
+            Ok(true) => {}
+            Ok(false) => return Err(refused(Refusal::AlreadyInvoiced)),
+            Err(err) => {
+                tracing::warn!(company_id = id, code = %err.code(), "onboarding advance item not read");
+                return Err(ApiError::Unavailable(
+                    "Stripe could not be reached. Try again in a minute.".into(),
+                ));
+            }
+        }
+    }
     let stored = change(&state, id, now, |c| {
         commitment::superuser_action(c, action, user.id, now)
     })
     .await?;
-    let c = &stored.commitment;
-    if item_open(c) && c.status != Status::AdvanceScheduled {
-        // The pending item is no longer wanted: deleted now, else by the
-        // daily run.
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        if let Err(err) = crate::onboarding_call::advance::settle_item(&state, id, now, until).await
-        {
-            tracing::warn!(company_id = id, code = %err.code(), "onboarding advance item not settled");
-        }
-    }
+    settle_unwanted_item(&state, id, &stored.commitment, now).await;
     Ok(Json(superuser_view(&state, id).await?))
 }
 

@@ -321,6 +321,38 @@ mod release {
     }
 
     #[test_db::test(seed)]
+    async fn automatic_tax_needs_stripe_tax_to_be_active(pool: MySqlPool) {
+        // Off: reported, and Stripe Tax is not checked.
+        let shared = FakeStripe::with_catalog();
+        let checks = report(&server(&pool, &shared, true).await).await;
+        assert!(checks["automatic_tax"].0);
+        assert!(checks["automatic_tax"].1.contains("is off"));
+        assert!(!checks.contains_key("stripe_tax"));
+
+        for (status, ok) in [("pending", false), ("active", true)] {
+            let shared = FakeStripe::with_catalog();
+            shared.lock().unwrap().tax_settings = Some(json!({ "status": status }));
+            sqlx::raw_sql("UPDATE users SET is_superuser = 1 WHERE id = 103")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+                .with_stripe(fake_stripe::client(&shared).await)
+                .with_signup(SignupConfig {
+                    automatic_tax: true,
+                    ..SignupConfig::default()
+                });
+            let checks = report(&TestServer::new(app(state))).await;
+            assert!(checks["automatic_tax"].1.contains("is on"));
+            let (tax_ok, detail) = &checks["stripe_tax"];
+            assert_eq!(*tax_ok, ok, "{status}: {detail}");
+            if !ok {
+                assert!(detail.contains("Stripe Tax is pending"), "{detail}");
+            }
+        }
+    }
+
+    #[test_db::test(seed)]
     async fn only_super_admins_see_the_release_checks(pool: MySqlPool) {
         let shared = FakeStripe::with_catalog();
         let server = server(&pool, &shared, true).await;

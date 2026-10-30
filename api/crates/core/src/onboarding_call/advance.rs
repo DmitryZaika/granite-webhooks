@@ -2,11 +2,14 @@
 //!
 //! The advance is one month of the subscription, added as a pending invoice
 //! item on the subscription within the last [`ITEM_WINDOW_DAYS`] before the
-//! charge the notice named; Stripe sweeps it into that subscription invoice,
-//! so it is charged (and dunned) with it. Once that invoice is paid the
-//! advance line's total there (its amount and its tax) is credited to the
+//! charge the notice named, priced on the base product (tax exclusive, like
+//! the catalog); Stripe sweeps it into that subscription invoice, so it is
+//! charged (and dunned) with it. Once that invoice is paid the advance
+//! line's total there (its amount and its tax) is credited to the
 //! customer's balance, which Stripe applies to the next invoice. Nothing is
-//! paid more overall, only earlier.
+//! paid more overall, only earlier. If the subscription ends while that
+//! invoice is unpaid, the advance line is credited off it (a credit note):
+//! the month it pays for never comes.
 //!
 //! Every item creation is keyed by company, deadline and the items made so
 //! far; a run that stopped halfway finds its item again by metadata before
@@ -25,20 +28,20 @@
 
 use super::commitment::{
     self, AdvanceTerms, CHARGE_LATE_HOURS, ChargeFacts, Commitment, Outcome, Status, Withdrawal,
-    advance_scheduled, advance_withdrawn, credited, drop_notice, invoice_ended, item_invoiced,
-    item_open, item_withdrawn, withdrawal,
+    advance_scheduled, advance_withdrawn, credited, drop_notice, invoice_ended, item_credited_off,
+    item_invoiced, item_open, item_withdrawn, withdrawal,
 };
 use super::store::{self, SaveError, Stored};
 use crate::billing::cancellation::{self, CancellationError, is_live_subscription_status};
-use crate::billing::catalog::SIGNUP_TZ;
+use crate::billing::catalog::{BASE_LOOKUP_KEY, SIGNUP_TZ};
 use crate::billing::lock::{CompanyLock, LockError};
 use crate::billing::reminder_emails::{
     RenderedEmail, escape_html, format_local_date, format_money, html_paragraph, wrap_html,
 };
 use crate::billing::store::{BillingStore, MySqlBillingStore};
 use crate::billing::stripe::{
-    ADVANCE_CREDIT_KIND, ADVANCE_ITEM_KIND, AdvanceItem, Stripe, StripeError, positive_int,
-    stripe_id, subscription_snapshot,
+    ADVANCE_CREDIT_KIND, ADVANCE_CREDIT_NOTE_KIND, ADVANCE_ITEM_KIND, AdvanceItem, Stripe,
+    StripeError, positive_int, stripe_id, subscription_snapshot,
 };
 use crate::state::AppState;
 use chrono::{DateTime, Duration, NaiveDateTime, TimeZone};
@@ -135,6 +138,10 @@ fn credit_key(company_id: i32, invoice_id: &str) -> String {
     format!("onboarding-advance:{company_id}:{invoice_id}:credit")
 }
 
+fn credit_note_key(company_id: i32, invoice_id: &str) -> String {
+    format!("onboarding-advance:{company_id}:{invoice_id}:credit-note")
+}
+
 /// `From:` of the onboarding emails (`BILLING_EMAIL_FROM_ADDRESS`).
 pub(super) fn from_address() -> String {
     crate::billing::from_address()
@@ -172,6 +179,9 @@ pub struct LiveSubscription {
     pub anchor: Option<NaiveDateTime>,
     /// Unit amount x quantity of every item, before tax.
     pub monthly_cents: i64,
+    /// The product of the base item's price (`granite_base_monthly_v1`):
+    /// the advance item is priced on it.
+    pub base_product: Option<String>,
 }
 
 pub fn live_subscription(subscription: &Value) -> LiveSubscription {
@@ -191,6 +201,12 @@ pub fn live_subscription(subscription: &Value) -> LiveSubscription {
             .iter()
             .filter_map(|item| Some(item.unit_amount_cents? * item.quantity))
             .sum(),
+        base_product: subscription["items"]["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|item| item["price"]["lookup_key"] == BASE_LOOKUP_KEY)
+            .and_then(|item| stripe_id(&item["price"]["product"])),
         id: snapshot.id,
     }
 }
@@ -430,6 +446,10 @@ async fn add_item_locked(
     let Some(live) = live else {
         return Ok(Added::Nothing);
     };
+    let product = live
+        .base_product
+        .clone()
+        .ok_or_else(|| AdvanceError::Stripe("no_base_product".into()))?;
     let recorded = store::advance_items_recorded(pool, company_id).await?;
     in_time(until)?;
     let item = stripe
@@ -439,6 +459,7 @@ async fn add_item_locked(
             company_id,
             deadline: &deadline,
             amount_cents: terms.advance_cents,
+            product: &product,
             description: &item_description(&terms),
             idempotency_key: &item_key(company_id, &deadline, recorded),
         })
@@ -479,6 +500,8 @@ pub enum Settled {
     Credited,
     /// Its invoice ended unpaid (void, uncollectible).
     Ended,
+    /// The subscription ended with it on an unpaid invoice: credited off.
+    CreditedOff,
 }
 
 /// `Due::SettleItem`, under the company lock.
@@ -492,6 +515,67 @@ pub async fn settle_item(
     let result = settle_item_locked(state, company_id, now, until).await;
     lock.release().await;
     result
+}
+
+/// Whether the recorded item may still be deleted (pending, on a draft
+/// invoice, or gone).
+///
+/// Read from Stripe under the company lock. On a finalized invoice it may
+/// not: that invoice is recorded (the advance is then credited back once
+/// paid). True without an open item.
+pub async fn item_removable(
+    state: &AppState,
+    company_id: i32,
+    now: NaiveDateTime,
+) -> Result<bool, AdvanceError> {
+    let lock = CompanyLock::acquire(&state.pool, company_id).await?;
+    let result = item_removable_locked(state, company_id, now).await;
+    lock.release().await;
+    result
+}
+
+async fn item_removable_locked(
+    state: &AppState,
+    company_id: i32,
+    now: NaiveDateTime,
+) -> Result<bool, AdvanceError> {
+    let Some(stored) = store::load(&state.pool, company_id).await? else {
+        return Ok(true);
+    };
+    let c = &stored.commitment;
+    let (true, Some(item_id)) = (item_open(c), c.advance_item_id.as_deref()) else {
+        return Ok(true);
+    };
+    let stripe = &advance_stripe(state);
+    if !stripe.is_enabled() {
+        return Err(AdvanceError::Stripe("not_configured".into()));
+    }
+    let item = match stripe.invoice_item(item_id).await {
+        Ok(item) if item["deleted"] != true => item,
+        Ok(_) | Err(StripeError::Missing(_)) => return Ok(true),
+        Err(err) => return Err(stripe_error(&err)),
+    };
+    let Some(invoice_id) = stripe_id(&item["invoice"]) else {
+        return Ok(true);
+    };
+    let status = match stripe.invoice(&invoice_id).await {
+        Ok(invoice) => invoice["status"].as_str().map(str::to_string),
+        // A deleted draft takes its items back to pending.
+        Err(StripeError::Missing(_)) => return Ok(true),
+        Err(err) => return Err(stripe_error(&err)),
+    };
+    if status.as_deref() == Some("draft") {
+        return Ok(true);
+    }
+    apply(&state.pool, company_id, now, |c| {
+        item_invoiced(c, &invoice_id, now)
+    })
+    .await?;
+    tracing::info!(
+        company_id,
+        "onboarding advance item found on a finalized invoice"
+    );
+    Ok(false)
 }
 
 /// Deletes the item (pending, or on a draft invoice), then forgets it.
@@ -583,18 +667,21 @@ pub async fn settle_item_locked(
     };
     match invoice["status"].as_str() {
         Some("paid") => {
-            let amount = advance_line_total(&invoice, &item_id)
+            in_time(until)?;
+            let lines = stripe
+                .invoice_lines(&invoice_id)
+                .await
+                .map_err(|e| stripe_error(&e))?;
+            let amount = advance_line_total(&lines, &item_id)
                 .or_else(|| item["amount"].as_i64())
                 .or_else(|| c.terms.map(|t| t.advance_cents));
-            credit(
-                state,
-                c,
-                &invoice_id,
-                amount.unwrap_or_default(),
-                now,
-                until,
-            )
-            .await
+            let ended = invoice_subscription_ended(stripe, &invoice, until).await?;
+            let paid = PaidAdvance {
+                invoice_id: &invoice_id,
+                amount_cents: amount.unwrap_or_default(),
+                subscription_ended: ended,
+            };
+            credit(state, c, &paid, now, until).await
         }
         Some(status @ ("void" | "uncollectible")) => {
             apply(pool, company_id, now, |c| {
@@ -603,11 +690,132 @@ pub async fn settle_item_locked(
             .await?;
             Ok(Settled::Ended)
         }
-        Some("draft") if c.status != Status::AdvanceScheduled => {
-            delete_item(state, company_id, &item_id, "not_wanted", now, until).await
+        Some("open") => {
+            if invoice_subscription_ended(stripe, &invoice, until).await? {
+                credit_off(state, c, &invoice_id, &item_id, now, until).await
+            } else {
+                Ok(Settled::Waiting)
+            }
+        }
+        Some("draft") => {
+            if c.status != Status::AdvanceScheduled {
+                return delete_item(state, company_id, &item_id, "not_wanted", now, until).await;
+            }
+            if !invoice_subscription_ended(stripe, &invoice, until).await? {
+                return Ok(Settled::Waiting);
+            }
+            let reason = Withdrawal::SubscriptionEnded;
+            apply(pool, company_id, now, |c| advance_withdrawn(c, reason, now)).await?;
+            delete_item(state, company_id, &item_id, reason.as_str(), now, until).await
         }
         _ => Ok(Settled::Waiting),
     }
+}
+
+/// The subscription `invoice` belongs to has ended (`canceled`,
+/// `incomplete_expired`, or gone); false for an invoice of no subscription.
+async fn invoice_subscription_ended(
+    stripe: &Stripe,
+    invoice: &Value,
+    until: Instant,
+) -> Result<bool, AdvanceError> {
+    let Some(id) = stripe_id(&invoice["parent"]["subscription_details"]["subscription"])
+        .or_else(|| stripe_id(&invoice["subscription"]))
+    else {
+        return Ok(false);
+    };
+    in_time(until)?;
+    match stripe.subscription(&id).await {
+        Ok(subscription) => Ok(matches!(
+            subscription["status"].as_str(),
+            Some("canceled" | "incomplete_expired")
+        )),
+        Err(StripeError::Missing(_)) => Ok(true),
+        Err(err) => Err(stripe_error(&err)),
+    }
+}
+
+/// The subscription ended with the advance on its unpaid invoice: the
+/// advance line (with its tax) is credited off that invoice once (a credit
+/// note already there is recorded instead), the commitment voids, and staff
+/// are told.
+async fn credit_off(
+    state: &AppState,
+    c: &Commitment,
+    invoice_id: &str,
+    item_id: &str,
+    now: NaiveDateTime,
+    until: Instant,
+) -> Result<Settled, AdvanceError> {
+    let company_id = c.company_id;
+    let stripe = &advance_stripe(state);
+    in_time(until)?;
+    let existing = stripe
+        .invoice_credit_notes(invoice_id)
+        .await
+        .map_err(|e| stripe_error(&e))?
+        .into_iter()
+        .find(|note| {
+            note["metadata"]["kind"] == ADVANCE_CREDIT_NOTE_KIND && note["status"] != "void"
+        });
+    let (note_id, created) = if let Some(id) = existing.as_ref().and_then(stripe_id) {
+        (id, None)
+    } else {
+        in_time(until)?;
+        let lines = stripe
+            .invoice_lines(invoice_id)
+            .await
+            .map_err(|e| stripe_error(&e))?;
+        let line_id = advance_line(&lines, item_id)
+            .and_then(stripe_id)
+            .ok_or_else(|| AdvanceError::Stripe("no_advance_line".into()))?;
+        in_time(until)?;
+        let note = stripe
+            .credit_advance_line(
+                invoice_id,
+                &line_id,
+                company_id,
+                &credit_off_memo(c.terms.as_ref()),
+                &credit_note_key(company_id, invoice_id),
+            )
+            .await
+            .map_err(|e| stripe_error(&e))?;
+        let id = stripe_id(&note).ok_or_else(|| AdvanceError::Stripe("invalid_response".into()))?;
+        (
+            id,
+            Some(note["total"].as_i64().or_else(|| note["amount"].as_i64())),
+        )
+    };
+    apply(&state.pool, company_id, now, |c| {
+        item_credited_off(c, invoice_id, &note_id, now)
+    })
+    .await?;
+    tracing::info!(
+        company_id,
+        "onboarding advance credited off after the subscription ended"
+    );
+    if let Some(amount) = created {
+        let alert = StaffAlert::CreditedOff {
+            invoice_id,
+            amount_cents: amount,
+        };
+        notify_staff(state, company_id, c.terms.as_ref(), &alert).await;
+    }
+    Ok(Settled::CreditedOff)
+}
+
+/// `Advance payment for <months> credited: the subscription ended first`.
+fn credit_off_memo(terms: Option<&AdvanceTerms>) -> String {
+    terms.map_or_else(
+        || "The advance payment is credited: the subscription ended before the month it pays for".to_string(),
+        |terms| {
+            format!(
+                "The advance payment for {} to {} is credited: the subscription ended before that month",
+                format_local_date(terms.prepaid_from),
+                format_local_date(terms.prepaid_until)
+            )
+        },
+    )
 }
 
 /// A pending item: kept while the advance may be charged, else deleted.
@@ -643,19 +851,28 @@ async fn settle_pending(
     delete_item(state, company_id, item_id, reason.as_str(), now, until).await
 }
 
+/// The invoice line of `item_id` among `lines` (every line of the invoice,
+/// [`Stripe::invoice_lines`]).
+fn advance_line<'a>(lines: &'a [Value], item_id: &str) -> Option<&'a Value> {
+    lines.iter().find(|line| {
+        stripe_id(&line["parent"]["invoice_item_details"]["invoice_item"])
+            .or_else(|| stripe_id(&line["invoice_item"]))
+            .is_some_and(|id| id == item_id)
+    })
+}
+
 /// The total the invoice line of `item_id` charged: its amount plus the tax
 /// Stripe added to it (automatic tax), so the credit returns the month's
-/// tax too. `None` without that line.
+/// tax too.
+///
+/// `None` without that line. `lines`: every line of the invoice (the
+/// invoice object carries only the first 10).
 ///
 /// Dahlia lists the line's tax in `taxes[]` (`tax_behavior`), older API
 /// versions in `tax_amounts[]` (`inclusive`); inclusive tax is already in
 /// the amount.
-pub fn advance_line_total(invoice: &Value, item_id: &str) -> Option<i64> {
-    let line = invoice["lines"]["data"].as_array()?.iter().find(|line| {
-        stripe_id(&line["parent"]["invoice_item_details"]["invoice_item"])
-            .or_else(|| stripe_id(&line["invoice_item"]))
-            .is_some_and(|id| id == item_id)
-    })?;
+pub fn advance_line_total(lines: &[Value], item_id: &str) -> Option<i64> {
+    let line = advance_line(lines, item_id)?;
     let added = |list: &Value, inclusive: &dyn Fn(&Value) -> bool| -> i64 {
         list.as_array().map_or(0, |taxes| {
             taxes
@@ -670,19 +887,33 @@ pub fn advance_line_total(invoice: &Value, item_id: &str) -> Option<i64> {
     Some(line["amount"].as_i64()? + tax)
 }
 
-/// Credits the month the paid invoice `invoice_id` carried in advance,
-/// once: a credit already in the customer's balance transactions (a lost
-/// save, a replay after the 24-hour key window) is recorded instead. A
-/// cancellation scheduled to end before the prepaid month ends is moved to
-/// its end first.
+/// The paid invoice that carried the advance.
+struct PaidAdvance<'a> {
+    invoice_id: &'a str,
+    /// The advance line's total (with its tax).
+    amount_cents: i64,
+    /// Its subscription has ended: the prepaid month never comes.
+    subscription_ended: bool,
+}
+
+/// Credits the month the paid invoice carried in advance, once: a credit
+/// already in the customer's balance transactions (a lost save, a replay
+/// after the 24-hour key window) is recorded instead. A cancellation
+/// scheduled to end before the prepaid month ends is moved to its end
+/// first. When the subscription has already ended nothing is refunded
+/// automatically: staff are told to review it.
 async fn credit(
     state: &AppState,
     c: &Commitment,
-    invoice_id: &str,
-    amount_cents: i64,
+    paid: &PaidAdvance<'_>,
     now: NaiveDateTime,
     until: Instant,
 ) -> Result<Settled, AdvanceError> {
+    let PaidAdvance {
+        invoice_id,
+        amount_cents,
+        ..
+    } = *paid;
     let company_id = c.company_id;
     let stripe = &advance_stripe(state);
     let (Some(customer), _) = billing_ids(&state.pool, company_id).await? else {
@@ -698,6 +929,7 @@ async fn credit(
             txn["metadata"]["kind"] == ADVANCE_CREDIT_KIND
                 && txn["metadata"]["invoice"] == invoice_id
         });
+    let new_credit = existing.is_none();
     let credit_id = if let Some(id) = existing.as_ref().and_then(stripe_id) {
         id
     } else {
@@ -717,6 +949,7 @@ async fn credit(
     };
     if let Some(terms) = c.terms
         && now < terms.prepaid_from
+        && !paid.subscription_ended
     {
         in_time(until)?;
         cancellation::end_with_prepaid_month(state, company_id, terms.prepaid_until, invoice_id)
@@ -727,6 +960,13 @@ async fn credit(
     })
     .await?;
     tracing::info!(company_id, "onboarding advance credited back");
+    if new_credit && paid.subscription_ended {
+        let alert = StaffAlert::PaidAfterEnd {
+            invoice_id,
+            amount_cents,
+        };
+        notify_staff(state, company_id, c.terms.as_ref(), &alert).await;
+    }
     Ok(Settled::Credited)
 }
 
@@ -828,6 +1068,113 @@ fn render_staff_notice(company_id: i32, name: &str, terms: &AdvanceTerms) -> Ren
     ];
     RenderedEmail {
         subject: format!("Onboarding advance notice sent: {}", name.trim()),
+        html: wrap_html(
+            lines
+                .iter()
+                .map(|line| html_paragraph(&escape_html(line)))
+                .collect(),
+        ),
+        text: lines.join("\n\n"),
+    }
+}
+
+/// An internal alert about an advance whose subscription ended before the
+/// month it paid for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StaffAlert<'a> {
+    /// The advance line was credited off the unpaid invoice.
+    CreditedOff {
+        invoice_id: &'a str,
+        amount_cents: Option<i64>,
+    },
+    /// The invoice was paid anyway: credited to the customer's balance, not
+    /// refunded.
+    PaidAfterEnd {
+        invoice_id: &'a str,
+        amount_cents: i64,
+    },
+}
+
+/// Sends `alert` to `BILLING_ALERT_EMAIL` (company id and name, amounts,
+/// dates; no other customer data). Best effort.
+async fn notify_staff(
+    state: &AppState,
+    company_id: i32,
+    terms: Option<&AdvanceTerms>,
+    alert: &StaffAlert<'_>,
+) {
+    let Some(to) = crate::billing::methods::alert_email(state) else {
+        return;
+    };
+    let name = store::company_name(&state.pool, company_id)
+        .await
+        .unwrap_or_default();
+    let email = render_staff_alert(company_id, &name, terms, alert);
+    if let Err(err) = cancellation::send_rendered(state, to, &email).await {
+        tracing::warn!(
+            company_id,
+            kind = cancellation::failure_kind(&err),
+            "onboarding advance staff alert failed"
+        );
+    }
+}
+
+fn render_staff_alert(
+    company_id: i32,
+    name: &str,
+    terms: Option<&AdvanceTerms>,
+    alert: &StaffAlert<'_>,
+) -> RenderedEmail {
+    let months = terms.map_or_else(
+        || "the prepaid month".to_string(),
+        |terms| {
+            format!(
+                "{} to {}",
+                format_local_date(terms.prepaid_from),
+                format_local_date(terms.prepaid_until)
+            )
+        },
+    );
+    let company = format!("Company: {} (id {company_id})", name.trim());
+    let (subject, lines) = match *alert {
+        StaffAlert::CreditedOff {
+            invoice_id,
+            amount_cents,
+        } => (
+            format!("Onboarding advance credited off: {}", name.trim()),
+            vec![
+                company,
+                format!(
+                    "The subscription ended while the advance payment for {months} was unpaid on invoice {invoice_id}."
+                ),
+                format!(
+                    "A credit note of {} took the advance line (with its tax) off that invoice. The rest of the invoice is still due.",
+                    amount_cents.map_or_else(|| "the advance line".to_string(), format_money)
+                ),
+            ],
+        ),
+        StaffAlert::PaidAfterEnd {
+            invoice_id,
+            amount_cents,
+        } => (
+            format!(
+                "Onboarding advance paid after the subscription ended: {}",
+                name.trim()
+            ),
+            vec![
+                company,
+                format!(
+                    "Invoice {invoice_id} with the advance payment for {months} was paid, but the subscription has ended, so that month never comes."
+                ),
+                format!(
+                    "{} (with tax) was credited to the customer's Stripe balance. Nothing was refunded: review whether to refund it.",
+                    format_money(amount_cents)
+                ),
+            ],
+        ),
+    };
+    RenderedEmail {
+        subject,
         html: wrap_html(
             lines
                 .iter()
@@ -950,7 +1297,7 @@ mod tests {
 
     #[test]
     fn the_credit_is_the_advance_line_with_its_exclusive_tax() {
-        let invoice = json!({ "lines": { "data": [
+        let lines = json!([
             { "amount": 30_000, "taxes": [{ "amount": 2_100, "tax_behavior": "exclusive" }] },
             { "amount": 30_000, "parent": { "invoice_item_details": { "invoice_item": "ii_9" } },
               "taxes": [
@@ -961,10 +1308,74 @@ mod tests {
               "tax_amounts": [{ "amount": 350, "inclusive": false }, { "amount": 20, "inclusive": true }] },
             { "amount": 4_000, "parent": { "invoice_item_details": { "invoice_item": "ii_incl" } },
               "taxes": [{ "amount": 280, "tax_behavior": "inclusive" }] },
-        ] } });
-        assert_eq!(advance_line_total(&invoice, "ii_9"), Some(32_400));
-        assert_eq!(advance_line_total(&invoice, "ii_old"), Some(5_350));
-        assert_eq!(advance_line_total(&invoice, "ii_incl"), Some(4_000));
-        assert_eq!(advance_line_total(&invoice, "ii_none"), None);
+        ]);
+        let lines = lines.as_array().unwrap();
+        assert_eq!(advance_line_total(lines, "ii_9"), Some(32_400));
+        assert_eq!(advance_line_total(lines, "ii_old"), Some(5_350));
+        assert_eq!(advance_line_total(lines, "ii_incl"), Some(4_000));
+        assert_eq!(advance_line_total(lines, "ii_none"), None);
+    }
+
+    #[test]
+    fn the_advance_is_priced_on_the_base_items_product() {
+        let live = live_subscription(&json!({
+            "id": "sub_1", "status": "active",
+            "items": { "data": [
+                { "id": "si_2", "quantity": 2,
+                  "price": { "id": "p2", "lookup_key": "granite_extra_user_monthly_v1",
+                             "unit_amount": 3_000, "product": "prod_seat" } },
+                { "id": "si_1", "quantity": 1,
+                  "price": { "id": "p1", "lookup_key": "granite_base_monthly_v1",
+                             "unit_amount": 30_000, "product": { "id": "prod_base" } } },
+            ] },
+        }));
+        assert_eq!(live.base_product.as_deref(), Some("prod_base"));
+        assert_eq!(
+            live_subscription(&json!({ "id": "sub_1" })).base_product,
+            None
+        );
+    }
+
+    #[test]
+    fn the_staff_alerts_name_company_invoice_and_amounts_only() {
+        let terms = AdvanceTerms {
+            advance_cents: 30_000,
+            charge_at: at("2027-01-28 15:00"),
+            prepaid_from: at("2027-02-28 15:00"),
+            prepaid_until: at("2027-03-28 15:00"),
+        };
+        let off = render_staff_alert(
+            7,
+            "Rock & Co",
+            Some(&terms),
+            &StaffAlert::CreditedOff {
+                invoice_id: "in_1",
+                amount_cents: Some(32_100),
+            },
+        );
+        assert_eq!(off.subject, "Onboarding advance credited off: Rock & Co");
+        assert!(off.text.contains("Company: Rock & Co (id 7)"));
+        assert!(
+            off.text
+                .contains("February 28, 2027 to March 28, 2027 was unpaid on invoice in_1")
+        );
+        assert!(off.text.contains("A credit note of $321.00"));
+        let paid = render_staff_alert(
+            7,
+            "Rock & Co",
+            None,
+            &StaffAlert::PaidAfterEnd {
+                invoice_id: "in_1",
+                amount_cents: 32_100,
+            },
+        );
+        assert!(
+            paid.text
+                .contains("Nothing was refunded: review whether to refund it.")
+        );
+        for email in [off, paid] {
+            assert!(!email.text.contains('\u{2014}'));
+            assert!(email.html.contains("Rock &amp; Co"));
+        }
     }
 }

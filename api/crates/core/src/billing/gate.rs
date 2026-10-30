@@ -125,7 +125,9 @@ async fn locked<G: GateStripe, T>(
 
 /// A bank payment is on its way (D18) for a subscription that has not ended:
 /// it keeps access open meanwhile. Paying an ended subscription's old invoice
-/// never restores access, so it lifts nothing. `BILLING_PAUSED` agrees.
+/// never restores access, so it lifts nothing. `BILLING_PAUSED` agrees. Once
+/// per invoice: `mark_processing` never marks a second bank payment of an
+/// invoice whose bank payment failed, so both read the same mark.
 fn payment_on_its_way(record: &CompanyBilling, now: NaiveDateTime) -> bool {
     is_processing(&record.methods, now)
         && !is_ended_subscription_status(&record.subscription_status)

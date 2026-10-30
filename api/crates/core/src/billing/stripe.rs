@@ -1068,6 +1068,44 @@ impl Stripe {
         self.get(&format!("/v1/payment_intents/{}", path_part(id)), &[])
             .await
     }
+
+    /// The PaymentIntent with the payment method it uses expanded (its
+    /// `type` tells a bank debit from a card).
+    pub async fn payment_intent_with_method(&self, id: &str) -> Result<Value, StripeError> {
+        self.get(
+            &format!("/v1/payment_intents/{}", path_part(id)),
+            &[("expand[]", "payment_method".into())],
+        )
+        .await
+    }
+
+    /// The invoice a PaymentIntent pays (dahlia has no `invoice` on a
+    /// PaymentIntent or a charge: `GET /v1/invoice_payments`); `None` when it
+    /// pays no invoice.
+    pub async fn invoice_of_payment_intent(
+        &self,
+        payment_intent: &str,
+    ) -> Result<Option<String>, StripeError> {
+        let list = self
+            .get(
+                "/v1/invoice_payments",
+                &[
+                    ("payment[type]", "payment_intent".into()),
+                    ("payment[payment_intent]", payment_intent.into()),
+                    ("limit", "1".into()),
+                ],
+            )
+            .await?;
+        Ok(data(list)
+            .first()
+            .and_then(|payment| stripe_id(&payment["invoice"])))
+    }
+
+    /// A dispute as Stripe has it now (its `status`).
+    pub async fn dispute(&self, id: &str) -> Result<Value, StripeError> {
+        self.get(&format!("/v1/disputes/{}", path_part(id)), &[])
+            .await
+    }
 }
 
 /// What a test-seam SetupIntent is for: its idempotency key and metadata.
@@ -1461,7 +1499,8 @@ pub fn normalize_event(event: &Value) -> Option<BillingEvent> {
 /// a voided one is dropped (`None`: its `invoice.voided` event applies it). A closed (voided, uncollectible)
 /// invoice that has since been paid becomes `invoice.paid`. A paid or closed invoice carries its subscription's
 /// live status, so it restores access only once no other invoice of it is unpaid, and never for a subscription
-/// that has ended. Without a client the event is used as sent.
+/// that has ended. A `payment_method.updated` is dropped unless the method is the customer's default
+/// (`invoice_settings.default_payment_method`). Without a client the event is used as sent.
 pub async fn latest_event(
     stripe: &Stripe,
     event: BillingEvent,
@@ -1514,6 +1553,31 @@ pub async fn latest_event(
                 _ => return Ok(None),
             }
         }
+        // Only the customer's default method becomes the company's stored
+        // one (an update of the stored method itself changes nothing).
+        BillingEvent::PaymentMethodUpdated {
+            id,
+            customer_id,
+            payment_method_id,
+        } => {
+            let customer = match stripe
+                .customer_with_default_payment_method(&customer_id)
+                .await
+            {
+                Ok(customer) => customer,
+                Err(StripeError::Missing(_)) => return Ok(None),
+                Err(err) => return Err(err),
+            };
+            let default = stripe_id(&customer["invoice_settings"]["default_payment_method"]);
+            if default.as_deref() != Some(payment_method_id.as_str()) {
+                return Ok(None);
+            }
+            BillingEvent::PaymentMethodUpdated {
+                id,
+                customer_id,
+                payment_method_id,
+            }
+        }
         other => other,
     };
     Ok(Some(match event {
@@ -1564,6 +1628,9 @@ async fn with_live_subscription(
 pub const ADVANCE_ITEM_KIND: &str = "onboarding_advance";
 /// `metadata[kind]` of the credit that gives the advance back.
 pub const ADVANCE_CREDIT_KIND: &str = "onboarding_advance_credit";
+/// `metadata[kind]` of the credit note that takes the advance line off an
+/// unpaid invoice once the subscription ended.
+pub const ADVANCE_CREDIT_NOTE_KIND: &str = "onboarding_advance_credit_note";
 
 /// The onboarding advance: a month of the subscription paid in advance.
 #[derive(Debug, Clone)]
@@ -1575,6 +1642,9 @@ pub struct AdvanceItem<'a> {
     /// `YYYY-MM-DD` of the deadline it is for.
     pub deadline: &'a str,
     pub amount_cents: i64,
+    /// The base subscription product (`prod_...`, the product of the
+    /// `granite_base_monthly_v1` price): the item takes its tax code.
+    pub product: &'a str,
     /// `Advance payment for <month range>`.
     pub description: &'a str,
     /// `onboarding-advance:<company_id>:<deadline>[:<n>]`.
@@ -1588,14 +1658,18 @@ pub struct AdvanceItem<'a> {
 impl Stripe {
     /// A pending USD invoice item for the subscription's next invoice,
     /// tagged `metadata[kind]=onboarding_advance`, `company_id`, `deadline`.
+    /// Priced like the catalog (`price_data` on the base product, tax
+    /// exclusive), so automatic tax treats it as a month of the plan.
     pub async fn create_advance_item(&self, item: &AdvanceItem<'_>) -> Result<Value, StripeError> {
         self.post_keyed(
             "/v1/invoiceitems",
             &[
                 ("customer", item.customer.into()),
                 ("subscription", item.subscription.into()),
-                ("amount", item.amount_cents.to_string()),
-                ("currency", "usd".into()),
+                ("price_data[currency]", "usd".into()),
+                ("price_data[product]", item.product.into()),
+                ("price_data[unit_amount]", item.amount_cents.to_string()),
+                ("price_data[tax_behavior]", "exclusive".into()),
                 ("description", item.description.into()),
                 ("metadata[kind]", ADVANCE_ITEM_KIND.into()),
                 ("metadata[company_id]", item.company_id.to_string()),
@@ -1631,6 +1705,68 @@ impl Stripe {
             reqwest::Method::DELETE,
             &format!("/v1/invoiceitems/{}", path_part(id)),
             &[],
+        )
+        .await
+    }
+
+    /// Every line of an invoice (`GET /v1/invoices/{id}/lines`, page by
+    /// page): the invoice itself carries only the first 10.
+    pub async fn invoice_lines(&self, invoice_id: &str) -> Result<Vec<Value>, StripeError> {
+        let path = format!("/v1/invoices/{}/lines", path_part(invoice_id));
+        let mut lines: Vec<Value> = Vec::new();
+        loop {
+            let mut query = vec![("limit", "100".to_string())];
+            if let Some(last) = lines.last().and_then(stripe_id) {
+                query.push(("starting_after", last));
+            }
+            let page = self.get(&path, &query).await?;
+            let more = page["has_more"] == true;
+            let data = data(page);
+            if data.is_empty() {
+                break;
+            }
+            lines.extend(data);
+            if !more {
+                break;
+            }
+        }
+        Ok(lines)
+    }
+
+    /// The credit notes of an invoice (up to 100).
+    pub async fn invoice_credit_notes(&self, invoice_id: &str) -> Result<Vec<Value>, StripeError> {
+        let list = self
+            .get(
+                "/v1/credit_notes",
+                &[("invoice", invoice_id.into()), ("limit", "100".into())],
+            )
+            .await?;
+        Ok(data(list))
+    }
+
+    /// Credits the advance's invoice line (`line_id`, its tax included) off
+    /// the unpaid invoice `invoice_id`: what is due drops by it. Tagged
+    /// `metadata[kind]=onboarding_advance_credit_note`, `company_id`.
+    pub async fn credit_advance_line(
+        &self,
+        invoice_id: &str,
+        line_id: &str,
+        company_id: i32,
+        memo: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            "/v1/credit_notes",
+            &[
+                ("invoice", invoice_id.into()),
+                ("lines[0][type]", "invoice_line_item".into()),
+                ("lines[0][invoice_line_item]", line_id.into()),
+                ("lines[0][quantity]", "1".into()),
+                ("memo", memo.into()),
+                ("metadata[kind]", ADVANCE_CREDIT_NOTE_KIND.into()),
+                ("metadata[company_id]", company_id.to_string()),
+            ],
+            idempotency_key,
         )
         .await
     }
@@ -1708,6 +1844,28 @@ impl Stripe {
     /// `GET /v1/balance`, read only for its `livemode`.
     pub async fn balance(&self) -> Result<Value, StripeError> {
         self.get("/v1/balance", &[]).await
+    }
+
+    /// `GET /v1/tax/settings`: `status` is `active` once Stripe Tax can
+    /// compute tax (needed by `STRIPE_AUTOMATIC_TAX`).
+    pub async fn tax_settings(&self) -> Result<Value, StripeError> {
+        self.get("/v1/tax/settings", &[]).await
+    }
+
+    /// Archived prices holding one of `keys` (a lookup key stays on an
+    /// archived price), with their product expanded.
+    pub async fn archived_prices_by_lookup_keys(
+        &self,
+        keys: &[&str],
+    ) -> Result<Vec<Value>, StripeError> {
+        let mut query: Vec<(&str, String)> = keys
+            .iter()
+            .map(|key| ("lookup_keys[]", (*key).to_string()))
+            .collect();
+        query.push(("active", "false".into()));
+        query.push(("limit", "10".into()));
+        query.push(("expand[]", "data.product".into()));
+        Ok(data(self.get("/v1/prices", &query).await?))
     }
 
     /// The account's payment method configurations (up to 100); the default

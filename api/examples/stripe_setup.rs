@@ -1,11 +1,13 @@
 //! Sets up the Stripe account for self-serve billing: the five prices, the
 //! customer portal configuration and the webhook endpoint.
 //!
-//! cargo run -q -p api --example stripe_setup -- [--apply] [--webhook-url <url>] [--secret-file <path>]
+//! cargo run -q -p api --example stripe_setup -- [--apply [--live]] [--webhook-url <url>] [--secret-file <path>]
 //!
 //! Reads STRIPE_SECRET_KEY from the environment only. Without --apply it only
-//! reads and reports. Creating the webhook endpoint needs --secret-file: Stripe
-//! shows the signing secret once, and it is written there with mode 0600.
+//! reads and reports. --apply with a live key (sk_live_/rk_live_) also needs
+//! --live, so production is never written by accident. Creating the webhook
+//! endpoint needs --secret-file: Stripe shows the signing secret once, and it
+//! is written there with mode 0600 (a failed run removes the empty file).
 //! STRIPE_API_BASE (a fake Stripe) is honoured for test keys only.
 use api::billing::setup::{KeyMode, key_mode};
 use api::billing::stripe::Stripe;
@@ -13,16 +15,19 @@ use api::billing::stripe_setup::{Options, run};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: stripe_setup [--apply] [--webhook-url <url>] [--secret-file <path>]";
+const USAGE: &str =
+    "usage: stripe_setup [--apply [--live]] [--webhook-url <url>] [--secret-file <path>]";
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut apply = false;
+    let mut live = false;
     let mut webhook_url = None;
     let mut secret_file = None;
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--apply" => apply = true,
+            "--live" => live = true,
             "--webhook-url" => {
                 webhook_url = Some(args.next().ok_or("--webhook-url needs a value")?)
             }
@@ -34,7 +39,10 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             other => return Err(format!("unknown argument {other}")),
         }
     }
-    Ok(Options::from_env(apply, webhook_url, secret_file))
+    Ok(Options {
+        live,
+        ..Options::from_env(apply, webhook_url, secret_file)
+    })
 }
 
 #[tokio::main]

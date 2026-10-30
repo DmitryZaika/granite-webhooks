@@ -994,6 +994,36 @@ async fn a_live_key_never_takes_the_test_seam(pool: MySqlPool) {
 
 /// Another request holding the email's lock: 503 `signup_busy`, nothing stored.
 #[test_db::test(seed)]
+async fn parallel_signups_from_one_ip_stop_at_the_limit(pool: MySqlPool) {
+    let env = env(pool).await;
+    // Different emails, so the per-email lock never serializes them: only
+    // the per-IP lock keeps the count and the insert together.
+    let requests = (0..14).map(|n| {
+        env.server
+            .post("/v1/public/signups")
+            .add_header("x-forwarded-for", "203.0.113.8")
+            .json(&body(&format!("burst{n}@fresh.test")))
+    });
+    let answers =
+        futures_util::future::join_all(requests.map(|request| async move { request.await })).await;
+    let created = answers
+        .iter()
+        .filter(|res| res.status_code() == StatusCode::CREATED)
+        .count();
+    let limited = answers
+        .iter()
+        .filter(|res| res.status_code() == StatusCode::TOO_MANY_REQUESTS)
+        .count();
+    assert_eq!((created, limited), (10, 4));
+    let rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM signup_intents WHERE ip = '203.0.113.8'")
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 10);
+}
+
+#[test_db::test(seed)]
 async fn a_busy_email_lock_is_signup_busy(pool: MySqlPool) {
     let env = env(pool).await;
     let email = "busy@fresh.test";

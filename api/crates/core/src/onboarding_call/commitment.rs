@@ -768,7 +768,9 @@ fn store_booking(out: &mut Outcome, booking: Booking, source: &str) {
 /// invitee.
 ///
 /// Replaces a stored booking (`Rescheduled`). A call starting at or
-/// before the missed call's start is refused.
+/// before the missed call's start is refused. A call that ends by the
+/// charge date takes a scheduled advance back at once (`call_booked`): the
+/// caller then deletes the pending item ([`Due::SettleItem`]).
 pub fn record_booking(
     commitment: &Commitment,
     booking: Booking,
@@ -780,6 +782,7 @@ pub fn record_booking(
     }
     let mut out = unchanged(commitment);
     store_booking(&mut out, booking, "widget");
+    withdraw_for_call(&mut out);
     Ok(out)
 }
 
@@ -1178,6 +1181,31 @@ fn call_before_charge(c: &Commitment, charge_at: NaiveDateTime) -> bool {
         .is_some_and(|call| call.end_at <= charge_at && !is_missed(c, call))
 }
 
+/// A notice is out and the booked call ends by its charge date: no advance
+/// item may be (or stay) in Stripe ([`Withdrawal::CallBooked`]).
+pub fn call_avoids_advance(c: &Commitment) -> bool {
+    matches!(c.status, Status::NoticeSent | Status::AdvanceScheduled)
+        && c.terms
+            .is_some_and(|terms| call_before_charge(c, terms.charge_at))
+}
+
+/// A scheduled advance whose booked call ends by the charge goes back to
+/// `notice_sent` (`call_booked`); its item stays recorded for
+/// [`Due::SettleItem`] to delete.
+fn withdraw_for_call(out: &mut Outcome) {
+    let c = &out.commitment;
+    if c.status != Status::AdvanceScheduled || !call_avoids_advance(c) {
+        return;
+    }
+    let from = c.status;
+    out.commitment.status = Status::NoticeSent;
+    let detail = json!({
+        "reason": Withdrawal::CallBooked.as_str(),
+        "item_id": out.commitment.advance_item_id,
+    });
+    push(out, EventKind::AdvanceWithdrawn, from, None, detail);
+}
+
 /// Steps 6 and 7: past the deadline the notice falls due, within
 /// [`ITEM_WINDOW_DAYS`] of the charge the item. Either is skipped for good
 /// when charging is off or no consent is on file; neither while held for
@@ -1219,16 +1247,8 @@ fn advance_due(out: &mut Outcome, facts: &DailyFacts, now: NaiveDateTime) -> Opt
             push(out, EventKind::NoticeWithdrawn, from, None, detail);
             (now >= out.commitment.deadline_at).then_some(Due::Notice)
         }
-        (Status::AdvanceScheduled, Some(terms)) => {
-            if call_before_charge(c, terms.charge_at) {
-                let from = c.status;
-                out.commitment.status = Status::NoticeSent;
-                let detail = json!({
-                    "reason": "call_booked",
-                    "item_id": out.commitment.advance_item_id,
-                });
-                push(out, EventKind::AdvanceWithdrawn, from, None, detail);
-            }
+        (Status::AdvanceScheduled, Some(_)) => {
+            withdraw_for_call(out);
             None
         }
         _ => None,
@@ -1502,6 +1522,37 @@ pub fn invoice_ended(
     out
 }
 
+/// The subscription ended while the item sat on its unpaid invoice.
+///
+/// The advance line was credited off that invoice (`credit_note_id`), as
+/// the month it paid for never comes. The item is forgotten; a live
+/// commitment is void.
+pub fn item_credited_off(
+    commitment: &Commitment,
+    invoice_id: &str,
+    credit_note_id: &str,
+    _now: NaiveDateTime,
+) -> Outcome {
+    let mut out = unchanged(commitment);
+    if !item_open(commitment) {
+        return out;
+    }
+    let from = commitment.status;
+    let item_id = out.commitment.advance_item_id.take();
+    out.commitment.stripe_invoice_id = Some(invoice_id.to_string());
+    if !from.is_final() {
+        out.commitment.status = Status::Void;
+    }
+    let detail = json!({
+        "reason": "subscription_ended",
+        "invoice_id": invoice_id,
+        "item_id": item_id,
+        "credit_note_id": credit_note_id,
+    });
+    push(&mut out, EventKind::Voided, from, None, detail);
+    out
+}
+
 /// What is checked right before the item reaches Stripe, and again while it
 /// is pending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1532,6 +1583,9 @@ pub enum Withdrawal {
     /// Stripe ends the subscription with no request recorded yet (the
     /// webhook sync records one): waits as `notice_sent`.
     CancelScheduled,
+    /// A booked call ends by the charge date (it counts once held): waits
+    /// as `notice_sent`.
+    CallBooked,
     /// Held for review: waits as `notice_sent`.
     Held,
     /// `ONBOARDING_ADVANCE_CHARGING` is off: skipped for good.
@@ -1549,6 +1603,7 @@ impl Withdrawal {
             Self::SubscriptionEnded => "subscription_ended",
             Self::CancellationRequested(_) => "cancellation_requested",
             Self::CancelScheduled => "cancel_scheduled",
+            Self::CallBooked => "call_booked",
             Self::Held => "review_hold",
             Self::ChargingOff => "charging_off",
             Self::NoConsent => "no_consent",
@@ -1570,6 +1625,8 @@ pub fn withdrawal(commitment: &Commitment, facts: &ChargeFacts) -> Option<Withdr
         Some(Withdrawal::CancellationRequested(requested))
     } else if facts.cancel_scheduled {
         Some(Withdrawal::CancelScheduled)
+    } else if call_avoids_advance(commitment) {
+        Some(Withdrawal::CallBooked)
     } else if commitment.review_hold_at.is_some() {
         Some(Withdrawal::Held)
     } else if !facts.charging_enabled {
@@ -1590,7 +1647,8 @@ pub fn withdrawal(commitment: &Commitment, facts: &ChargeFacts) -> Option<Withdr
 /// The advance may not be in Stripe ([`withdrawal`]).
 ///
 /// Void, suspended, skipped for good, a new notice, or (a scheduled
-/// cancellation, a review hold) back to `notice_sent` to wait. A pending
+/// cancellation, a call booked before the charge, a review hold) back to
+/// `notice_sent` to wait. A pending
 /// item stays recorded: delete it, then [`item_withdrawn`]. From
 /// `notice_sent` or `advance_scheduled` only.
 pub fn advance_withdrawn(
@@ -1610,7 +1668,7 @@ pub fn advance_withdrawn(
         Withdrawal::ChargingOff => skip(&mut out, "charging_off"),
         Withdrawal::NoConsent => skip(&mut out, "no_consent"),
         Withdrawal::ChargeMoved => return drop_notice(commitment, reason.as_str(), now),
-        Withdrawal::CancelScheduled | Withdrawal::Held => {
+        Withdrawal::CancelScheduled | Withdrawal::CallBooked | Withdrawal::Held => {
             if from == Status::AdvanceScheduled {
                 out.commitment.status = Status::NoticeSent;
                 push(&mut out, EventKind::AdvanceWithdrawn, from, None, detail);
@@ -2206,13 +2264,80 @@ mod tests {
     }
 
     #[test]
-    fn a_call_booked_to_end_by_the_charge_takes_the_scheduled_item_back() {
-        let c = book(&scheduled(), call("2026-12-31 15:00"));
-        let day = run(&c, &facts(), "2026-12-30 10:00");
+    fn a_call_booked_to_end_by_the_charge_takes_the_scheduled_item_back_at_once() {
+        let now = at("2026-12-30 10:00");
+        let out = record_booking(&scheduled(), call("2026-12-31 15:00"), now).unwrap();
+        assert_eq!(out.commitment.status, Status::NoticeSent);
+        assert_eq!(
+            kinds(&out),
+            [EventKind::Booked, EventKind::AdvanceWithdrawn]
+        );
+        assert_eq!(out.events[1].detail["reason"], "call_booked");
+        assert_eq!(out.events[1].detail["item_id"], "ii_1");
+        assert!(item_open(&out.commitment));
+        assert!(call_avoids_advance(&out.commitment));
+        assert_eq!(
+            run(&out.commitment, &facts(), "2026-12-30 11:00").due,
+            [Due::SettleItem]
+        );
+        // Nothing may put an item back while that call is booked.
+        let ok = ChargeFacts {
+            next_charge_at: Some(at("2027-01-01 10:00")),
+            ..charge_facts()
+        };
+        assert_eq!(
+            withdrawal(&out.commitment, &ok),
+            Some(Withdrawal::CallBooked)
+        );
+        let noticed_and_booked = book(&noticed(&base()), call("2026-12-31 15:00"));
+        assert_eq!(
+            withdrawal(&noticed_and_booked, &ok),
+            Some(Withdrawal::CallBooked)
+        );
+        let waits = advance_withdrawn(&noticed_and_booked, Withdrawal::CallBooked, now);
+        assert_eq!(waits.commitment, noticed_and_booked);
+
+        // A call ending after the charge leaves the advance scheduled.
+        let late = record_booking(&scheduled(), call("2027-01-01 10:00"), now).unwrap();
+        assert_eq!(late.commitment.status, Status::AdvanceScheduled);
+        assert_eq!(kinds(&late), [EventKind::Booked]);
+        assert_eq!(withdrawal(&late.commitment, &ok), None);
+
+        // A booking the daily run finds does the same.
+        let found = BookingCheck::Found(call("2026-12-31 15:00"));
+        let day = run(&scheduled(), &with(found), "2026-12-30 10:00");
         assert_eq!(day.outcome.commitment.status, Status::NoticeSent);
-        assert_eq!(kinds(&day.outcome), [EventKind::AdvanceWithdrawn]);
-        assert_eq!(day.outcome.events[0].detail["reason"], "call_booked");
+        assert_eq!(
+            kinds(&day.outcome),
+            [EventKind::Booked, EventKind::AdvanceWithdrawn]
+        );
         assert_eq!(day.due, [Due::SettleItem]);
+    }
+
+    #[test]
+    fn an_advance_credited_off_after_the_subscription_ended_voids_and_forgets_the_item() {
+        let c = item_invoiced(&scheduled(), "in_1", at("2027-01-01 11:00")).commitment;
+        let out = item_credited_off(&c, "in_1", "cn_1", at("2027-01-20 10:00"));
+        assert_eq!(out.commitment.status, Status::Void);
+        assert!(!item_open(&out.commitment));
+        assert_eq!(kinds(&out), [EventKind::Voided]);
+        assert_eq!(out.events[0].detail["reason"], "subscription_ended");
+        assert_eq!(out.events[0].detail["credit_note_id"], "cn_1");
+        assert_eq!(out.events[0].detail["item_id"], "ii_1");
+        assert_eq!(
+            item_credited_off(&out.commitment, "in_1", "cn_1", at("2027-01-20 10:01")).events,
+            []
+        );
+        let waived = Commitment {
+            status: Status::Waived,
+            ..c
+        };
+        assert_eq!(
+            item_credited_off(&waived, "in_1", "cn_1", at("2027-01-20 10:00"))
+                .commitment
+                .status,
+            Status::Waived
+        );
     }
 
     #[test]

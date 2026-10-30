@@ -17,6 +17,17 @@ Parameters:
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
     Default: Z09213062QDJ105YROL3K
+  OriginVerifySecret:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: >-
+      Sent to the function URL as X-Granite-Origin-Verify; the api trusts
+      X-Forwarded-For only on requests carrying it (its CLOUDFRONT_ORIGIN_SECRET,
+      same value). Empty: no header. See README "CloudFront origin secret".
+
+Conditions:
+  HasOriginVerifySecret: !Not [!Equals [!Ref OriginVerifySecret, '']]
 
 Resources:
   Certificate:
@@ -48,6 +59,12 @@ Resources:
               OriginProtocolPolicy: https-only
               OriginSSLProtocols: [TLSv1.2]
               OriginReadTimeout: !Ref OriginReadTimeout
+            # CloudFront replaces a viewer header of the same name.
+            OriginCustomHeaders: !If
+              - HasOriginVerifySecret
+              - - HeaderName: X-Granite-Origin-Verify
+                  HeaderValue: !Ref OriginVerifySecret
+              - !Ref AWS::NoValue
         DefaultCacheBehavior:
           TargetOriginId: lambda
           ViewerProtocolPolicy: https-only

@@ -4,9 +4,14 @@
 //! customer's and the subscription's default, then the old one is detached.
 //! A bank account waiting for micro-deposits is kept as
 //! `company_billing.pending_setup_intent_id` until Stripe verifies it. Holds
-//! (a blocked bank account, a dispute) give the company [`HOLD_DAYS`] to save
-//! a new method. Paying an open invoice never changes `payment_status`
-//! (D17): only `invoice.paid` or the gate's Stripe read do.
+//! pause access [`HOLD_DAYS`] after they start: a blocked bank account's
+//! until a new method is saved, a dispute's until no dispute of the company
+//! is open or lost (every dispute is kept in `billing_disputes`; a new method
+//! does not lift it, a superuser can: [`clear_hold_by_staff`]). Paying an
+//! open invoice never changes `payment_status` (D17): only `invoice.paid` or
+//! the gate's Stripe read do. A bank payment in flight lifts a pause once per
+//! invoice: not after a bank payment of that invoice failed
+//! (`billing_bank_payment_failures`), never after the invoice was paid.
 //!
 //! Holds apply to self-serve companies only (`plan_source = 'subscription'`):
 //! a legacy company's dispute or blocked account only tells staff.
@@ -16,8 +21,8 @@
 //! `charge.dispute.closed`, `payment_method.automatically_updated`) are
 //! claimed once by event id and re-read from Stripe before anything changes,
 //! so a late or out-of-order event acts on Stripe's current state (a closed
-//! dispute's outcome is final, read from the event). Logs carry Stripe error
-//! codes only.
+//! dispute's outcome is final, read from the event, and never reopened by a
+//! late `created`). Logs carry Stripe error codes only.
 
 use super::addons::{AccountPaymentMethod, payment_method};
 use super::cancellation::{company_name, failure_kind, manager_contacts};
@@ -299,7 +304,8 @@ pub async fn apply_setup(
 }
 
 /// Under the company lock: `method` becomes the default everywhere, the old
-/// one is detached, holds and the pending bank account are cleared.
+/// one is detached, a blocked-account hold and the pending bank account are
+/// cleared (a dispute hold stays: only the disputes end it).
 async fn make_default(
     state: &AppState,
     company_id: i32,
@@ -368,12 +374,18 @@ async fn make_default(
     if let Some(other) = pending.filter(|other| *other != setup_id) {
         cancel_quietly(state, company_id, other, setup_id).await;
     }
+    // MySQL assigns left to right: `method_hold` last, so the IFs see the
+    // old value.
     sqlx::query(
         "UPDATE company_billing
             SET stripe_payment_method_id = ?, pending_setup_intent_id = NULL,
-                method_hold = NULL, method_hold_at = NULL, method_hold_until = NULL,
-                method_hold_charge_id = NULL, method_hold_amount_cents = NULL,
-                method_hold_charged_at = NULL
+                method_hold_at = IF(method_hold = 'disputed', method_hold_at, NULL),
+                method_hold_until = IF(method_hold = 'disputed', method_hold_until, NULL),
+                method_hold_charge_id = IF(method_hold = 'disputed', method_hold_charge_id, NULL),
+                method_hold_amount_cents =
+                  IF(method_hold = 'disputed', method_hold_amount_cents, NULL),
+                method_hold_charged_at = IF(method_hold = 'disputed', method_hold_charged_at, NULL),
+                method_hold = IF(method_hold = 'disputed', method_hold, NULL)
           WHERE company_id = ?",
     )
     .bind(method)
@@ -522,11 +534,23 @@ fn amount_of(invoice: &Value) -> i64 {
         .unwrap_or_default()
 }
 
-/// The oldest open subscription invoice with something left to pay.
-fn oldest_open(invoices: &[Value]) -> Option<&Value> {
+/// The subscription an invoice bills (dahlia's
+/// `parent.subscription_details.subscription`, else the legacy top-level
+/// `subscription`); `None` for an invoice of no subscription.
+fn invoice_subscription(invoice: &Value) -> Option<String> {
+    stripe_id(&invoice["parent"]["subscription_details"]["subscription"])
+        .or_else(|| stripe_id(&invoice["subscription"]))
+}
+
+/// The oldest open invoice of `subscription` (the company's current one)
+/// with something left to pay: never an invoice of an old subscription or
+/// one made by hand.
+fn oldest_open<'a>(invoices: &'a [Value], subscription: Option<&str>) -> Option<&'a Value> {
+    let subscription = subscription?;
     invoices
         .iter()
         .filter(|invoice| invoice["status"] == "open")
+        .filter(|invoice| invoice_subscription(invoice).as_deref() == Some(subscription))
         .filter(|invoice| amount_of(invoice) > 0)
         .min_by_key(|invoice| {
             (
@@ -536,22 +560,54 @@ fn oldest_open(invoices: &[Value]) -> Option<&Value> {
         })
 }
 
-/// Marks a bank payment in flight; an older mark past [`PROCESSING_DAYS`]
-/// starts over.
+/// Marks a bank payment of `invoice_id` in flight; an older mark past
+/// [`PROCESSING_DAYS`] starts over. `true` when it did.
+///
+/// Never for an invoice already paid (`company_billing_invoices`, written by
+/// `invoice.paid` before it clears the mark, so a late `processing` cannot
+/// land after it), nor for one whose bank payment failed before (D18 lifts a
+/// pause once per invoice: access then returns when the money arrives).
 pub async fn mark_processing(
     pool: &sqlx::MySqlPool,
     company_id: i32,
+    invoice_id: &str,
     now: NaiveDateTime,
-) -> sqlx::Result<()> {
-    sqlx::query(
+) -> sqlx::Result<bool> {
+    let marked = sqlx::query(
         "UPDATE company_billing
             SET payment_processing_at = IF(payment_processing_at IS NULL
                                              OR payment_processing_at <= ?, ?, payment_processing_at)
-          WHERE company_id = ?",
+          WHERE company_id = ?
+            AND NOT EXISTS (SELECT 1 FROM company_billing_invoices paid
+                             WHERE paid.stripe_invoice_id = ? AND paid.status = 'paid')
+            AND NOT EXISTS (SELECT 1 FROM billing_bank_payment_failures failed
+                             WHERE failed.stripe_invoice_id = ?)",
     )
     .bind(now - Duration::days(PROCESSING_DAYS))
     .bind(now)
     .bind(company_id)
+    .bind(invoice_id)
+    .bind(invoice_id)
+    .execute(pool)
+    .await?;
+    Ok(marked.rows_affected() == 1)
+}
+
+/// A bank payment of `invoice_id` failed (`charge.failed`): its next bank
+/// payment no longer lifts a pause. Idempotent.
+pub async fn record_bank_failure(
+    pool: &sqlx::MySqlPool,
+    company_id: i32,
+    invoice_id: &str,
+    now: NaiveDateTime,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT IGNORE INTO billing_bank_payment_failures (stripe_invoice_id, company_id, failed_at)
+         VALUES (?, ?, ?)",
+    )
+    .bind(invoice_id)
+    .bind(company_id)
+    .bind(now)
     .execute(pool)
     .await?;
     Ok(())
@@ -590,7 +646,8 @@ async fn default_method(
 ///
 /// Under the key `invoice-pay:<invoice>:<attempt_id>`. Never
 /// changes `payment_status`: `invoice.paid` does. A bank debit marks
-/// `payment_processing_at`. 400 when `attempt_id` is not a UUID, 409
+/// `payment_processing_at` ([`mark_processing`]: not for an invoice whose
+/// bank payment failed before). 400 when `attempt_id` is not a UUID, 409
 /// `no_payment_method`, 503 `payments_unavailable`.
 pub async fn pay_open_invoice(
     state: &AppState,
@@ -617,7 +674,7 @@ pub async fn pay_open_invoice(
         .open_invoices(&customer)
         .await
         .map_err(|err| stripe_failure(&err, company_id, "open invoices"))?;
-    let Some(invoice) = oldest_open(&invoices) else {
+    let Some(invoice) = oldest_open(&invoices, record.stripe_subscription_id.as_deref()) else {
         return Ok(InvoicePayment::NothingDue);
     };
     let invoice_id = invoice["id"].as_str().unwrap_or_default().to_string();
@@ -633,7 +690,7 @@ pub async fn pay_open_invoice(
     match paid {
         Ok(answer) if answer["status"] == "paid" => Ok(InvoicePayment::Paid { amount_cents }),
         Ok(_) => {
-            mark_processing(&state.pool, company_id, super::now()).await?;
+            mark_processing(&state.pool, company_id, &invoice_id, super::now()).await?;
             Ok(InvoicePayment::Processing { amount_cents })
         }
         Err(StripeError::Api(failure)) if failure.code == "invoice_payment_intent_requires_action" => {
@@ -839,21 +896,47 @@ async fn setup_failed(state: &AppState, object: &Value) -> ApiResult<()> {
     Ok(())
 }
 
+/// The invoice a PaymentIntent pays, re-read from Stripe.
+async fn invoice_of_intent(state: &AppState, payment_intent: &str) -> ApiResult<Option<String>> {
+    match state.stripe.invoice_of_payment_intent(payment_intent).await {
+        Ok(invoice) => Ok(invoice),
+        Err(StripeError::Missing(_)) => Ok(None),
+        Err(err) => {
+            tracing::warn!(
+                stripe_code = err.code(),
+                "Stripe invoice payment read failed"
+            );
+            Err(ApiError::Upstream(format!("Stripe error {}", err.code())))
+        }
+    }
+}
+
+/// The payment is a bank debit: the type of the method it actually uses
+/// (not the types it would accept).
+fn paid_by_bank(intent: &Value) -> bool {
+    intent["payment_method"]["type"] == "us_bank_account"
+        || intent["latest_charge"]["payment_method_details"]["type"] == "us_bank_account"
+}
+
+/// A bank payment of an invoice is on its way: marked (D18) unless that
+/// invoice is paid already or its bank payment failed before. A payment of
+/// no invoice lifts nothing.
 async fn payment_processing(state: &AppState, object: &Value) -> ApiResult<()> {
     let Some(id) = object["id"].as_str() else {
         return Ok(());
     };
-    let Some(intent) = present(state.stripe.payment_intent(id).await, "payment intent")? else {
+    let read = state.stripe.payment_intent_with_method(id).await;
+    let Some(intent) = present(read, "payment intent")? else {
         return Ok(());
     };
-    let bank = intent["payment_method_types"]
-        .as_array()
-        .is_some_and(|types| types.iter().any(|kind| kind == "us_bank_account"));
-    if intent["status"] != "processing" || !bank {
+    if intent["status"] != "processing" || !paid_by_bank(&intent) {
         return Ok(());
     }
-    if let Some(record) = company_of_customer(state, stripe_id(&intent["customer"])).await? {
-        mark_processing(&state.pool, record.company_id, super::now()).await?;
+    let Some(record) = company_of_customer(state, stripe_id(&intent["customer"])).await? else {
+        return Ok(());
+    };
+    if let Some(invoice) = invoice_of_intent(state, id).await? {
+        mark_processing(&state.pool, record.company_id, &invoice, super::now()).await?;
     }
     Ok(())
 }
@@ -869,6 +952,13 @@ async fn charge_failed(state: &AppState, object: &Value) -> ApiResult<()> {
         return Ok(());
     }
     if let Some(record) = company_of_customer(state, stripe_id(&charge["customer"])).await? {
+        // Its invoice's next bank payment lifts no pause (D18, once per
+        // invoice).
+        if let Some(intent) = stripe_id(&charge["payment_intent"])
+            && let Some(invoice) = invoice_of_intent(state, &intent).await?
+        {
+            record_bank_failure(&state.pool, record.company_id, &invoice, super::now()).await?;
+        }
         // The bank payment in flight came back: the gate may pause again.
         clear_processing(&state.pool, record.company_id).await?;
         notify_internal(
@@ -884,88 +974,275 @@ async fn charge_failed(state: &AppState, object: &Value) -> ApiResult<()> {
     Ok(())
 }
 
-async fn dispute_created(state: &AppState, object: &Value) -> ApiResult<()> {
-    let Some(charge_id) = stripe_id(&object["charge"]) else {
-        return Ok(());
-    };
-    let Some(charge) = present(state.stripe.charge(&charge_id).await, "charge")? else {
-        return Ok(());
-    };
-    let Some(record) = company_of_customer(state, stripe_id(&charge["customer"])).await? else {
-        return Ok(());
-    };
-    // A dispute on a method the company has since replaced holds nothing.
-    let charged = stripe_id(&charge["payment_method"]);
-    let outcome =
-        if record.stripe_payment_method_id.is_none() || charged == record.stripe_payment_method_id {
-            let disputed = Disputed {
-                charge_id: &charge_id,
-                amount_cents: object["amount"].as_i64(),
-                charged_at: charge["created"]
-                    .as_i64()
-                    .and_then(|at| DateTime::from_timestamp(at, 0))
-                    .map(|at| at.naive_utc()),
-            };
-            hold(state, &record, MethodHold::Disputed, Some(disputed)).await?
-        } else {
-            HoldOutcome::Unchanged
-        };
-    notify_internal(
-        state,
-        record.company_id,
-        InternalEvent::Dispute {
-            reason: object["reason"].as_str(),
-            amount_cents: object["amount"].as_i64(),
-            hold: outcome,
-        },
+/// A dispute row that keeps its company held: open or lost, and not
+/// resolved by staff (columns of `billing_disputes`, unqualified).
+pub const HOLDING_DISPUTE: &str =
+    "resolved_at IS NULL AND status NOT IN ('won', 'warning_closed', 'prevented')";
+
+/// Stripe dispute statuses that end a dispute.
+fn is_closed_dispute(status: &str) -> bool {
+    matches!(status, "won" | "lost" | "warning_closed" | "prevented")
+}
+
+/// One Stripe dispute, as read.
+struct DisputeRecord<'a> {
+    dispute_id: &'a str,
+    charge_id: &'a str,
+    amount_cents: Option<i64>,
+    /// Stripe's status.
+    status: &'a str,
+    /// When Stripe opened it (`created`), else now.
+    created_at: NaiveDateTime,
+}
+
+/// Records a dispute (one row per Stripe dispute). A closed one stays
+/// closed: a late or retried `created` never reopens it.
+async fn record_dispute(
+    pool: &sqlx::MySqlPool,
+    company_id: i32,
+    dispute: &DisputeRecord<'_>,
+    now: NaiveDateTime,
+) -> sqlx::Result<()> {
+    // MySQL assigns left to right: `status` sees the old `closed_at`.
+    sqlx::query(
+        "INSERT INTO billing_disputes
+           (company_id, stripe_dispute_id, charge_id, amount_cents, status, created_at, closed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           status = IF(closed_at IS NULL, VALUES(status), status),
+           amount_cents = COALESCE(VALUES(amount_cents), amount_cents),
+           closed_at = COALESCE(closed_at, VALUES(closed_at))",
     )
-    .await;
+    .bind(company_id)
+    .bind(dispute.dispute_id)
+    .bind(dispute.charge_id)
+    .bind(dispute.amount_cents)
+    .bind(dispute.status)
+    .bind(dispute.created_at)
+    .bind(is_closed_dispute(dispute.status).then_some(now))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
-/// A closed dispute: won (or an inquiry closed without a chargeback) lifts
-/// the hold set for its charge; a lost one keeps it. Staff are told either
-/// way.
-async fn dispute_closed(state: &AppState, object: &Value) -> ApiResult<()> {
-    let Some(charge_id) = stripe_id(&object["charge"]) else {
+/// The company's dispute hold after one of its disputes changed: held while
+/// any dispute holds it (whatever method was charged), lifted once none
+/// does. Answers what it did and whether a hold was lifted.
+async fn reconcile_dispute_hold(
+    state: &AppState,
+    record: &CompanyBilling,
+    disputed: Disputed<'_>,
+) -> ApiResult<(HoldOutcome, bool)> {
+    let holding: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT CAST(COUNT(*) AS SIGNED) FROM billing_disputes
+          WHERE company_id = ? AND {HOLDING_DISPUTE}"
+    )))
+    .bind(record.company_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if holding > 0 {
+        let outcome = hold(state, record, MethodHold::Disputed, Some(disputed)).await?;
+        return Ok((outcome, false));
+    }
+    let cleared = clear_dispute_hold(&state.pool, record.company_id).await?;
+    let outcome = if is_self_serve(state, record.company_id).await? {
+        HoldOutcome::Unchanged
+    } else {
+        HoldOutcome::Legacy
+    };
+    Ok((outcome, cleared))
+}
+
+/// A Stripe object's `created` time.
+fn stripe_created(object: &Value) -> Option<NaiveDateTime> {
+    object["created"]
+        .as_i64()
+        .and_then(|at| DateTime::from_timestamp(at, 0))
+        .map(|at| at.naive_utc())
+}
+
+/// A new dispute: its current state is read from Stripe (a retried
+/// `created` delivered after `closed` must not hold), recorded, and the
+/// company held while it is open or lost, even when the charged method has
+/// been replaced since. Staff are told, also when no company matches.
+async fn dispute_created(state: &AppState, object: &Value) -> ApiResult<()> {
+    let Some(dispute_id) = object["id"].as_str() else {
+        return Ok(());
+    };
+    let Some(dispute) = present(state.stripe.dispute(dispute_id).await, "dispute")? else {
+        return Ok(());
+    };
+    let Some(charge_id) = stripe_id(&dispute["charge"]) else {
         return Ok(());
     };
     let Some(charge) = present(state.stripe.charge(&charge_id).await, "charge")? else {
         return Ok(());
     };
-    let Some(record) = company_of_customer(state, stripe_id(&charge["customer"])).await? else {
+    let amount_cents = dispute["amount"].as_i64();
+    let reason = dispute["reason"].as_str();
+    let customer = stripe_id(&charge["customer"]);
+    let Some(record) = company_of_customer(state, customer.clone()).await? else {
+        let event = InternalEvent::Dispute {
+            reason,
+            amount_cents,
+            hold: HoldOutcome::NoCompany,
+        };
+        notify_unmatched(state, customer.as_deref(), event).await;
+        return Ok(());
+    };
+    let now = super::now();
+    let created_at = stripe_created(&dispute).unwrap_or(now);
+    let row = DisputeRecord {
+        dispute_id,
+        charge_id: &charge_id,
+        amount_cents,
+        status: dispute["status"].as_str().unwrap_or("needs_response"),
+        created_at,
+    };
+    record_dispute(&state.pool, record.company_id, &row, now).await?;
+    let disputed = Disputed {
+        charge_id: &charge_id,
+        amount_cents,
+        charged_at: stripe_created(&charge),
+    };
+    let (outcome, _) = reconcile_dispute_hold(state, &record, disputed).await?;
+    let event = InternalEvent::Dispute {
+        reason,
+        amount_cents,
+        hold: outcome,
+    };
+    notify_internal(state, record.company_id, event).await;
+    Ok(())
+}
+
+/// A closed dispute (its outcome is final, read from the event): won (or an
+/// inquiry closed without a chargeback) lifts the company's dispute hold
+/// once no other dispute of it is open or lost; a lost one keeps it (and
+/// holds a company the `created` event never reached) until a superuser
+/// lifts it. Staff are told either way.
+async fn dispute_closed(state: &AppState, object: &Value) -> ApiResult<()> {
+    let (Some(dispute_id), Some(charge_id)) = (object["id"].as_str(), stripe_id(&object["charge"]))
+    else {
+        return Ok(());
+    };
+    let Some(charge) = present(state.stripe.charge(&charge_id).await, "charge")? else {
         return Ok(());
     };
     let status = object["status"].as_str();
-    let won = matches!(status, Some("won" | "warning_closed"));
-    let hold_cleared = won && clear_dispute_hold(state, record.company_id, &charge_id).await?;
-    notify_internal(
-        state,
-        record.company_id,
-        InternalEvent::DisputeClosed {
+    let amount_cents = object["amount"].as_i64();
+    let customer = stripe_id(&charge["customer"]);
+    let Some(record) = company_of_customer(state, customer.clone()).await? else {
+        let event = InternalEvent::DisputeClosed {
             status,
-            amount_cents: object["amount"].as_i64(),
-            hold_cleared,
-        },
-    )
-    .await;
+            amount_cents,
+            hold_cleared: false,
+        };
+        notify_unmatched(state, customer.as_deref(), event).await;
+        return Ok(());
+    };
+    let now = super::now();
+    let created_at = stripe_created(object).unwrap_or(now);
+    let row = DisputeRecord {
+        dispute_id,
+        charge_id: &charge_id,
+        amount_cents,
+        status: status.unwrap_or("lost"),
+        created_at,
+    };
+    record_dispute(&state.pool, record.company_id, &row, now).await?;
+    let disputed = Disputed {
+        charge_id: &charge_id,
+        amount_cents,
+        charged_at: stripe_created(&charge),
+    };
+    let (_, hold_cleared) = reconcile_dispute_hold(state, &record, disputed).await?;
+    let event = InternalEvent::DisputeClosed {
+        status,
+        amount_cents,
+        hold_cleared,
+    };
+    notify_internal(state, record.company_id, event).await;
     Ok(())
 }
 
-/// Clears the company's dispute hold when it was set for `charge_id`.
-async fn clear_dispute_hold(state: &AppState, company_id: i32, charge_id: &str) -> sqlx::Result<bool> {
-    let cleared = sqlx::query(
+/// Lifts the company's dispute hold when no dispute of it holds it any
+/// more; one statement, so a dispute recorded meanwhile keeps the hold.
+async fn clear_dispute_hold(pool: &sqlx::MySqlPool, company_id: i32) -> sqlx::Result<bool> {
+    let cleared = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE company_billing
             SET method_hold = NULL, method_hold_at = NULL, method_hold_until = NULL,
                 method_hold_charge_id = NULL, method_hold_amount_cents = NULL,
                 method_hold_charged_at = NULL
-          WHERE company_id = ? AND method_hold = 'disputed' AND method_hold_charge_id = ?",
-    )
+          WHERE company_id = ? AND method_hold = 'disputed'
+            AND NOT EXISTS (SELECT 1 FROM billing_disputes
+                             WHERE billing_disputes.company_id = ? AND {HOLDING_DISPUTE})"
+    )))
     .bind(company_id)
-    .bind(charge_id)
-    .execute(&state.pool)
+    .bind(company_id)
+    .execute(pool)
     .await?;
     Ok(cleared.rows_affected() == 1)
+}
+
+/// A superuser lifts the company's payment method hold
+/// (`POST /v1/superuser/companies/{id}/billing/payment-hold/clear`).
+///
+/// Its open and lost disputes are marked resolved by `user_id` (they never
+/// hold it again; a new dispute does), the hold is lifted and
+/// `method_hold_cleared_by`/`_at` record who did it, in one transaction.
+/// Staff are told when anything changed. `true` when a hold was lifted.
+pub async fn clear_hold_by_staff(
+    state: &AppState,
+    company_id: i32,
+    user_id: i32,
+) -> ApiResult<bool> {
+    let now = super::now();
+    let mut tx = state.pool.begin().await?;
+    let resolved = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE billing_disputes SET resolved_by_user_id = ?, resolved_at = ?
+          WHERE company_id = ? AND {HOLDING_DISPUTE}"
+    )))
+    .bind(user_id)
+    .bind(now)
+    .bind(company_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    let previous: Option<String> = sqlx::query_scalar(
+        "SELECT CAST(method_hold AS CHAR) FROM company_billing WHERE company_id = ? FOR UPDATE",
+    )
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .flatten();
+    let cleared = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE company_billing
+            SET method_hold = NULL, method_hold_at = NULL, method_hold_until = NULL,
+                method_hold_charge_id = NULL, method_hold_amount_cents = NULL,
+                method_hold_charged_at = NULL,
+                method_hold_cleared_by = ?, method_hold_cleared_at = ?
+          WHERE company_id = ? AND method_hold IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM billing_disputes
+                             WHERE billing_disputes.company_id = ? AND {HOLDING_DISPUTE})"
+    )))
+    .bind(user_id)
+    .bind(now)
+    .bind(company_id)
+    .bind(company_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        == 1;
+    tx.commit().await?;
+    if cleared || resolved > 0 {
+        let event = InternalEvent::HoldCleared {
+            by_user_id: user_id,
+            cleared: previous.as_deref().filter(|_| cleared),
+            disputes_resolved: resolved,
+        };
+        notify_internal(state, company_id, event).await;
+    }
+    Ok(cleared)
 }
 
 async fn method_updated(state: &AppState, object: &Value) -> ApiResult<()> {
@@ -1007,6 +1284,17 @@ pub struct Disputed<'a> {
     pub charged_at: Option<NaiveDateTime>,
 }
 
+/// The company is on a self-serve plan (holds apply to it).
+async fn is_self_serve(state: &AppState, company_id: i32) -> sqlx::Result<bool> {
+    let self_serve: Option<bool> = sqlx::query_scalar(
+        "SELECT COALESCE(plan_source = 'subscription', 0) FROM company WHERE id = ?",
+    )
+    .bind(company_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(self_serve == Some(true))
+}
+
 /// Sets a hold on a self-serve company unless one runs already (its end
 /// never moves), then tries its email at once (the billing reminders job
 /// sends what is left).
@@ -1016,13 +1304,7 @@ async fn hold(
     kind: MethodHold,
     disputed: Option<Disputed<'_>>,
 ) -> ApiResult<HoldOutcome> {
-    let self_serve: Option<bool> = sqlx::query_scalar(
-        "SELECT COALESCE(plan_source = 'subscription', 0) FROM company WHERE id = ?",
-    )
-    .bind(record.company_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    if self_serve != Some(true) {
+    if !is_self_serve(state, record.company_id).await? {
         return Ok(HoldOutcome::Legacy);
     }
     let read = record.stripe_payment_method_id.as_deref();
@@ -1033,11 +1315,17 @@ async fn hold(
     Ok(HoldOutcome::Set)
 }
 
-/// Writes a hold set at `now` unless one runs already; `true` when it did.
+/// Writes a hold set at `now` unless one runs already; `true` when it did
+/// (its email is then due).
 ///
-/// It lands only while the company's saved method is still `read_method`
-/// (the one charged or blocked, as read before): a Manager who saved a new
-/// method meanwhile (which clears holds) is not held.
+/// A blocked-account hold lands only while the company's saved method is
+/// still `read_method` (the one blocked, as read before): a Manager who
+/// saved a new method meanwhile (which clears that hold) is not held. A
+/// dispute holds whatever method is saved now, and turns a running
+/// blocked-account hold into a dispute hold: a new method must not lift it.
+/// The converted hold keeps its end (the Managers were already told that
+/// date) and starts a new email cycle at `now`, so they learn that a new
+/// method no longer lifts it.
 pub async fn set_hold(
     pool: &sqlx::MySqlPool,
     company_id: i32,
@@ -1051,7 +1339,8 @@ pub async fn set_hold(
             SET method_hold = ?, method_hold_at = ?, method_hold_until = ?,
                 method_hold_charge_id = ?, method_hold_amount_cents = ?,
                 method_hold_charged_at = ?
-          WHERE company_id = ? AND method_hold IS NULL AND stripe_payment_method_id <=> ?",
+          WHERE company_id = ? AND method_hold IS NULL
+            AND (? = 'disputed' OR stripe_payment_method_id <=> ?)",
     )
     .bind(kind.as_str())
     .bind(now)
@@ -1060,10 +1349,30 @@ pub async fn set_hold(
     .bind(disputed.and_then(|disputed| disputed.amount_cents))
     .bind(disputed.and_then(|disputed| disputed.charged_at))
     .bind(company_id)
+    .bind(kind.as_str())
     .bind(read_method)
     .execute(pool)
     .await?;
-    Ok(set.rows_affected() == 1)
+    if set.rows_affected() == 1 {
+        return Ok(true);
+    }
+    if kind == MethodHold::Disputed {
+        let converted = sqlx::query(
+            "UPDATE company_billing
+                SET method_hold = 'disputed', method_hold_at = ?, method_hold_charge_id = ?,
+                    method_hold_amount_cents = ?, method_hold_charged_at = ?
+              WHERE company_id = ? AND method_hold = 'blocked'",
+        )
+        .bind(now)
+        .bind(disputed.map(|disputed| disputed.charge_id))
+        .bind(disputed.and_then(|disputed| disputed.amount_cents))
+        .bind(disputed.and_then(|disputed| disputed.charged_at))
+        .bind(company_id)
+        .execute(pool)
+        .await?;
+        return Ok(converted.rows_affected() == 1);
+    }
+    Ok(false)
 }
 
 /// Sends the hold email to the Managers who do not have it yet, each claimed
@@ -1180,15 +1489,42 @@ async fn send_rendered(
 
 /// The internal notice, when `BILLING_ALERT_EMAIL` is set.
 async fn notify_internal(state: &AppState, company_id: i32, event: InternalEvent<'_>) {
+    if alert_email(state).is_none() {
+        return;
+    }
+    let company = company_name(&state.pool, company_id).await;
+    send_internal(
+        state,
+        &InternalNotice {
+            event,
+            company_id: Some(company_id),
+            company_name: &company,
+            stripe_customer: None,
+        },
+    )
+    .await;
+}
+
+/// The internal notice for an event of a Stripe customer no company has.
+async fn notify_unmatched(state: &AppState, customer: Option<&str>, event: InternalEvent<'_>) {
+    send_internal(
+        state,
+        &InternalNotice {
+            event,
+            company_id: None,
+            company_name: "",
+            stripe_customer: customer,
+        },
+    )
+    .await;
+}
+
+async fn send_internal(state: &AppState, notice: &InternalNotice<'_>) {
     let Some(to) = alert_email(state) else {
         return;
     };
-    let company = company_name(&state.pool, company_id).await;
-    let email = render_internal_notice(&InternalNotice {
-        event,
-        company_id,
-        company_name: &company,
-    });
+    let company_id = notice.company_id;
+    let email = render_internal_notice(notice);
     if let Err(err) = send_rendered(state, to, &email).await {
         // Never retried (the event is claimed): staff hear of it through
         // Error Tracking instead.
@@ -1289,8 +1625,27 @@ mod tests {
             json!({ "id": "in_zero", "status": "open", "created": 50, "amount_remaining": 0 }),
             json!({ "id": "in_paid", "status": "paid", "created": 10, "amount_remaining": 0 }),
         ];
-        assert_eq!(oldest_open(&invoices).unwrap()["id"], "in_old");
-        assert!(oldest_open(&invoices[2..]).is_none());
+        let invoices = invoices.map(|mut invoice| {
+            invoice["parent"] = json!({ "subscription_details": { "subscription": "sub_1" } });
+            invoice
+        });
+        assert_eq!(
+            oldest_open(&invoices, Some("sub_1")).unwrap()["id"],
+            "in_old"
+        );
+        assert!(oldest_open(&invoices[2..], Some("sub_1")).is_none());
+        assert!(oldest_open(&invoices, None).is_none());
+        // An older invoice of another (or no) subscription is never paid.
+        let legacy = json!({ "id": "in_legacy", "status": "open", "created": 1,
+            "amount_remaining": 100, "subscription": "sub_old" });
+        let by_hand = json!({ "id": "in_hand", "status": "open", "created": 2,
+            "amount_remaining": 100 });
+        let mixed = [legacy.clone(), by_hand, invoices[0].clone()];
+        assert_eq!(oldest_open(&mixed, Some("sub_1")).unwrap()["id"], "in_new");
+        assert_eq!(
+            oldest_open(&[legacy], Some("sub_old")).unwrap()["id"],
+            "in_legacy"
+        );
     }
 
     #[test]

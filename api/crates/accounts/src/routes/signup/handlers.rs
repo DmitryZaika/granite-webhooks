@@ -16,7 +16,8 @@ use crate::routes::auth::{start_session, with_cookies};
 use crate::signup::intent::{self, Intent, NewIntent, SignupStatus};
 use crate::signup::payment::{self, SavedMethod, SavedMethodStatus, Setup};
 use crate::signup::{
-    RequestMeta, consent, email_lock_name, emails, ensure_enabled, funnel, notify, provision,
+    RequestMeta, consent, email_lock_name, emails, ensure_enabled, funnel, ip_lock_name, notify,
+    provision,
 };
 use crate::state::AppState;
 use axum::Json;
@@ -43,6 +44,11 @@ const SIGNUPS_PER_IP_HOUR: i64 = 10;
 /// was sent and none matches (not hex), so verification fails like a wrong
 /// code.
 const NO_CODE: &str = "none";
+/// The funnel event in place of `signup_started` / `signup_code_resent` when
+/// the email already has an account. Sent so both answers make the same
+/// PostHog call (a timing difference would reveal the account); it is not a
+/// funnel step.
+const ACCOUNT_EXISTS_EVENT: &str = "signup_account_exists";
 
 fn coded(status: StatusCode, code: &'static str, message: &str) -> ApiError {
     ApiError::coded(status, code, message)
@@ -306,7 +312,7 @@ async fn start_limited(
     ip: Option<&str>,
     now: NaiveDateTime,
 ) -> ApiResult<Option<i64>> {
-    if state.signup.rate_limits_off && state.stripe.is_test_mode() {
+    if limits_off(state) {
         return Ok(None);
     }
     let since = now - chrono::Duration::hours(1);
@@ -340,6 +346,52 @@ async fn start_limited(
     .fetch_one(&state.pool)
     .await?;
     Ok(wait(by_ip, SIGNUPS_PER_IP_HOUR))
+}
+
+/// `SIGNUP_RATE_LIMITS=off` with a test key: no per-email or per-IP limit.
+fn limits_off(state: &AppState) -> bool {
+    state.signup.rate_limits_off && state.stripe.is_test_mode()
+}
+
+/// The named locks around a new signup's limit check and insert: the client
+/// IP's (when it is known and limited), then the email's. Always taken in
+/// that order and only here, so two requests never wait on each other in a
+/// cycle. Parallel requests from one IP with different emails are counted
+/// one after the other instead of all passing the per-IP limit.
+struct StartLocks {
+    ip: Option<NamedLock>,
+    email: NamedLock,
+}
+
+impl StartLocks {
+    async fn acquire(state: &AppState, email: &str, ip: Option<&str>) -> ApiResult<Self> {
+        let ip = match ip.filter(|_| !limits_off(state)) {
+            Some(ip) => Some(
+                NamedLock::acquire(&state.pool, &ip_lock_name(ip), 10)
+                    .await
+                    .map_err(lock_error)?,
+            ),
+            None => None,
+        };
+        match NamedLock::acquire(&state.pool, &email_lock_name(email), 10).await {
+            Ok(email) => Ok(Self { ip, email }),
+            Err(err) => {
+                if let Some(ip) = ip {
+                    ip.release().await;
+                }
+                Err(lock_error(err))
+            }
+        }
+    }
+
+    /// Releases both, the email's first. A lock dropped without this (the
+    /// request cancelled) closes its connection and MySQL releases it.
+    async fn release(self) {
+        self.email.release().await;
+        if let Some(ip) = self.ip {
+            ip.release().await;
+        }
+    }
 }
 
 /// 429 `too_many_signups` with `retry_after_seconds` and `Retry-After`.
@@ -423,9 +475,7 @@ pub async fn create(
     let id = uuid::Uuid::new_v4().to_string();
     let code = new_code()?;
 
-    let lock = NamedLock::acquire(&state.pool, &email_lock_name(&valid.email), 10)
-        .await
-        .map_err(lock_error)?;
+    let locks = StartLocks::acquire(&state, &valid.email, meta.ip.as_deref()).await?;
     let stored = async {
         let now = crate::billing::now();
         if let Some(wait) = start_limited(&state, &valid.email, meta.ip.as_deref(), now).await? {
@@ -453,28 +503,41 @@ pub async fn create(
         Ok::<_, ApiError>(Started::Stored(existing))
     }
     .await;
-    lock.release().await;
+    locks.release().await;
     let existing = match stored? {
         Started::Limited(wait) => return Ok(too_many_signups(wait)),
         Started::Stored(existing) => existing,
     };
 
-    let sent = match existing {
-        None => emails::send_code(&state, &valid.email, &code).await,
-        Some(deleted) => notify::send_account_exists(&state, &valid.email, deleted).await,
+    // Both answers make one PostHog call, alongside the email, so the
+    // response time does not tell whether the email has an account.
+    let (sent, ()) = match existing {
+        None => {
+            tokio::join!(
+                emails::send_code(&state, &valid.email, &code),
+                funnel::capture(
+                    &state,
+                    "signup_started",
+                    &id,
+                    json!({ "users_estimate": valid.plan.users, "addons": addon_keys(&valid.plan) }),
+                )
+            )
+        }
+        Some(deleted) => {
+            tokio::join!(
+                notify::send_account_exists(&state, &valid.email, deleted),
+                funnel::capture(
+                    &state,
+                    ACCOUNT_EXISTS_EVENT,
+                    &id,
+                    json!({ "resend": false })
+                )
+            )
+        }
     };
     if let Err(err) = sent {
         intent::expire(&state.pool, &id, crate::billing::now()).await?;
         return Err(err);
-    }
-    if existing.is_none() {
-        funnel::capture(
-            &state,
-            "signup_started",
-            &id,
-            json!({ "users_estimate": valid.plan.users, "addons": addon_keys(&valid.plan) }),
-        )
-        .await;
     }
     Ok((
         StatusCode::CREATED,
@@ -639,13 +702,22 @@ pub async fn resend_code(
             "You have asked for 5 codes. Start again or email support@granite-manager.com.",
         ));
     }
-    match existing {
+    // One PostHog call either way, alongside the email (as in `create`).
+    let (sent, ()) = match existing {
         None => {
-            emails::send_code(&state, &intent.email, &code).await?;
-            funnel::capture(&state, "signup_code_resent", &id, json!({})).await;
+            tokio::join!(
+                emails::send_code(&state, &intent.email, &code),
+                funnel::capture(&state, "signup_code_resent", &id, json!({}))
+            )
         }
-        Some(deleted) => notify::send_account_exists(&state, &intent.email, deleted).await?,
-    }
+        Some(deleted) => {
+            tokio::join!(
+                notify::send_account_exists(&state, &intent.email, deleted),
+                funnel::capture(&state, ACCOUNT_EXISTS_EVENT, &id, json!({ "resend": true }))
+            )
+        }
+    };
+    sent?;
     Ok(Json(ResentCode {
         resend_in_seconds: RESEND_SECONDS,
     }))

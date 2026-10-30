@@ -19,6 +19,17 @@ Parameters:
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
     Default: Z09213062QDJ105YROL3K
+  OriginVerifySecret:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: >-
+      Sent to both function URLs as X-Granite-Origin-Verify; the api trusts
+      X-Forwarded-For only on requests carrying it (CLOUDFRONT_ORIGIN_SECRET of
+      granite-api-dev and granite-api-stream-dev, same value). Empty: no header.
+
+Conditions:
+  HasOriginVerifySecret: !Not [!Equals [!Ref OriginVerifySecret, '']]
 
 Resources:
   # Uploaded files. Public read like production's bucket: the app links to
@@ -108,6 +119,12 @@ Resources:
               OriginProtocolPolicy: https-only
               OriginSSLProtocols: [TLSv1.2]
               OriginReadTimeout: 30
+            # CloudFront replaces a viewer header of the same name.
+            OriginCustomHeaders: !If
+              - HasOriginVerifySecret
+              - - HeaderName: X-Granite-Origin-Verify
+                  HeaderValue: !Ref OriginVerifySecret
+              - !Ref AWS::NoValue
           # Streams the answer; 60 s between bytes, as production's stream host.
           - Id: stream
             DomainName: !Ref StreamFunctionUrlDomain
@@ -115,6 +132,11 @@ Resources:
               OriginProtocolPolicy: https-only
               OriginSSLProtocols: [TLSv1.2]
               OriginReadTimeout: 60
+            OriginCustomHeaders: !If
+              - HasOriginVerifySecret
+              - - HeaderName: X-Granite-Origin-Verify
+                  HeaderValue: !Ref OriginVerifySecret
+              - !Ref AWS::NoValue
         DefaultCacheBehavior:
           TargetOriginId: lambda
           ViewerProtocolPolicy: https-only

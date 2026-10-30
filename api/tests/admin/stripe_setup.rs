@@ -22,6 +22,7 @@ fn secret_path() -> PathBuf {
 fn options(apply: bool, secret_file: Option<PathBuf>) -> Options {
     Options {
         apply,
+        live: false,
         webhook_url: URL.into(),
         secret_file,
         payments_app_url: "https://payments.example.com".into(),
@@ -308,7 +309,172 @@ async fn a_key_and_a_stripe_account_in_different_modes_stop_the_run() {
     let shared = empty_account();
     let stripe = fake_stripe::client(&shared).await;
     let mut out = Vec::new();
-    let result = run(&stripe, KeyMode::Live, &options(true, None), &mut out).await;
-    assert!(matches!(result, Err(SetupError::Refused(_))));
+    let live = Options {
+        live: true,
+        ..options(true, None)
+    };
+    let result = run(&stripe, KeyMode::Live, &live, &mut out).await;
+    let Err(SetupError::Refused(reason)) = result else {
+        panic!("expected a refusal");
+    };
+    assert!(reason.contains("livemode disagree"), "{reason}");
     assert_eq!(writes(&shared), 0);
+}
+
+#[tokio::test]
+async fn applying_with_a_live_key_needs_the_live_flag() {
+    let shared = empty_account();
+    let stripe = fake_stripe::client(&shared).await;
+    let mut out = Vec::new();
+    let result = run(&stripe, KeyMode::Live, &options(true, None), &mut out).await;
+    let Err(SetupError::Refused(reason)) = result else {
+        panic!("expected a refusal");
+    };
+    assert!(reason.contains("--live"), "{reason}");
+    assert!(
+        shared.lock().unwrap().requests.is_empty(),
+        "refused before reading Stripe"
+    );
+    // A dry run with a live key needs no flag (it stops here only because
+    // the fake is a test-mode account).
+    let result = run(&stripe, KeyMode::Live, &options(false, None), &mut out).await;
+    let Err(SetupError::Refused(reason)) = result else {
+        panic!("expected the livemode refusal");
+    };
+    assert!(reason.contains("livemode disagree"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_failed_run_leaves_no_secret_file_behind() {
+    let shared = empty_account();
+    shared.lock().unwrap().fail(
+        axum::http::Method::POST,
+        "/v1/webhook_endpoints",
+        fake_stripe::FailMode::Before,
+        1,
+    );
+    let path = secret_path();
+    let (result, _) = go(&shared, &options(true, Some(path.clone()))).await;
+    assert!(matches!(result, Err(SetupError::Stripe(_))), "{result:?}");
+    assert!(!path.exists(), "the reserved file is removed");
+
+    // The next run with the same path creates the endpoint and keeps its secret.
+    let (result, _) = go(&shared, &options(true, Some(path.clone()))).await;
+    assert_eq!(result.unwrap().secret_file_written, Some(path.clone()));
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("whsec_")
+    );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn an_empty_secret_file_from_an_old_run_is_reused() {
+    let shared = empty_account();
+    let path = secret_path();
+    std::fs::write(&path, "").unwrap();
+    let (result, _) = go(&shared, &options(true, Some(path.clone()))).await;
+    assert_eq!(result.unwrap().secret_file_written, Some(path.clone()));
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("whsec_")
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+/// An archived price holding the base lookup key.
+fn archive_base(shared: &Shared, cents: i64, product: &str) {
+    let mut fake = shared.lock().unwrap();
+    let mut archived = fake_stripe::price("price_old_base", "granite_base_monthly_v1", cents);
+    archived["active"] = json!(false);
+    archived["product"] = json!({ "id": "prod_old", "name": product });
+    fake.prices.push(archived);
+}
+
+#[tokio::test]
+async fn an_archived_price_of_ours_hands_its_lookup_key_to_the_new_one() {
+    let shared = empty_account();
+    archive_base(&shared, 30_000, "Granite Manager Base (up to 10 users)");
+    let (dry, output) = go(&shared, &options(false, None)).await;
+    assert_eq!(dry.unwrap().problems, 0, "{output}");
+    assert!(
+        output.contains("lookup key moved from archived price price_old_base"),
+        "{output}"
+    );
+
+    let path = secret_path();
+    let (result, output) = go(&shared, &options(true, Some(path.clone()))).await;
+    let outcome = result.unwrap();
+    assert_eq!(outcome.problems, 0, "{output}");
+    let fake = shared.lock().unwrap();
+    let transfers: Vec<_> = fake
+        .calls("POST", "/v1/prices")
+        .into_iter()
+        .filter(|seen| seen.field("transfer_lookup_key").as_deref() == Some("true"))
+        .collect();
+    assert_eq!(transfers.len(), 1);
+    assert_eq!(
+        transfers[0].field("lookup_key").as_deref(),
+        Some("granite_base_monthly_v1")
+    );
+    let holder: Vec<&Value> = fake
+        .prices
+        .iter()
+        .filter(|price| price["lookup_key"] == "granite_base_monthly_v1")
+        .collect();
+    assert_eq!(holder.len(), 1);
+    assert_eq!(holder[0]["active"], true);
+    drop(fake);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn an_archived_price_that_is_not_ours_stops_that_price() {
+    let shared = empty_account();
+    archive_base(&shared, 25_000, "Something else");
+    let (dry, output) = go(&shared, &options(false, None)).await;
+    assert_eq!(dry.unwrap().problems, 1, "{output}");
+    assert!(
+        output.contains(
+            "held by archived price price_old_base (25000 cents, product Something else)"
+        ),
+        "{output}"
+    );
+
+    let path = secret_path();
+    let (result, output) = go(&shared, &options(true, Some(path.clone()))).await;
+    assert_eq!(result.unwrap().problems, 1, "{output}");
+    let fake = shared.lock().unwrap();
+    assert!(
+        fake.calls("POST", "/v1/prices")
+            .iter()
+            .all(|seen| seen.field("lookup_key").as_deref() != Some("granite_base_monthly_v1")),
+        "the base price is not created"
+    );
+    assert_eq!(fake.calls("POST", "/v1/prices").len(), 4);
+    drop(fake);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn the_environment_list_reports_automatic_tax_and_stripe_tax() {
+    let shared = FakeStripe::with_catalog();
+    shared.lock().unwrap().tax_settings = Some(json!({ "status": "active" }));
+    let (_, output) = go(&shared, &options(false, None)).await;
+    assert!(
+        output.contains("STRIPE_AUTOMATIC_TAX: 1 to compute sales tax"),
+        "{output}"
+    );
+    assert!(
+        output.contains("Stripe Tax is active on this account"),
+        "{output}"
+    );
 }

@@ -22,7 +22,7 @@ use sqlx::MySqlConnection;
 /// Legal documents, copied from general_datebase
 /// `app/content/legal/manifest.json` (a new version is a new pair here).
 pub const TERMS_VERSION: &str = "terms-2026-10-v3";
-pub const TERMS_SHA256: &str = "1733428117cc7509e0035b6ea90758df4e96f424475d8da69cdbd3fa1590ce12";
+pub const TERMS_SHA256: &str = "b68add71c84afe50bf05c9c233b3c03009bbacf849af5a71cfdc0c60371ffc9e";
 pub const PRIVACY_VERSION: &str = "privacy-2026-10-v2";
 pub const PRIVACY_SHA256: &str = "a5c1a5ad7793ad455a709c474429fc1b5ab45829e2bfafd3249a5c90ecd9a2dc";
 pub const DPA_VERSION: &str = "dpa-2026-10-v1";
