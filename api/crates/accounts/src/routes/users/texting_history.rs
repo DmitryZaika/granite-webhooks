@@ -50,6 +50,9 @@ pub async fn follow(state: &AppState, company_id: i32, before: &Line, after: &Li
     if !left_cloudtalk && !same_number {
         return;
     }
+    // No CloudTalk number saved: CloudTalk only has texts on the rep's
+    // RingCentral number if it was their CloudTalk line too.
+    let line = line.or(filled(after.ringcentral_phone.as_deref()));
     if let Err(error) = copy_cloudtalk_history(pool, company_id, line, agent, extension).await {
         tracing::error!(company_id, %error, "copying CloudTalk history failed");
     }

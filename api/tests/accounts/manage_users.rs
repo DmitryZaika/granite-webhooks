@@ -220,14 +220,14 @@ async fn managers_edit_users_and_keep_position_rows(pool: MySqlPool) {
 async fn moving_a_rep_to_ringcentral_keeps_their_texts(pool: MySqlPool) {
     make_manager(&pool).await;
     sqlx::query(
-        "UPDATE users SET cloudtalk_agent_id = '42', cloudtalk_phone_number = '3175550111',
-                ringcentral_extension_id = '777'
+        "UPDATE users SET cloudtalk_agent_id = '42', ringcentral_extension_id = '777'
           WHERE id = 100",
     )
     .execute(&pool)
     .await
     .unwrap();
-    // Her text, a reply to her line, and another rep's text.
+    // Her text, a reply to her line (no CloudTalk number saved: the one she
+    // now has on RingCentral), and another rep's text.
     sqlx::query(
         "INSERT INTO cloudtalk_sms
            (recipient, text, direction, agent, sender_user_id, company_id,
