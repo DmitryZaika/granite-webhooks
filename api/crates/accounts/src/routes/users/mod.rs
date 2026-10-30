@@ -13,6 +13,7 @@ pub mod call_activity;
 mod handlers;
 pub mod manage;
 pub mod queries;
+pub mod texting_history;
 
 use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
