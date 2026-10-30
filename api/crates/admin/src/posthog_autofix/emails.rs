@@ -2,16 +2,21 @@
 //! ledger or the workflow is escaped: error text is user and third-party input.
 
 use super::config::Config;
-use super::model::{LastSeen, RunReport, RunView, Source};
+use super::model::{AgentResult, LastSeen, RunReport, RunView, Source};
 use super::notify::Email;
 use crate::html::escape;
 use std::collections::HashMap;
 use std::fmt::Write;
 
 const NAME_MAX: usize = 120;
+/// One line of the bug report; the agent is asked for less.
+const LINE_MAX: usize = 400;
 
-/// A run opened a pull request: subject `[AI fix] <title>`, then the issue,
-/// the fix and the pull request, in a few lines.
+/// A run opened a pull request: a short bug report and the pull request.
+///
+/// Subject `[AI fix] <title>`, then Given / When / Then, Actual / Expected /
+/// Impact and Fix / Test. A result from an older workflow, without the
+/// report's fields, shows its Issue and Fix lines instead.
 pub fn pull_request_opened(
     run: &RunView,
     report: &RunReport,
@@ -30,10 +35,7 @@ pub fn pull_request_opened(
     .unwrap_or_default();
     let mut html = String::new();
     if let Some(agent) = agent {
-        html.push_str(&field("Issue", &agent.summary));
-        if !agent.fix_summary.trim().is_empty() {
-            html.push_str(&field("Fix", &agent.fix_summary));
-        }
+        html.push_str(&bug_report(run, agent));
     }
     let draft = if report.pr_draft {
         " (draft: a check failed, see the PR)"
@@ -42,7 +44,7 @@ pub fn pull_request_opened(
     };
     let _ = write!(
         html,
-        "<p><strong>Pull request:</strong> {}{draft}</p>",
+        "<p><strong>PR:</strong> {}{draft}</p>",
         link(pr_url, pr_url)
     );
     let bug = run
@@ -64,6 +66,50 @@ pub fn pull_request_opened(
         subject: format!("[AI fix] {}", clean(title, NAME_MAX)),
         html,
     }
+}
+
+/// The agent's report as three short paragraphs; empty lines are left out.
+fn bug_report(run: &RunView, agent: &AgentResult) -> String {
+    let flow = paragraph(&[
+        ("<strong>Given</strong> ", &agent.given),
+        ("<strong>When</strong> ", &agent.when),
+        ("<strong>Then</strong> ", &agent.then),
+    ]);
+    let fix = paragraph(&[("<strong>Fix:</strong> ", &agent.fix_summary)]);
+    if flow.is_empty() {
+        return format!("{}{fix}", field("Issue", &clean(&agent.summary, LINE_MAX)));
+    }
+    let source = run
+        .source
+        .as_deref()
+        .and_then(Source::parse)
+        .unwrap_or(Source::Unknown);
+    let impact = format!("{}. {}", happened(run, source), agent.impact);
+    let outcome = paragraph(&[
+        ("<strong>Actual:</strong> ", &agent.actual),
+        ("<strong>Expected:</strong> ", &agent.expected),
+        ("<strong>Impact:</strong> ", &impact),
+    ]);
+    let change = paragraph(&[
+        ("<strong>Fix:</strong> ", &agent.fix_summary),
+        ("<strong>Test:</strong> ", &agent.check),
+    ]);
+    format!("{flow}{outcome}{change}")
+}
+
+/// `<p>label text<br>label text</p>` for the lines with text, each escaped and
+/// cut to one line; empty when no line has text.
+fn paragraph(lines: &[(&str, &str)]) -> String {
+    let lines: Vec<String> = lines
+        .iter()
+        .map(|(label, text)| (label, clean(text, LINE_MAX)))
+        .filter(|(_, text)| !text.is_empty())
+        .map(|(label, text)| format!("{label}{}", escape(&text)))
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!("<p>{}</p>", lines.join("<br>"))
 }
 
 /// Dry run: the errors this tick would have started fixing, each with where
@@ -275,6 +321,13 @@ mod tests {
             outcome,
             target_repo: Some(TargetRepo::GraniteWebhooks),
             summary: "Crash".into(),
+            given: "a company with calling turned off".into(),
+            when: "a user opens /employee and the dock calls POST /v1/phone/web/devices".into(),
+            then: "the API answers 403 calling_disabled".into(),
+            actual: "the SPA reports the 403 to PostHog as an error".into(),
+            expected: "a normal refusal; the dock shows calling is off".into(),
+            impact: "Users see nothing; PostHog noise only.".into(),
+            check: "Repeat Given/When: no calling_disabled error in PostHog.".into(),
             root_cause: "A null".into(),
             fix_summary: "Guard it".into(),
             risk: "Low".into(),
@@ -306,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pull_request_email_is_short_and_has_the_issue_the_fix_and_the_links() {
+    fn a_pull_request_email_is_a_short_bug_report_with_the_links() {
         let config = Config::default();
         let mut run = run("TypeError: x is null", "d");
         let signature = "3fa9c0d1b2e4".repeat(5);
@@ -319,14 +372,22 @@ mod tests {
             email.subject,
             "[AI fix] Fix quote print with an open preview"
         );
-        assert!(
-            email
-                .html
-                .contains("<p><strong>Issue:</strong> Print fails on /employee/quote/:quoteId</p>")
-        );
-        assert!(email.html.contains("<p><strong>Fix:</strong> Guard it</p>"));
+        assert!(email.html.starts_with(
+            "<p><strong>Given</strong> a company with calling turned off<br>\
+             <strong>When</strong> a user opens /employee and the dock calls \
+             POST /v1/phone/web/devices<br>\
+             <strong>Then</strong> the API answers 403 calling_disabled</p>\
+             <p><strong>Actual:</strong> the SPA reports the 403 to PostHog as an error<br>\
+             <strong>Expected:</strong> a normal refusal; the dock shows calling is off<br>\
+             <strong>Impact:</strong> 12 times to 3 users. Users see nothing; PostHog \
+             noise only.</p>\
+             <p><strong>Fix:</strong> Guard it<br>\
+             <strong>Test:</strong> Repeat Given/When: no calling_disabled error in \
+             PostHog.</p>"
+        ));
+        assert!(!email.html.contains("Issue:"));
         assert!(email.html.contains(&format!(
-            "<p><strong>Pull request:</strong> <a href=\"{PR}\">{PR}</a></p>"
+            "<p><strong>PR:</strong> <a href=\"{PR}\">{PR}</a></p>"
         )));
         assert!(!email.html.contains("draft"));
         assert!(
@@ -355,23 +416,65 @@ mod tests {
     }
 
     #[test]
-    fn a_draft_pull_request_says_so_and_a_missing_fix_or_bug_id_is_left_out() {
+    fn a_draft_pull_request_says_so_and_a_missing_line_or_bug_id_is_left_out() {
         let config = Config::default();
         let mut answer = agent(Outcome::FixedWithTest);
         answer.fix_summary = "  ".into();
+        answer.then = String::new();
+        answer.impact = String::new();
         let mut draft = report(Some(answer));
         draft.pr_draft = true;
-        let email = pull_request_opened(&run("e", "d"), &draft, PR, &config);
+        let mut server = run("e", "d");
+        server.source = Some("granite-api".into());
+        let email = pull_request_opened(&server, &draft, PR, &config);
         assert!(email.html.contains("(draft: a check failed, see the PR)"));
         assert!(!email.html.contains("<strong>Fix:</strong>"));
+        assert!(!email.html.contains("<strong>Then</strong>"));
+        assert!(email.html.contains("<p><strong>Test:</strong> Repeat"));
+        // A server error has no users; the counts stand alone.
+        assert!(
+            email
+                .html
+                .contains("<strong>Impact:</strong> 12 times.</p>")
+        );
         assert!(!email.html.contains("Bug "));
         assert!(email.html.contains("PostHog issue"));
     }
 
     #[test]
+    fn a_result_from_an_older_workflow_shows_its_issue_line() {
+        let answer: AgentResult = serde_json::from_value(serde_json::json!({
+            "outcome": "fixed_with_test",
+            "target_repo": "general_datebase",
+            "summary": "Print fails\non /employee/quote/:quoteId",
+            "root_cause": "r",
+            "fix_summary": "Guard it",
+            "risk": "",
+            "test": {"status": "written", "files": [], "command": "bunx vitest run a.test.ts",
+                     "why_not_possible": null, "manual_test_steps": null},
+            "recommendation": null,
+            "duplicate_of": null,
+            "pr_title": null,
+        }))
+        .expect("the old result shape still parses");
+        let html = pull_request_opened(
+            &run("e", "d"),
+            &report(Some(answer)),
+            PR,
+            &Config::default(),
+        )
+        .html;
+        assert!(html.starts_with(
+            "<p><strong>Issue:</strong> Print fails on /employee/quote/:quoteId</p>\
+             <p><strong>Fix:</strong> Guard it</p><p><strong>PR:</strong>"
+        ));
+        assert!(!html.contains("Given") && !html.contains("Impact"));
+    }
+
+    #[test]
     fn markup_in_agent_text_is_escaped() {
         let mut answer = agent(Outcome::FixedWithTest);
-        answer.summary = "<script>alert(1)</script>".into();
+        answer.given = "<script>alert(1)</script>".into();
         answer.fix_summary = "<img src=x onerror=y>".into();
         answer.pr_title = Some("<b>title</b>".into());
         let email = pull_request_opened(

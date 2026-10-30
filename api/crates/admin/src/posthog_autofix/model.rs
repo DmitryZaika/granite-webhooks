@@ -331,13 +331,36 @@ pub struct AgentResult {
     pub outcome: Outcome,
     /// The repository it changed, if any.
     pub target_repo: Option<TargetRepo>,
-    /// One short sentence: what goes wrong and on which route (the email's
-    /// and the pull request's Issue line).
+    /// One short sentence: what goes wrong and on which route (the title when
+    /// there is no `pr_title`, and the Issue line of an older report).
     pub summary: String,
+    /// The bug report's Given: the state the bug needs, e.g. `a company with
+    /// calling turned off`. Empty from a workflow older than these fields.
+    #[serde(default)]
+    pub given: String,
+    /// When: the user's action, with the page and the API route.
+    #[serde(default)]
+    pub when: String,
+    /// Then: what the system does at that point, e.g. `the API answers 403
+    /// calling_disabled`.
+    #[serde(default)]
+    pub then: String,
+    /// What goes wrong now.
+    #[serde(default)]
+    pub actual: String,
+    /// What should happen instead.
+    #[serde(default)]
+    pub expected: String,
+    /// What users notice, in one sentence; the email adds the counts.
+    #[serde(default)]
+    pub impact: String,
+    /// How a developer sees the fix by hand, in one line; empty without a fix.
+    #[serde(default)]
+    pub check: String,
     /// Why it happened, in a few sentences.
     pub root_cause: String,
-    /// One or two short sentences: what the fix adds or changes (the Fix
-    /// line); empty without a fix.
+    /// One or two short sentences: what the fix changes, naming the function
+    /// and file (the Fix line); empty without a fix.
     pub fix_summary: String,
     /// What the fix could break, and how likely.
     pub risk: String,
