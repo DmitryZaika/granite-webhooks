@@ -22385,6 +22385,114 @@
         ]
       }
     },
+    "/v1/sms/{provider}/messages/{id}/retry": {
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Retry a failed text",
+        "description": "Sends one of the caller's failed texts again, with its files, and\nreplaces it with the new attempt: the sent text, or the new failure.\nErrors come back as a token in `error`, as when sending.",
+        "operationId": "retry_sms",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The failed message",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SentSms"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The stored text cannot be sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller has no agent id for the provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a failed text of the caller's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over ten texts a minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/sms/attachments": {
       "post": {
         "tags": [
@@ -40898,7 +41006,7 @@
           "auth"
         ],
         "summary": "Sign in",
-        "description": "Checks the email and password; on success creates a session (60 days),\nsets it as the `__session` cookie (HttpOnly, SameSite=Lax, Secure in\nproduction) and says where the user starts. Too many failed attempts\nfor the email answer 429 until the 15-minute window passes. A wrong\nemail and a wrong password answer the same 401.",
+        "description": "Checks the email and password; on success creates a session (it lasts\nuntil sign-out: never by time),\nsets it as the `__session` cookie (HttpOnly, SameSite=Lax, Secure in\nproduction) and says where the user starts. Too many failed attempts\nfor the email answer 429 until the 15-minute window passes. A wrong\nemail and a wrong password answer the same 401.",
         "operationId": "sign_in",
         "requestBody": {
           "content": {
@@ -40995,7 +41103,7 @@
           "auth"
         ],
         "summary": "The current session",
-        "description": "The signed-in user (for a super admin, in the company they act in), the\npath they start at, the acting company's subdomain and the companies a\nsuper admin can switch to. 401 when signed out.\n\nThe CRM asks this as every page opens, so it also keeps the session: it\nlives another 60 days from now, and the cookie is set again with its full\nlifetime. The CRM's own hosts answer this path too (their CloudFront\npasses it here): Safari keeps a cookie set by a server on another IP\nrange than the page (this API) for 7 days only, but not one set by the\npage's own host.",
+        "description": "The signed-in user (for a super admin, in the company they act in), the\npath they start at, the acting company's subdomain and the companies a\nsuper admin can switch to. 401 when signed out.\n\nThe CRM asks this as every page opens, so it also sets the cookie again\nfor its full 400 days (sessions never end by time; one from before that\nstops ending here). The CRM's own hosts answer this path too (their\nCloudFront passes it here): Safari keeps a cookie set by a server on\nanother IP range than the page (this API) for 7 days only, but not one\nset by the page's own host.",
         "operationId": "get_auth_session",
         "responses": {
           "200": {
@@ -45361,7 +45469,7 @@
           "jobs"
         ],
         "summary": "Run Granite Phone's upkeep",
-        "description": "Signs out the phones of users who may no longer use Granite Phone (or\nwhose company was deleted) and expired or idle sign-ins, deletes\nleftover Telnyx credentials of signed-out phones (backing off on\nfailures), deletes Telnyx callbacks older than 30 days, closes calls\nTelnyx never reported the end of (after 6 hours), keeps the customer\nphone index that matches calls to customers in step (customers changed\nor added since the last run; each company's first fill, at most 5,000\ncustomers a run), writes up to 3 AI notes (transcript, note tidied like\nthe CRM's, on the call and its deal, the deal's people notified), gives\nanswered outbound calls their call points (provider `telnyx`), deletes\nTelnyx's copies of copied recordings whose delete failed, retries failed\nrecording copies (5 attempts), brings port-in orders up to date from\nTelnyx (adding ported numbers to the company), and last reads sent 10DLC\ntexting registrations and pending number assignments again. Bounded work per run, and\nno new work after 20 seconds; the next run takes the rest. Returns what\nwas done.",
+        "description": "Signs out the phones of users who may no longer use Granite Phone (or\nwhose company was deleted) and browser phones whose CRM sign-in ended, deletes\nleftover Telnyx credentials of signed-out phones (backing off on\nfailures), deletes Telnyx callbacks older than 30 days, closes calls\nTelnyx never reported the end of (after 6 hours), keeps the customer\nphone index that matches calls to customers in step (customers changed\nor added since the last run; each company's first fill, at most 5,000\ncustomers a run), writes up to 3 AI notes (transcript, note tidied like\nthe CRM's, on the call and its deal, the deal's people notified), gives\nanswered outbound calls their call points (provider `telnyx`), deletes\nTelnyx's copies of copied recordings whose delete failed, retries failed\nrecording copies (5 attempts), brings port-in orders up to date from\nTelnyx (adding ported numbers to the company), and last reads sent 10DLC\ntexting registrations and pending number assignments again. Bounded work per run, and\nno new work after 20 seconds; the next run takes the rest. Returns what\nwas done.",
         "operationId": "run_phone_job",
         "responses": {
           "200": {
@@ -51254,7 +51362,7 @@
           "phone"
         ],
         "summary": "Sign a phone in",
-        "description": "Signs the Granite Phone app in with the CRM email and password and\nreturns its device token (send it as the `X-Granite-Device` header) and\nits call key (signs the calls it places), both shown only here. Only\nemployees, admins and superusers of a company that is not deleted may:\nothers get 403 `no_phone_access`.\nFailed attempts count together with `POST /v1/auth/login`'s (10 per\nemail and address, 50 per email in 15 minutes, then 429\n`rate_limited`), and a wrong email and a wrong password both answer 401\n`invalid_credentials`. The sign-in lasts 12 months, or until the phone\nis unused for 30 days, signs out or is revoked. Next:\n`POST /v1/phone/devices` registers the phone for calling.",
+        "description": "Signs the Granite Phone app in with the CRM email and password and\nreturns its device token (send it as the `X-Granite-Device` header) and\nits call key (signs the calls it places), both shown only here. Only\nemployees, admins and superusers of a company that is not deleted may:\nothers get 403 `no_phone_access`.\nFailed attempts count together with `POST /v1/auth/login`'s (10 per\nemail and address, 50 per email in 15 minutes, then 429\n`rate_limited`), and a wrong email and a wrong password both answer 401\n`invalid_credentials`. The sign-in lasts until the phone signs out or is\nrevoked, never ending by time. Next:\n`POST /v1/phone/devices` registers the phone for calling.",
         "operationId": "create_device_session",
         "requestBody": {
           "content": {
@@ -71889,7 +71997,7 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time",
-            "description": "When the sign-in ends at the latest: 12 months from now (sooner when\nthe phone is unused for 30 days, signs out or is revoked)."
+            "description": "12 months from now, for display only: the sign-in never ends by time,\nonly when the phone signs out or is revoked."
           },
           "user": {
             "$ref": "#/components/schemas/PhoneUser",
@@ -82162,7 +82270,7 @@
           },
           "sessions_expired": {
             "type": "integer",
-            "description": "Phones signed out because their sign-in expired (12 months) or went\nunused for 30 days.",
+            "description": "Browser phones signed out because their CRM sign-in ended.",
             "minimum": 0
           },
           "credentials_deleted": {
