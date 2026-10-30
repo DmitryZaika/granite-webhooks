@@ -38620,6 +38620,54 @@
         ]
       }
     },
+    "/v1/places/check": {
+      "get": {
+        "tags": [
+          "places"
+        ],
+        "summary": "Check a street address",
+        "description": "Whether Google Maps finds the address as a house number on a street, so a\nquote is not printed or sent as a contract to an address that does not exist.",
+        "operationId": "check_address",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "e.g. `123 Main St, Indianapolis` (state and ZIP optional).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressCheck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/places/{place_id}": {
       "get": {
         "tags": [
@@ -61978,6 +62026,26 @@
               "null"
             ],
             "description": "ZIP code."
+          }
+        }
+      },
+      "AddressCheck": {
+        "type": "object",
+        "description": "`GET /v1/places/check`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`found`, `not_found`, or `unknown` (Google could not be asked)."
+          },
+          "formatted_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Google's full address when found."
           }
         }
       },
