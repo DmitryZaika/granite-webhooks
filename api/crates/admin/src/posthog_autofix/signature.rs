@@ -182,6 +182,15 @@ fn clean_file(source: &str) -> String {
     CHUNK_HASH.replace(path, "$1").into_owned()
 }
 
+/// Hex characters of a signature in a bug id.
+const BUG_ID_CHARS: usize = 12;
+
+/// The short id people see for a bug (emails, pull requests, branch names):
+/// the start of its signature.
+pub fn bug_id(signature: &str) -> &str {
+    signature.get(..BUG_ID_CHARS).unwrap_or(signature)
+}
+
 /// SHA-256 (lowercase hex) of the normalized fingerprint.
 pub fn signature(fingerprint: &Fingerprint<'_>) -> String {
     let material = [

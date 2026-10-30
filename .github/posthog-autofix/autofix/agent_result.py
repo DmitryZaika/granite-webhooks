@@ -30,7 +30,7 @@ TEST_STATUSES = ("written", "not_possible", "not_applicable")
 _TEXT_FIELDS: dict[str, tuple[bool, int]] = {
     "summary": (False, 300),
     "root_cause": (False, 3000),
-    "fix_summary": (False, 3000),
+    "fix_summary": (False, 1000),
     "risk": (False, 1500),
     "recommendation": (True, 1500),
     "duplicate_of": (True, 300),

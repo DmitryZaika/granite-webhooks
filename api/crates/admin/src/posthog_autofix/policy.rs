@@ -1,9 +1,11 @@
 //! The intake's decisions as plain functions: which bugs may start a run,
-//! which web error is the copy of an api error, how many runs may start now,
-//! and when to retry.
+//! which web error is the copy of an api error or of another web error, how
+//! many runs may start now, and when to retry.
 
 use super::config::Config;
 use super::model::{SkipReason, Source};
+use super::posthog::MESSAGE_CHARS;
+use super::signature::normalize_message;
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 
 /// A settled bug, as the intake read it from its events and PostHog.
@@ -32,6 +34,8 @@ const RETRY_CAP_MINUTES: i64 = 4 * 60;
 /// The SPA's toast and API error types.
 const TOAST: &str = "ErrorToast";
 const GRANITE_API_ERROR: &str = "GraniteApiError";
+/// Characters a toast must repeat of an error's message to be its copy.
+const MIN_REPEATED_CHARS: usize = 12;
 /// A toast with one of these reports a failure, not a hint: the app's own
 /// failure words, or the message of a JavaScript error it caught and showed.
 const FAILURE_WORDS: [&str; 13] = [
@@ -103,7 +107,7 @@ pub fn eligibility(candidate: &Candidate<'_>, exclude: &[String]) -> Result<(), 
 fn noise(candidate: &Candidate<'_>) -> Option<SkipReason> {
     let message = candidate.message.to_lowercase();
     if candidate.source == Source::Web {
-        let toast = candidate.exception_type == TOAST || candidate.error_source == Some("toast");
+        let toast = is_toast(candidate.exception_type, candidate.error_source);
         let generic =
             matches!(candidate.exception_type, "Error" | TOAST) && is_generic_api_body(&message);
         if generic || (toast && message.contains("database error")) {
@@ -220,6 +224,31 @@ pub fn route_matches(template: &str, path: &str) -> bool {
                 expected == actual
             }
         })
+}
+
+/// Whether a web bug is an error toast the SPA reported.
+pub fn is_toast(exception_type: &str, error_source: Option<&str>) -> bool {
+    exception_type == TOAST || error_source == Some("toast")
+}
+
+/// Whether a toast's text only repeats `error`'s message, as
+/// `Could not open editor: <message>` does: the same failure, reported once
+/// where it happened and once where the user saw it.
+///
+/// Short messages (`Failed`) repeat by chance, so they never match.
+pub fn toast_repeats(toast: &str, error: &str) -> bool {
+    // Messages are read cut, and the toast's title cuts its copy first: a
+    // cut toast repeats an error that starts with what it kept.
+    let cut = toast.chars().count() >= MESSAGE_CHARS;
+    let error = normalize_message(error);
+    let toast = normalize_message(toast);
+    let said = toast
+        .split_once(": ")
+        .map_or(toast.as_str(), |(_, rest)| rest);
+    if said.chars().count() < MIN_REPEATED_CHARS {
+        return false;
+    }
+    toast == error || said == error || (cut && error.starts_with(said))
 }
 
 /// Localhost, IPs and `.local`/`.test` hosts all fail the domain check.
@@ -831,6 +860,42 @@ mod tests {
             api_status("TypeError", "Granite API 404 on /v1/x: ", None),
             None
         );
+    }
+
+    #[test]
+    fn a_toast_that_repeats_an_error_is_its_copy() {
+        // Oct 28: one click on a stone without a photo, two issues, two PRs.
+        let error = "The image could not be downloaded from storage. Try uploading it again.";
+        assert!(toast_repeats(
+            &format!("Could not open editor: {error}"),
+            error
+        ));
+        assert!(toast_repeats(error, error));
+        let long = format!("{} end", "x".repeat(400));
+        let cut: String = format!("Could not save: {long}")
+            .chars()
+            .take(300)
+            .collect();
+        assert!(toast_repeats(&cut, &long));
+    }
+
+    #[test]
+    fn a_toast_with_its_own_failure_is_not_a_copy() {
+        let error = "The image could not be downloaded from storage. Try uploading it again.";
+        assert!(!toast_repeats(
+            "Could not save the quote: Server error",
+            error
+        ));
+        assert!(!toast_repeats("Failed to save the quote", "Failed"));
+        assert!(!toast_repeats("Upload failed: Failed", "Failed"));
+        // Whole, it only shares a start with the error: another failure.
+        assert!(!toast_repeats(
+            "Could not save: Cannot read properties of undefined",
+            "Cannot read properties of undefined (reading 'items')"
+        ));
+        assert!(is_toast("ErrorToast", None));
+        assert!(is_toast("Error", Some("toast")));
+        assert!(!is_toast("Error", Some("client")));
     }
 
     #[test]

@@ -13,6 +13,7 @@ from pathlib import Path
 from helpers import commit, git, init_repo, run_context, sample_result
 
 from autofix import publish
+from autofix.context import RunContext
 from autofix.github import GitHub
 from autofix.http import Response
 from autofix.publish import Plan, PublishError
@@ -110,6 +111,27 @@ class PublishTest(unittest.TestCase):
         )
         self.assertEqual(labels, {"labels": ["ai-fix"]})
         self.assertEqual(json.loads(self.run.pr_json.read_text())["pr_url"], published.pr_url)
+
+    def test_the_bug_id_names_the_branch(self) -> None:
+        fix = self.make_fix({"app/a.ts": "export const a = 2\n"})
+        self.write_fix_job_files(fix)
+        publish.create_bundle(self.run)
+        run = RunContext(**{**self.run.__dict__, "bug_id": "0123456789ab"})
+        github = FakeGitHub()
+        publish.open_pr(
+            run,
+            publish.plan(run, self.bases),
+            self.report_job_checkout(),
+            "tok",
+            GitHub("tok", github),
+            push_url=str(self.remote),
+        )
+        self.assertEqual(
+            git(self.remote, "rev-parse", "refs/heads/ai-fix/bug-0123456789ab-42"), fix
+        )
+        create = next(payload for method, url, payload in github.requests if url.endswith("/pulls"))
+        self.assertEqual(create["head"], "ai-fix/bug-0123456789ab-42")
+        self.assertIn("**Bug ID:** `0123456789ab`", create["body"])
 
     def test_unverified_is_a_draft_with_its_label(self) -> None:
         fix = self.make_fix({"app/a.ts": "export const a = 2\n"})
