@@ -1,9 +1,9 @@
 //! Starting the fix workflow (`workflow_dispatch`).
 //!
-//! The dispatch carries only the ledger id, the PostHog issue id and the id
-//! of the bug's latest event. The workflow reads everything else itself, so
-//! error text (user and third-party input) never reaches a workflow
-//! expression.
+//! The dispatch carries only the ledger id, the PostHog issue id, the id of
+//! the bug's latest event and the bug's short id. The workflow reads
+//! everything else itself, so error text (user and third-party input) never
+//! reaches a workflow expression.
 
 use super::config::Config;
 use super::posthog::{is_event_uuid, is_issue_id};
@@ -17,6 +17,9 @@ pub struct Dispatch<'a> {
     pub issue_id: &'a str,
     /// The bug's latest `$exception` event; `None` on rows of the issue intake.
     pub event_id: Option<&'a str>,
+    /// The bug's short id (its signature's start), shown in the pull request;
+    /// `None` on rows without a signature.
+    pub bug_id: Option<&'a str>,
 }
 
 /// GitHub refused or could not be reached; the row is retried later.
@@ -76,8 +79,8 @@ impl Dispatcher for GitHub<'_> {
 const BODY_EXCERPT: usize = 200;
 
 /// The `workflow_dispatch` endpoint and body. Inputs are strings: GitHub
-/// rejects other JSON types, so a row without an event sends `""`. Ids that
-/// are not lowercase UUIDs never leave the api.
+/// rejects other JSON types, so a row without an event or bug id sends `""`.
+/// Ids that are not lowercase UUIDs never leave the api.
 fn dispatch_request(
     config: &Config,
     dispatch: &Dispatch<'_>,
@@ -99,6 +102,7 @@ fn dispatch_request(
             "run_id": dispatch.run_id.to_string(),
             "issue_id": dispatch.issue_id,
             "event_id": event_id,
+            "bug_id": dispatch.bug_id.unwrap_or_default(),
         },
     });
     Ok((url, body))
@@ -114,6 +118,7 @@ mod tests {
             run_id: 42,
             issue_id: "01a158ec-b8d5-7002-bb99-07e4e724acee",
             event_id: Some("01a17880-7a7a-740b-ac7c-30975f48657a"),
+            bug_id: Some("3fa9c0d1b2e4"),
         };
         let (url, body) = dispatch_request(&Config::default(), &dispatch).unwrap();
         assert_eq!(
@@ -128,15 +133,18 @@ mod tests {
                     "run_id": "42",
                     "issue_id": "01a158ec-b8d5-7002-bb99-07e4e724acee",
                     "event_id": "01a17880-7a7a-740b-ac7c-30975f48657a",
+                    "bug_id": "3fa9c0d1b2e4",
                 },
             })
         );
         let without_event = Dispatch {
             event_id: None,
+            bug_id: None,
             ..dispatch
         };
         let (_, body) = dispatch_request(&Config::default(), &without_event).unwrap();
         assert_eq!(body["inputs"]["event_id"], "");
+        assert_eq!(body["inputs"]["bug_id"], "");
     }
 
     #[test]
@@ -145,6 +153,7 @@ mod tests {
             run_id: 1,
             issue_id: "01a158ec-b8d5-7002-bb99-07e4e724acee",
             event_id: Some("x' || true"),
+            bug_id: None,
         };
         assert!(dispatch_request(&Config::default(), &bad_event).is_err());
         let bad_issue = Dispatch {

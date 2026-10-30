@@ -10,7 +10,7 @@ from unittest import mock
 from helpers import ISSUE_ID, run_context
 
 from autofix import agent, http, issue_context
-from autofix.context import InputError, RunContext, validate_event_id
+from autofix.context import InputError, RunContext, validate_bug_id, validate_event_id
 from autofix.issue_context import _EVENT_COLUMNS
 
 EVENT_ID = "01a178be-5c96-76e1-948e-8a106a728988"
@@ -435,6 +435,22 @@ class SummaryTest(unittest.TestCase):
     def test_when_nothing_works_the_summary_is_empty(self) -> None:
         text, _ = self.build(FakeTransport(http.Response(403, {"detail": "no"})))
         self.assertEqual(text, "")
+
+
+class BugIdTest(unittest.TestCase):
+    def test_validation(self) -> None:
+        self.assertEqual(validate_bug_id(""), "")
+        self.assertEqual(validate_bug_id("0123456789ab"), "0123456789ab")
+        for bad in ("0123456789a", "0123456789abc", "0123456789AB", "0123456789ag", " 0123456789a"):
+            with self.subTest(bad=bad), self.assertRaises(InputError):
+                validate_bug_id(bad)
+
+    def test_from_env(self) -> None:
+        env = {"RUN_ID": "42", "ISSUE_ID": ISSUE_ID}
+        self.assertEqual(RunContext.from_env(env).bug_id, "")
+        self.assertEqual(RunContext.from_env({**env, "BUG_ID": "0123456789ab"}).bug_id, "0123456789ab")
+        with self.assertRaises(InputError):
+            RunContext.from_env({**env, "BUG_ID": "1; rm -rf /"})
 
 
 class EventIdTest(unittest.TestCase):

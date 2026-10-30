@@ -40,7 +40,8 @@ pub struct TickReport {
     pub queued: usize,
     /// Bugs skipped as noise, resolved, suppressed or not production.
     pub skipped: usize,
-    /// Browser errors folded into the API error of the same request.
+    /// Browser errors folded into the API error of the same request, or
+    /// toasts into the web error they repeat.
     pub duplicates: usize,
     /// Fix runs started.
     pub dispatched: usize,
@@ -52,8 +53,6 @@ pub struct TickReport {
     pub regressions: usize,
     /// PostHog issues of opened fixes assigned to their reviewer (write-back).
     pub assigned: usize,
-    /// A storm digest was sent.
-    pub storm_digest: bool,
     /// Another tick held the lock; this one did nothing.
     pub busy: bool,
     /// Steps that failed (PostHog or GitHub unreachable); retried next tick.
@@ -77,9 +76,11 @@ const JUDGE_BATCH: u32 = 20;
 const FAILED_RUN_RETRY_HOURS: i64 = 24;
 /// A browser 5xx and the API error of its request are this close in time.
 const LINK_SLACK_MINUTES: i64 = 10;
+/// A toast is reported within this long of the error it repeats (the same
+/// click: milliseconds apart).
+const TOAST_SLACK_SECONDS: i64 = 60;
 /// Events of previewed issues are read from this long before the oldest.
 const EVENTS_LOOKBACK_HOURS: i64 = 1;
-const STORM_TOP: u32 = 5;
 /// A fix is watched for a regression this long after it finished.
 const REGRESSION_DAYS: i64 = 30;
 const REGRESSION_BATCH: u32 = 100;
@@ -184,7 +185,6 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         let poll = policy::window_start(self.now, config.poll_minutes);
         if ledger::claim_notice(&mut *self.conn, "poll", poll, self.now).await? {
             self.discover().await?;
-            self.storm().await?;
             if self.out_of_time() {
                 return Ok(());
             }
@@ -233,18 +233,15 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         self.report.errors.push(format!("{step}: {error}"));
     }
 
-    /// Gives up on runs that never reported back.
+    /// Gives up on runs that never reported back. Only a pull request is
+    /// emailed, so this shows in the ledger and the tick's report.
     async fn watchdog(&mut self) -> Result<(), sqlx::Error> {
         let config = self.deps.config;
         let cutoff = self.now - Duration::minutes(config.run_timeout_minutes);
         for id in ledger::stale_in_flight(&mut *self.conn, cutoff).await? {
-            if !ledger::time_out(&mut *self.conn, id, cutoff, self.now).await? {
-                continue;
-            }
-            self.report.timed_out += 1;
-            self.report.processed += 1;
-            if let Some(run) = ledger::load_run(&mut *self.conn, id).await? {
-                self.queue(emails::run_timed_out(&run, config));
+            if ledger::time_out(&mut *self.conn, id, cutoff, self.now).await? {
+                self.report.timed_out += 1;
+                self.report.processed += 1;
             }
         }
         Ok(())
@@ -307,40 +304,6 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         Ok(())
     }
 
-    /// One digest email when more new bugs than the threshold arrived in the
-    /// last storm window, and none sooner than a window after the last.
-    async fn storm(&mut self) -> Result<(), sqlx::Error> {
-        let config = self.deps.config;
-        let since = self.now - Duration::minutes(config.storm_window_minutes);
-        let new_issues = ledger::count_created_since(&mut *self.conn, since).await?;
-        if new_issues <= config.storm_threshold {
-            return Ok(());
-        }
-        // The count slides, so the digest must too: a storm across an aligned
-        // window boundary is still one storm.
-        if ledger::notice_since(&mut *self.conn, "storm", since).await? {
-            return Ok(());
-        }
-        let window = policy::window_start(self.now, config.storm_window_minutes);
-        if !ledger::claim_notice(&mut *self.conn, "storm", window, self.now).await? {
-            return Ok(());
-        }
-        let top: Vec<(String, usize)> = ledger::top_groups(&mut *self.conn, since, STORM_TOP)
-            .await?
-            .into_iter()
-            .map(|(label, issues)| (label, usize::try_from(issues).unwrap_or(0)))
-            .collect();
-        let email = emails::storm_digest(
-            usize::try_from(new_issues).unwrap_or(usize::MAX),
-            config.storm_window_minutes,
-            &top,
-            config,
-        );
-        self.report.storm_digest = true;
-        self.queue(email);
-        Ok(())
-    }
-
     /// Judges the oldest settled bugs: queued, skipped or folded.
     async fn judge_settled(&mut self) -> Result<(), sqlx::Error> {
         let config = self.deps.config;
@@ -386,8 +349,8 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             Some(status) => self.verdict(row, status).await?,
             None => Some(Verdict::Skipped(SkipReason::NoEvents)),
         };
-        // Its API error is not judged yet: folding into a row that may still
-        // be skipped would lose the bug, so it waits for the next poll.
+        // The error it copies is not judged yet: folding into a row that may
+        // still be skipped would lose the bug, so it waits for the next poll.
         let Some(verdict) = verdict else {
             return Ok(());
         };
@@ -408,9 +371,9 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         Ok(())
     }
 
-    /// The gates on the bug's own events, then the fold of a browser 5xx
-    /// into the API error of the same request; `None` while that API error
-    /// waits to be judged.
+    /// The gates on the bug's own events, then the fold of a toast into the
+    /// web error it repeats, or of a browser 5xx into the API error of the
+    /// same request; `None` while that error waits to be judged.
     async fn verdict(
         &mut self,
         row: &SettledRow,
@@ -430,6 +393,9 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         };
         if let Err(reason) = policy::eligibility(&candidate, &self.deps.config.exclude) {
             return Ok(Some(Verdict::Skipped(reason)));
+        }
+        if source == Source::Web && policy::is_toast(&row.issue_name, row.error_source.as_deref()) {
+            return self.toast_verdict(row).await;
         }
         let path = policy::web_5xx_path(
             source,
@@ -454,6 +420,33 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         }
         Ok(Some(
             matching
+                .first()
+                .map_or(Verdict::Queued, |&&(of, _, _)| Verdict::Duplicate { of }),
+        ))
+    }
+
+    /// A toast that only repeats the message of a web error seen at the same
+    /// moment is that error's bug, so it folds into the error's row (which
+    /// carries the stack of the code that failed); `None` while that error
+    /// waits to be judged. Any other toast is queued.
+    async fn toast_verdict(&mut self, row: &SettledRow) -> Result<Option<Verdict>, sqlx::Error> {
+        let (Some(first), Some(last)) = (row.first_seen_at, row.last_seen_at) else {
+            return Ok(Some(Verdict::Queued));
+        };
+        let slack = Duration::seconds(TOAST_SLACK_SECONDS);
+        let errors =
+            ledger::web_errors_seen_between(&mut *self.conn, first - slack, last + slack).await?;
+        let repeated: Vec<_> = errors
+            .iter()
+            .filter(|(id, message, _)| {
+                *id != row.id && policy::toast_repeats(&row.issue_description, message)
+            })
+            .collect();
+        if repeated.iter().any(|&&(_, _, waiting)| waiting) {
+            return Ok(None);
+        }
+        Ok(Some(
+            repeated
                 .first()
                 .map_or(Verdict::Queued, |&&(of, _, _)| Verdict::Duplicate { of }),
         ))
@@ -547,6 +540,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
                 run_id: run.id,
                 issue_id: &run.posthog_issue_id,
                 event_id: run.event_uuid.as_deref(),
+                bug_id: run.signature.as_deref().map(signature::bug_id),
             };
             match self.deps.dispatcher.dispatch(&dispatch).await {
                 Ok(()) => self.report.dispatched += 1,
@@ -556,7 +550,8 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         Ok(())
     }
 
-    /// Queues `run` again with a backoff, or fails it after its last attempt.
+    /// Queues `run` again with a backoff, or fails it after its last attempt
+    /// (in the ledger only: just pull requests are emailed).
     async fn dispatch_refused(
         &mut self,
         run: &RunView,
@@ -572,12 +567,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             ledger::retry_dispatch(&mut *self.conn, run.id, retry_at, &message).await?;
             return Ok(());
         }
-        if !ledger::fail_dispatch(&mut *self.conn, run.id, &message, self.now).await? {
-            return Ok(());
-        }
-        if let Some(failed) = ledger::load_run(&mut *self.conn, run.id).await? {
-            self.queue(emails::dispatch_failed(&failed, &message, config));
-        }
+        ledger::fail_dispatch(&mut *self.conn, run.id, &message, self.now).await?;
         Ok(())
     }
 

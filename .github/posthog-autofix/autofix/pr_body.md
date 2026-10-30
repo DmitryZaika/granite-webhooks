@@ -1,16 +1,15 @@
-> Opened by the PostHog auto-fix workflow. Review it like any other change: the agent's text below is its own claim; the **Verification** section is what the workflow proved.
+**Issue:** $summary
+**Fix:** $fix_summary
+$links
+$verdict
 
-**$summary**
+<details><summary>Details</summary>
 
-PostHog issue: $posthog_url
+> Opened by the PostHog auto-fix workflow. Review it like any other change: the agent's text is its own claim; the **Verification** section is what the workflow proved.
 
 ## Root cause
 
 $root_cause
-
-## Fix
-
-$fix_summary
 
 ## Test
 
@@ -27,3 +26,5 @@ $risk
 ---
 
 Run: $run_url · Agent cost: $cost
+
+</details>

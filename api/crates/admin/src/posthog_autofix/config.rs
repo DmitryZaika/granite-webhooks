@@ -103,9 +103,6 @@ pub struct Config {
     pub max_concurrent: u32,
     /// Runs dispatched in any rolling 24 hours.
     pub max_per_day: u32,
-    /// More new bugs than this in one storm window sends one digest email.
-    pub storm_threshold: u32,
-    pub storm_window_minutes: i64,
     /// A run that reported its outcome keeps counting its bug's events for
     /// this long after it ended (a failed run for a day), and a skipped bug's
     /// row for this long after its last event. After that, the bug gets a
@@ -143,9 +140,7 @@ impl Default for Config {
             poll_minutes: 5,
             settle_minutes: 30,
             max_concurrent: 2,
-            max_per_day: 8,
-            storm_threshold: 20,
-            storm_window_minutes: 30,
+            max_per_day: 20,
             signature_window_days: 14,
             run_timeout_minutes: 120,
             max_attempts: 3,
@@ -176,8 +171,6 @@ impl fmt::Debug for Config {
             .field("settle_minutes", &self.settle_minutes)
             .field("max_concurrent", &self.max_concurrent)
             .field("max_per_day", &self.max_per_day)
-            .field("storm_threshold", &self.storm_threshold)
-            .field("storm_window_minutes", &self.storm_window_minutes)
             .field("signature_window_days", &self.signature_window_days)
             .field("run_timeout_minutes", &self.run_timeout_minutes)
             .field("max_attempts", &self.max_attempts)
@@ -231,18 +224,6 @@ impl Config {
             positive,
         );
         parse_into(&read, "MAX_PER_DAY", &mut config.max_per_day, positive);
-        parse_into(
-            &read,
-            "STORM_THRESHOLD",
-            &mut config.storm_threshold,
-            positive,
-        );
-        parse_into(
-            &read,
-            "STORM_WINDOW_MINUTES",
-            &mut config.storm_window_minutes,
-            positive,
-        );
         parse_into(
             &read,
             "SIGNATURE_WINDOW_DAYS",
@@ -371,7 +352,7 @@ mod tests {
     fn nothing_set_is_off_with_safe_caps() {
         let config = config(&[]);
         assert_eq!(config.mode, Mode::Off);
-        assert_eq!((config.max_concurrent, config.max_per_day), (2, 8));
+        assert_eq!((config.max_concurrent, config.max_per_day), (2, 20));
         assert_eq!(config.missing_for_mode(), None);
         assert!(
             config

@@ -9,7 +9,17 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import agent, callback, database, identity, isolation, issue_context, publish, verify
+from . import (
+    agent,
+    callback,
+    database,
+    identity,
+    isolation,
+    issue_context,
+    open_prs,
+    publish,
+    verify,
+)
 from .context import REPOS, InputError, RunContext, write_output
 from .github import GitHub
 
@@ -29,6 +39,11 @@ def cmd_validate_inputs() -> None:
 def cmd_issue_context() -> None:
     # Best effort: a failure only means the agent fetches the issue itself.
     issue_context.write_context(RunContext.from_env())
+
+
+def cmd_open_prs() -> None:
+    # Best effort: a failure only means the agent does not see them.
+    open_prs.write_open_prs(RunContext.from_env())
 
 
 def cmd_layout() -> None:
@@ -145,6 +160,7 @@ COMMANDS: dict[str, Callable[[], None]] = {
     "database migrate": cmd_database_migrate,
     "validate-inputs": cmd_validate_inputs,
     "issue-context": cmd_issue_context,
+    "open-prs": cmd_open_prs,
     "callback started": cmd_callback_started,
     "git-identity": cmd_git_identity,
     "isolate": cmd_isolate,

@@ -121,6 +121,8 @@ class ValidateTest(unittest.TestCase):
             "missing field": {k: v for k, v in sample_result().items() if k != "risk"},
             "too long title": sample_result(pr_title="x" * 101),
             "empty summary": sample_result(summary=""),
+            "long summary": sample_result(summary="x" * 301),
+            "long fix summary": sample_result(fix_summary="x" * 1001),
             "wrong type": sample_result(root_cause=5),
             "test without command": sample_result(test={"command": None}),
             "files not a list": sample_result(test={"files": "a.rs"}),
