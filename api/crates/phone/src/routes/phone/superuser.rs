@@ -10,12 +10,15 @@ use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
 use crate::phone::availability::WorkingHours;
 use crate::phone::company::{self, CompanyConfig, RecordingMode};
+use crate::routes::sms::moves;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use chrono::NaiveDate;
+use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sqlx::MySqlPool;
 
 /// Most holidays a company may list.
 const MAX_HOLIDAYS: usize = 366;
@@ -451,7 +454,36 @@ pub async fn save_company_telnyx_config(
     let config = company::load(&state.pool, id)
         .await?
         .ok_or_else(|| ApiError::Internal("the Telnyx setup was not saved".into()))?;
+    if config.texting_on() {
+        carry_company(&state.pool, id).await;
+    }
     Ok(Json(TelnyxCompanyConfig::of(&config, &state)))
+}
+
+/// The company texts through Granite Phone: everyone who may call from one
+/// of its numbers gets their texts from other providers copied to Telnyx
+/// (`crate::routes::sms::moves`). Failures are logged; the save stands.
+async fn carry_company(pool: &MySqlPool, company_id: i32) {
+    let users: Vec<i32> = match sqlx::query_scalar(
+        "SELECT DISTINCT nu.user_id FROM telnyx_number_users nu
+           JOIN telnyx_numbers n ON n.id = nu.number_id
+          WHERE n.company_id = ? AND n.active <> 0 AND nu.can_call_from <> 0",
+    )
+    .bind(company_id)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(users) => users,
+        Err(error) => {
+            tracing::error!(company_id, %error, "listing Granite Phone users failed");
+            return;
+        }
+    };
+    for user_id in users {
+        if let Err(error) = moves::carry(pool, company_id, user_id).await {
+            tracing::error!(company_id, user_id, %error, "copying texts to Telnyx failed");
+        }
+    }
 }
 
 #[cfg(test)]

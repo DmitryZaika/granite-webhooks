@@ -923,3 +923,57 @@ async fn a_users_inbox_is_the_threads_of_their_lines(pool: MySqlPool) {
             .starts_with("/employee/telnyx/thread/")
     );
 }
+
+#[test_db::test(seed)]
+async fn a_reps_texts_follow_them_to_telnyx(pool: MySqlPool) {
+    let setup = setup(&pool).await;
+    // Rita texted Dave (317-555-0104) through RingCentral before Granite Phone.
+    sqlx::raw_sql(
+        "UPDATE users SET ringcentral_extension_id = '777', ringcentral_phone_number = '3175550199'
+          WHERE id = 100;
+         INSERT INTO ringcentral_sms
+           (sender, recipient, text, direction, status, agent, company_id, created_date,
+            sender10, recipient10, phone_digits)
+         VALUES (13175550199, 13175550104, 'Your slab is in', 'outbound', 'sent', '777', 100,
+                 '2026-01-05 10:00:00', '3175550199', '3175550104', '3175550104'),
+                (13175550104, 13175550199, 'Great, thanks', 'inbound', 'received', NULL, 100,
+                 '2026-01-05 11:00:00', '3175550104', '3175550199', '3175550104');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        api::routes::sms::moves::carry(&pool, 100, 100)
+            .await
+            .unwrap()
+            > 0
+    );
+    // Copying again copies nothing.
+    assert_eq!(
+        api::routes::sms::moves::carry(&pool, 100, 100)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let rita = setup.get("/v1/sms/telnyx/threads", sessions::REP).await;
+    assert!(phones(&rita).contains(&"3175550104"));
+    let thread = setup
+        .get("/v1/sms/telnyx/threads/3175550104", sessions::REP)
+        .await;
+    let texts: Vec<&str> = thread["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["Your slab is in", "Great, thanks"]);
+    // Her inbox over every provider shows each text once.
+    let mine = setup
+        .get("/v1/sms/mine/threads/3175550104", sessions::REP)
+        .await;
+    assert_eq!(mine["messages"].as_array().unwrap().len(), 2);
+    // Mark shares a line with her, not her history.
+    let mark = setup.get("/v1/sms/telnyx/threads", sessions::MANAGER).await;
+    assert!(!phones(&mark).contains(&"3175550104"));
+}

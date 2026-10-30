@@ -486,13 +486,19 @@ async fn merged_thread(
         all.extend(rows);
         unread_count += thread_unread(pool, provider, user, &digits, &access).await?;
     }
-    // A rep on both keeps one of each text moved from CloudTalk to RingCentral.
-    let originals: HashSet<i64> = all
+    // A text copied when its rep changed provider shows once.
+    let originals: HashSet<String> = all
         .iter()
-        .filter(|message| message.provider == SmsProvider::Cloudtalk)
-        .map(|message| i64::from(message.id))
+        .filter(|message| message.copy_of.is_none())
+        .map(|message| format!("{}:{}", message.provider.as_str(), message.id))
         .collect();
-    all.retain(|message| message.copy_of.is_none_or(|id| !originals.contains(&id)));
+    let mut shown = HashSet::new();
+    all.retain(|message| {
+        message
+            .copy_of
+            .as_ref()
+            .is_none_or(|original| !originals.contains(original) && shown.insert(original.clone()))
+    });
     all.sort_by_key(|message| message.created_at);
     let keep = usize::try_from(limit).unwrap_or(0);
     if all.len() > keep {

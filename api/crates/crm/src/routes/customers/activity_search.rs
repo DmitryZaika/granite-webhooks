@@ -185,9 +185,11 @@ async fn sms_documents(
                     CAST(sender AS CHAR) AS sender, CAST(recipient AS CHAR) AS recipient
                FROM {table} WHERE company_id = "
         ));
-        builder
-            .push_bind(company_id)
-            .push(" AND status IN ('received', 'sent') AND (");
+        // A copy made when its rep changed provider is its original's twin.
+        builder.push_bind(company_id).push(format!(
+            " AND {} AND status IN ('received', 'sent') AND (",
+            crate::sms_provider::not_a_copy("")
+        ));
         for (index, column) in ["sender", "recipient"].into_iter().enumerate() {
             if index > 0 {
                 builder.push(" OR ");

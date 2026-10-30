@@ -528,9 +528,11 @@ async fn load_sms_timeline(
             "SELECT text, CAST(direction AS CHAR) AS direction, CAST(created_date AS DATETIME) AS created_date,
                     CAST(sender AS CHAR) AS sender
                FROM {table}
-              WHERE company_id = ? AND status IN ('received', 'sent')
+              WHERE company_id = ? AND status IN ('received', 'sent') AND {}
                 AND ({} IN ({marks}) OR {} IN ({marks}))
               ORDER BY created_date DESC, id DESC LIMIT ?",
+            // A copy made when its rep changed provider is its original's twin.
+            crate::sms_provider::not_a_copy(""),
             normalized("sender"),
             normalized("recipient"),
         );

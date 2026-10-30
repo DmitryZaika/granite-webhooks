@@ -134,54 +134,90 @@ pub async fn inbox_lines(
         .collect())
 }
 
+/// SQL over `telnyx_sms s`: a text copied for `rep` when they moved to
+/// Telnyx (`crate::routes::sms::moves`); binds the rep's user id.
+fn rep_copy() -> String {
+    format!(
+        "s.agent = ? AND COALESCE(s.idempotency_key, '') REGEXP '{}'",
+        crate::sms_provider::COPY_KEY
+    )
+}
+
 /// The customer phones (thread keys) that texted or were texted from
-/// `lines`.
+/// `lines`, and those of `rep`'s texts copied from their earlier provider.
 pub async fn line_threads(
     pool: &MySqlPool,
     company_id: i32,
     lines: &[String],
+    rep: Option<i32>,
 ) -> sqlx::Result<Vec<String>> {
-    if lines.is_empty() {
+    let mut parts = Vec::new();
+    if !lines.is_empty() {
+        let marks = vec!["?"; lines.len()].join(", ");
+        // idx_sms_inbound_recipient and idx_sms_outbound_sender: index only.
+        parts.push(format!(
+            "SELECT s.phone_digits FROM telnyx_sms s
+              WHERE s.company_id = ? AND s.direction = 'inbound' AND s.recipient10 IN ({marks})
+                AND s.phone_digits IS NOT NULL
+             UNION
+             SELECT s.phone_digits FROM telnyx_sms s
+              WHERE s.company_id = ? AND s.direction = 'outbound' AND s.sender10 IN ({marks})
+                AND s.phone_digits IS NOT NULL"
+        ));
+    }
+    if rep.is_some() {
+        parts.push(format!(
+            "SELECT s.phone_digits FROM telnyx_sms s
+              WHERE s.company_id = ? AND {} AND s.phone_digits IS NOT NULL",
+            rep_copy()
+        ));
+    }
+    if parts.is_empty() {
         return Ok(Vec::new());
     }
-    let marks = vec!["?"; lines.len()].join(", ");
-    // idx_sms_inbound_recipient and idx_sms_outbound_sender: index only.
-    let sql = format!(
-        "SELECT s.phone_digits FROM telnyx_sms s
-          WHERE s.company_id = ? AND s.direction = 'inbound' AND s.recipient10 IN ({marks})
-            AND s.phone_digits IS NOT NULL
-         UNION
-         SELECT s.phone_digits FROM telnyx_sms s
-          WHERE s.company_id = ? AND s.direction = 'outbound' AND s.sender10 IN ({marks})
-            AND s.phone_digits IS NOT NULL"
-    );
-    let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
-    for _ in 0..2 {
-        query = query.bind(company_id);
-        for line in lines {
-            query = query.bind(line);
+    let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(parts.join(" UNION ")));
+    if !lines.is_empty() {
+        for _ in 0..2 {
+            query = query.bind(company_id);
+            for line in lines {
+                query = query.bind(line);
+            }
         }
+    }
+    if let Some(rep) = rep {
+        query = query.bind(company_id).bind(rep.to_string());
     }
     query.fetch_all(pool).await
 }
 
-/// The thread `phone` has a row on one of `lines`.
+/// The thread `phone` has a row on one of `lines`, or one of `rep`'s
+/// copied texts.
 pub async fn thread_on_lines(
     pool: &MySqlPool,
     company_id: i32,
     lines: &[String],
+    rep: Option<i32>,
     phone: &str,
 ) -> sqlx::Result<bool> {
-    if lines.is_empty() {
+    let mut parts = Vec::new();
+    if !lines.is_empty() {
+        let marks = vec!["?"; lines.len()].join(", ");
+        parts.push(format!(
+            "(s.direction = 'inbound' AND s.recipient10 IN ({marks}))
+              OR (s.direction = 'outbound' AND s.sender10 IN ({marks}))"
+        ));
+    }
+    if rep.is_some() {
+        parts.push(format!("({})", rep_copy()));
+    }
+    if parts.is_empty() {
         return Ok(false);
     }
-    let marks = vec!["?"; lines.len()].join(", ");
     let sql = format!(
         "SELECT 1 FROM telnyx_sms s
-          WHERE s.company_id = ? AND s.phone_digits = ?
-            AND ((s.direction = 'inbound' AND s.recipient10 IN ({marks}))
-              OR (s.direction = 'outbound' AND s.sender10 IN ({marks})))
-          LIMIT 1"
+          WHERE s.company_id = ? AND s.phone_digits = ? AND ({})
+          LIMIT 1",
+        parts.join(" OR ")
     );
     let mut query = sqlx::query_scalar::<_, i32>(sqlx::AssertSqlSafe(sql))
         .bind(company_id)
@@ -190,6 +226,9 @@ pub async fn thread_on_lines(
         for line in lines {
             query = query.bind(line);
         }
+    }
+    if let Some(rep) = rep {
+        query = query.bind(rep.to_string());
     }
     Ok(query.fetch_optional(pool).await?.is_some())
 }

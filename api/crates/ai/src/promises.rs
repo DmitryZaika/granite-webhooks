@@ -42,6 +42,7 @@ use crate::followups::gather::{customer_inventory_page_url, customer_quote_page_
 use crate::phone::company;
 use crate::routes::ai::conversation_reply::{self, ConversationReplyInput, ReplyMode};
 use crate::routes::calls::recording::{CallTranscriptError, transcribe_call};
+use crate::sms_provider::not_a_copy;
 use crate::state::AppState;
 use crate::transcribe::TranscribeError;
 use chrono::{NaiveDateTime, TimeZone, Timelike, Utc};
@@ -1353,6 +1354,8 @@ pub async fn waiting_customers(
     user_id: i32,
 ) -> sqlx::Result<Vec<Waiting>> {
     let mut waiting = Vec::new();
+    // Copies of a rep's texts on their new provider (`moves`) are not new.
+    let original = not_a_copy("");
     for table in SMS_TABLES {
         // Granite Phone texts carry no agent: a thread is its line's.
         let to_rep = if table == "telnyx_sms" {
@@ -1371,7 +1374,7 @@ pub async fn waiting_customers(
                 "SELECT COALESCE(RIGHT(m.phone_digits, 10), ''), m.text, CAST(m.created_date AS DATETIME)
                    FROM {table} m
                    JOIN (SELECT phone_digits, MAX(id) AS last_id FROM {table}
-                          WHERE company_id = ? AND COALESCE(is_echo, 0) = 0
+                          WHERE company_id = ? AND COALESCE(is_echo, 0) = 0 AND {original}
                             AND created_date > UTC_TIMESTAMP() - INTERVAL 3 DAY
                           GROUP BY phone_digits) last ON last.last_id = m.id
                   WHERE m.direction = 'inbound'
@@ -1494,6 +1497,9 @@ async fn queue(pool: &MySqlPool) -> sqlx::Result<u64> {
         .fetch_all(pool)
         .await?,
     );
+    // A copy made when its rep changed provider (`moves`) was scanned as
+    // its original.
+    let original = not_a_copy("m");
     for table in SMS_TABLES {
         let sent_by = sent_by(table);
         found.extend(
@@ -1507,7 +1513,7 @@ async fn queue(pool: &MySqlPool) -> sqlx::Result<u64> {
                    JOIN {table} m ON {sent_by} AND m.company_id = u.company_id
                   WHERE u.ai_promises = 1 AND u.is_deleted = 0
                     AND m.direction = 'outbound' AND COALESCE(m.is_automated, 0) = 0
-                    AND COALESCE(m.is_echo, 0) = 0 AND m.status <> 'failed'
+                    AND COALESCE(m.is_echo, 0) = 0 AND m.status <> 'failed' AND {original}
                     AND m.created_date > UTC_TIMESTAMP() - INTERVAL ? DAY
                     AND NOT EXISTS (SELECT 1 FROM ai_promise_scans s
                                      WHERE s.user_id = u.id AND s.source_key = CONCAT('{table}:', m.id))"
@@ -2088,6 +2094,7 @@ async fn later_messages(
 ) -> sqlx::Result<Vec<String>> {
     let mut sent: Vec<(NaiveDateTime, String)> = Vec::new();
     if let Some(digits) = scan.customer_digits.as_deref() {
+        let original = not_a_copy("m");
         for table in SMS_TABLES {
             let sent_by = sent_by(table);
             let rows: Vec<(Option<String>, NaiveDateTime)> =
@@ -2096,7 +2103,7 @@ async fn later_messages(
                        JOIN users u ON u.id = ?
                       WHERE m.company_id = ? AND m.phone_digits IN (?, CONCAT('1', ?))
                         AND {sent_by} AND m.direction = 'outbound'
-                        AND COALESCE(m.is_echo, 0) = 0 AND m.created_date > ?
+                        AND COALESCE(m.is_echo, 0) = 0 AND m.created_date > ? AND {original}
                       ORDER BY m.created_date LIMIT 5"
                 )))
                 .bind(scan.user_id)

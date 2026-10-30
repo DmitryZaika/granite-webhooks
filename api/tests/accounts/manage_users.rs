@@ -256,8 +256,12 @@ async fn moving_a_rep_to_ringcentral_keeps_their_texts(pool: MySqlPool) {
     };
     save().await.assert_status(StatusCode::NO_CONTENT);
     save().await.assert_status(StatusCode::NO_CONTENT);
+    // Hers, by agent id and by number, tagged with her extension; not the
+    // other rep's.
     let copied: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT text, agent FROM ringcentral_sms WHERE company_id = 100 ORDER BY id",
+        "SELECT text, agent FROM ringcentral_sms
+          WHERE company_id = 100 AND text IN ('Your slab is ready', 'Thanks', 'Not hers')
+          ORDER BY id",
     )
     .fetch_all(&pool)
     .await
@@ -266,9 +270,27 @@ async fn moving_a_rep_to_ringcentral_keeps_their_texts(pool: MySqlPool) {
         copied,
         [
             ("Your slab is ready".to_string(), Some("777".to_string())),
-            ("Thanks".to_string(), None),
+            ("Thanks".to_string(), Some("777".to_string())),
         ]
     );
+    // And the five the seed has her sending; the second save copied nothing.
+    let copies: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ringcentral_sms
+          WHERE company_id = 100 AND idempotency_key LIKE 'cloudtalk:%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(copies, 7);
+    // Her agent id is remembered after the save cleared it.
+    let agents: Vec<String> = sqlx::query_scalar(
+        "SELECT value FROM user_sms_identities
+          WHERE user_id = 100 AND provider = 'cloudtalk' AND kind = 'agent'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(agents, ["42"]);
 }
 
 #[test_db::test(seed)]

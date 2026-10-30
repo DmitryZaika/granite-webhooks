@@ -1,7 +1,7 @@
 //! One conversation, and its read marker.
 
 use super::provider::{
-    Param, SAMPLE_PHONES, SmsProvider, fetch_all, phone_variants, valid_thread_phone,
+    COPY_KEY, Param, SAMPLE_PHONES, SmsProvider, fetch_all, phone_variants, valid_thread_phone,
 };
 use super::rollup::{MANUAL_UNREAD_AT, manual_unread};
 use super::schemas::{
@@ -33,9 +33,9 @@ struct MessageRow {
     status: String,
     agent: Option<String>,
     conversation_at: DateTime<Utc>,
-    /// The `CloudTalk` row a `RingCentral` copy was made from.
+    /// The original a copy names (`moves`).
     #[sqlx(default)]
-    copy_of: Option<i64>,
+    copy_of: Option<String>,
 }
 
 /// The thread's rows (`s`) visible to the caller, before `before_id`.
@@ -151,12 +151,10 @@ async fn message_rows(
         )
     } else {
         let order = provider.order_column();
-        let copy_of = if provider == SmsProvider::Ringcentral {
-            ", CAST(IF(s.idempotency_key LIKE 'cloudtalk:%', SUBSTRING(s.idempotency_key, 11), NULL)
-                    AS SIGNED) AS copy_of"
-        } else {
-            ""
-        };
+        let copy_of = format!(
+            ", IF(COALESCE(s.idempotency_key, '') REGEXP '{COPY_KEY}', s.idempotency_key, NULL)
+                    AS copy_of"
+        );
         format!(
             "SELECT {columns}, s.created_date AS conversation_at{copy_of} FROM {table} s
               WHERE {filter}

@@ -27,6 +27,7 @@ pub mod flow_stops;
 pub mod flows;
 mod history;
 mod inbound_media;
+pub mod moves;
 pub mod provider;
 mod rollup;
 pub mod schemas;
