@@ -28,8 +28,8 @@
 
 use crate::app_origin::{app_origin, company_subdomain};
 use crate::auth::cookie::{
-    SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, SessionData, cookie_values, decode_session_map,
-    encode_session, encode_session_map, request_session_id,
+    SESSION_COOKIE_NAME, SessionData, cookie_values, decode_session_map, encode_session,
+    encode_session_map, request_session_id,
 };
 use crate::auth::session::{
     SUPER_ADMIN_POSITION, SessionUser, find_session_user, keep_session, user_positions,
@@ -324,7 +324,8 @@ pub async fn record_failed_login(
 
 /// Sign in
 ///
-/// Checks the email and password; on success creates a session (60 days),
+/// Checks the email and password; on success creates a session (it lasts
+/// until sign-out: never by time),
 /// sets it as the `__session` cookie (HttpOnly, SameSite=Lax, Secure in
 /// production) and says where the user starts. Too many failed attempts
 /// for the email answer 429 until the 15-minute window passes. A wrong
@@ -378,15 +379,11 @@ pub async fn login(
 async fn start_session(state: &AppState, user_id: i32) -> ApiResult<Response> {
     let pool = &state.pool;
     let session_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO sessions (id, user_id, expiration_date)
-         VALUES (?, ?, NOW() + INTERVAL ? SECOND)",
-    )
-    .bind(&session_id)
-    .bind(user_id)
-    .bind(SESSION_MAX_AGE_SECONDS)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO sessions (id, user_id, expiration_date) VALUES (?, ?, NULL)")
+        .bind(&session_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
     let user = find_session_user(pool, &session_id)
         .await?
         .ok_or_else(|| ApiError::Internal("Failed to create session. Please try again.".into()))?;
@@ -445,12 +442,12 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
 /// path they start at, the acting company's subdomain and the companies a
 /// super admin can switch to. 401 when signed out.
 ///
-/// The CRM asks this as every page opens, so it also keeps the session: it
-/// lives another 60 days from now, and the cookie is set again with its full
-/// lifetime. The CRM's own hosts answer this path too (their CloudFront
-/// passes it here): Safari keeps a cookie set by a server on another IP
-/// range than the page (this API) for 7 days only, but not one set by the
-/// page's own host.
+/// The CRM asks this as every page opens, so it also sets the cookie again
+/// for its full 400 days (sessions never end by time; one from before that
+/// stops ending here). The CRM's own hosts answer this path too (their
+/// CloudFront passes it here): Safari keeps a cookie set by a server on
+/// another IP range than the page (this API) for 7 days only, but not one
+/// set by the page's own host.
 #[crate::openapi::path(
     get,
     path = "/v1/auth/session",

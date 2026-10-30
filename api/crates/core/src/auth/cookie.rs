@@ -144,8 +144,10 @@ pub struct CookieConfig {
     pub secure: bool,
 }
 
-/// Seconds a session lives (`SESSION_MAX_AGE_SECONDS`: 60 days).
-pub const SESSION_MAX_AGE_SECONDS: i64 = 60 * 60 * 24 * 60;
+/// Seconds a browser keeps the session cookie: 400 days, the most browsers
+/// allow. The session itself never ends on its own, and every page open sets
+/// the cookie again (`GET /v1/auth/session`).
+pub const SESSION_MAX_AGE_SECONDS: i64 = 60 * 60 * 24 * 400;
 
 impl CookieConfig {
     fn attributes(&self, max_age: i64, with_domain: bool) -> String {
@@ -292,13 +294,13 @@ mod tests {
         );
         assert_eq!(
             set[1],
-            "__session=abc; Path=/; Max-Age=5184000; HttpOnly; SameSite=Lax; Secure; Domain=.granite-manager.com"
+            "__session=abc; Path=/; Max-Age=34560000; HttpOnly; SameSite=Lax; Secure; Domain=.granite-manager.com"
         );
         assert_eq!(shared.clear_session().len(), 2);
         let local = CookieConfig::default();
         assert_eq!(
             local.set_session("abc"),
-            ["__session=abc; Path=/; Max-Age=5184000; HttpOnly; SameSite=Lax"]
+            ["__session=abc; Path=/; Max-Age=34560000; HttpOnly; SameSite=Lax"]
         );
     }
 

@@ -514,9 +514,9 @@ async fn last_seen_is_written_at_most_every_five_minutes(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn idle_expired_and_removed_users_tokens_are_refused(pool: MySqlPool) {
-    // Used 29 days ago: still in. 31 days: out, as is a session never used
-    // since a sign-in 31 days ago, and one past its 12 months.
+async fn only_removed_users_tokens_are_refused(pool: MySqlPool) {
+    // Nothing ends by time: unused 29 or 400 days, never used since a sign-in
+    // 400 days ago, or past the 12 months it shows, a phone is still in.
     add_session(
         &pool,
         900110,
@@ -532,7 +532,7 @@ async fn idle_expired_and_removed_users_tokens_are_refused(pool: MySqlPool) {
         100,
         100,
         11,
-        "last_seen_at = UTC_TIMESTAMP() - INTERVAL 31 DAY",
+        "last_seen_at = UTC_TIMESTAMP() - INTERVAL 400 DAY",
     )
     .await;
     add_session(
@@ -541,7 +541,7 @@ async fn idle_expired_and_removed_users_tokens_are_refused(pool: MySqlPool) {
         100,
         100,
         12,
-        "created_at = UTC_TIMESTAMP() - INTERVAL 31 DAY, last_seen_at = NULL",
+        "created_at = UTC_TIMESTAMP() - INTERVAL 400 DAY, last_seen_at = NULL",
     )
     .await;
     add_session(
@@ -559,12 +559,14 @@ async fn idle_expired_and_removed_users_tokens_are_refused(pool: MySqlPool) {
     add_session(&pool, 900115, 104, 100, 15, "").await;
     add_session(&pool, 900116, 100, 101, 16, "").await;
     let (server, _) = server(pool).await;
-    server
-        .get("/v1/me/devices")
-        .add_header(HEADER, token(10))
-        .await
-        .assert_status_ok();
-    for n in 11..=16 {
+    for n in 10..=13 {
+        server
+            .get("/v1/me/devices")
+            .add_header(HEADER, token(n))
+            .await
+            .assert_status_ok();
+    }
+    for n in 14..=16 {
         server
             .get("/v1/me/devices")
             .add_header(HEADER, token(n))
