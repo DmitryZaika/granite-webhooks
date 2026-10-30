@@ -799,6 +799,65 @@ async fn the_model_asks_back_when_a_question_fits_several_features(pool: MySqlPo
     assert!(sent.contains("(I mean SMS templates in Granite Manager.)"));
 }
 
+/// An answer that found nothing ends with a question back: the manual's
+/// closest topics, a click away; the click is answered from its section.
+#[test_db::test(seed)]
+async fn an_answer_that_found_nothing_asks_which_topic(pool: MySqlPool) {
+    let dead_end = "I can't confirm the **DLC form** or how to fill it out in Granite Manager.";
+    let reply = "Open **Admin > Company settings > Phone** and click **Texting registration**.";
+    let (server, ai) = setup(
+        &pool,
+        vec![Reply::Text(dead_end.into()), Reply::Text(reply.into())],
+    )
+    .await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "What about the DLC form?", "isNew": true }),
+    )
+    .await;
+    assert_eq!(
+        answer(&events),
+        format!("{dead_end}\n\nDo you mean one of these?")
+    );
+    let choices: Value = serde_json::from_str(named(&events, "clarify")[0]).unwrap();
+    let labels: Vec<&str> = choices
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            assert_eq!(c["source"], "manual");
+            c["label"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        labels[..2],
+        ["Texting registration (10DLC)", "Granite Phone (Telnyx)"]
+    );
+    assert!(named(&events, "crmManual").is_empty());
+    let saved = history(&pool).await;
+    let asked = saved.last().unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        asked.contains("Do you mean one of these?\n\n[[CLARIFY:What about the DLC form?|Texting registration (10DLC)=texting-registration-10dlc|Granite Phone (Telnyx)=admin-phone-telnyx"),
+        "{asked}"
+    );
+
+    let events = ask(
+        &server,
+        json!({ "query": "Texting registration (10DLC)", "isNew": false }),
+    )
+    .await;
+    assert_eq!(answer(&events), reply);
+    assert_eq!(named(&events, "crmManual"), ["true"]);
+    let requests = ai.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2, "no pick: the choice has its section");
+    let sent = contents(&requests[1]).join("\n");
+    assert!(sent.contains("(I mean Texting registration (10DLC) in Granite Manager.)"));
+}
+
 /// A feature the topic table names is answered, even when the model would
 /// ask back: "layout" in this app is the quote's slab layout.
 #[test_db::test(seed)]
