@@ -526,3 +526,47 @@ async fn pictures_come_as_short_links(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NOT_FOUND);
 }
+
+#[test_db::test(seed)]
+async fn texts_from_my_earlier_provider_are_on_my_line(pool: MySqlPool) {
+    let setup = setup(&pool, true).await;
+    // Rita texted Dave (317-555-0104) through RingCentral before Granite Phone.
+    sqlx::raw_sql(
+        "UPDATE users SET ringcentral_extension_id = '777', ringcentral_phone_number = '3175550199'
+          WHERE id = 100;
+         INSERT INTO ringcentral_sms
+           (sender, recipient, text, direction, status, agent, company_id, created_date,
+            sender10, recipient10, phone_digits)
+         VALUES (13175550199, 13175550104, 'Your slab is in', 'outbound', 'sent', '777', 100,
+                 '2026-01-05 10:00:00', '3175550199', '3175550104', '3175550104'),
+                (13175550104, 13175550199, 'Great, thanks', 'inbound', 'received', NULL, 100,
+                 '2026-01-05 11:00:00', '3175550104', '3175550199', '3175550104');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    api::routes::sms::moves::carry(&pool, 100, 100)
+        .await
+        .unwrap();
+
+    // On her own line (not the shared one), in the app.
+    let rita = setup
+        .json(1, "/v1/phone/texts/threads?number=%2B13175550104")
+        .await;
+    assert_eq!(keys(&rita), ["9701-3175550104"]);
+    let thread = setup
+        .json(1, "/v1/phone/texts/threads/9701-3175550104/messages")
+        .await;
+    let texts: Vec<&str> = thread["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["Great, thanks", "Your slab is in"]);
+    // Mark, on the shared line with her, does not get her history.
+    let mark = setup
+        .json(2, "/v1/phone/texts/threads?number=%2B13175550104")
+        .await;
+    assert_eq!(keys(&mark), Vec::<&str>::new());
+}

@@ -6,7 +6,8 @@
 //! those tagged with an agent id they ever had, and those on a number they
 //! ever had (their own: a shared Granite Phone line is not theirs alone).
 //! The ids are kept in `user_sms_identities`, so a cleared field still
-//! counts. A copy's `idempotency_key` names its original
+//! counts. On Telnyx the copies sit on the rep's own line, so the Granite
+//! Phone app shows them too. A copy's `idempotency_key` names its original
 //! ([`COPY_KEY`](super::provider::COPY_KEY)), which stays where it is: views
 //! over every provider skip copies, and an inbox showing both keeps one.
 
@@ -127,6 +128,12 @@ pub async fn carry(pool: &MySqlPool, company_id: i32, user_id: i32) -> sqlx::Res
     );
     remember(pool, company_id, user_id, &ids).await?;
 
+    // The app threads Telnyx texts by line: copies go on the rep's own.
+    let line_id = caller_ids
+        .iter()
+        .find(|line| line.kind == NumberKind::Direct)
+        .or_else(|| caller_ids.first())
+        .map(|line| line.number_id);
     let mut targets = Vec::new();
     if let Some(extension) = current
         .ringcentral_extension_id
@@ -134,18 +141,24 @@ pub async fn carry(pool: &MySqlPool, company_id: i32, user_id: i32) -> sqlx::Res
         .map(str::trim)
         .filter(|extension| !extension.is_empty())
     {
-        targets.push((SmsProvider::Ringcentral, extension.to_string()));
+        targets.push((SmsProvider::Ringcentral, extension.to_string(), None));
     }
-    if !caller_ids.is_empty() && company_features(pool, company_id).await?.telnyx_sms {
-        targets.push((SmsProvider::Telnyx, user.clone()));
+    if line_id.is_some() && company_features(pool, company_id).await?.telnyx_sms {
+        targets.push((SmsProvider::Telnyx, user.clone(), line_id));
     }
     let mut copied = 0;
-    for (target, agent) in targets {
+    for (target, agent, line_id) in targets {
         let mut tx = pool.begin().await?;
         for source in SmsProvider::ALL {
             if source != target {
-                copied += copy_texts(&mut tx, company_id, user_id, source, target, &agent).await?;
+                copied += copy_texts(
+                    &mut tx, company_id, user_id, source, target, &agent, line_id,
+                )
+                .await?;
             }
+        }
+        if let Some(line_id) = line_id {
+            move_to_line(&mut tx, company_id, user_id, line_id).await?;
         }
         copy_files_and_reads(&mut tx, company_id, target).await?;
         tx.commit().await?;
@@ -153,9 +166,32 @@ pub async fn carry(pool: &MySqlPool, company_id: i32, user_id: i32) -> sqlx::Res
     Ok(copied)
 }
 
+/// The rep's Telnyx copies on a line no longer theirs move to `line_id`.
+async fn move_to_line(
+    tx: &mut Transaction<'_, MySql>,
+    company_id: i32,
+    user_id: i32,
+    line_id: i32,
+) -> sqlx::Result<()> {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE telnyx_sms SET number_id = ?
+          WHERE company_id = ? AND agent = ? AND idempotency_key REGEXP '{COPY_KEY}'
+            AND (number_id IS NULL OR number_id NOT IN (
+                  SELECT nu.number_id FROM telnyx_number_users nu
+                   WHERE nu.user_id = ? AND nu.can_call_from <> 0))"
+    )))
+    .bind(line_id)
+    .bind(company_id)
+    .bind(user_id.to_string())
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// The user's texts on `source` (sent by them, tagged with an agent id of
 /// theirs, or on a number of theirs) not yet on `target`, copied there and
-/// tagged with their `agent` id on `target`.
+/// tagged with their `agent` id on `target` (on Telnyx, on their line).
 async fn copy_texts(
     tx: &mut Transaction<'_, MySql>,
     company_id: i32,
@@ -163,10 +199,12 @@ async fn copy_texts(
     source: SmsProvider,
     target: SmsProvider,
     agent: &str,
+    line_id: Option<i32>,
 ) -> sqlx::Result<u64> {
     let (table, from) = (target.sms_table(), source.sms_table());
     let name = source.as_str();
-    // A copy keeps naming the first original.
+    // A copy keeps naming the first original. Oldest first: the app orders
+    // a line's texts by id.
     let original = format!(
         "IF(COALESCE(s.idempotency_key, '') REGEXP '{COPY_KEY}', s.idempotency_key,
             CONCAT('{name}:', s.id))"
@@ -176,11 +214,11 @@ async fn copy_texts(
     let sql = format!(
         "INSERT INTO {table}
            (sender, recipient, text, direction, status, error_message, idempotency_key, agent,
-            sender_user_id, company_id, created_date, sender10, recipient10, phone_digits,
-            is_echo, echo_of_sms_id, is_automated)
+            {line_column}sender_user_id, company_id, created_date, sender10, recipient10,
+            phone_digits, is_echo, echo_of_sms_id, is_automated)
          SELECT s.sender, s.recipient, s.text, s.direction, s.status, s.error_message,
-                {original}, ?, s.sender_user_id, s.company_id, s.created_date, s.sender10,
-                s.recipient10, s.phone_digits, 0, NULL, s.is_automated
+                {original}, ?, {line_value}s.sender_user_id, s.company_id, s.created_date,
+                s.sender10, s.recipient10, s.phone_digits, 0, NULL, s.is_automated
            FROM {from} s
           WHERE s.company_id = ? AND s.is_echo = 0
             AND (s.sender_user_id = ?
@@ -190,13 +228,17 @@ async fn copy_texts(
             AND {original} NOT LIKE '{target_name}:%'
             AND {original} NOT IN (
               SELECT r.idempotency_key FROM {table} r
-               WHERE r.company_id = ? AND r.idempotency_key REGEXP '{COPY_KEY}')",
+               WHERE r.company_id = ? AND r.idempotency_key REGEXP '{COPY_KEY}')
+          ORDER BY s.created_date, s.id",
         target_name = target.as_str(),
+        line_column = if line_id.is_some() { "number_id, " } else { "" },
+        line_value = if line_id.is_some() { "?, " } else { "" },
     );
-    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .bind(agent)
-        .bind(company_id)
-        .bind(user_id);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(agent);
+    if let Some(line_id) = line_id {
+        query = query.bind(line_id);
+    }
+    query = query.bind(company_id).bind(user_id);
     for _ in 0..3 {
         query = query.bind(company_id).bind(user_id);
     }
