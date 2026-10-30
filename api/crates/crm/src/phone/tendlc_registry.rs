@@ -116,10 +116,9 @@ fn failed(err: &TenDlcError, what: &'static str) -> RegistryError {
     }
 }
 
-/// 400 naming the first thing missing, when the form is not complete (the
-/// IRS letter too when `letter_needed`: the server reads letters).
-pub fn complete(draft: &TenDlcDraft, letter_needed: bool) -> Result<(), RegistryError> {
-    match tendlc::problems_with_letter(draft, letter_needed).first() {
+/// 400 naming the first thing missing, when the form is not complete.
+pub fn complete(draft: &TenDlcDraft) -> Result<(), RegistryError> {
+    match tendlc::problems(draft).first() {
         Some(problem) => Err(RegistryError::Invalid(format!(
             "The registration is not complete: {}",
             problem.message
@@ -539,7 +538,7 @@ pub async fn send(state: &AppState, company_id: i32, actor: i32) -> Result<Row, 
         return Err(RegistryError::Conflict("It is with Telnyx already.".into()));
     }
     let draft = row.draft();
-    complete(&draft, state.ai.is_enabled())?;
+    complete(&draft)?;
     if let Some(why) = ai_check::blocks_sending(state, &row, actor).await? {
         return Err(RegistryError::Conflict(why));
     }
@@ -675,7 +674,7 @@ pub async fn resend(
         ));
     }
     let draft = row.draft();
-    complete(&draft, state.ai.is_enabled())?;
+    complete(&draft)?;
     if let Some(why) = ai_check::blocks_sending(state, &row, actor).await? {
         return Err(RegistryError::Conflict(why));
     }
@@ -706,10 +705,7 @@ async fn send_again(
     // A refusal after something was taken is kept on the registration.
     let mut refusal: Option<RegistryError> = None;
     let brand_id = row.telnyx_brand_id.clone().unwrap_or_default();
-    let brand_changed = row
-        .sent_brand()
-        .is_none_or(|sent| tendlc::brand_as_sent(&sent) != tendlc::brand_as_sent(&draft.brand));
-    if brand_changed || row.brand_failed() {
+    if row.sent_brand().as_ref() != Some(&draft.brand) || row.brand_failed() {
         match telnyx
             .update_brand(&brand_id, &brand_body(&draft.brand, &hook))
             .await
