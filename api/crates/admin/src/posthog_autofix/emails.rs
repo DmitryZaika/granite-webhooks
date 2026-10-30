@@ -2,10 +2,7 @@
 //! ledger or the workflow is escaped: error text is user and third-party input.
 
 use super::config::Config;
-use super::model::{
-    AgentResult, Conclusion, LastSeen, RunReport, RunView, Source, TestReport, TestStatus,
-    Verification,
-};
+use super::model::{LastSeen, RunReport, RunView, Source};
 use super::notify::Email;
 use crate::html::escape;
 use std::collections::HashMap;
@@ -13,88 +10,58 @@ use std::fmt::Write;
 
 const NAME_MAX: usize = 120;
 
-/// A run reported its result: subject `[AI fix] <outcome>: <issue name>`.
-pub fn run_finished(run: &RunView, report: &RunReport, config: &Config) -> Email {
-    let mut html = String::from("<h2>PostHog auto-fix result</h2>");
-    html.push_str(&issue_section(run, config));
-    let _ = write!(html, "{}", field("Result", &label(report)));
-    html.push_str(&pull_request(report));
-    if let Some(agent) = &report.agent {
-        html.push_str(&agent_section(agent));
-    }
-    if let Some(notes) = &report.notes {
-        html.push_str(&block("Verification notes", notes));
-    }
-    html.push_str(&run_line(report.github_run_url.as_deref()));
-    if let Some(cost) = report.cost_usd {
-        html.push_str(&field(
-            "Cost",
-            &format!("${cost:.2} (Claude Code estimate)"),
-        ));
-    }
-    Email {
-        subject: subject(&label(report), run),
-        html,
-    }
-}
-
-/// The watchdog gave up on a run that never reported back.
-pub fn run_timed_out(run: &RunView, config: &Config) -> Email {
-    let mut html = String::from("<h2>PostHog auto-fix timed out</h2>");
-    html.push_str(&issue_section(run, config));
-    let _ = write!(
-        html,
-        "<p>No result arrived within {} minutes. A result that arrives later is still \
-         recorded and emailed.</p>",
-        config.run_timeout_minutes
-    );
-    html.push_str(&run_line(run.github_run_url.as_deref()));
-    Email {
-        subject: subject("Timed out", run),
-        html,
-    }
-}
-
-/// A run could not be started after every attempt.
-pub fn dispatch_failed(run: &RunView, error: &str, config: &Config) -> Email {
-    let mut html = String::from("<h2>PostHog auto-fix could not start</h2>");
-    html.push_str(&issue_section(run, config));
-    html.push_str(&field("Attempts", &run.attempts.to_string()));
-    html.push_str(&block("Last error", error));
-    Email {
-        subject: subject("Could not start", run),
-        html,
-    }
-}
-
-/// More new issues than the storm threshold arrived in one window. `top` is
-/// `(exception type: message, issue count)`, most frequent first.
-pub fn storm_digest(
-    new_issues: usize,
-    window_minutes: i64,
-    top: &[(String, usize)],
+/// A run opened a pull request: subject `[AI fix] <title>`, then the issue,
+/// the fix and the pull request, in a few lines.
+pub fn pull_request_opened(
+    run: &RunView,
+    report: &RunReport,
+    pr_url: &str,
     config: &Config,
 ) -> Email {
-    let max_per_day = config.max_per_day;
-    let mut html = format!(
-        "<h2>PostHog error storm</h2>\
-         <p>{new_issues} new issues in {window_minutes} minutes. The storm itself starts \
-         nothing: each issue is still judged on its own once it settles. Noise is \
-         skipped, repeats fold into one run, and at most {max_per_day} runs start a \
-         day.</p><p><strong>Most frequent:</strong></p><ol>"
-    );
-    for (text, count) in top {
-        let _ = write!(
-            html,
-            "<li>{} ({count})</li>",
-            escape(&clean(text, NAME_MAX))
-        );
+    let agent = report.agent.as_ref();
+    let title = [
+        agent.and_then(|agent| agent.pr_title.as_deref()),
+        agent.map(|agent| agent.summary.as_str()),
+        Some(run.issue_name.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|text| !text.trim().is_empty())
+    .unwrap_or_default();
+    let mut html = String::new();
+    if let Some(agent) = agent {
+        html.push_str(&field("Issue", &agent.summary));
+        if !agent.fix_summary.trim().is_empty() {
+            html.push_str(&field("Fix", &agent.fix_summary));
+        }
     }
-    html.push_str("</ol>");
+    let draft = if report.pr_draft {
+        " (draft: a check failed, see the PR)"
+    } else {
+        ""
+    };
+    let _ = write!(
+        html,
+        "<p><strong>Pull request:</strong> {}{draft}</p>",
+        link(pr_url, pr_url)
+    );
+    let bug = run
+        .signature
+        .as_deref()
+        .map(|signature| {
+            format!(
+                "Bug {} &middot; ",
+                escape(super::signature::bug_id(signature))
+            )
+        })
+        .unwrap_or_default();
+    let _ = write!(
+        html,
+        "<p><small>{bug}{}</small></p>",
+        link(&config.issue_url(&run.posthog_issue_id), "PostHog issue")
+    );
     Email {
-        subject: format!(
-            "[AI fix] Error storm: {new_issues} new issues in {window_minutes} minutes"
-        ),
+        subject: format!("[AI fix] {}", clean(title, NAME_MAX)),
         html,
     }
 }
@@ -218,21 +185,6 @@ fn subject(label: &str, run: &RunView) -> String {
     format!("[AI fix] {label}: {}", clean(&run.issue_name, NAME_MAX))
 }
 
-fn label(report: &RunReport) -> String {
-    let Some(agent) = report
-        .agent
-        .as_ref()
-        .filter(|_| report.conclusion == Conclusion::Completed)
-    else {
-        return "Failed".into();
-    };
-    if agent.outcome.is_fix() && report.verification == Verification::Unverified {
-        "Fixed, unverified (draft PR)".into()
-    } else {
-        agent.outcome.label().into()
-    }
-}
-
 /// Collapses whitespace (a subject must stay on one line) and cuts to `max`.
 fn clean(text: &str, max: usize) -> String {
     let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -263,89 +215,6 @@ fn issue_link(run: &RunView, config: &Config) -> String {
     )
 }
 
-fn pull_request(report: &RunReport) -> String {
-    if let Some(url) = &report.pr_url {
-        let draft = if report.pr_draft { " (draft)" } else { "" };
-        return format!(
-            "<p><strong>Pull request:</strong> {}{draft}</p>",
-            link(url, url)
-        );
-    }
-    let fixed = report
-        .agent
-        .as_ref()
-        .is_some_and(|agent| agent.outcome.is_fix());
-    let why = if fixed {
-        "the workflow did not open one; see the run and the notes"
-    } else {
-        "this result changes no code"
-    };
-    field("Pull request", &format!("none, {why}"))
-}
-
-fn agent_section(agent: &AgentResult) -> String {
-    let mut html = block("Summary", &agent.summary);
-    html.push_str(&block("Root cause", &agent.root_cause));
-    if !agent.fix_summary.trim().is_empty() {
-        html.push_str(&block("Fix", &agent.fix_summary));
-    }
-    html.push_str(&block("Risk", &agent.risk));
-    html.push_str(&test_section(&agent.test));
-    if let Some(recommendation) = &agent.recommendation {
-        html.push_str(&block("Recommendation", recommendation));
-    }
-    if let Some(duplicate_of) = &agent.duplicate_of {
-        html.push_str(&field("Already covered by", duplicate_of));
-    }
-    html
-}
-
-fn test_section(test: &TestReport) -> String {
-    let mut html = String::new();
-    match test.status {
-        TestStatus::Written => {
-            if let Some(command) = &test.command {
-                let _ = write!(
-                    html,
-                    "<p><strong>Test command:</strong> <code>{}</code></p>",
-                    escape(command)
-                );
-            }
-            if !test.files.is_empty() {
-                let files: Vec<String> = test
-                    .files
-                    .iter()
-                    .map(|file| format!("<code>{}</code>", escape(file)))
-                    .collect();
-                let _ = write!(
-                    html,
-                    "<p><strong>Test files:</strong> {}</p>",
-                    files.join(", ")
-                );
-            }
-            if let Some(steps) = &test.manual_test_steps {
-                html.push_str(&block("Check it in the app", steps));
-            }
-        }
-        TestStatus::NotPossible => {
-            let why = test.why_not_possible.as_deref().unwrap_or("not stated");
-            html.push_str(&block("No automated test, because", why));
-        }
-        TestStatus::NotApplicable => {
-            html.push_str("<p><strong>Test:</strong> none, there is no fix.</p>");
-        }
-    }
-    if let Some(steps) = &test.manual_test_steps {
-        html.push_str(&block("Manual test steps", steps));
-    }
-    html
-}
-
-fn run_line(url: Option<&str>) -> String {
-    url.map(|url| format!("<p><strong>GitHub run:</strong> {}</p>", link(url, url)))
-        .unwrap_or_default()
-}
-
 fn count(value: Option<u32>) -> String {
     value.map_or_else(|| "?".into(), |value| value.to_string())
 }
@@ -369,7 +238,9 @@ fn link(url: &str, text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::posthog_autofix::model::{Outcome, TargetRepo};
+    use crate::posthog_autofix::model::{
+        AgentResult, Conclusion, Outcome, TargetRepo, TestReport, TestStatus, Verification,
+    };
     use chrono::Utc;
 
     const ISSUE: &str = "01a158ec-b8d5-7002-bb99-07e4e724acee";
@@ -435,52 +306,89 @@ mod tests {
     }
 
     #[test]
-    fn subjects_follow_the_outcome() {
+    fn a_pull_request_email_is_short_and_has_the_issue_the_fix_and_the_links() {
         let config = Config::default();
-        let run = run("TypeError: x is null", "d");
-        let fixed = run_finished(&run, &report(Some(agent(Outcome::FixedWithTest))), &config);
+        let mut run = run("TypeError: x is null", "d");
+        let signature = "3fa9c0d1b2e4".repeat(5);
+        run.signature = Some(signature.clone());
+        let mut answer = agent(Outcome::FixedWithTest);
+        answer.summary = "Print fails on /employee/quote/:quoteId".into();
+        answer.pr_title = Some("Fix quote print\nwith an open preview".into());
+        let email = pull_request_opened(&run, &report(Some(answer.clone())), PR, &config);
         assert_eq!(
-            fixed.subject,
-            "[AI fix] Fixed with a test: TypeError: x is null"
+            email.subject,
+            "[AI fix] Fix quote print with an open preview"
         );
-
-        let mut draft = report(Some(agent(Outcome::FixedWithTest)));
-        draft.verification = Verification::Unverified;
-        draft.pr_draft = true;
-        let email = run_finished(&run, &draft, &config);
         assert!(
             email
-                .subject
-                .starts_with("[AI fix] Fixed, unverified (draft PR): ")
+                .html
+                .contains("<p><strong>Issue:</strong> Print fails on /employee/quote/:quoteId</p>")
         );
-        assert!(email.html.contains("(draft)"));
-
-        let mut failed = report(None);
-        failed.conclusion = Conclusion::Failed;
-        failed.pr_url = None;
+        assert!(email.html.contains("<p><strong>Fix:</strong> Guard it</p>"));
+        assert!(email.html.contains(&format!(
+            "<p><strong>Pull request:</strong> <a href=\"{PR}\">{PR}</a></p>"
+        )));
+        assert!(!email.html.contains("draft"));
         assert!(
-            run_finished(&run, &failed, &config)
-                .subject
-                .starts_with("[AI fix] Failed: ")
+            email
+                .html
+                .contains(&format!("Bug {} &middot; ", &signature[..12]))
         );
+        assert!(email.html.contains(&format!(
+            "<a href=\"{}\">PostHog issue</a>",
+            config.issue_url(ISSUE)
+        )));
+        for left_out in ["Root cause", "Risk", "cargo test", "$1.50", "actions/runs"] {
+            assert!(!email.html.contains(left_out), "{left_out}");
+        }
+
+        // No pr_title: the summary names it; no summary either: the issue name.
+        answer.pr_title = None;
+        let email = pull_request_opened(&run, &report(Some(answer.clone())), PR, &config);
+        assert_eq!(
+            email.subject,
+            "[AI fix] Print fails on /employee/quote/:quoteId"
+        );
+        answer.summary = " ".into();
+        let email = pull_request_opened(&run, &report(Some(answer)), PR, &config);
+        assert_eq!(email.subject, "[AI fix] TypeError: x is null");
     }
 
     #[test]
-    fn the_storm_digest_says_issues_are_still_judged() {
+    fn a_draft_pull_request_says_so_and_a_missing_fix_or_bug_id_is_left_out() {
         let config = Config::default();
-        let html = storm_digest(25, 30, &[("TypeError: a".into(), 9)], &config).html;
-        assert!(html.contains("each issue is still judged on its own"));
-        assert!(html.contains(&format!("at most {} runs start a day", config.max_per_day)));
-        assert!(!html.contains("None were started"));
+        let mut answer = agent(Outcome::FixedWithTest);
+        answer.fix_summary = "  ".into();
+        let mut draft = report(Some(answer));
+        draft.pr_draft = true;
+        let email = pull_request_opened(&run("e", "d"), &draft, PR, &config);
+        assert!(email.html.contains("(draft: a check failed, see the PR)"));
+        assert!(!email.html.contains("<strong>Fix:</strong>"));
+        assert!(!email.html.contains("Bug "));
+        assert!(email.html.contains("PostHog issue"));
+    }
+
+    #[test]
+    fn markup_in_agent_text_is_escaped() {
+        let mut answer = agent(Outcome::FixedWithTest);
+        answer.summary = "<script>alert(1)</script>".into();
+        answer.fix_summary = "<img src=x onerror=y>".into();
+        answer.pr_title = Some("<b>title</b>".into());
+        let email = pull_request_opened(
+            &run("<i>name</i>", "d"),
+            &report(Some(answer)),
+            "https://github.com/o/r/pull/7?a=\"b\"",
+            &Config::default(),
+        );
+        assert!(!email.html.contains("<script>") && !email.html.contains("<img"));
+        assert!(email.html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(email.html.contains("&lt;img src=x onerror=y&gt;"));
+        assert!(!email.html.contains("pull/7?a=\"b\""));
     }
 
     #[test]
     fn digest_subjects() {
         let config = Config::default();
-        assert_eq!(
-            storm_digest(25, 30, &[("TypeError: a".into(), 9)], &config).subject,
-            "[AI fix] Error storm: 25 new issues in 30 minutes"
-        );
         let runs = [run("a", "d"), run("b", "d")];
         let seen = HashMap::new();
         assert_eq!(
@@ -566,51 +474,10 @@ mod tests {
     #[test]
     fn long_names_are_cut_and_stay_on_one_line() {
         let name = format!("Error\n{}", "x".repeat(300));
-        let email = run_timed_out(&run(&name, "d"), &Config::default());
+        let email = pull_request_opened(&run(&name, "d"), &report(None), PR, &Config::default());
         assert!(!email.subject.contains('\n'));
-        assert!(email.subject.chars().count() <= "[AI fix] Timed out: ".len() + NAME_MAX);
+        assert!(email.subject.chars().count() <= "[AI fix] ".len() + NAME_MAX);
         assert!(email.subject.ends_with("..."));
-    }
-
-    #[test]
-    fn markup_in_ledger_values_is_escaped() {
-        let config = Config::default();
-        let run = run("<b>name</b>", "<script>alert(1)</script>");
-        let mut report = report(Some(agent(Outcome::FixedWithTest)));
-        report.notes = Some("<img src=x onerror=y>".into());
-        let html = run_finished(&run, &report, &config).html;
-        assert!(!html.contains("<script>") && !html.contains("<img"));
-        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
-        let failed = dispatch_failed(&run, "<i>boom</i>", &config).html;
-        assert!(!failed.contains("<i>"));
-    }
-
-    #[test]
-    fn a_fix_email_has_the_pull_request_and_the_test_command() {
-        let email = run_finished(
-            &run("e", "d"),
-            &report(Some(agent(Outcome::FixedWithTest))),
-            &Config::default(),
-        );
-        assert!(email.html.contains(&format!("href=\"{PR}\"")));
-        assert!(email.html.contains("cargo test -p api --test x"));
-        assert!(email.html.contains("api/tests/x.rs"));
-        assert!(email.html.contains("$1.50 (Claude Code estimate)"));
-        assert!(email.html.contains(&Config::default().issue_url(ISSUE)));
-    }
-
-    #[test]
-    fn a_not_a_code_bug_email_has_the_recommendation() {
-        let mut answer = agent(Outcome::NotACodeBug);
-        answer.recommendation = Some("Suppress the rule in PostHog".into());
-        answer.test.status = TestStatus::NotApplicable;
-        let mut report = report(Some(answer));
-        report.pr_url = None;
-        report.verification = Verification::NotApplicable;
-        let email = run_finished(&run("e", "d"), &report, &Config::default());
-        assert!(email.subject.starts_with("[AI fix] Not a code bug: "));
-        assert!(email.html.contains("Suppress the rule in PostHog"));
-        assert!(email.html.contains("changes no code"));
     }
 
     #[test]
@@ -619,11 +486,13 @@ mod tests {
         let run = run("e", "d");
         let emails = [
             regression(&run, &config),
-            run_timed_out(&run, &config),
-            dispatch_failed(&run, "boom", &config),
-            storm_digest(21, 30, &[("a: b".into(), 4)], &config),
             preview_digest(std::slice::from_ref(&run), &HashMap::new(), &config),
-            run_finished(&run, &report(Some(agent(Outcome::NeedsHuman))), &config),
+            pull_request_opened(
+                &run,
+                &report(Some(agent(Outcome::FixedWithTest))),
+                PR,
+                &config,
+            ),
         ];
         assert!(emails[0].html.contains("check the PR's deploy"));
         for email in &emails {

@@ -9,17 +9,17 @@ An error that needs no code change gets a short report instead.
 time-triggered (every minute) ── POST /v1/jobs/posthog-autofix ──▶ api: intake
   watchdog · read new events as bugs · settle 30 min · skip noise · fold copies
   · dispatch within the caps (or, in dry run, email what it would dispatch)
-                                     │ workflow_dispatch(run_id, issue_id, event_id)
+                                     │ workflow_dispatch(run_id, issue_id, event_id, bug_id)
                                      ▼
 GitHub Actions: posthog-autofix.yml, three jobs
   prepare  trusted: warms and saves the Rust build cache, never runs agent code
   fix      both repos · MySQL 8 · isolate the agent (own user, egress firewall)
-           · fetch the issue's summary · claude -p (fixer-prompt.md)
+           · fetch the issue's summary and the open auto-fix PRs · claude -p (fixer-prompt.md)
            · verify red/green + checks · bundle
   report   fresh runner: re-check the bundle · push · open the PR · report back
                                      │
 api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
-  ledger updated · developers emailed
+  ledger updated · developers emailed (only when a PR opened)
 ```
 
 ## Where things are
@@ -45,7 +45,11 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
    source and, once source maps work, the symbolicated top frame. A bug is a
    signature, not a PostHog issue: one "Failed to fetch" split over 110
    issues is one bug, and a catch-all issue titled with a 401 that also holds
-   a 500 gives the 500 its own row. A signature's events add to its row
+   a 500 gives the 500 its own row. A browser error toast that only repeats
+   another error's message, seen within a minute of it, is folded into that
+   error (one run). Each bug has a **bug id**, the first 12 hex
+   characters of its signature, shown in the PR, the email and the branch name
+   `ai-fix/bug-<id>-<run>`. A signature's events add to its row
    while that row waits or runs, for 14 days after a run reported its
    outcome (one day after a run failed or never reported, so a broken run
    is retried), or while a skipped bug keeps happening within 14 days;
@@ -62,7 +66,7 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
    rejections, empty-body 404s and 403s stay). A browser `GraniteApiError`
    5xx whose route has an api error in the same minutes becomes a `duplicate` of it,
    and lifts its users (server errors carry no user).
-4. **Dispatch.** Within the caps (2 at once, 8 in any 24 hours by default),
+4. **Dispatch.** Within the caps (2 at once, 20 in any 24 hours by default),
    bugs seen in the last 24 hours first, then by users and occurrences. Rows
    over a cap stay `queued` for later ticks, never dropped. The workflow gets
    the run, the issue and the bug's latest event.
@@ -70,6 +74,8 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
    either makes two commits in one repository (`test: reproduce …`, then
    `fix: …`), one commit (`fixed_without_test`, with manual test steps), or
    none (`not_a_code_bug`, `not_reproducible`, `duplicate`, `needs_human`).
+   The agent sees the open auto-fix pull requests of both repositories and
+   answers `duplicate` instead of opening a second fix for the same bug.
 6. **Verify.** The workflow, not the agent:
    - checks the commit contract;
    - runs the test on the first commit, where it must fail for the right
@@ -79,14 +85,24 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
    A failed check never gives a ready pull request: it gives a draft labelled
    `ai-fix:unverified`, with the evidence.
 7. **Report.** The pull request is opened by the `granite-autofix` GitHub App.
-   The api records the result and emails `POSTHOG_AUTOFIX_RECIPIENTS`. With
+   The api records the result and emails `POSTHOG_AUTOFIX_RECIPIENTS` only
+   when the run opened a pull request (and when a fixed issue reopens): a short
+   email with the issue and route, the fix, the PR link and the bug id. Runs
+   that end without a PR, a storm of new bugs, a timeout or a run that could not
+   start send no email; they show in the ledger and in GitHub Actions. With
    write-back configured, the next poll assigns the PostHog issue to the
    fix's reviewer.
+
+The PR description is short (issue, fix, bug id, one verification line); the
+rest sits under a collapsed Details block.
 
 Before the agent starts, `python3 -m autofix issue-context` queries PostHog's
 HogQL API (same read-only key as the MCP) and puts the issue's summary and
 latest stack in the agent's first message, fenced as untrusted. It is best
 effort: on any failure the agent fetches the issue through the MCP tools.
+`python3 -m autofix open-prs` likewise lists the open `ai-fix` pull requests
+(number, title, bug id, issue line, changed files) through the read-only App
+token, and writes nothing on any failure.
 
 Browser errors resolve to real files and functions once the SPA uploads its
 source maps at deploy (`general_datebase`, `docs/static-hosting.md`). Until
@@ -137,14 +153,12 @@ sent after it releases the database lock.
 | `POSTHOG_AUTOFIX_CALLBACK_SECRET` | none | Shared with the workflow (`AUTOFIX_CALLBACK_SECRET`). Callbacks are refused without it. |
 | `POSTHOG_AUTOFIX_RECIPIENTS` | none | Comma-separated developer emails. |
 | `POSTHOG_AUTOFIX_MAX_CONCURRENT` | `2` | Runs in flight at once. |
-| `POSTHOG_AUTOFIX_MAX_PER_DAY` | `8` | Runs dispatched in any rolling 24 hours. |
+| `POSTHOG_AUTOFIX_MAX_PER_DAY` | `20` | Runs dispatched in any rolling 24 hours. |
 | `POSTHOG_AUTOFIX_SETTLE_MINUTES` | `30` | Wait after a bug's first event before it is judged. |
 | `POSTHOG_AUTOFIX_POLL_MINUTES` | `5` | PostHog is read at most this often. |
 | `POSTHOG_AUTOFIX_SIGNATURE_WINDOW_DAYS` | `14` | How long after a run reported its outcome (or after a skipped bug's last event) its row counts the bug's new events before the bug gets a new row. |
 | `POSTHOG_AUTOFIX_RUN_TIMEOUT_MINUTES` | `120` | The watchdog gives up on a silent run after this. |
 | `POSTHOG_AUTOFIX_MAX_ATTEMPTS` | `3` | Dispatch failures and usage-limit retries before a run fails. |
-| `POSTHOG_AUTOFIX_STORM_THRESHOLD` | `20` | More new bugs than this in one storm window send one digest. |
-| `POSTHOG_AUTOFIX_STORM_WINDOW_MINUTES` | `30` | The storm window. |
 | `POSTHOG_AUTOFIX_EXCLUDE` | see `config.rs` `DEFAULT_EXCLUDE` | Newline- or `;`-separated, case-insensitive substrings of `<type>: <message>`. Replaces the defaults. |
 | `POSTHOG_AUTOFIX_WRITE_KEY` | none | Optional write-back: PostHog personal API key with `error_tracking:write`, project 141685. |
 | `POSTHOG_AUTOFIX_ASSIGNEE` | none | Optional write-back: comma-separated `user:<PostHog user id>` or `role:<role uuid>`, e.g. `user:378526,user:123`. When a fix's pull request opens, its issue is assigned to one of them (PostHog allows one assignee per issue; they take turns by run), retried on the next poll if PostHog fails. Both write-back variables must be set. |
@@ -176,7 +190,7 @@ The App needs Contents, Pull requests and Issues (read and write) and Metadata
    eligible issues sends one "Dry run: N issue(s) would be fixed" email. Check
    that duplicates fold, noise is skipped, and the volume matches the caps.
 5. Do one manual workflow run (below) to prove the GitHub side.
-6. Switch to `POSTHOG_AUTOFIX_MODE=live` with the default caps (2 at once, 3
+6. Switch to `POSTHOG_AUTOFIX_MODE=live` with the default caps (2 at once, 20
    a day). Raise them only after a week of reviewed results.
 
 Switching modes keeps the watermark, so no backlog floods in. Issues
@@ -220,7 +234,7 @@ SELECT LAST_INSERT_ID();
 
 Then go to Actions, then PostHog auto-fix, then Run workflow, with `run_id` =
 that id, `issue_id` = the uuid and, optionally, `event_id` = the uuid of one
-`$exception` event of the bug (the run is then about that event's error). The `started` callback refuses any run the
+`$exception` event of the bug (the run is then about that event's error) and `bug_id` (12 lowercase hex, names the branch). The `started` callback refuses any run the
 ledger did not dispatch, so a typo stops the run before the agent starts.
 
 ## Reading the ledger

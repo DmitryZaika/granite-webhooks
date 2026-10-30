@@ -32,7 +32,7 @@
       "enum": ["granite-webhooks", "general_datebase", null]
     },
     "summary": {
-      "description": "One line: what goes wrong for the user, in plain words.",
+      "description": "One short sentence: what goes wrong for the user and on which route (page route or API route), e.g. `Print fails on /employee/quote/:quoteId when the old preview window is still open`.",
       "type": "string",
       "minLength": 1,
       "maxLength": 300
@@ -44,9 +44,9 @@
       "maxLength": 3000
     },
     "fix_summary": {
-      "description": "What the fix changes and why that removes the cause. Empty string without a fix.",
+      "description": "One or two short sentences: what the fix adds or changes, naming the new function, variable or check and its file, e.g. `Adds isPlaceholderImage() in StoneImageCropInput.tsx and skips the editor for placeholder images`. Empty string without a fix.",
       "type": "string",
-      "maxLength": 3000
+      "maxLength": 1000
     },
     "risk": {
       "description": "What the fix could break and how likely that is. Empty string without a fix.",

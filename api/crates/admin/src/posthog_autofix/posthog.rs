@@ -185,7 +185,7 @@ fn groups_query(from: DateTime<Utc>, to: DateTime<Utc>, limit: u32) -> String {
 }
 
 /// Characters of an exception message read.
-const MESSAGE_CHARS: usize = 300;
+pub const MESSAGE_CHARS: usize = 300;
 /// The columns [`parse_issues`] reads, in this order.
 const ISSUE_COLUMNS: &str = "id, created_at, status, name, description";
 /// Characters of an error response kept in a [`SourceError`].

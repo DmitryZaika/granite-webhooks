@@ -331,11 +331,13 @@ pub struct AgentResult {
     pub outcome: Outcome,
     /// The repository it changed, if any.
     pub target_repo: Option<TargetRepo>,
-    /// One line: what went wrong.
+    /// One short sentence: what goes wrong and on which route (the email's
+    /// and the pull request's Issue line).
     pub summary: String,
     /// Why it happened, in a few sentences.
     pub root_cause: String,
-    /// What changed and why that fixes it; empty without a fix.
+    /// One or two short sentences: what the fix adds or changes (the Fix
+    /// line); empty without a fix.
     pub fix_summary: String,
     /// What the fix could break, and how likely.
     pub risk: String,

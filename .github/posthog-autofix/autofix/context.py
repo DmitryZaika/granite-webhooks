@@ -1,6 +1,6 @@
 """The run's identity and file locations, read from the environment.
 
-`RUN_ID`, `ISSUE_ID` and `EVENT_ID` come from `workflow_dispatch` inputs, so
+`RUN_ID`, `ISSUE_ID`, `EVENT_ID` and `BUG_ID` come from `workflow_dispatch` inputs, so
 they are validated here before anything uses them (they reach the agent's
 prompt, the branch name and the callback URL).
 """
@@ -17,6 +17,7 @@ POSTHOG_PROJECT = 141685
 
 _RUN_ID = re.compile(r"[0-9]{1,20}")
 _ISSUE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_BUG_ID = re.compile(r"[0-9a-f]{12}")
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -43,6 +44,13 @@ def validate_event_id(value: str) -> str:
     return value
 
 
+def validate_bug_id(value: str) -> str:
+    """The bug's short id (12 hex of its signature); "" is allowed (an older api sends none)."""
+    if value and not _BUG_ID.fullmatch(value):
+        raise InputError("bug_id must be empty or 12 lowercase hex characters")
+    return value
+
+
 def is_sha(value: object) -> bool:
     return isinstance(value, str) and _SHA.fullmatch(value) is not None
 
@@ -59,6 +67,8 @@ class RunContext:
     github_run_url: str
     # uuid of a sample `$exception` event of the bug to fix; "" when not given.
     event_id: str = ""
+    # Short stable id of the bug (first 12 hex of its signature); "" when not given.
+    bug_id: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "RunContext":
@@ -77,6 +87,7 @@ class RunContext:
             out_dir=Path(env.get("RUNNER_TEMP", "/tmp")) / "autofix-out",
             github_run_url=run_url,
             event_id=validate_event_id(env.get("EVENT_ID", "")),
+            bug_id=validate_bug_id(env.get("BUG_ID", "")),
         )
 
     def repo_dir(self, repo: str) -> Path:
@@ -93,6 +104,10 @@ class RunContext:
     @property
     def issue_context(self) -> Path:
         return self.out_dir / "issue-context.json"
+
+    @property
+    def open_prs(self) -> Path:
+        return self.out_dir / "open-prs.json"
 
     @property
     def verification_json(self) -> Path:
