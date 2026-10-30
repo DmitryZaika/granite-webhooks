@@ -580,7 +580,7 @@ async fn managers_fill_it_in_save_drafts_and_mark_it_ready(pool: MySqlPool) {
     assert_eq!(first["status"], "draft");
     assert_eq!(
         first["actions"],
-        json!({ "edit": true, "markReady": false })
+        json!({ "edit": true, "markReady": false, "sendAnyway": false })
     );
     let brand = &first["draft"]["brand"];
     assert_eq!(brand["displayName"], "Acme Stone");
