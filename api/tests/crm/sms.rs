@@ -540,6 +540,19 @@ async fn a_rep_on_two_providers_reads_every_text_in_one_inbox(pool: MySqlPool) {
     assert_eq!(mine["threads"][0]["last_message_text"], "Via RingCentral");
     assert_eq!(mine["threads"][0]["message_count"], 3);
 
+    // A RingCentral copy of a CloudTalk text (a move) shows once.
+    sqlx::raw_sql(
+        "INSERT INTO ringcentral_sms
+           (sender, recipient, text, direction, status, agent, company_id, created_date,
+            sender10, recipient10, phone_digits, idempotency_key)
+         SELECT r.sender, r.recipient, 'Hello Alice', r.direction, r.status, r.agent,
+                r.company_id, r.created_date - INTERVAL 1 DAY, r.sender10, r.recipient10,
+                r.phone_digits, 'cloudtalk:9000'
+           FROM ringcentral_sms r WHERE r.text = 'Via RingCentral'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let thread = get(&pool, "/v1/sms/mine/threads/3175550100", sessions::REP).await;
     let texts: Vec<(&str, &str)> = thread["messages"]
         .as_array()

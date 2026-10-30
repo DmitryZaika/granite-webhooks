@@ -764,6 +764,7 @@ pub async fn update_account(
     texting_history::follow(
         &state,
         actor.company_id,
+        actor.user_id,
         &before.line(),
         &texting_history::Line {
             cloudtalk_agent: input

@@ -30,7 +30,7 @@ use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::MySqlPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The providers to read and the agent id to narrow each to: every provider
 /// unfiltered without a rep, else those the rep (a user id) has an agent id on.
@@ -486,6 +486,19 @@ async fn merged_thread(
         all.extend(rows);
         unread_count += thread_unread(pool, provider, user, &digits, &access).await?;
     }
+    // A text copied when its rep changed provider shows once.
+    let originals: HashSet<String> = all
+        .iter()
+        .filter(|message| message.copy_of.is_none())
+        .map(|message| format!("{}:{}", message.provider.as_str(), message.id))
+        .collect();
+    let mut shown = HashSet::new();
+    all.retain(|message| {
+        message
+            .copy_of
+            .as_ref()
+            .is_none_or(|original| !originals.contains(original) && shown.insert(original.clone()))
+    });
     all.sort_by_key(|message| message.created_at);
     let keep = usize::try_from(limit).unwrap_or(0);
     if all.len() > keep {

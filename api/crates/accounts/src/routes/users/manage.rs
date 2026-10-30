@@ -937,6 +937,7 @@ pub async fn update(
     texting_history::follow(
         &state,
         existing_company,
+        id,
         &texting_history::Line {
             cloudtalk_agent: agent_before,
             cloudtalk_phone: line10(phone_before),
