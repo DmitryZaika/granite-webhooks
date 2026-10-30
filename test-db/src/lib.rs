@@ -10,8 +10,9 @@
 //! 2. A test runs on a copy of the template. Copies stay on the server between
 //!    runs (`_test_db_c_<template>_<n>`): a run makes a new one only when more
 //!    tests run at once than there are copies. Making copies (each one script
-//!    of ~200 `CREATE TABLE`s and `INSERT ... SELECT`s) used to take most of a
-//!    run of a few tests, since every run made its own.
+//!    of ~200 `CREATE TABLE`s and `INSERT ... SELECT`s of the stored, not
+//!    generated, columns) used to take most of a run of a few tests, since
+//!    every run made its own.
 //! 3. A test claims its copy with a MySQL named lock that it holds while it
 //!    runs, so no two tests share one, whatever process, test binary or
 //!    worktree they run in.
@@ -150,6 +151,8 @@ struct Plan {
     tables: HashMap<String, Option<i64>>,
     /// Each table's `CREATE TABLE`, for a copy whose table a test dropped.
     create_table: HashMap<String, String>,
+    /// Per table, its stored (not generated) columns: the copy's column list.
+    columns: HashMap<String, String>,
     /// `(table, constraint, referenced table)` of every foreign key, sorted.
     foreign_keys: Vec<(String, String, String)>,
 }
@@ -326,8 +329,10 @@ async fn restore(
             schema_changed = true;
             write!(
                 script,
-                "{}; INSERT INTO `{table}` SELECT * FROM `{}`.`{table}`;",
-                plan.create_table[table], plan.template
+                "{}; INSERT INTO `{table}` ({columns}) SELECT {columns} FROM `{}`.`{table}`;",
+                plan.create_table[table],
+                plan.template,
+                columns = plan.columns[table],
             )
             .expect("write to String");
             continue;
@@ -338,8 +343,9 @@ async fn restore(
         dirty = true;
         write!(
             script,
-            "DELETE FROM `{table}`; INSERT INTO `{table}` SELECT * FROM `{}`.`{table}`;",
-            plan.template
+            "DELETE FROM `{table}`; INSERT INTO `{table}` ({columns}) SELECT {columns} FROM `{}`.`{table}`;",
+            plan.template,
+            columns = plan.columns[table],
         )
         .expect("write to String");
     }
@@ -445,19 +451,39 @@ async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<
     .fetch_all(&mut conn)
     .await?;
     let foreign_keys = foreign_keys(&mut conn, &name).await?;
+    // A generated column cannot be inserted into.
+    let stored: Vec<(String, String)> = sqlx::query_as(
+        "SELECT CAST(TABLE_NAME AS CHAR), CAST(CONCAT('`', COLUMN_NAME, '`') AS CHAR)
+           FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = ? AND GENERATION_EXPRESSION = ''
+          ORDER BY TABLE_NAME, ORDINAL_POSITION",
+    )
+    .bind(&name)
+    .fetch_all(&mut conn)
+    .await?;
     conn.close().await?;
+    let mut stored_columns: HashMap<String, Vec<String>> = HashMap::new();
+    for (table, column) in stored {
+        stored_columns.entry(table).or_default().push(column);
+    }
 
     let mut script = String::from("SET FOREIGN_KEY_CHECKS = 0;\n");
     let mut tables = HashMap::with_capacity(rows.len());
     let mut create_table = HashMap::with_capacity(rows.len());
+    let mut columns = HashMap::with_capacity(rows.len());
     for (table, ddl, checksum) in rows {
         writeln!(script, "{ddl};").expect("write to String");
+        let list = stored_columns
+            .get(&table)
+            .map(|stored| stored.join(", "))
+            .unwrap_or_default();
         writeln!(
             script,
-            "INSERT INTO `{table}` SELECT * FROM `{name}`.`{table}`;"
+            "INSERT INTO `{table}` ({list}) SELECT {list} FROM `{name}`.`{table}`;"
         )
         .expect("write to String");
         tables.insert(table.clone(), checksum);
+        columns.insert(table.clone(), list);
         create_table.insert(table, ddl);
     }
     script.push_str("SET FOREIGN_KEY_CHECKS = 1;\n");
@@ -467,6 +493,7 @@ async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<
         script,
         tables,
         create_table,
+        columns,
         foreign_keys,
     })
 }

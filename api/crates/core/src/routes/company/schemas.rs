@@ -7,7 +7,8 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
 pub struct CompanyFeatures {
     /// The QuickBooks feature is switched on for the company (on unless a
-    /// platform admin turned it off).
+    /// platform admin turned it off) and, on a subscription plan, the
+    /// company has the QuickBooks add-on.
     pub quickbooks_enabled: bool,
     /// The company has connected a QuickBooks account (OAuth tokens saved).
     /// QuickBooks data is only usable when both this and `quickbooks_enabled`
@@ -19,9 +20,16 @@ pub struct CompanyFeatures {
     /// The points leaderboard (the company's own switch, else the
     /// platform-wide default). See `GET /v1/points-leaderboard`.
     pub leaderboard: bool,
-    /// E-signatures: the company has a SignWell API key. Each user still needs
-    /// their own `is_signature_available` flag.
+    /// E-signatures: the company has a SignWell API key (or its own switch is
+    /// on) and, on a subscription plan, the Signatures add-on. Each user still
+    /// needs their own `is_signature_available` flag.
     pub e_signature: bool,
+    /// Quotes: the company's plan includes the Quotes add-on (always true on a
+    /// legacy plan).
+    pub quotes: bool,
+    /// The users' email signature block: the company's plan includes the
+    /// Signatures add-on (always true on a legacy plan).
+    pub email_signature: bool,
     /// Inbound email is set up (the company has a mail domain): the Emails
     /// inbox and email widgets are offered.
     pub inbound_email: bool,

@@ -527,3 +527,181 @@ INSERT INTO email_attachments (id, email_id, content_type, content_subtype, file
 INSERT INTO email_reads (message_id, read_at) VALUES
   ('<m8801@other.test>', '2026-04-10 15:00:00'),
   ('<m8804@other.test>', '2026-04-06 12:00:01');
+
+-- Add-on plans (ids 20100-20199). Both companies are on a subscription plan
+-- with eSignatures and QuickBooks switched on, so only the plan decides.
+-- 20100 Quotes Only Stone: bought Quotes.
+-- 20101 Comp Signatures Stone: Signatures granted free by a superuser, plus a
+--   Quotes item that ended (does not count).
+-- Users: 20100 manager + 20101 rep of 20100; 20102 manager + 20103 rep of
+-- 20101. Sessions aaaaaaaa-0000-4000-8000-0000000<user id>.
+INSERT INTO company (id, name, plan_source, signature_enabled) VALUES
+  (20100, 'Quotes Only Stone', 'subscription', 1),
+  (20101, 'Comp Signatures Stone', 'subscription', 1);
+
+INSERT INTO company_addons (company_id, addon_key, source, stripe_subscription_item_id, granted_by, started_at, ended_at) VALUES
+  (20100, 'quotes',     'subscription', 'si_seed_quotes', NULL, '2026-10-01 00:00:00', NULL),
+  (20101, 'signatures', 'comp',         NULL,             NULL, '2026-10-01 00:00:00', NULL),
+  (20101, 'quotes',     'subscription', 'si_seed_ended',  NULL, '2026-01-01 00:00:00', '2026-02-01 00:00:00');
+
+INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
+  (20100, 'manager@quotes-only.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Quinn Manager', 1, 1, 0, 0, 20100),
+  (20101, 'rep@quotes-only.test',     '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Ray Rep',       1, 0, 0, 0, 20100),
+  (20102, 'manager@comp-sign.test',   '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Cora Manager',  1, 1, 0, 0, 20101),
+  (20103, 'rep@comp-sign.test',       '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Sid Rep',       1, 0, 0, 0, 20101);
+
+INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+  (20100, 5, 20100),
+  (20101, 1, 20100),
+  (20102, 5, 20101),
+  (20103, 1, 20101);
+
+INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
+  ('aaaaaaaa-0000-4000-8000-000000020100', 20100, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020101', 20101, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020102', 20102, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020103', 20103, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);
+
+-- Onboarding call (ids 20400-20499). Both companies are self-serve
+-- (subscription plan); dates are relative to the reset.
+-- 20400 Onboarding Stone: commitment pending, signed up 3 days ago, deadline in
+--   27 days, advance $300.00 stated at signup; trialing (sub_seed_onboarding)
+--   with cus_seed_onboarding and an onboarding_advance consent.
+-- 20401 Booked Stone: commitment booked, signed up 10 days ago, deadline in 20
+--   days, the call in 5 days 15:00-16:00 UTC.
+-- Users: 20400 Owen Manager (admin, Manager), 20401 Rita Rep (SalesRep),
+-- 20402 Ada Admin (admin, SalesManager) of 20400; 20403 Bea Manager (admin,
+-- Manager) of 20401. Sessions aaaaaaaa-0000-4000-8000-0000000<user id>.
+INSERT INTO company (id, name, plan_source, signature_enabled) VALUES
+  (20400, 'Onboarding Stone', 'subscription', 1),
+  (20401, 'Booked Stone', 'subscription', 1);
+
+INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
+  (20400, 'manager@onboarding.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Owen Manager', 1, 1, 0, 0, 20400),
+  (20401, 'rep@onboarding.test',     '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Rita Rep',     1, 0, 0, 0, 20400),
+  (20402, 'admin@onboarding.test',   '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Ada Admin',    1, 1, 0, 0, 20400),
+  (20403, 'manager@booked.test',     '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Bea Manager',  1, 1, 0, 0, 20401);
+
+INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+  (20400, 5, 20400),
+  (20401, 1, 20400),
+  (20402, 2, 20400),
+  (20403, 5, 20401);
+
+INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
+  ('aaaaaaaa-0000-4000-8000-000000020400', 20400, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020401', 20401, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020402', 20402, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020403', 20403, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);
+
+INSERT INTO company_billing (company_id, stripe_customer_id, stripe_subscription_id, subscription_status, payment_status, trial_end_at) VALUES
+  (20400, 'cus_seed_onboarding', 'sub_seed_onboarding', 'trialing', 'none', UTC_TIMESTAMP() + INTERVAL 87 DAY);
+
+INSERT INTO consent_records (company_id, user_id, source, kind, document_version, checkbox_text, checkbox_sha256, amounts_and_dates, accepted_at) VALUES
+  (20400, 20400, 'self_serve', 'onboarding_advance', 'onboarding-advance-2026-10-v2',
+   'Onboarding is free. If it is not completed within 30 days, the next charge at least 7 days after a notice also includes the following month in advance ($300.00 plus applicable sales tax).',
+   SHA2('Onboarding is free. If it is not completed within 30 days, the next charge at least 7 days after a notice also includes the following month in advance ($300.00 plus applicable sales tax).', 256),
+   JSON_OBJECT('onboarding_advance_cents', 30000), UTC_TIMESTAMP() - INTERVAL 3 DAY);
+
+INSERT INTO company_onboarding_commitments
+  (company_id, status, deadline_at, original_deadline_at, tolled_days, extension_used, signup_advance_cents,
+   calendly_invitee_uri, calendly_event_uri, calendly_reschedule_url, calendly_cancel_url,
+   booked_start_at, booked_end_at, booked_at, version, created_at, updated_at) VALUES
+  (20400, 'pending', UTC_TIMESTAMP() + INTERVAL 27 DAY, UTC_TIMESTAMP() + INTERVAL 27 DAY, 0, 0, 30000,
+   NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+   0, UTC_TIMESTAMP() - INTERVAL 3 DAY, UTC_TIMESTAMP() - INTERVAL 3 DAY),
+  (20401, 'booked', UTC_TIMESTAMP() + INTERVAL 20 DAY, UTC_TIMESTAMP() + INTERVAL 20 DAY, 0, 0, 30000,
+   'https://api.calendly.com/scheduled_events/SEED-EVT-20401/invitees/SEED-INV-20401',
+   'https://api.calendly.com/scheduled_events/SEED-EVT-20401',
+   'https://calendly.com/reschedulings/SEED-INV-20401',
+   'https://calendly.com/cancellations/SEED-INV-20401',
+   DATE(UTC_TIMESTAMP()) + INTERVAL 5 DAY + INTERVAL 15 HOUR,
+   DATE(UTC_TIMESTAMP()) + INTERVAL 5 DAY + INTERVAL 16 HOUR,
+   UTC_TIMESTAMP() - INTERVAL 2 DAY,
+   1, UTC_TIMESTAMP() - INTERVAL 10 DAY, UTC_TIMESTAMP() - INTERVAL 2 DAY);
+
+INSERT INTO company_onboarding_commitment_events (company_id, kind, from_status, to_status, deadline_at, actor_user_id, detail, created_at) VALUES
+  (20400, 'created', NULL, 'pending', UTC_TIMESTAMP() + INTERVAL 27 DAY, NULL, JSON_OBJECT('signup_advance_cents', 30000), UTC_TIMESTAMP() - INTERVAL 3 DAY),
+  (20401, 'created', NULL, 'pending', UTC_TIMESTAMP() + INTERVAL 20 DAY, NULL, JSON_OBJECT('signup_advance_cents', 30000), UTC_TIMESTAMP() - INTERVAL 10 DAY),
+  (20401, 'booked', 'pending', 'booked', UTC_TIMESTAMP() + INTERVAL 20 DAY, NULL, JSON_OBJECT('source', 'widget'), UTC_TIMESTAMP() - INTERVAL 2 DAY);
+
+-- Self-serve account page (ids 20500-20599), for the payments app's e2e
+-- against a fake Stripe that knows customer cus_sb10 and subscription
+-- sub_sb10 (base + Quotes items).
+-- 20500 Sb10 Stone: subscription plan, in its free period until 2037-01-21,
+--   Quotes bought through the subscription.
+-- 20501 Sb10 Other Stone: another subscription company without a Stripe
+--   subscription (tenant isolation).
+-- Users: 20500 manager + 20501 rep of 20500; 20502 manager of 20501.
+-- Sessions aaaaaaaa-0000-4000-8000-0000000<user id>.
+INSERT INTO company (id, name, plan_source) VALUES
+  (20500, 'Sb10 Stone', 'subscription'),
+  (20501, 'Sb10 Other Stone', 'subscription');
+
+INSERT INTO company_billing
+  (company_id, stripe_customer_id, stripe_subscription_id, subscription_status, payment_status,
+   trial_end_at, monthly_price_cents) VALUES
+  (20500, 'cus_sb10', 'sub_sb10', 'trialing', 'active', '2037-01-21 05:00:00', 37500);
+
+INSERT INTO company_addons (company_id, addon_key, source, stripe_subscription_item_id, granted_by, started_at, ended_at) VALUES
+  (20500, 'quotes', 'subscription', 'si_sb10_quotes', NULL, '2026-10-01 00:00:00', NULL);
+
+INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
+  (20500, 'manager@sb10.test',       '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Dana Manager',  1, 1, 0, 0, 20500),
+  (20501, 'rep@sb10.test',           '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Remy Rep',      1, 0, 0, 0, 20500),
+  (20502, 'manager@sb10-other.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Otto Manager',  1, 1, 0, 0, 20501);
+
+INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+  (20500, 5, 20500),
+  (20501, 1, 20500),
+  (20502, 5, 20501);
+
+INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
+  ('aaaaaaaa-0000-4000-8000-000000020500', 20500, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020501', 20501, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020502', 20502, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);
+
+-- Move to plan (ids 20600-20699), for the plan invite e2e.
+-- 20600 Legacy Move Stone: legacy, no billing row. 20600 Lena Manager (Manager,
+--   manager@legacy-move.test) and 20601 Rob Rep (not a Manager). An open invite
+--   (Quotes; first charge 30 days out, expires in 14) made by user 103, with the
+--   dev link token `sb11-dev-invite-token-0001` for Lena: only its SHA-256 is
+--   stored (48f4a140...). Open /upgrade/sb11-dev-invite-token-0001.
+-- 20601 Legacy Sub Stone: legacy, paying a legacy single-price subscription
+--   (sub_seed_legacy, active, period end 20 days out; billing not required, so
+--   the reminder and reconcile jobs pass it by). 20602 Lila Manager (Manager,
+--   manager@legacy-sub.test).
+-- Sessions aaaaaaaa-0000-4000-8000-0000000<user id>.
+INSERT INTO company (id, name) VALUES
+  (20600, 'Legacy Move Stone'),
+  (20601, 'Legacy Sub Stone');
+
+INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
+  (20600, 'manager@legacy-move.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Lena Manager', 1, 1, 0, 0, 20600),
+  (20601, 'rep@legacy-move.test',     '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Rob Rep',      1, 0, 0, 0, 20600),
+  (20602, 'manager@legacy-sub.test',  '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Lila Manager', 1, 1, 0, 0, 20601);
+
+INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+  (20600, 5, 20600),
+  (20601, 1, 20600),
+  (20602, 5, 20601);
+
+INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
+  ('aaaaaaaa-0000-4000-8000-000000020600', 20600, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020601', 20601, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020602', 20602, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);
+
+INSERT INTO company_billing (company_id, stripe_customer_id, stripe_subscription_id, stripe_price_id,
+                             stripe_subscription_item_id, subscription_status, payment_status,
+                             current_period_start, current_period_end, plan_name, monthly_price_cents)
+VALUES (20601, 'cus_seed_legacy', 'sub_seed_legacy', 'price_seed_legacy', 'si_seed_legacy', 'active', 'active',
+        DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 DAY), DATE_ADD(UTC_TIMESTAMP(), INTERVAL 20 DAY), 'Pro', 30000);
+
+INSERT INTO plan_invites (id, company_id, created_by, addons, first_charge_on, first_charge_at, expires_at,
+                          status, created_at, updated_at)
+VALUES ('5b110000-0000-4000-8000-000000020600', 20600, 103, '["quotes"]',
+        DATE_ADD(UTC_DATE(), INTERVAL 30 DAY), TIMESTAMP(DATE_ADD(UTC_DATE(), INTERVAL 30 DAY), '14:00:00'),
+        DATE_ADD(UTC_TIMESTAMP(), INTERVAL 14 DAY), 'open', UTC_TIMESTAMP(), UTC_TIMESTAMP());
+
+INSERT INTO plan_invite_tokens (token_sha256, invite_id, user_id, created_at) VALUES
+  ('48f4a14034abe625fa5329327b97fde5d35886111825a91fc9c9f6e8cb0da5ac', '5b110000-0000-4000-8000-000000020600', 20600, UTC_TIMESTAMP());

@@ -18,7 +18,8 @@
 //! `quoteForms.server.ts` and the `admin.quotes.forms` routes.
 
 use crate::auth::{AdminUser, EmployeeUser};
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
@@ -233,7 +234,7 @@ async fn insert(
     responses(
         (status = 200, description = "The forms", body = [QuoteFormSummary]),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -243,6 +244,7 @@ pub async fn list_forms(
     EmployeeUser(user): EmployeeUser,
     Query(filter): Query<FormFilter>,
 ) -> ApiResult<Json<Vec<QuoteFormSummary>>> {
+    user.plan.require(AddonKey::Quotes)?;
     Ok(Json(
         summaries(&state.pool, user.company_id, filter.active).await?,
     ))
@@ -272,7 +274,7 @@ pub struct NewQuoteForm {
         (status = 201, description = "Created", body = CreatedId),
         (status = 400, description = "No name, or the layout cannot be read", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -282,6 +284,7 @@ pub async fn create_form(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<NewQuoteForm>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = form_name(&input.name)?;
     if let Some(problem) = config_problem(&input.config) {
         return Err(ApiError::BadRequest(problem));
@@ -302,7 +305,7 @@ pub async fn create_form(
     responses(
         (status = 201, description = "Created", body = CreatedId),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such form", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -313,6 +316,7 @@ pub async fn copy_form(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let form = find(&state.pool, user.company_id, id)
         .await?
         .ok_or(ApiError::NotFound)?;
@@ -342,7 +346,7 @@ pub struct FormOrder {
     responses(
         (status = 204, description = "Saved"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -352,6 +356,7 @@ pub async fn reorder_forms(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<FormOrder>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let mut order: Vec<i32> = Vec::new();
     for id in input.ids.into_iter().filter(|id| *id > 0) {
         if !order.contains(&id) {
@@ -385,7 +390,7 @@ pub async fn reorder_forms(
     responses(
         (status = 200, description = "The form", body = QuoteForm),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such form", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -396,6 +401,7 @@ pub async fn get_form(
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<QuoteForm>> {
+    user.plan.require(AddonKey::Quotes)?;
     find(&state.pool, user.company_id, id)
         .await?
         .map(Json)
@@ -431,7 +437,7 @@ pub struct SavedQuoteForm {
         (status = 204, description = "Saved"),
         (status = 400, description = "No name, or the layout cannot be read", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such form", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -443,6 +449,7 @@ pub async fn save_form(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<SavedQuoteForm>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     find(&state.pool, user.company_id, id)
         .await?
         .ok_or_else(|| ApiError::NotFound)?;
@@ -496,7 +503,7 @@ pub struct FormStatus {
     responses(
         (status = 204, description = "Saved"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -507,6 +514,7 @@ pub async fn set_form_status(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<FormStatus>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     sqlx::query(
         "UPDATE quote_forms SET status = ? WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
@@ -534,7 +542,7 @@ pub async fn set_form_status(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -544,6 +552,7 @@ pub async fn delete_form(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     sqlx::query(
         "UPDATE quote_forms SET deleted_at = NOW() WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
@@ -595,7 +604,7 @@ pub async fn load_letterhead(pool: &MySqlPool, company_id: i32) -> ApiResult<Let
     responses(
         (status = 200, description = "The letterhead", body = Letterhead),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -604,6 +613,7 @@ pub async fn letterhead(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<Letterhead>> {
+    user.plan.require(AddonKey::Quotes)?;
     Ok(Json(load_letterhead(&state.pool, user.company_id).await?))
 }
 
@@ -639,7 +649,7 @@ pub struct FinishedImage {
         (status = 200, description = "The image", body = FinishedImage),
         (status = 400, description = "Not an uploaded form image", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Storage error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -649,6 +659,7 @@ pub async fn finish_image(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<FormImage>,
 ) -> ApiResult<Json<FinishedImage>> {
+    user.plan.require(AddonKey::Quotes)?;
     // Trimming overwrites the file: only one the company uploaded.
     let key = crate::routes::uploads::company_key(
         &state.storage,

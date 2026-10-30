@@ -166,12 +166,27 @@ pub(super) async fn authenticate_device(
     })
 }
 
+/// 402 on the phone's paid admin setup while the company is paused (the
+/// rest of the phone stays open: calls, texts, 911).
+async fn refuse_paid_setup_while_paused(
+    parts: &Parts,
+    state: &AppState,
+    company_id: i32,
+) -> Result<(), ApiError> {
+    if super::phone_admin_paused(parts.uri.path()) && super::company_paused(state, company_id).await
+    {
+        return Err(ApiError::PaymentRequired);
+    }
+    Ok(())
+}
+
 impl FromRequestParts<AppState> for DeviceUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let token = device_token(parts).ok_or(ApiError::Unauthorized)?;
         let device = authenticate_device(&token, state).await?;
+        refuse_paid_setup_while_paused(parts, state, device.user.company_id).await?;
         super::check_sections(parts, state, &device.user).await?;
         Ok(device)
     }
@@ -227,6 +242,7 @@ impl FromRequestParts<AppState> for PhoneCaller {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         if let Some(token) = device_token(parts) {
             let device = authenticate_device(&token, state).await?;
+            refuse_paid_setup_while_paused(parts, state, device.user.company_id).await?;
             super::check_sections(parts, state, &device.user).await?;
             return Ok(Self {
                 user: device.user,

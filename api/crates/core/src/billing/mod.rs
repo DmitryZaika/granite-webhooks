@@ -3,21 +3,44 @@
 //! Stripe tells us about payments through webhooks; this module keeps
 //! `company_billing` (one row per company), its invoices and the managers'
 //! "payment required" notifications in step, and decides whether the
-//! company's access is paused. A failed payment starts a 10 day grace period;
+//! company's access is paused. A failed payment starts a 7 day grace period;
 //! when it ends unpaid (Stripe confirms), the company is suspended until it
-//! pays. Companies only get warnings and pauses when `company.billing_required`
-//! is on. Port of the CRM's `stripeBilling.ts` / `stripeBilling.server.ts`.
+//! pays. A company asked to pay that never subscribed gets 7 days from
+//! `company.billing_required_at`, then pauses until it subscribes. Companies
+//! only get warnings and pauses when `company.billing_required` is on. Port of
+//! the CRM's `billing*.ts` on `fix/stripe-billing`.
 
 pub mod account;
+pub mod addons;
+pub mod amount_notice;
+pub mod cancellation;
+pub mod cancellation_emails;
+pub mod catalog;
+pub mod gate;
+pub mod invites;
+pub mod items;
+pub mod lock;
 pub mod machine;
+pub mod method_emails;
+pub mod methods;
 pub mod reactivation;
+pub mod reminder_emails;
+pub mod reminder_store;
+pub mod reminders;
+pub mod seats;
+pub mod setup;
 pub mod store;
 pub mod stripe;
+pub mod stripe_setup;
+#[cfg(test)]
+mod test_store;
 
-use chrono::{DateTime, Duration, NaiveDateTime, SubsecRound, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, SubsecRound, TimeZone, Utc};
 use serde::Serialize;
 
-pub const GRACE_PERIOD_DAYS: i64 = 10;
+pub const GRACE_PERIOD_DAYS: i64 = 7;
+/// Days a company has to subscribe after Stripe payment is first required.
+pub const FIRST_PAYMENT_DAYS: i64 = 7;
 pub const BILLING_PATH: &str = "/admin/billing";
 pub const PAYMENT_REQUIRED_TITLE: &str = "Payment required";
 pub const UPDATE_PAYMENT_LABEL: &str = "Update Payment Method";
@@ -76,6 +99,62 @@ pub struct CompanyBilling {
     pub monthly_price_cents: Option<i64>,
     pub user_count: Option<i64>,
     pub outstanding_balance_cents: i64,
+    /// The `failed_payment_at` of the last dunning cycle that recovered, and
+    /// when: written by the save that restores access, cleared by a new cycle.
+    pub recovered_failed_at: Option<NaiveDateTime>,
+    pub recovered_at: Option<NaiveDateTime>,
+    /// When the first charge is due (self-serve signup).
+    pub trial_end_at: Option<NaiveDateTime>,
+    /// The subscription item billing users beyond the included ones.
+    pub extra_user_item_id: Option<String>,
+    /// The billable user count last pushed to Stripe.
+    pub billable_users: Option<i64>,
+    /// When the subscription is scheduled to end (a cancellation request).
+    pub cancel_at: Option<NaiveDateTime>,
+    /// The payment method columns: read with the row, written only by
+    /// `billing::methods` (never by `BillingStore::save`).
+    pub methods: MethodState,
+}
+
+/// Why the saved payment method stopped working (`company_billing.method_hold`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodHold {
+    /// The bank blocked debits from the account (D10).
+    Blocked,
+    /// A payment was disputed (D11).
+    Disputed,
+}
+
+impl MethodHold {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Blocked => "blocked",
+            Self::Disputed => "disputed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "blocked" => Some(Self::Blocked),
+            "disputed" => Some(Self::Disputed),
+            _ => None,
+        }
+    }
+}
+
+/// A company's payment method state (step 13).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MethodState {
+    /// A bank account a Manager added that waits for micro-deposits.
+    pub pending_setup_intent_id: Option<String>,
+    /// The saved method stopped working; access pauses at `hold_until`
+    /// unless a new method is saved (a blocked account) or until no dispute
+    /// of the company is open or lost (a dispute).
+    pub hold: Option<MethodHold>,
+    pub hold_at: Option<NaiveDateTime>,
+    pub hold_until: Option<NaiveDateTime>,
+    /// A bank payment is on its way (`payment_intent.processing`).
+    pub payment_processing_at: Option<NaiveDateTime>,
 }
 
 impl CompanyBilling {
@@ -99,6 +178,13 @@ impl CompanyBilling {
             monthly_price_cents: None,
             user_count: None,
             outstanding_balance_cents: 0,
+            recovered_failed_at: None,
+            recovered_at: None,
+            trial_end_at: None,
+            extra_user_item_id: None,
+            billable_users: None,
+            cancel_at: None,
+            methods: MethodState::default(),
         }
     }
 }
@@ -108,7 +194,7 @@ impl CompanyBilling {
 pub struct BillingInvoice {
     pub company_id: i32,
     pub stripe_invoice_id: String,
-    /// `paid` or `open`.
+    /// `paid`, `open`, `void` or `uncollectible`.
     pub status: String,
     pub amount_due_cents: i64,
     pub amount_paid_cents: i64,
@@ -147,6 +233,34 @@ pub struct SubscriptionSnapshot {
     /// `metadata.company_id`.
     pub company_id: Option<i32>,
     pub deleted: bool,
+    /// Every item of the subscription.
+    pub items: Vec<ItemSnapshot>,
+    /// Sum of unit price x quantity over all items; `Some` only for a
+    /// multi-item (self-serve) subscription, whose `price_id`, `item_id`,
+    /// `plan_name`, `unit_amount_cents` and `quantity` are the base item's.
+    pub monthly_total_cents: Option<i64>,
+    /// When the free period ends (the first charge), while one is set.
+    pub trial_end: Option<NaiveDateTime>,
+    /// When the subscription is scheduled to end: `cancel_at`, or the period
+    /// end with `cancel_at_period_end`.
+    pub cancel_at: Option<NaiveDateTime>,
+    /// `metadata.replaced_by`: a legacy subscription a plan move replaced
+    /// with this subscription id (it ends at its period end).
+    pub replaced_by: Option<String>,
+    /// `metadata.plan_invite_id`: the plan invite that made this subscription
+    /// (a legacy subscription it replaced carries it too, with `replaced_by`).
+    pub plan_invite_id: Option<String>,
+}
+
+/// One item of a Stripe subscription.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemSnapshot {
+    pub id: String,
+    pub price_id: String,
+    /// The price's lookup key.
+    pub lookup_key: Option<String>,
+    pub quantity: i64,
+    pub unit_amount_cents: Option<i64>,
 }
 
 /// What a Stripe invoice says.
@@ -164,6 +278,13 @@ pub struct InvoiceSnapshot {
     pub hosted_invoice_url: Option<String>,
     pub invoice_pdf: Option<String>,
     pub paid_at: Option<NaiveDateTime>,
+    /// The invoice's subscription status read from Stripe when the event is
+    /// applied; `None` when it was not read.
+    pub live_subscription_status: Option<String>,
+    /// The subscription's `metadata.replaced_by` (a plan move replaced it).
+    pub replaced_by: Option<String>,
+    /// The subscription's `metadata.plan_invite_id`.
+    pub plan_invite_id: Option<String>,
 }
 
 /// The Stripe events billing acts on.
@@ -186,6 +307,12 @@ pub enum BillingEvent {
         paid: bool,
         invoice: InvoiceSnapshot,
     },
+    /// `invoice.voided` or `invoice.marked_uncollectible`: nobody will pay it.
+    InvoiceClosed {
+        id: String,
+        kind: &'static str,
+        invoice: InvoiceSnapshot,
+    },
     PaymentMethodUpdated {
         id: String,
         customer_id: String,
@@ -199,6 +326,7 @@ impl BillingEvent {
             Self::CheckoutCompleted { id, .. }
             | Self::Subscription { id, .. }
             | Self::Invoice { id, .. }
+            | Self::InvoiceClosed { id, .. }
             | Self::PaymentMethodUpdated { id, .. } => id,
         }
     }
@@ -206,7 +334,7 @@ impl BillingEvent {
     pub const fn event_type(&self) -> &'static str {
         match self {
             Self::CheckoutCompleted { .. } => "checkout.session.completed",
-            Self::Subscription { kind, .. } => kind,
+            Self::Subscription { kind, .. } | Self::InvoiceClosed { kind, .. } => kind,
             Self::Invoice { paid: true, .. } => "invoice.paid",
             Self::Invoice { paid: false, .. } => "invoice.payment_failed",
             Self::PaymentMethodUpdated { .. } => "payment_method.updated",
@@ -256,8 +384,12 @@ pub fn parse_billing_plans(raw: Option<&str>, fallback_price_id: Option<&str>) -
     plans
 }
 
+/// Subscription statuses that never renew (SQL checks bind them joined with
+/// commas, for `FIND_IN_SET`).
+pub const ENDED_SUBSCRIPTION_STATUSES: [&str; 2] = ["canceled", "incomplete_expired"];
+
 pub fn is_ended_subscription_status(status: &str) -> bool {
-    matches!(status, "canceled" | "incomplete_expired")
+    ENDED_SUBSCRIPTION_STATUSES.contains(&status)
 }
 
 pub fn is_paying_subscription_status(status: &str) -> bool {
@@ -300,6 +432,24 @@ pub fn stripe_confirms_non_payment(state: &StripeLiveState) -> bool {
             .is_some_and(is_unpaid_subscription_status)
 }
 
+/// No successful payment yet: no billing row, or a Stripe customer whose
+/// Checkout or first payment never completed.
+pub fn is_awaiting_first_payment(record: Option<&CompanyBilling>) -> bool {
+    record.is_none_or(|record| record.payment_status == PaymentStatus::None)
+}
+
+/// A failed or paused payment (the gate checks Stripe for these).
+pub const fn is_overdue(record: &CompanyBilling) -> bool {
+    matches!(
+        record.payment_status,
+        PaymentStatus::PastDue | PaymentStatus::Suspended
+    )
+}
+
+pub fn first_payment_deadline(required_since: NaiveDateTime) -> NaiveDateTime {
+    required_since + Duration::days(FIRST_PAYMENT_DAYS)
+}
+
 /// The record names another subscription that is still alive.
 fn has_live_other_subscription(record: &CompanyBilling, subscription_id: Option<&str>) -> bool {
     match (subscription_id, record.stripe_subscription_id.as_deref()) {
@@ -324,9 +474,12 @@ pub fn days_remaining(grace_ends_at: NaiveDateTime, now: NaiveDateTime) -> i64 {
     (remaining + day - 1) / day
 }
 
-/// `September 11, 2026`.
+/// `September 11, 2026`: the business day ([`catalog::SIGNUP_TZ`]) of a UTC time.
 pub fn format_billing_date(date: NaiveDateTime) -> String {
-    date.format("%B %-d, %Y").to_string()
+    catalog::SIGNUP_TZ
+        .from_utc_datetime(&date)
+        .format("%B %-d, %Y")
+        .to_string()
 }
 
 pub fn payment_required_message(grace_ends_at: NaiveDateTime) -> String {
@@ -355,6 +508,39 @@ pub fn outstanding_balance_cents(invoices: &[BillingInvoice]) -> i64 {
         .sum()
 }
 
+/// The payments app's origin: `PAYMENTS_APP_URL`, read per request, default
+/// `https://payments.granite-manager.com`.
+pub fn payments_app_url() -> String {
+    std::env::var("PAYMENTS_APP_URL")
+        .ok()
+        .map(|url| url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| "https://payments.granite-manager.com".into())
+}
+
+/// The payments app's account page.
+pub fn payments_account_url() -> String {
+    format!("{}/account", payments_app_url())
+}
+
+/// The `From:` of every billing email unless `BILLING_EMAIL_FROM_ADDRESS` says
+/// otherwise.
+pub const DEFAULT_FROM_ADDRESS: &str = "noreply@granite-manager.com";
+
+/// The `From:` address of billing, signup and plan emails:
+/// `BILLING_EMAIL_FROM_ADDRESS`, else [`DEFAULT_FROM_ADDRESS`].
+pub fn from_address() -> String {
+    from_address_of(std::env::var("BILLING_EMAIL_FROM_ADDRESS").ok().as_deref())
+}
+
+fn from_address_of(configured: Option<&str>) -> String {
+    configured
+        .map(str::trim)
+        .filter(|address| !address.is_empty())
+        .unwrap_or(DEFAULT_FROM_ADDRESS)
+        .to_string()
+}
+
 /// The current time, whole seconds (what a DATETIME column keeps).
 pub fn now() -> NaiveDateTime {
     Utc::now().naive_utc().trunc_subsecs(0)
@@ -376,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn grace_lasts_ten_days_then_suspends() {
+    fn grace_lasts_seven_days_then_suspends() {
         let failed_at = at("2026-09-01 00:00:00");
         let record = CompanyBilling {
             payment_status: PaymentStatus::PastDue,
@@ -385,7 +571,7 @@ mod tests {
             grace_period_ends_at: Some(add_grace_days(failed_at)),
             ..CompanyBilling::empty(1)
         };
-        for day in 1..=10 {
+        for day in 1..=7 {
             let now = failed_at + Duration::days(day - 1) + Duration::minutes(1);
             assert_eq!(
                 with_grace_expiry(&record, now).payment_status,
@@ -398,16 +584,17 @@ mod tests {
         );
         assert_eq!(
             days_remaining(add_grace_days(failed_at), at("2026-09-03 00:00:00")),
-            8
+            5
         );
         assert_eq!(
-            days_remaining(add_grace_days(failed_at), at("2026-09-10 23:00:00")),
+            days_remaining(add_grace_days(failed_at), at("2026-09-07 23:00:00")),
             1
         );
         assert_eq!(
-            days_remaining(add_grace_days(failed_at), at("2026-09-12 00:00:00")),
+            days_remaining(add_grace_days(failed_at), at("2026-09-08 00:00:00")),
             0
         );
+        assert_eq!(first_payment_deadline(failed_at), at("2026-09-08 00:00:00"));
     }
 
     #[test]
@@ -473,6 +660,22 @@ mod tests {
     }
 
     #[test]
+    fn billing_dates_are_the_indianapolis_day_of_a_utc_time() {
+        assert_eq!(
+            format_billing_date(at("2026-09-11 03:30:00")),
+            "September 10, 2026"
+        );
+        assert_eq!(
+            format_billing_date(at("2026-09-11 04:00:00")),
+            "September 11, 2026"
+        );
+        assert_eq!(
+            format_billing_date(at("2026-01-01 04:59:59")),
+            "December 31, 2025"
+        );
+    }
+
+    #[test]
     fn non_payment_needs_an_open_invoice_or_an_unpaid_status() {
         let state = |status: Option<&str>, cents| StripeLiveState {
             subscription_status: status.map(str::to_string),
@@ -482,5 +685,15 @@ mod tests {
         assert!(stripe_confirms_non_payment(&state(Some("past_due"), 0)));
         assert!(!stripe_confirms_non_payment(&state(Some("active"), 0)));
         assert!(!stripe_confirms_non_payment(&state(None, 0)));
+    }
+
+    #[test]
+    fn the_from_address_defaults_and_trims() {
+        assert_eq!(from_address_of(None), DEFAULT_FROM_ADDRESS);
+        assert_eq!(from_address_of(Some("  ")), DEFAULT_FROM_ADDRESS);
+        assert_eq!(
+            from_address_of(Some(" billing@granite.test ")),
+            "billing@granite.test"
+        );
     }
 }

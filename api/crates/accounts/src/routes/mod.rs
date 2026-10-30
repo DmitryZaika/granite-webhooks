@@ -9,5 +9,6 @@ pub mod device_sessions;
 pub mod leaderboard;
 pub mod me;
 pub mod onboarding;
+pub mod signup;
 pub mod teach_mode;
 pub mod users;

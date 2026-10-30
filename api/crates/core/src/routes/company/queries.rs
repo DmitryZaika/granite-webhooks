@@ -1,4 +1,5 @@
 use super::schemas::CompanyFeatures;
+use crate::entitlements::{AddonKey, entitled_sql};
 use crate::sms_provider::SmsProvider;
 use sqlx::{AssertSqlSafe, FromRow, MySqlPool};
 
@@ -9,6 +10,8 @@ struct FeatureRow {
     onboarding: bool,
     leaderboard: bool,
     e_signature: bool,
+    quotes: bool,
+    email_signature: bool,
     domain: Option<String>,
     cloudtalk: bool,
     ringcentral: bool,
@@ -36,7 +39,9 @@ fn filled(column: &str) -> String {
 /// `companySignatureEnabled`: the company uses eSignatures, i.e. at least one
 /// of its users may send for signature. Access is given per user
 /// (`users.is_signature_available`, Superuser › Feature access); the old
-/// company switch (`company.signature_enabled`) is no longer read.
+/// company switch (`company.signature_enabled`) is no longer read. On a
+/// subscription plan the Signatures add-on gives every user access, so there
+/// it is the add-on alone (`company_features`).
 pub const SIGNATURE_ON: &str = "EXISTS (SELECT 1 FROM users su
                                  WHERE su.company_id = c.id AND su.is_deleted = 0
                                    AND COALESCE(su.is_signature_available, 0) <> 0)";
@@ -52,14 +57,17 @@ pub async fn company_features(
     company_id: i32,
 ) -> Result<CompanyFeatures, sqlx::Error> {
     let sql = format!(
-        "SELECT c.quickbooks_enabled <> 0 AS quickbooks_enabled,
+        "SELECT (c.quickbooks_enabled <> 0 AND {qbo_entitled}) AS quickbooks_enabled,
                 ({qbo_realm} AND c.qbo_access_token IS NOT NULL
                  AND c.qbo_refresh_token IS NOT NULL
                  AND c.qbo_access_expires IS NOT NULL
                  AND c.qbo_refresh_expires IS NOT NULL) AS quickbooks_connected,
                 {ONBOARDING_ON} AS onboarding,
                 {LEADERBOARD_ON} AS leaderboard,
-                {SIGNATURE_ON} AS e_signature,
+                (({SIGNATURE_ON} OR COALESCE(c.plan_source, 'legacy') = 'subscription')
+                 AND {signatures_entitled}) AS e_signature,
+                {quotes_entitled} AS quotes,
+                {signatures_entitled} AS email_signature,
                 c.domain,
                 ({ct_key} AND {ct_secret}) AS cloudtalk,
                 ((c.ringcentral_access_token IS NOT NULL
@@ -78,6 +86,9 @@ pub async fn company_features(
            {ROLLOUT_JOINS}
           WHERE c.id = ?",
         qbo_realm = filled("c.qbo_realm_id"),
+        qbo_entitled = entitled_sql("c", AddonKey::Quickbooks),
+        signatures_entitled = entitled_sql("c", AddonKey::Signatures),
+        quotes_entitled = entitled_sql("c", AddonKey::Quotes),
         ct_key = filled("c.cloudtalk_access_key"),
         ct_secret = filled("c.cloudtalk_access_secret"),
         rc_id = filled("c.ringcentral_client_id"),
@@ -96,6 +107,8 @@ pub async fn company_features(
             onboarding: false,
             leaderboard: false,
             e_signature: false,
+            quotes: true,
+            email_signature: true,
             inbound_email: false,
             cloudtalk: false,
             ringcentral: false,
@@ -110,6 +123,8 @@ pub async fn company_features(
             onboarding: row.onboarding,
             leaderboard: row.leaderboard,
             e_signature: row.e_signature,
+            quotes: row.quotes,
+            email_signature: row.email_signature,
             inbound_email: mail_domain(row.domain.as_deref()).is_some(),
             cloudtalk: row.cloudtalk,
             ringcentral: row.ringcentral,

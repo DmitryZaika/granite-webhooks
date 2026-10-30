@@ -17,6 +17,13 @@
 //! - `POST /v1/jobs/phone` → Granite Phone upkeep: sign-outs, recordings,
 //!   AI notes, call points, old Telnyx callbacks
 //! - `POST /v1/jobs/posthog-autofix` → new PostHog errors into fix runs
+//! - `POST /v1/jobs/billing-reminders` → Stripe upkeep (webhook event prune,
+//!   reconcile) and the billing reminder emails to managers
+//! - `POST /v1/jobs/subscription-maintenance` → stuck signups and plan
+//!   invite acceptances resumed, abandoned signups expired, the daily seat
+//!   reconcile
+//! - `POST /v1/jobs/onboarding-commitments` → onboarding call reminders,
+//!   tolling, completion, the fee notice and the fee invoice
 //! - `POST /v1/jobs/tendlc-checks` → the AI check of a 10DLC texting
 //!   registration marked ready
 //! - `POST /v1/jobs/promises` → what reps promised customers on calls, texts
@@ -25,15 +32,18 @@
 //! Replaces the Remix `api.*.process` cron routes.
 
 mod appointment_reminders;
+pub mod billing_reminders;
 pub mod call_history;
 pub mod call_points;
 pub mod contact_sync;
 pub mod maintenance_reminders;
+pub mod onboarding_commitments;
 pub mod phone;
 pub mod posthog_autofix;
 pub mod promises;
 pub mod signature_reminders;
 pub mod sms_followups;
+pub mod subscription_maintenance;
 pub mod supplier_files;
 pub mod survey_notifications;
 pub mod tendlc_checks;
@@ -55,5 +65,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(phone::run))
         .routes(routes!(posthog_autofix::run))
         .routes(routes!(tendlc_checks::run))
+        .routes(routes!(billing_reminders::run))
+        .routes(routes!(subscription_maintenance::run))
+        .routes(routes!(onboarding_commitments::run))
         .routes(routes!(promises::run))
 }

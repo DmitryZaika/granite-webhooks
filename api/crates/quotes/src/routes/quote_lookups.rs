@@ -9,7 +9,8 @@
 //! the company's most recently changed quotes.
 
 use crate::auth::EmployeeUser;
-use crate::error::{ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiResult, ErrorBody};
 use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::quote_editor::{StoneImage, stone_images};
@@ -104,7 +105,7 @@ struct DrawingRow {
     responses(
         (status = 200, description = "Remembered names and items", body = QuoteSuggestions),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -113,6 +114,7 @@ pub async fn quote_suggestions(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<QuoteSuggestions>> {
+    user.plan.require(AddonKey::Quotes)?;
     // Only the two lists are read out of each drawing, not the whole drawing.
     let rows: Vec<DrawingRow> = sqlx::query_as(
         "SELECT CAST(JSON_EXTRACT(q.draft_drawing_json, '$.areas') AS CHAR) AS areas,
@@ -293,7 +295,7 @@ pub struct StoneImageLookup {
     responses(
         (status = 200, description = "The photo, or null", body = StoneImageLookup),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -303,6 +305,7 @@ pub async fn quote_stone_image(
     EmployeeUser(user): EmployeeUser,
     Query(query): Query<StoneImageQuery>,
 ) -> ApiResult<Json<StoneImageLookup>> {
+    user.plan.require(AddonKey::Quotes)?;
     let color = query.color.trim();
     if color.is_empty() {
         return Ok(Json(StoneImageLookup { image: None }));

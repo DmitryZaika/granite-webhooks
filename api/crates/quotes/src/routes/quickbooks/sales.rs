@@ -7,7 +7,8 @@
 
 use super::invoice::{number, text};
 use crate::auth::EmployeeUser;
-use crate::error::{ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::qbo::{Access, QboError, escape};
 use crate::state::AppState;
@@ -340,7 +341,7 @@ fn currency(report: &Report) -> String {
     responses(
         (status = 200, description = "Sales", body = RepSales),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -354,6 +355,7 @@ pub async fn my_sales(
         Ok(_) if name.is_empty() => return Ok(Json(RepSales::only(SalesStatus::Unavailable))),
         Ok(access) => access,
         Err(QboError::NotConnected) => return Ok(Json(RepSales::only(SalesStatus::Unavailable))),
+        Err(QboError::AddonRequired) => return Err(ApiError::AddonRequired(AddonKey::Quickbooks)),
         Err(QboError::Database(err)) => return Err(err.into()),
         Err(err) => {
             tracing::warn!(error = %err, "QuickBooks sales unavailable");
@@ -596,7 +598,7 @@ fn customer_rows(report: &Report, invoices: &[DatedInvoice]) -> Vec<CustomerSale
     responses(
         (status = 200, description = "Customers", body = RepCustomers),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -637,6 +639,7 @@ pub async fn my_customers(
     .await;
     Ok(Json(match result {
         Ok(customers) => customers,
+        Err(QboError::AddonRequired) => return Err(ApiError::AddonRequired(AddonKey::Quickbooks)),
         Err(err) if err.is_not_connected() => RepCustomers::empty(CustomersStatus::NotConnected),
         Err(QboError::Database(err)) => return Err(err.into()),
         Err(err) => {

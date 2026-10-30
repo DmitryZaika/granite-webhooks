@@ -5,6 +5,10 @@
 
 #[path = "../common/mod.rs"]
 mod common;
+#[path = "../support/fake_stripe.rs"]
+mod fake_stripe;
+#[path = "../support/fake_webhooks.rs"]
+mod fake_webhooks;
 
 mod app_shell;
 mod auth;
@@ -15,6 +19,9 @@ mod me;
 mod me_account;
 mod onboarding;
 mod position_sections;
+mod signup;
+mod signup_bank;
+mod signup_provisioning;
 mod teach_mode;
 mod todos;
 mod user_call_activity;

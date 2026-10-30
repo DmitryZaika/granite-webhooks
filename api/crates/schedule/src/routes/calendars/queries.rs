@@ -1,12 +1,9 @@
 use super::schemas::Calendar;
 use sqlx::MySqlPool;
 
-/// Built-in calendars every company has: slug, name, color.
-pub const SYSTEM_CALENDARS: [(&str, &str, &str); 3] = [
-    ("templates", "Templates", "green"),
-    ("installations", "Installations", "red"),
-    ("estimates", "Estimates", "blue"),
-];
+/// Built-in calendars every company has (in `company_create`, which seeds
+/// them for a new company).
+pub use crate::company_create::SYSTEM_CALENDARS;
 
 /// Creates missing built-in calendars and restores their names (colors are
 /// the company's choice). Port of `ensureSystemCalendars`.

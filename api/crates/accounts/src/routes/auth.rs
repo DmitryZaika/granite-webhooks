@@ -102,24 +102,8 @@ fn random_token() -> Result<String, ApiError> {
         }))
 }
 
-/// The client address: the first `X-Forwarded-For` entry (API Gateway and
-/// CloudFront set it), else "unknown".
-pub fn client_ip(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|value| value.to_str().ok())
-                .map(str::trim)
-        })
-        .unwrap_or("unknown")
-        .to_string()
-}
+/// The client address (in `api_core::auth`, which self-serve signup uses too).
+pub use crate::auth::{ClientIp, client_ip};
 
 /// The verified session cookie of the request, as every key it holds.
 fn request_session(
@@ -134,7 +118,7 @@ fn request_session(
         .find_map(|value| decode_session_map(&value, secret))
 }
 
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
+pub(crate) fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
     for cookie in cookies {
         if let Ok(value) = HeaderValue::from_str(&cookie) {
             response.headers_mut().append(SET_COOKIE, value);
@@ -343,7 +327,7 @@ pub async fn record_failed_login(
 )]
 pub async fn login(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     JsonBody(input): JsonBody<LoginInput>,
 ) -> ApiResult<Response> {
     let Some((email, password)) = normalized_credentials(&input.email, &input.password) else {
@@ -353,7 +337,7 @@ pub async fn login(
     };
     let pool = &state.pool;
     let email_hash = sha256_hex(&email);
-    let ip_hash = sha256_hex(&client_ip(&headers));
+    let ip_hash = sha256_hex(&ip);
     if too_many_failures(pool, &email_hash, &ip_hash).await? {
         return Err(ApiError::TooManyRequests(
             "Too many login attempts. Please try again later.".into(),
@@ -369,11 +353,20 @@ pub async fn login(
         .bind(&email_hash)
         .execute(pool)
         .await?;
-    start_session(&state, user_id).await
+    let started = start_session(&state, user_id).await?;
+    let body = auth_session(pool, started.user).await?;
+    Ok(with_cookies(Json(body).into_response(), started.cookies))
 }
 
-/// Signs the user in: a new session, the sign-in answer and its cookie.
-async fn start_session(state: &AppState, user_id: i32) -> ApiResult<Response> {
+/// A new session and the `Set-Cookie` values that carry it.
+pub(crate) struct StartedSession {
+    pub user: SessionUser,
+    pub cookies: Vec<String>,
+}
+
+/// Signs `user_id` in: a 60-day `sessions` row and its `__session` cookie
+/// (put it on the response with [`with_cookies`]).
+pub(crate) async fn start_session(state: &AppState, user_id: i32) -> ApiResult<StartedSession> {
     let pool = &state.pool;
     let session_id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
@@ -388,7 +381,6 @@ async fn start_session(state: &AppState, user_id: i32) -> ApiResult<Response> {
     let user = find_session_user(pool, &session_id)
         .await?
         .ok_or_else(|| ApiError::Internal("Failed to create session. Please try again.".into()))?;
-    let body = auth_session(pool, user).await?;
     let cookie = encode_session(
         &SessionData {
             session_id: Some(session_id),
@@ -396,10 +388,10 @@ async fn start_session(state: &AppState, user_id: i32) -> ApiResult<Response> {
         },
         &state.session_secret,
     );
-    Ok(with_cookies(
-        Json(body).into_response(),
-        state.cookie.set_session(&cookie),
-    ))
+    Ok(StartedSession {
+        user,
+        cookies: state.cookie.set_session(&cookie),
+    })
 }
 
 /// Sign out
@@ -1014,7 +1006,9 @@ pub async fn accept_invite(
         return Err(ApiError::NotFound);
     }
     tx.commit().await?;
-    start_session(&state, invited.id).await
+    let started = start_session(&state, invited.id).await?;
+    let body = auth_session(&state.pool, started.user).await?;
+    Ok(with_cookies(Json(body).into_response(), started.cookies))
 }
 
 #[cfg(test)]

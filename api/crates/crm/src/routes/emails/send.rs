@@ -13,7 +13,8 @@ use super::signatures::{self, Created};
 use super::sql::{can_read_thread, normalize_address, normalized};
 use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::native_delivery;
 use crate::state::AppState;
@@ -50,7 +51,7 @@ const MAX_DELAY_DAYS: i64 = 90;
         (status = 200, description = "Sent, or scheduled", body = SendEmailResult),
         (status = 400, description = "Invalid recipients, empty email, unknown deal, bad send time, an attachment the caller may not use, or an address SES refused", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, or sends documents for signature without the Signatures add-on (`addon`: `signatures`) or eSignature access", body = AddonRequiredBody),
         (status = 500, description = "Database error, or sent but not recorded", body = ErrorBody),
         (status = 502, description = "Sending failed", body = ErrorBody),
     ),
@@ -450,7 +451,7 @@ async fn sender(pool: &MySqlPool, user: &SessionUser) -> Result<Sender, sqlx::Er
     Ok(Sender {
         name: name.filter(|name| !name.trim().is_empty()),
         address: super::thread::from_email(domain.flatten().as_deref(), &user.email),
-        signature,
+        signature: signature.filter(|_| user.plan.has(AddonKey::Signatures)),
     })
 }
 

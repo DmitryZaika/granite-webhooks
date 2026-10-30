@@ -9,6 +9,7 @@
 
 use crate::auth::CurrentUser;
 use crate::auth::session::{SUPER_ADMIN_POSITION, SessionUser, UserPositionRow, user_positions};
+use crate::entitlements::{AddonKey, Entitlements};
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::openapi::{OpenApiRouter, routes};
@@ -46,14 +47,33 @@ pub struct ShellCompany {
 /// Company-level switches the frame reads.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ShellFeatures {
-    /// QuickBooks is switched on.
+    /// QuickBooks is switched on and in the plan.
     pub quickbooks: bool,
-    /// E-signatures are set up.
+    /// E-signatures are set up and in the plan.
     pub signature: bool,
     /// Guided tours are on.
     pub onboarding: bool,
     /// The points leaderboard is on.
     pub leaderboard: bool,
+    /// The plan includes the Quotes add-on (always true on a legacy plan).
+    pub quotes: bool,
+    /// The plan includes the Signatures add-on, so users' email signature
+    /// blocks are offered (always true on a legacy plan).
+    pub email_signature: bool,
+}
+
+/// The acting company's plan: what it pays for.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ShellPlan {
+    /// `legacy` (every add-on included) or `subscription` (only the add-ons
+    /// in `addons`).
+    pub source: &'static str,
+    /// The add-ons the company may use, in a fixed order (all of them on a
+    /// legacy plan).
+    pub addons: Vec<AddonKey>,
+    /// Where a Manager buys or cancels add-ons (the payments app's account
+    /// page).
+    pub manage_url: String,
 }
 
 /// `GET /v1/app/shell`.
@@ -105,7 +125,8 @@ pub struct AppShell {
     pub is_shop_manager: bool,
     /// Holds Template in the company (their portal is their own schedule).
     pub is_template_maker: bool,
-    /// May send documents for signature.
+    /// May send documents for signature: the user's own flag, or any user of
+    /// a subscription company whose plan has the Signatures add-on.
     pub user_signature_access: bool,
     /// AI promises is on for the user (`users.ai_promises`): the promise list
     /// and the promised messages in the composers.
@@ -113,10 +134,23 @@ pub struct AppShell {
     /// The user has the AI personal assistant, on or switched off by them
     /// (the switch on My Account).
     pub user_ai_promises_available: bool,
-    /// The acting company's switches.
+    /// The acting company's switches, with the plan's add-ons applied.
     pub company_features: ShellFeatures,
+    /// The acting company's plan.
+    pub plan: ShellPlan,
     /// What the user's home company can do, as the guided tours gate on it.
     pub feature_capabilities: crate::routes::onboarding::team::TeamCapabilities,
+}
+
+impl ShellPlan {
+    /// `PAYMENTS_APP_URL` is read per request, like `SMS_IMAGES_ENABLED`.
+    fn of(plan: &Entitlements) -> Self {
+        Self {
+            source: plan.source(),
+            addons: plan.entitled(),
+            manage_url: crate::billing::payments_account_url(),
+        }
+    }
 }
 
 /// A company of the switcher.
@@ -284,7 +318,8 @@ pub async fn shell(
         can_manage_billing: here(MANAGER),
         is_shop_manager: here(SHOP_MANAGER),
         is_template_maker: here(TEMPLATE_MAKER),
-        user_signature_access: user.is_signature_available,
+        user_signature_access: user.is_signature_available
+            || (user.plan.subscription && user.plan.has(AddonKey::Signatures)),
         user_ai_promises,
         user_ai_promises_available,
         company_features: ShellFeatures {
@@ -292,7 +327,10 @@ pub async fn shell(
             signature: features.e_signature,
             onboarding: features.onboarding,
             leaderboard: features.leaderboard,
+            quotes: features.quotes,
+            email_signature: features.email_signature,
         },
+        plan: ShellPlan::of(&user.plan),
         feature_capabilities,
         user,
     }))

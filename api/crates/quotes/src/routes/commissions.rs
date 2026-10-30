@@ -15,7 +15,8 @@ use crate::commissions::{
     CommissionPart, CommissionRule, PaidRow, PayrollWeek, payroll_date_for, payroll_weeks,
     pick_invoice, quote_commission, status_of,
 };
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
@@ -117,7 +118,7 @@ pub async fn load_rules(pool: &MySqlPool, company_id: i32) -> ApiResult<Vec<Comm
     responses(
         (status = 200, description = "The rules", body = [CommissionRule]),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -126,6 +127,7 @@ pub async fn list_rules(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<Vec<CommissionRule>>> {
+    user.plan.require(AddonKey::Quotes)?;
     Ok(Json(load_rules(&state.pool, user.company_id).await?))
 }
 
@@ -292,7 +294,7 @@ async fn save_rule(
         (status = 201, description = "Added", body = CreatedId),
         (status = 400, description = "Check the rule", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -302,6 +304,7 @@ pub async fn create_rule(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<RuleInput>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let id = save_rule(&state.pool, user.company_id, user.id, None, checked(input)?).await?;
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
@@ -320,7 +323,7 @@ pub async fn create_rule(
         (status = 204, description = "Saved"),
         (status = 400, description = "Check the rule", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such rule", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -332,6 +335,7 @@ pub async fn update_rule(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<RuleInput>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     save_rule(
         &state.pool,
         user.company_id,
@@ -355,7 +359,7 @@ pub async fn update_rule(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -365,6 +369,7 @@ pub async fn delete_rule(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     sqlx::query("UPDATE commission_rules SET deleted_at = NOW() WHERE id = ? AND company_id = ?")
         .bind(id)
         .bind(user.company_id)
@@ -414,7 +419,7 @@ pub async fn load_settings(pool: &MySqlPool, company_id: i32) -> ApiResult<Commi
     responses(
         (status = 200, description = "The settings", body = CommissionSettings),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -423,6 +428,7 @@ pub async fn get_settings(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<CommissionSettings>> {
+    user.plan.require(AddonKey::Quotes)?;
     Ok(Json(load_settings(&state.pool, user.company_id).await?))
 }
 
@@ -438,7 +444,7 @@ pub async fn get_settings(
     responses(
         (status = 204, description = "Saved"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -448,6 +454,7 @@ pub async fn save_settings(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<CommissionSettings>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     sqlx::query(
         "INSERT INTO commission_settings (company_id, base_weekly, payroll_weekday) VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE base_weekly = VALUES(base_weekly), payroll_weekday = VALUES(payroll_weekday)",
@@ -596,7 +603,7 @@ pub struct Commissions {
         (status = 200, description = "The commissions", body = Commissions),
         (status = 400, description = "Unknown scope", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee, or not an admin for `company`", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, or not an admin for `company`, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -606,6 +613,7 @@ pub async fn list_commissions(
     EmployeeUser(user): EmployeeUser,
     Query(query): Query<CommissionScope>,
 ) -> ApiResult<Json<Commissions>> {
+    user.plan.require(AddonKey::Quotes)?;
     let only = match query.scope.as_deref() {
         None | Some("mine") => Some(user.id),
         Some("company") if user.is_admin || user.is_superuser => None,
@@ -665,7 +673,7 @@ struct SignedQuote {
     responses(
         (status = 200, description = "Synced", body = SyncResult),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -674,6 +682,7 @@ pub async fn sync_commissions(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<SyncResult>> {
+    user.plan.require(AddonKey::Quotes)?;
     let company_id = user.company_id;
     let rules = load_rules(&state.pool, company_id).await?;
     let settings = load_settings(&state.pool, company_id).await?;
@@ -823,7 +832,7 @@ pub struct Payout {
     responses(
         (status = 204, description = "Marked"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -833,6 +842,7 @@ pub async fn pay_out(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<Payout>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     if input.ids.is_empty() {
         return Ok(StatusCode::NO_CONTENT);
     }

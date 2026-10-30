@@ -12,7 +12,8 @@
 //! `.measurements` and `.email-templates` routes.
 
 use crate::auth::{AdminUser, EmployeeUser};
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
 use crate::openapi::{OpenApiRouter, routes};
@@ -154,7 +155,7 @@ async fn exists(state: &AppState, table: &str, company_id: i32, id: i32) -> Resu
     responses(
         (status = 200, description = "Tax rates", body = Vec<QuoteTaxRate>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -163,6 +164,7 @@ pub async fn list_tax_rates(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<Vec<QuoteTaxRate>>> {
+    user.plan.require(AddonKey::Quotes)?;
     Ok(Json(
         sqlx::query_as(
             "SELECT id, name, sequence, CAST(tax_pct AS DOUBLE) AS tax_pct FROM quote_tax_rates
@@ -187,7 +189,7 @@ pub async fn list_tax_rates(
         (status = 201, description = "Added", body = QuoteTaxRate),
         (status = 400, description = "No name, or a percent outside 0-100", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -197,6 +199,7 @@ pub async fn create_tax_rate(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<QuoteTaxRateInput>,
 ) -> ApiResult<(StatusCode, Json<QuoteTaxRate>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = required(&input.name, 120, "Name is required.")?;
     let tax_pct = tax_pct(input.tax_pct)?;
     let sequence = sequence(input.sequence);
@@ -237,7 +240,7 @@ pub async fn create_tax_rate(
         (status = 204, description = "Saved"),
         (status = 400, description = "No name, or a percent outside 0-100", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such tax rate in the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -249,6 +252,7 @@ pub async fn update_tax_rate(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<QuoteTaxRateInput>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = required(&input.name, 120, "Name is required.")?;
     let tax_pct = tax_pct(input.tax_pct)?;
     exists(&state, "quote_tax_rates", user.company_id, id).await?;
@@ -278,7 +282,7 @@ pub async fn update_tax_rate(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such tax rate in the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -289,6 +293,7 @@ pub async fn delete_tax_rate(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     soft_delete(&state, "quote_tax_rates", user.company_id, id).await
 }
 
@@ -303,7 +308,7 @@ pub async fn delete_tax_rate(
     responses(
         (status = 200, description = "Payment terms", body = Vec<QuotePaymentTerm>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -312,6 +317,7 @@ pub async fn list_payment_terms(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<Vec<QuotePaymentTerm>>> {
+    user.plan.require(AddonKey::Quotes)?;
     Ok(Json(
         sqlx::query_as(
             "SELECT id, name, sequence, terms FROM quote_payment_terms
@@ -336,7 +342,7 @@ pub async fn list_payment_terms(
         (status = 201, description = "Added", body = QuotePaymentTerm),
         (status = 400, description = "No name or no terms", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -346,6 +352,7 @@ pub async fn create_payment_term(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<QuotePaymentTermInput>,
 ) -> ApiResult<(StatusCode, Json<QuotePaymentTerm>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = required(&input.name, 120, "Name is required.")?;
     let terms = required(&input.terms, 5000, "Terms are required.")?;
     let sequence = sequence(input.sequence);
@@ -386,7 +393,7 @@ pub async fn create_payment_term(
         (status = 204, description = "Saved"),
         (status = 400, description = "No name or no terms", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such payment terms in the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -398,6 +405,7 @@ pub async fn update_payment_term(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<QuotePaymentTermInput>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = required(&input.name, 120, "Name is required.")?;
     let terms = required(&input.terms, 5000, "Terms are required.")?;
     exists(&state, "quote_payment_terms", user.company_id, id).await?;
@@ -427,7 +435,7 @@ pub async fn update_payment_term(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such payment terms in the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -438,6 +446,7 @@ pub async fn delete_payment_term(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     soft_delete(&state, "quote_payment_terms", user.company_id, id).await
 }
 
@@ -484,7 +493,7 @@ pub struct OnlineQuoteOptionInput {
     responses(
         (status = 200, description = "Options", body = Vec<OnlineQuoteOption>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -493,6 +502,7 @@ pub async fn list_online_options(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<Vec<OnlineQuoteOption>>> {
+    user.plan.require(AddonKey::Quotes)?;
     // Deleted rows count: defaults the admin deleted stay deleted.
     let ever: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM online_quote_options WHERE company_id = ?")
@@ -551,7 +561,7 @@ pub async fn enabled_online_options(
         (status = 201, description = "Added", body = OnlineQuoteOption),
         (status = 400, description = "No name", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -561,6 +571,7 @@ pub async fn create_online_option(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<OnlineQuoteOptionInput>,
 ) -> ApiResult<(StatusCode, Json<OnlineQuoteOption>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = required(&input.name, 120, "Name is required.")?;
     let sequence = sequence(input.sequence);
     let id = sqlx::query(
@@ -600,7 +611,7 @@ pub async fn create_online_option(
         (status = 204, description = "Saved"),
         (status = 400, description = "No name", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such option in the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -612,6 +623,7 @@ pub async fn update_online_option(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<OnlineQuoteOptionInput>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = required(&input.name, 120, "Name is required.")?;
     exists(&state, "online_quote_options", user.company_id, id).await?;
     sqlx::query(
@@ -640,7 +652,7 @@ pub async fn update_online_option(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such option in the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -651,6 +663,7 @@ pub async fn delete_online_option(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     soft_delete(&state, "online_quote_options", user.company_id, id).await
 }
 
@@ -699,7 +712,7 @@ fn rounding(value: f64) -> f64 {
     responses(
         (status = 200, description = "The settings", body = QuoteSettings),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -708,6 +721,7 @@ pub async fn get_settings(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<QuoteSettings>> {
+    user.plan.require(AddonKey::Quotes)?;
     Ok(Json(
         load_quote_settings(&state.pool, user.company_id).await?,
     ))
@@ -750,7 +764,7 @@ pub async fn load_quote_settings(
         (status = 204, description = "Saved"),
         (status = 400, description = "Depth not in (0, 120]", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -760,6 +774,7 @@ pub async fn save_settings(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<QuoteSettingsInput>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let depth = input.default_depth;
     if !depth.is_finite() || depth <= 0.0 || depth > 120.0 {
         return Err(ApiError::BadRequest(
@@ -878,7 +893,7 @@ pub struct QuoteEmailTemplateOrder {
     responses(
         (status = 204, description = "Saved"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -888,6 +903,7 @@ pub async fn reorder_email_templates(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<QuoteEmailTemplateOrder>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let existing: Vec<i32> = sqlx::query_scalar(
         "SELECT id FROM quote_email_templates
           WHERE company_id = ? AND user_id IS NULL AND deleted_at IS NULL
@@ -940,7 +956,7 @@ async fn company_template(state: &AppState, company_id: i32, id: i32) -> Result<
     responses(
         (status = 200, description = "Templates", body = Vec<QuoteEmailTemplate>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -949,6 +965,7 @@ pub async fn list_email_templates(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<Vec<QuoteEmailTemplate>>> {
+    user.plan.require(AddonKey::Quotes)?;
     Ok(Json(
         sqlx::query_as(
             "SELECT id, user_id IS NOT NULL AS personal, name, subject, body, sequence
@@ -989,7 +1006,7 @@ fn template_fields(
         (status = 201, description = "Added"),
         (status = 400, description = "No name or no subject", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -999,6 +1016,7 @@ pub async fn create_email_template(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<QuoteEmailTemplateInput>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let (name, subject, body, sequence) = template_fields(&input)?;
     let id = sqlx::query(
         "INSERT INTO quote_email_templates (company_id, user_id, name, subject, body, sequence, created_by)
@@ -1031,7 +1049,7 @@ pub async fn create_email_template(
         (status = 204, description = "Saved"),
         (status = 400, description = "No name or no subject", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such company template", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1043,6 +1061,7 @@ pub async fn update_email_template(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<QuoteEmailTemplateInput>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let (name, subject, body, sequence) = template_fields(&input)?;
     company_template(&state, user.company_id, id).await?;
     sqlx::query(
@@ -1073,7 +1092,7 @@ pub async fn update_email_template(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such company template", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1084,6 +1103,7 @@ pub async fn delete_email_template(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     company_template(&state, user.company_id, id).await?;
     sqlx::query(
         "UPDATE quote_email_templates SET deleted_at = NOW() WHERE id = ? AND company_id = ?",

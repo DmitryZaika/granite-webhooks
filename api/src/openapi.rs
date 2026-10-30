@@ -32,7 +32,11 @@ use utoipa::{Modify, OpenApi};
         title = "Granite Manager API",
         description = "JSON API behind Granite Manager, a CRM for countertop and \
             stone fabrication companies. Every request acts as the signed-in user \
-            and only sees data of that user's company."
+            and only sees data of that user's company. While a company's access is \
+            paused for billing, session routes other than billing, sign-in, the app \
+            shell, `GET /v1/me` and notifications answer 402 \
+            `{\"error\": \"Payment required\", \"code\": \"payment_required\"}`: \
+            see `GET /v1/billing/gate`."
     ),
     components(schemas(ErrorBody)),
     modifiers(&SessionCookie),
@@ -74,6 +78,7 @@ use utoipa::{Modify, OpenApi};
         (name = "invoices", description = "Invoices the CRM keeps itself, for companies without QuickBooks"),
         (name = "followups", description = "AI follow-ups: the company rule they obey, timelines and enrollments"),
         (name = "billing", description = "The company's Granite Manager subscription (Stripe)"),
+        (name = "onboarding-call", description = "The self-serve onboarding call: complete it within 30 days of signup or pay the onboarding fee (Terms section 11)"),
         (name = "jobs", description = "Scheduled jobs the time-triggered Lambda runs (job key, no session)"),
         (name = "posthog-autofix", description = "Callbacks of the PostHog auto-fix GitHub workflow (callback secret, no session)"),
         (name = "phone", description = "Granite Phone, business calling through Telnyx: the app's sign-in and devices, calls, contacts and settings, and their admin pages"),

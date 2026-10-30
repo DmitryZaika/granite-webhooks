@@ -172,22 +172,32 @@ async fn push_notification_to_phones(notification_id: u64) -> usize {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct JobError {
     message: String,
-    /// The api answered 5xx: it reported that error to `PostHog` itself.
+    /// The api answered 5xx on its own: it reported that error to `PostHog`.
     api_reported: bool,
 }
 
 impl JobError {
     fn transport(error: &reqwest::Error) -> Self {
+        let message = if error.is_timeout() {
+            "the api job timed out (no answer in time)".to_string()
+        } else {
+            error.to_string()
+        };
         Self {
-            message: error.to_string(),
+            message,
             api_reported: false,
         }
     }
 
-    /// `Err` for any non-success answer; 5xx ones are already reported by the api.
+    /// `Err` for any non-success answer; 5xx ones are already reported by the
+    /// api, except a 504: the gateway gave up, the api never saw the end.
     fn from_status(status: u16) -> Result<(), Self> {
         match status {
             200..=299 => Ok(()),
+            504 => Err(Self {
+                message: "the api job timed out (HTTP 504)".to_string(),
+                api_reported: false,
+            }),
             _ => Err(Self {
                 message: format!("the api answered HTTP {status}"),
                 api_reported: (500..=599).contains(&status),
@@ -216,9 +226,9 @@ async fn report_job(job: &str, result: Result<usize, JobError>) -> Result<usize,
     }
 }
 
-/// The API answers within its 30 s limit; a hung connection must not use up
-/// the whole run and starve the jobs after it.
-const API_JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
+/// The API Gateway cuts every request at 30 s, so no api job gets longer; a
+/// hung connection must not use up the whole run and starve the jobs after it.
+const API_JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
 async fn post_api_job(job: &str, label: &str) -> Result<usize, JobError> {
@@ -306,14 +316,8 @@ async fn process_signature_reminders() -> Result<usize, JobError> {
     post_api_job("signature-reminders", "e-signature reminders").await
 }
 
-/// The api answers within its 30 s; a call that hangs must not hold the tick.
 async fn process_posthog_autofix() -> Result<usize, JobError> {
-    post_api_job_within(
-        "posthog-autofix",
-        "PostHog auto-fix",
-        std::time::Duration::from_secs(25),
-    )
-    .await
+    post_api_job("posthog-autofix", "PostHog auto-fix").await
 }
 
 async fn process_checklist_surveys() -> Result<usize, JobError> {
@@ -322,6 +326,39 @@ async fn process_checklist_surveys() -> Result<usize, JobError> {
 
 async fn process_contact_sync() -> Result<usize, JobError> {
     post_api_job("contact-sync", "contact sync").await
+}
+
+async fn process_billing_reminders() -> Result<usize, JobError> {
+    post_api_job("billing-reminders", "billing reminders").await
+}
+
+async fn process_subscription_maintenance() -> Result<usize, JobError> {
+    post_api_job("subscription-maintenance", "subscription maintenance").await
+}
+
+/// Self-serve signups and seats; a failure never aborts the tick.
+async fn run_subscription_maintenance() {
+    match report_job(
+        "subscription-maintenance",
+        process_subscription_maintenance().await,
+    )
+    .await
+    {
+        Ok(0) => {}
+        Ok(count) => tracing::info!("Processed {count} signups in subscription maintenance"),
+        Err(error) => {
+            tracing::error!(?error, "Failed to run subscription maintenance; continuing");
+        }
+    }
+}
+
+/// Onboarding call reminders, tolling, the fee notice and invoice; a failure
+/// never aborts the tick.
+async fn run_onboarding_commitments() {
+    let result = post_api_job("onboarding-commitments", "onboarding commitments").await;
+    if let Err(error) = report_job("onboarding-commitments", result).await {
+        tracing::error!(?error, "Failed to run onboarding commitments; continuing");
+    }
 }
 
 /// Starts the supplier price file job without waiting for it: a big PDF takes
@@ -457,18 +494,43 @@ pub(crate) async fn function_handler(
 ) -> Result<OutgoingMessage, Error> {
     // This will now print the full JSON structure to your CloudWatch logs
     tracing::info!("Received event: {:?}", event.payload);
+    // Never ends the tick, whatever the api answers.
+    run_subscription_maintenance().await;
 
-    reported(
-        "cancel-pending-emails",
-        cancel_pending_emails_left_list(pool).await,
-    )
-    .await?;
-    reported(
-        "cancel-pending-emails",
-        cancel_pending_emails_for_non_leads(pool).await,
-    )
-    .await?;
-    let ready_emails = reported("scheduled-emails", get_ready_scheduled_emails(pool).await).await?;
+    // A failure is reported and logged; the jobs after it still run.
+    let billing_reminder_count =
+        match report_job("billing-reminders", process_billing_reminders().await).await {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::error!(?error, "Failed to process billing reminders; continuing");
+                0
+            }
+        };
+
+    // The jobs that end the tick on failure; onboarding runs either way, then
+    // the failure ends the tick.
+    let ready: Result<Vec<ScheduledEmail>, Error> = async {
+        reported(
+            "cancel-pending-emails",
+            cancel_pending_emails_left_list(pool).await,
+        )
+        .await?;
+        reported(
+            "cancel-pending-emails",
+            cancel_pending_emails_for_non_leads(pool).await,
+        )
+        .await?;
+        Ok(reported("scheduled-emails", get_ready_scheduled_emails(pool).await).await?)
+    }
+    .await;
+    if let Err(error) = &ready {
+        tracing::error!(
+            ?error,
+            "Failed to prepare scheduled emails; ending the tick after onboarding"
+        );
+    }
+    run_onboarding_commitments().await;
+    let ready_emails = ready?;
     let processed_email_count = if automated_email_send_window_is_open_now() {
         let mut failed = 0usize;
         let mut first_error = None;
@@ -589,9 +651,10 @@ pub(crate) async fn function_handler(
             }
         };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, {} contact syncs, {} saved calls, and {} PostHog auto-fix changes",
+        "Successfully processed {} emails, {} activity deadline reminders, {} billing reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, {} contact syncs, {} saved calls, and {} PostHog auto-fix changes",
         processed_email_count,
         reminder_count,
+        billing_reminder_count,
         estimate_reminder_count,
         maintenance_reminder_count,
         sms_followup_count,
@@ -619,6 +682,42 @@ mod tests {
         assert!(!activity_reminder_needs_telegram(true, None));
         assert!(!activity_reminder_needs_telegram(false, Some(1)));
         assert!(activity_reminder_needs_telegram(true, Some(1)));
+    }
+
+    #[test]
+    fn billing_runs_before_and_onboarding_after_the_fallible_jobs_and_neither_aborts_the_tick() {
+        let source = include_str!("generic_handler.rs");
+        let start = source
+            .find("pub(crate) async fn function_handler")
+            .expect("function_handler");
+        let end = source.find("#[cfg(test)]").expect("test module");
+        let handler = &source[start..end];
+        assert!(source[..end].contains("post_api_job(\"billing-reminders\""));
+        assert!(handler.contains("Failed to process billing reminders; continuing"));
+        let billing = handler
+            .find("process_billing_reminders().await")
+            .expect("billing reminders call");
+        let first_fallible = handler.find(".await?").expect("a `?` job");
+        assert!(
+            billing < first_fallible,
+            "billing must run before the `?` jobs"
+        );
+        assert!(!handler.contains("process_billing_reminders().await?"));
+        let onboarding = handler
+            .find("run_onboarding_commitments().await")
+            .expect("onboarding commitments call");
+        let last_fallible = handler
+            .rfind("get_ready_scheduled_emails(pool).await")
+            .expect("the last `?` job");
+        let tick_ends = handler
+            .find("ready?")
+            .expect("the `?` jobs' failure ends the tick");
+        assert!(
+            billing < first_fallible && last_fallible < onboarding && onboarding < tick_ends,
+            "onboarding commitments run after the `?` jobs and before their failure ends the tick"
+        );
+        assert!(source[..end].contains("\"onboarding-commitments\","));
+        assert!(source[..end].contains("Failed to run onboarding commitments; continuing"));
     }
 
     #[test]
@@ -708,6 +807,9 @@ mod tests {
             let error = JobError::from_status(status).expect_err("5xx fails");
             assert!(!error.should_report(), "{status}");
         }
+        let timeout = JobError::from_status(504).expect_err("504 fails");
+        assert!(timeout.should_report());
+        assert_eq!(timeout.to_string(), "the api job timed out (HTTP 504)");
         for status in [301, 400, 401, 404, 422, 429] {
             let error = JobError::from_status(status).expect_err("non-2xx fails");
             assert!(error.should_report(), "{status}");

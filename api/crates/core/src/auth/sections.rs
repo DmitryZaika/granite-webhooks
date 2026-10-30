@@ -408,6 +408,7 @@ mod tests {
             ringcentral_extension_id: None,
             ringcentral_phone_number: None,
             is_signature_available: false,
+            plan: crate::entitlements::Entitlements::default(),
         }
     }
 

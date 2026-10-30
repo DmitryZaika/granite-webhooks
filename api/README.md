@@ -25,7 +25,9 @@ api/
     routes/jobs/         the scheduled jobs (/v1/jobs/*), which call into every area
   crates/                bottom to top; a crate may use only the crates below it
     core/      api-core       AppState and the clients it holds, ApiError, the auth
-                              extractors (auth/), the route macros (openapi.rs), sql
+                              extractors (auth/), the route macros (openapi.rs), sql,
+                              Stripe billing (billing/), add-ons (entitlements.rs),
+                              self-serve signup (signup/), onboarding_call/
     media/     api-media      pictures (HEIC, thumbnails) and PDFs, signing PDFs
     crm/       api-crm        customers, deals, texts (routes/sms), emails, calls,
                               templates, uploads, Granite Phone's logic (phone/)
@@ -185,7 +187,77 @@ is a port of the CRM's `stripeBilling.ts`, tested in memory in
 and against Stripe's test mode in `tests/admin/billing_stripe_live.rs` when
 `STRIPE_TEST_SECRET_KEY=sk_test_...` is set). Env: `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET`, `STRIPE_BILLING_PLANS` (`price|Name|cents,...`) or
-`STRIPE_PRICE_ID`.
+`STRIPE_PRICE_ID`. A failed payment gets 7 days of grace, a company asked to
+pay (`company.billing_required_at`) 7 days to subscribe; then session routes
+off the allow-list in `auth/mod.rs` answer 402 (decided by the session query).
+Each company's billing writes run under `billing/lock.rs` (a MySQL named lock
+on its own connection, since the Lambda pool has one).
+
+`POST /v1/jobs/billing-reminders` prunes old webhook event ids (daily) and
+reconciles with Stripe (a pass every 6 hours, 50 companies per run, cursor in
+`job_runs`), then emails Managers (`billing/reminders.rs`, deduped in
+`billing_reminder_emails`): the dunning countdown and, 7 days before Stripe's
+`trial_end` (synced to `trial_end_at`), the first charge.
+`GET /v1/superuser/billing/setup` checks the env and the Stripe webhook and
+prices. Optional env: `BILLING_EMAIL_FROM_ADDRESS`.
+
+Add-ons (`entitlements.rs` in api-core): Signatures, Quotes and QuickBooks are free
+for legacy companies (`company.plan_source = 'legacy'`, everyone before
+self-serve) and need an active `company_addons` row on a subscription plan.
+Session routes check `user.plan.require(AddonKey::...)` (the session query
+loads the plan); a refusal is 403 with `addon`. Superusers grant one free
+with `PUT /v1/superuser/companies/{id}/addons/{key}`.
+
+Self-serve signup (`signup/` in api-core, `routes/signup/` in api-accounts, `/v1/public/plans` and
+`/v1/public/signups/...`) is off until `SELF_SERVE_SIGNUP_ENABLED=1`; it
+prices from the Stripe lookup keys in `billing/catalog.rs` and also reads
+`STRIPE_PUBLIC_KEY`, `STRIPE_AUTOMATIC_TAX`, `SIGNUP_NOTIFY_USER_ID`,
+`SIGNUP_NOTIFY_EMAIL` and, with a `sk_test_` key only,
+`SIGNUP_TEST_PAYMENT_METHOD`. `POST /v1/jobs/subscription-maintenance`
+resumes stuck provisioning, expires abandoned signups and reconciles seats.
+
+Payment methods (`billing/methods.rs`, `routes/billing_methods.rs`): card and
+US bank account through SetupIntents confirmed by the payments app's Payment
+Element. A bank account waiting for micro-deposits gives a signup the CRM for
+10 days and its subscription once Stripe verifies it; `POST
+/v1/billing/payment-setup`, `/payment-method` and `/invoice-payment` serve the
+account, pay and upgrade pages. A blocked bank account or a dispute pauses
+access 7 days later unless a new method is saved. `BILLING_ALERT_EMAIL`
+(optional) gets the internal notice of returned debits, blocked accounts and
+disputes. The Stripe Dashboard setup is `general_datebase/apps/payments/STRIPE-DASHBOARD.md`.
+
+Onboarding with Dima (`onboarding_call/` in api-core, Terms section 11): provisioning
+gives each self-serve company a commitment to complete an onboarding call
+within 30 days or pay the fee fixed at signup. `GET /v1/onboarding-call`
+hands Managers and Admins a booking link, the widget's booking is recorded with
+`POST /v1/onboarding-call/bookings`, and superusers extend, waive, complete or
+mark a no-show at `/v1/superuser/companies/{id}/onboarding-commitment`.
+`POST /v1/jobs/onboarding-commitments` checks once a UTC day whether Calendly
+offers a slot within 5 business days (none tolls every open deadline a day),
+then per company once a day refreshes the call from Calendly, completes it 48
+hours after it ends, emails the day 7, 21 and 27 reminders and the fee notice
+to Managers (deduped in `billing_reminder_emails`, `cycle_kind = onboarding`),
+and 7 days after the notice charges the fee as its own Stripe invoice
+(`metadata.kind = onboarding_fee`, whose webhook events never reach
+subscription billing). Bookings are ours when the invitee carries
+`utm_campaign=granite-onboarding` and `utm_content=company-<id>`; nothing
+changes in Dima's Calendly. Env: `CALENDLY_API_TOKEN` (the existing token,
+reused), `CALENDLY_BASE_URL` (default `https://api.calendly.com`), optional
+`CALENDLY_ONBOARDING_URL` (else the account's own page) and
+`ONBOARDING_FEE_CHARGING=1` (off: a passed deadline ends as `fee_skipped`,
+never charged later). The onboarding emails are sent from
+`BILLING_EMAIL_FROM_ADDRESS`. Stripe does not retry a failed fee invoice
+(`fee_failed`): `SIGNUP_NOTIFY_USER_ID` (Telegram) and `SIGNUP_NOTIFY_EMAIL`
+also get that alert, and staff follow up by hand.
+
+Move to plan (`billing/invites/` in api-core, `routes/superuser_plan_invites.rs`,
+`routes/plan_invites.rs`): a superuser invites a legacy company's Managers to
+a plan (`plan_invites`, links `PAYMENTS_APP_URL/upgrade/<token>`, only token
+hashes stored); a Manager's acceptance makes the subscription under
+`plan-invite:<id>:*` keys and only then sets `plan_source = 'subscription'`. A
+running legacy subscription forces the first charge to its period end and is
+cancelled there (`metadata.replaced_by`, which billing never follows back).
+The flat-price Checkout (`POST /v1/billing/checkout`) now answers 409.
 
 ### Uploads and storage
 

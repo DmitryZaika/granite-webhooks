@@ -15,12 +15,15 @@
 
 use crate::auth::UserManager;
 use crate::auth::session::SessionUser;
+use crate::billing::lock::{LockError, NamedLock};
+use crate::billing::seats::{self, COUNTS_TOWARD_LIMIT};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::auth::{SentInvite, send_invite};
 use crate::routes::company::queries::company_features;
 use crate::routes::sms::provider::phone10;
+use crate::signup::email_lock_name;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -121,14 +124,9 @@ const PENDING: &str = "(u.password IS NULL OR u.password = '')";
 
 /// Users counting toward `max_users` (`COUNTS_TOWARD_COMPANY_USER_LIMIT_SQL`).
 async fn user_limit(pool: &MySqlPool, company_id: i32) -> Result<UserLimit, sqlx::Error> {
-    let current_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users u
-          WHERE u.company_id = ? AND u.is_deleted = 0
-            AND (EXISTS (SELECT 1 FROM users_positions up WHERE up.user_id = u.id
-                          AND up.company_id = u.company_id AND up.position_id <> 8)
-                 OR NOT EXISTS (SELECT 1 FROM users_positions up WHERE up.user_id = u.id
-                          AND up.company_id = u.company_id))",
-    )
+    let current_count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT COUNT(*) FROM users u WHERE u.company_id = ? AND {COUNTS_TOWARD_LIMIT}"
+    )))
     .bind(company_id)
     .fetch_one(pool)
     .await?;
@@ -271,7 +269,7 @@ fn checked_phone(phone: Option<&str>) -> ApiResult<Option<String>> {
     }
 }
 
-fn checked_email(email: &str) -> ApiResult<String> {
+pub(crate) fn checked_email(email: &str) -> ApiResult<String> {
     let email = email.trim().to_lowercase();
     if crate::routes::me::account::valid_email(&email) {
         Ok(email)
@@ -328,6 +326,7 @@ pub struct CreatedUser {
         (status = 403, description = "Caller may not manage users", body = ErrorBody),
         (status = 409, description = "The email is taken", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
+        (status = 503, description = "A signup of the same email is being set up; try again", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
@@ -348,51 +347,66 @@ pub async fn create(
     if let Some(conflict) = position_conflict(&positions) {
         return Err(ApiError::BadRequest(conflict.into()));
     }
-    let existing: Option<bool> = sqlx::query_scalar(
-        "SELECT is_deleted <> 0 FROM users WHERE LOWER(TRIM(email)) = ? LIMIT 1",
-    )
-    .bind(&email)
-    .fetch_optional(&state.pool)
-    .await?;
-    if let Some(deleted) = existing {
-        return Err(ApiError::Conflict(if deleted {
-            "This email belongs to a deleted user. Use a different email.".into()
-        } else {
-            "A user with this email already exists".into()
-        }));
-    }
-    let mut tx = state.pool.begin().await?;
-    // No password until they set up the account; the name is theirs to fill.
-    let inserted = sqlx::query(
-        "INSERT INTO users (name, email, company_id, is_employee, is_admin)
-         VALUES ('', ?, ?, ?, ?)",
-    )
-    .bind(&email)
-    .bind(company_id)
-    .bind(is_employee(&positions))
-    .bind(input.is_admin)
-    .execute(&mut *tx)
-    .await;
-    let id = match inserted {
-        Ok(result) => result.last_insert_id(),
-        Err(sqlx::Error::Database(err)) if err.is_unique_violation() => {
-            return Err(ApiError::Conflict(
-                "A user with this email already exists".into(),
-            ));
-        }
-        Err(err) => return Err(err.into()),
-    };
-    for position in &positions {
-        sqlx::query(
-            "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (?, ?, ?)",
+    // The lock self-serve signup takes: a signup provisioning this email
+    // cannot slip in between the check and the insert.
+    let lock = NamedLock::acquire(&state.pool, &email_lock_name(&email), 10)
+        .await
+        .map_err(|err| match err {
+            LockError::Busy => ApiError::Unavailable("Please try again in a moment.".into()),
+            LockError::Database(err) => ApiError::Database(err),
+        })?;
+    let created = async {
+        let existing: Option<bool> = sqlx::query_scalar(
+            "SELECT is_deleted <> 0 FROM users WHERE LOWER(TRIM(email)) = ? LIMIT 1",
         )
-        .bind(id)
-        .bind(position)
-        .bind(company_id)
-        .execute(&mut *tx)
+        .bind(&email)
+        .fetch_optional(&state.pool)
         .await?;
+        if let Some(deleted) = existing {
+            return Err(ApiError::Conflict(if deleted {
+                "This email belongs to a deleted user. Use a different email.".into()
+            } else {
+                "A user with this email already exists".into()
+            }));
+        }
+        let mut tx = state.pool.begin().await?;
+        // No password until they set up the account; the name is theirs to fill.
+        let inserted = sqlx::query(
+            "INSERT INTO users (name, email, company_id, is_employee, is_admin)
+             VALUES ('', ?, ?, ?, ?)",
+        )
+        .bind(&email)
+        .bind(company_id)
+        .bind(is_employee(&positions))
+        .bind(input.is_admin)
+        .execute(&mut *tx)
+        .await;
+        let id = match inserted {
+            Ok(result) => result.last_insert_id(),
+            Err(sqlx::Error::Database(err)) if err.is_unique_violation() => {
+                return Err(ApiError::Conflict(
+                    "A user with this email already exists".into(),
+                ));
+            }
+            Err(err) => return Err(err.into()),
+        };
+        for position in &positions {
+            sqlx::query(
+                "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (?, ?, ?)",
+            )
+            .bind(id)
+            .bind(position)
+            .bind(company_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(id)
     }
-    tx.commit().await?;
+    .await;
+    lock.release().await;
+    let id = created?;
+    seats::after_user_change(&state, company_id).await;
     let id = i32::try_from(id).unwrap_or(i32::MAX);
     let invite = send_invite(&state, id).await?;
     Ok((
@@ -891,6 +905,8 @@ pub async fn update(
         removed.push(row.id);
     }
     let added: Vec<(i32, i32)> = next.into_iter().filter(|key| !kept.contains(key)).collect();
+    let seats_may_change =
+        !removed.is_empty() || !added.is_empty() || company_id != existing_company;
 
     let mut tx = pool.begin().await?;
     sqlx::query(
@@ -930,6 +946,12 @@ pub async fn update(
         .await?;
     }
     tx.commit().await?;
+    if seats_may_change {
+        seats::after_user_change(&state, company_id).await;
+        if company_id != existing_company {
+            seats::after_user_change(&state, existing_company).await;
+        }
+    }
     crate::phone::revoke::revoke_if_lost_access(&state, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -958,11 +980,12 @@ pub async fn delete(
     UserManager(user): UserManager,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
-    target(&state.pool, &user, id).await?;
+    let company_id = target(&state.pool, &user, id).await?;
     sqlx::query("UPDATE users SET is_deleted = 1 WHERE id = ? AND is_deleted = 0")
         .bind(id)
         .execute(&state.pool)
         .await?;
+    seats::after_user_change(&state, company_id).await;
     crate::phone::revoke::revoke_user_phones(
         &state,
         id,

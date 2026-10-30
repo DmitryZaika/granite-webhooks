@@ -24,6 +24,12 @@ pub mod sessions {
     pub const EXPIRED: &str = "bbbbbbbb-0000-4000-8000-0000000e0100";
     pub const LOGGED_OUT: &str = "bbbbbbbb-0000-4000-8000-0000000d0100";
     pub const TOO_OLD: &str = "bbbbbbbb-0000-4000-8000-0000000a0100";
+    /// Company 20100: subscription plan with Quotes only.
+    pub const QUOTES_ONLY_MANAGER: &str = "aaaaaaaa-0000-4000-8000-000000020100";
+    pub const QUOTES_ONLY_REP: &str = "aaaaaaaa-0000-4000-8000-000000020101";
+    /// Company 20101: subscription plan with a comp Signatures grant only.
+    pub const COMP_SIGNATURES_MANAGER: &str = "aaaaaaaa-0000-4000-8000-000000020102";
+    pub const COMP_SIGNATURES_REP: &str = "aaaaaaaa-0000-4000-8000-000000020103";
 }
 
 pub fn server(pool: MySqlPool) -> TestServer {

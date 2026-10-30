@@ -231,6 +231,30 @@ async fn ses(
     })
 }
 
+/// How SES refused a send it did not take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SesRefusal {
+    /// Sending rate or quota: try again later.
+    Throttled,
+    /// The message, the sender or the account was refused.
+    Rejected,
+}
+
+/// `None` when SES may or may not have sent the email (5xx, network,
+/// timeout).
+pub fn ses_refusal(err: &Error) -> Option<SesRefusal> {
+    match err.code.as_str() {
+        "TooManyRequestsException" | "LimitExceededException" => Some(SesRefusal::Throttled),
+        "MessageRejected"
+        | "MailFromDomainNotVerifiedException"
+        | "AccountSuspendedException"
+        | "SendingPausedException"
+        | "BadRequestException"
+        | "NotFoundException" => Some(SesRefusal::Rejected),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

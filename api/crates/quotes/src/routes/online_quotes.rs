@@ -19,7 +19,8 @@
 //! a known customer with no rep goes to the managers.
 
 use crate::app_origin::{app_origin, company_subdomain};
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::{AddonKey, company_entitlements, require_addon};
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
 use crate::openapi::{OpenApiRouter, routes};
@@ -949,7 +950,8 @@ async fn ready_offer(
 /// stock with a photo that its default price list prices, never their
 /// prices), the sinks on display with a photo, the cooktop cutout and the
 /// counter depth to start with. `available` is false when the company has no
-/// price list with prices or no color to offer. Next, price the drawing with
+/// price list with prices or no color to offer, or its plan lacks the Quotes
+/// add-on. Next, price the drawing with
 /// `POST .../online-quote/prices`. No session needed.
 #[crate::openapi::path(
     get,
@@ -968,7 +970,15 @@ pub async fn setup(
     Path(company_id): Path<i32>,
 ) -> ApiResult<Json<OnlineQuoteSetup>> {
     let company = company_of(&state.pool, company_id).await?;
-    let Some(offer) = load_offer(&state.pool, company_id).await? else {
+    let offer = if company_entitlements(&state.pool, company_id)
+        .await?
+        .has(AddonKey::Quotes)
+    {
+        load_offer(&state.pool, company_id).await?
+    } else {
+        None
+    };
+    let Some(offer) = offer else {
         let settings = load_quote_settings(&state.pool, company_id).await?;
         return Ok(Json(OnlineQuoteSetup {
             company_name: company.name(),
@@ -1011,6 +1021,7 @@ pub async fn setup(
     responses(
         (status = 200, description = "Each color's total", body = OnlinePrices),
         (status = 400, description = "A piece the builder does not draw (more than 3 sides, corners that are not square, sizes out of range, unknown fields), more than 6 cutouts, a sink or color it does not offer, or not 1 to 10 colors", body = ErrorBody),
+        (status = 403, description = "The plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such company", body = ErrorBody),
         (status = 409, description = "The company has no prices for online quotes", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -1021,6 +1032,7 @@ pub async fn prices(
     Path(company_id): Path<i32>,
     JsonBody(input): JsonBody<OnlineDrawing>,
 ) -> ApiResult<Json<OnlinePrices>> {
+    require_addon(&state.pool, company_id, AddonKey::Quotes).await?;
     company_of(&state.pool, company_id).await?;
     let (offer, colors, sinks) = ready_offer(&state.pool, company_id).await?;
     let extras = checked_extras(&state.pool, company_id, &input.extras).await?;
@@ -1591,6 +1603,7 @@ async fn notify_rep(
     responses(
         (status = 201, description = "Saved (and emailed unless `emailed` is false)", body = OnlineQuoteSent),
         (status = 400, description = "No name, an email that is not one, a phone without 10 digits, or a drawing or color `POST .../online-quote/prices` refuses", body = ErrorBody),
+        (status = 403, description = "The plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such company", body = ErrorBody),
         (status = 409, description = "The company has no prices for online quotes", body = ErrorBody),
         (status = 429, description = "This address already got 3 online quotes today, or the company 30 this hour", body = ErrorBody),
@@ -1603,6 +1616,7 @@ pub async fn create(
     Path(company_id): Path<i32>,
     JsonBody(input): JsonBody<OnlineQuoteInput>,
 ) -> ApiResult<(StatusCode, Json<OnlineQuoteSent>)> {
+    require_addon(&state.pool, company_id, AddonKey::Quotes).await?;
     if input
         .website
         .as_deref()

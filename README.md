@@ -114,6 +114,77 @@ The `api/` crate replaces Remix loaders with JSON endpoints. See `api/README.md`
 for the route layout, auth, local setup (`make api-db-reset api-test api-local`)
 and the migration playbook.
 
+### Self-serve billing env
+
+Every variable the self-serve billing feature reads (Stripe, signup, advance
+payment, billing emails). The api checks them at start: an enabled switch with a
+missing dependency, or a malformed value, stops the Lambda with a message that
+names the variable (never its value). `GET /v1/superuser/billing/setup` reports
+the same and the Stripe side. The release steps are in
+`general_datebase/docs/self-serve-release.md`.
+
+`granite-api` (and `granite-api-stream`, same image):
+
+| Name | Required when | Default |
+|---|---|---|
+| `SESSION_SECRET` | always (also keys the signup email codes) | none: the api does not start |
+| `STRIPE_SECRET_KEY` | any billing; `sk_`/`rk_`, a restricted live key in production | unset: Stripe off |
+| `STRIPE_PUBLIC_KEY` | signups and payment method pages; `pk_`, same mode as the secret key | none |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhooks; `whsec_`, from the setup script's secret file | unset: webhooks refused |
+| `STRIPE_BILLING_PLANS` / `STRIPE_PRICE_ID` | legacy (grandfathered) plans only | none |
+| `STRIPE_AUTOMATIC_TAX` | only when tax is turned on (`1`/`true`, any case); Stripe Tax must be active (the setup check fails otherwise) | off |
+| `STRIPE_API_BASE` | tests and e2e only; ignored with a live key | `https://api.stripe.com` |
+| `SIGNUP_TEST_PAYMENT_METHOD` | sandbox e2e only; ignored unless the key is `sk_test_` | none |
+| `SIGNUP_RATE_LIMITS` | e2e only: `off` lifts the per-email and per-IP signup limits; ignored unless the key is `sk_test_` | limits on |
+| `SELF_SERVE_SIGNUP_ENABLED` | launch switch (`1`/`true`); needs the three Stripe keys and `WEBHOOKS_URL`/`WEBHOOKS_KEY` | off |
+| `ONBOARDING_ADVANCE_CHARGING` | charges the advance payment (`1`/`true`); needs `STRIPE_SECRET_KEY` and `CALENDLY_API_TOKEN` | off: a passed deadline ends `advance_skipped` |
+| `CALENDLY_API_TOKEN` | the onboarding call step and the deadline tolling | none |
+| `CALENDLY_BASE_URL` | tests only | `https://api.calendly.com` |
+| `CALENDLY_ONBOARDING_URL` | optional; a calendly.com page | the account's own page |
+| `WEBHOOKS_URL`, `WEBHOOKS_KEY` | every billing email; both or neither | unset: emails not sent |
+| `BILLING_EMAIL_FROM_ADDRESS` | optional; a plain address | `noreply@granite-manager.com` |
+| `BILLING_ALERT_EMAIL` | staff notices: disputes, blocked bank accounts, bank returns, advance notices | none: notices dropped |
+| `SIGNUP_NOTIFY_USER_ID`, `SIGNUP_NOTIFY_EMAIL` | optional staff alerts (Telegram user id, email) for signups and stuck provisioning | none |
+| `APP_URL` | optional | `https://granite-manager.com` |
+| `PAYMENTS_APP_URL` | optional | `https://payments.granite-manager.com` |
+| `SESSION_COOKIE_DOMAIN`, `SESSION_COOKIE_SECURE` | optional; the payments app shares the CRM cookie | `.granite-manager.com`, Secure |
+| `API_ALLOWED_ORIGINS` | optional; must include the payments origin when set | `https://granite-manager.com,https://*.granite-manager.com` |
+| `LAMBDA_KEY` | the scheduled jobs; same value as on `time-triggered` | none: jobs refused |
+| `CLOUDFRONT_ORIGIN_SECRET` | production; the value CloudFront sends as `X-Granite-Origin-Verify` (see below) | unset: `X-Forwarded-For` trusted on every request (startup warning, setup check fails) |
+
+### CloudFront origin secret
+
+The function URLs are public, so a direct caller could forge `X-Forwarded-For`
+and dodge the per-IP signup limit and login throttle. CloudFront adds
+`X-Granite-Origin-Verify: <secret>` to every request it forwards; with
+`CLOUDFRONT_ORIGIN_SECRET` set, the api reads `X-Forwarded-For` only on
+requests carrying that value and takes any other request's `sourceIp` as the
+client. Rollout, in this order (the other order makes every visitor look like
+a CloudFront edge address and shares their limits):
+
+1. Make a secret (`openssl rand -hex 32`), one for production, another for dev.
+2. CloudFront first: `stream.granite-manager.com` with
+   `aws cloudformation deploy --region us-east-1 --stack-name granite-api-stream
+   --template-file infra/api-domain.yaml --parameter-overrides
+   DomainName=stream.granite-manager.com FunctionUrlDomain=<its function URL host>
+   OriginVerifySecret=<secret>`; `api.granite-manager.com` is not in a template:
+   add the origin custom header `X-Granite-Origin-Verify` = `<secret>` to its
+   function URL origin in the CloudFront console; dev: `infra/dev-api.yaml`
+   with `OriginVerifySecret=<dev secret>`. Wait until each distribution shows
+   Deployed.
+3. Then set `CLOUDFRONT_ORIGIN_SECRET=<secret>` on `granite-api` and
+   `granite-api-stream` (dev: `granite-api-dev`, `granite-api-stream-dev`).
+4. Check: `GET /v1/superuser/billing/setup` shows `cloudfront_origin_secret` ok.
+
+Rolling back goes the other way: unset the variable, then drop the header.
+
+`time-triggered`: `API_URL`, `API_STREAM_URL` and `LAMBDA_KEY` (unchanged). It
+calls the billing jobs `subscription-maintenance`, `billing-reminders` and
+`onboarding-commitments` every tick; its Lambda timeout must be at least 7 minutes.
+
+Front-end build values (`VITE_SELF_SERVE_ENABLED`, `VITE_PAYMENTS_URL`, the
+payments app's `VITE_*`) are in the general_datebase README.
+
 ## Webhooks (third parties' callbacks Lambda)
 
 The `webhooks/` crate and the crates in `webhooks/crates/`. See

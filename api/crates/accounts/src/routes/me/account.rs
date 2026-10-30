@@ -7,6 +7,7 @@
 use crate::auth::ShopOrEmployeeUser;
 use crate::auth::cookie::request_session_id;
 use crate::email_signature;
+use crate::entitlements::AddonKey;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
@@ -57,7 +58,8 @@ pub struct Account {
     pub has_cloudtalk_api: bool,
     /// The home company has `RingCentral`.
     pub has_ringcentral_api: bool,
-    /// The signature applies (not for shop managers and workers).
+    /// The signature applies: not for shop managers and workers, and only
+    /// when the plan has the Signatures add-on (a legacy plan always does).
     pub shows_email_signature: bool,
     /// The user already rated the guided tours.
     pub has_onboarding_feedback: bool,
@@ -91,7 +93,8 @@ pub struct AccountInput {
     /// The email sender name.
     #[serde(default)]
     pub email_name: Option<String>,
-    /// The email signature (HTML, sanitized on save).
+    /// The email signature (HTML, sanitized on save). Ignored, like a field
+    /// left out, when the plan lacks the Signatures add-on.
     #[serde(default)]
     pub email_signature: Option<String>,
     /// `CloudTalk` agent id (digits).
@@ -219,7 +222,7 @@ pub async fn account(
         ringcentral_phone_number: row.ringcentral_phone_number,
         has_cloudtalk_api: features.cloudtalk,
         has_ringcentral_api: features.ringcentral,
-        shows_email_signature: !shop,
+        shows_email_signature: !shop && user.plan.has(AddonKey::Signatures),
         has_onboarding_feedback,
         feedback_dismissed: progress.has_row && progress.state.feedback_dismissed,
         has_granite_phone,
@@ -847,7 +850,10 @@ pub async fn update_account(
     headers: HeaderMap,
     JsonBody(input): JsonBody<AccountInput>,
 ) -> ApiResult<Json<AccountSaved>> {
-    let input = check(&input)?;
+    let mut input = check(&input)?;
+    if !user.plan.has(AddonKey::Signatures) {
+        input.email_signature = Field::Keep;
+    }
     let pool = &state.pool;
     let actor = home_actor(pool, user.id).await?;
     let before = stored(pool, actor).await?;

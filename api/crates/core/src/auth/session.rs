@@ -1,6 +1,9 @@
 //! Port of `getUser` + `handlePermissions` from the Remix app's
 //! `app/utils/session.server.ts`. Keep the two in sync until Remix is gone.
 
+use crate::billing::methods::PROCESSING_DAYS;
+use crate::billing::{ENDED_SUBSCRIPTION_STATUSES, FIRST_PAYMENT_DAYS};
+use crate::entitlements::{Entitlements, plan_columns};
 use crate::openapi::ToSchema;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
@@ -44,6 +47,10 @@ pub struct SessionUser {
     pub ringcentral_phone_number: Option<String>,
     /// Feature flag: the user may use e-signatures.
     pub is_signature_available: bool,
+    /// The add-ons the acting company's plan includes.
+    #[sqlx(flatten)]
+    #[serde(skip)]
+    pub plan: Entitlements,
 }
 
 #[derive(Debug, Clone, Copy, FromRow)]
@@ -62,14 +69,60 @@ pub fn valid_session_id(value: &str) -> bool {
         })
 }
 
-pub async fn find_session_user(
+/// `company.billing_required` is on and the company's access is paused: its
+/// payment is suspended (unless a bank payment is on its way: set
+/// `payment_processing_at` less than `PROCESSING_DAYS` ago, for a
+/// subscription that has not ended; `billing::methods::mark_processing`
+/// never sets it for an invoice already paid or whose bank payment failed
+/// before), its saved
+/// payment method's hold ended (`method_hold_until`, `billing::methods`), or
+/// it never paid and its first-payment window (`FIRST_PAYMENT_DAYS` from
+/// `billing_required_at`) ended, unless its signup's bank account is still
+/// inside its verification window (`signup_intents.bank_verification_until`).
+/// The same decisions as `billing::gate`. Expects `company` and a LEFT JOINed
+/// `company_billing`; binds `PROCESSING_DAYS`
+/// (the window `billing::methods::is_processing` uses), then
+/// [`ended_statuses`], then `FIRST_PAYMENT_DAYS`.
+const BILLING_PAUSED: &str = r"
+    COALESCE(company.billing_required, 0) <> 0
+    AND ((company_billing.payment_status = 'suspended'
+          AND (company_billing.payment_processing_at IS NULL
+               OR company_billing.payment_processing_at <= UTC_TIMESTAMP() - INTERVAL ? DAY
+               OR FIND_IN_SET(company_billing.subscription_status, ?) > 0))
+         OR (company_billing.method_hold IS NOT NULL
+             AND company_billing.method_hold_until <= UTC_TIMESTAMP())
+         OR (COALESCE(company_billing.payment_status, 'none')
+               NOT IN ('active', 'past_due', 'suspended')
+             AND company.billing_required_at IS NOT NULL
+             AND company.billing_required_at <= UTC_TIMESTAMP() - INTERVAL ? DAY
+             AND NOT EXISTS (
+               SELECT 1 FROM signup_intents bank_signup
+                WHERE bank_signup.company_id = company.id
+                  AND bank_signup.status = 'awaiting_bank_verification'
+                  AND bank_signup.bank_verification_until > UTC_TIMESTAMP())))";
+
+/// `billing::ENDED_SUBSCRIPTION_STATUSES` for `FIND_IN_SET`.
+fn ended_statuses() -> String {
+    ENDED_SUBSCRIPTION_STATUSES.join(",")
+}
+
+/// A live session's user, and whether their own company's access is paused
+/// for billing.
+#[derive(Debug, Clone, FromRow)]
+pub struct SessionRow {
+    #[sqlx(flatten)]
+    pub user: SessionUser,
+    pub billing_paused: bool,
+}
+
+pub async fn find_session(
     pool: &MySqlPool,
     session_id: &str,
-) -> Result<Option<SessionUser>, sqlx::Error> {
+) -> Result<Option<SessionRow>, sqlx::Error> {
     if !valid_session_id(session_id) {
         return Ok(None);
     }
-    sqlx::query_as::<_, SessionUser>(
+    sqlx::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(format!(
         r"
         SELECT users.id, users.email, users.name, users.phone_number,
                COALESCE(users.is_employee, 0) AS is_employee,
@@ -77,20 +130,58 @@ pub async fn find_session_user(
                COALESCE(users.is_superuser, 0) AS is_superuser,
                users.company_id, users.pined_bar, users.cloudtalk_agent_id,
                users.cloudtalk_phone_number, users.ringcentral_extension_id,
-               users.ringcentral_phone_number, users.is_signature_available
+               users.ringcentral_phone_number, users.is_signature_available,
+               {plan},
+               COALESCE({BILLING_PAUSED}, 0) AS billing_paused
         FROM users
         JOIN sessions ON sessions.user_id = users.id
+        LEFT JOIN company ON company.id = users.company_id
+        LEFT JOIN company_billing ON company_billing.company_id = users.company_id
         WHERE sessions.id = ?
           AND sessions.expiration_date > CURRENT_TIMESTAMP
           AND sessions.created_date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? MONTH)
           AND sessions.is_deleted = 0
           AND users.is_deleted = 0
         ",
-    )
+        plan = plan_columns("company"),
+    )))
+    .bind(PROCESSING_DAYS)
+    .bind(ended_statuses())
+    .bind(FIRST_PAYMENT_DAYS)
     .bind(session_id)
     .bind(SESSION_MAX_AGE_MONTHS)
     .fetch_optional(pool)
     .await
+}
+
+pub async fn find_session_user(
+    pool: &MySqlPool,
+    session_id: &str,
+) -> Result<Option<SessionUser>, sqlx::Error> {
+    Ok(find_session(pool, session_id).await?.map(|row| row.user))
+}
+
+/// Whether `company_id`'s access is paused for billing (a super admin acting
+/// in another company).
+pub async fn company_billing_paused(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> Result<bool, sqlx::Error> {
+    let paused: Option<bool> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        r"
+        SELECT COALESCE({BILLING_PAUSED}, 0)
+        FROM company
+        LEFT JOIN company_billing ON company_billing.company_id = company.id
+        WHERE company.id = ?
+        "
+    )))
+    .bind(PROCESSING_DAYS)
+    .bind(ended_statuses())
+    .bind(FIRST_PAYMENT_DAYS)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(paused.unwrap_or(false))
 }
 
 /// All of a user's position rows, across every company.
@@ -139,7 +230,7 @@ pub async fn find_user(
     user_id: i32,
     company_id: i32,
 ) -> Result<Option<SessionUser>, sqlx::Error> {
-    sqlx::query_as::<_, SessionUser>(
+    sqlx::query_as::<_, SessionUser>(sqlx::AssertSqlSafe(format!(
         r"
         SELECT users.id, users.email, users.name, users.phone_number,
                COALESCE(users.is_employee, 0) AS is_employee,
@@ -147,11 +238,14 @@ pub async fn find_user(
                COALESCE(users.is_superuser, 0) AS is_superuser,
                users.company_id, users.pined_bar, users.cloudtalk_agent_id,
                users.cloudtalk_phone_number, users.ringcentral_extension_id,
-               users.ringcentral_phone_number, users.is_signature_available
+               users.ringcentral_phone_number, users.is_signature_available,
+               {}
         FROM users
+        LEFT JOIN company ON company.id = users.company_id
         WHERE users.id = ? AND users.company_id = ? AND users.is_deleted = 0
         ",
-    )
+        plan_columns("company")
+    )))
     .bind(user_id)
     .bind(company_id)
     .fetch_optional(pool)
@@ -163,7 +257,7 @@ pub async fn find_live_user(
     pool: &MySqlPool,
     user_id: i32,
 ) -> Result<Option<SessionUser>, sqlx::Error> {
-    sqlx::query_as::<_, SessionUser>(
+    sqlx::query_as::<_, SessionUser>(sqlx::AssertSqlSafe(format!(
         r"
         SELECT users.id, users.email, users.name, users.phone_number,
                COALESCE(users.is_employee, 0) AS is_employee,
@@ -171,11 +265,14 @@ pub async fn find_live_user(
                COALESCE(users.is_superuser, 0) AS is_superuser,
                users.company_id, users.pined_bar, users.cloudtalk_agent_id,
                users.cloudtalk_phone_number, users.ringcentral_extension_id,
-               users.ringcentral_phone_number, users.is_signature_available
+               users.ringcentral_phone_number, users.is_signature_available,
+               {}
         FROM users
+        LEFT JOIN company ON company.id = users.company_id
         WHERE users.id = ? AND users.is_deleted = 0
         ",
-    )
+        plan_columns("company")
+    )))
     .bind(user_id)
     .fetch_optional(pool)
     .await
@@ -201,6 +298,7 @@ mod tests {
             ringcentral_extension_id: None,
             ringcentral_phone_number: None,
             is_signature_available: false,
+            plan: Entitlements::default(),
         }
     }
 

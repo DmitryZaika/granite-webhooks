@@ -8,6 +8,7 @@
 //! | `AdminUser`    | `getAdminUser`              | `is_admin \|\| is_superuser`              |
 //! | `UserManager`  | `canEditAdminUsers`         | a superuser, or an admin holding Manager in the company |
 //! | `CompanyManager` | (`can_manage_billing`)    | anyone holding Manager in the company (superusers too only then) |
+//! | `PositionedUser` | -                         | any valid session; also gives the user's positions in every company |
 //! | `InstallerUser` | `getInstallerUser` | an installer of the company |
 //! | `ShopOrEmployeeUser` | `getShopOrEmployeeUser` | an employee, or a shop manager / worker of the company |
 //! | `device::DeviceUser` | (Granite Phone app)  | a live `X-Granite-Device` token of an employee, admin or superuser |
@@ -15,6 +16,11 @@
 //!
 //! *`CurrentUser` also applies the super-admin elevation and company switch, so
 //! `company_id` is always the company the request acts in.
+//!
+//! Every extractor answers 402 `payment_required` when the company the request
+//! acts in has its access paused for billing, except on the paths in
+//! [`open_while_paused`]. `device::DeviceUser` and `device::PhoneCaller` are
+//! refused only on the phone admin setup ([`phone_admin_paused`]).
 //!
 //! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens, and the
 //! installers' and template makers' own schedule), on [`DEVICE_READ_ROUTES`]
@@ -51,6 +57,7 @@ pub mod job;
 pub mod sections;
 pub mod session;
 
+use crate::entitlements::company_entitlements;
 use crate::error::ApiError;
 use crate::state::AppState;
 use axum::extract::FromRequestParts;
@@ -58,8 +65,9 @@ use axum::http::Method;
 use axum::http::header::COOKIE;
 use axum::http::request::Parts;
 use cookie::{SESSION_COOKIE_NAME, cookie_values, decode_session};
+use lambda_http::tracing;
 use sections::Access;
-use session::{SessionUser, effective_user, find_session_user, user_positions};
+use session::{SessionUser, company_billing_paused, effective_user, find_session, user_positions};
 
 async fn authenticate(parts: &Parts, state: &AppState) -> Result<SessionUser, ApiError> {
     authenticate_with_access(parts, state)
@@ -266,6 +274,11 @@ async fn identify(
         && let Some(token) = device::device_token(parts)
     {
         let device = device::authenticate_device(&token, state).await?;
+        if !open_while_paused(&parts.method, parts.uri.path())
+            && company_paused(state, device.user.company_id).await
+        {
+            return Err(ApiError::PaymentRequired);
+        }
         let positions = user_positions(&state.pool, device.user.id).await?;
         return Ok((device.user, positions));
     }
@@ -278,16 +291,97 @@ async fn identify(
         .find_map(|value| decode_session(&value, &state.session_secret));
     let session = match (session, agent::bearer_token(&parts.headers)) {
         (Some(session), _) => session,
-        (None, Some(token)) => return agent::authenticate(parts, state, token).await,
+        (None, Some(token)) => {
+            let (mut user, positions) = agent::authenticate(parts, state, token).await?;
+            // The agent acts in the question's company: that company's plan,
+            // and its billing pause as for a session.
+            user.plan = company_entitlements(&state.pool, user.company_id).await?;
+            if !open_while_paused(&parts.method, parts.uri.path())
+                && company_paused(state, user.company_id).await
+            {
+                return Err(ApiError::PaymentRequired);
+            }
+            return Ok((user, positions));
+        }
         (None, None) => return Err(ApiError::Unauthorized),
     };
     let session_id = session.session_id.ok_or(ApiError::Unauthorized)?;
-    let user = find_session_user(&state.pool, &session_id)
+    let row = find_session(&state.pool, &session_id)
         .await?
         .ok_or(ApiError::Unauthorized)?;
-    let positions = user_positions(&state.pool, user.id).await?;
-    let user = effective_user(user, &positions, session.active_company_id);
+    let own_company_id = row.user.company_id;
+    let positions = user_positions(&state.pool, row.user.id).await?;
+    let mut user = effective_user(row.user, &positions, session.active_company_id);
+    if user.company_id != own_company_id {
+        // A super admin acting in another company: that company's plan.
+        user.plan = company_entitlements(&state.pool, user.company_id).await?;
+    }
+    if !open_while_paused(&parts.method, parts.uri.path()) {
+        let paused = if user.company_id == own_company_id {
+            row.billing_paused
+        } else {
+            // A super admin acting in another company.
+            company_paused(state, user.company_id).await
+        };
+        if paused {
+            return Err(ApiError::PaymentRequired);
+        }
+    }
     Ok((user, positions))
+}
+
+/// Whether `company_id`'s access is paused for billing; errors keep access.
+async fn company_paused(state: &AppState, company_id: i32) -> bool {
+    company_billing_paused(&state.pool, company_id)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "billing pause check failed");
+            false
+        })
+}
+
+/// Paths (and everything below them) that work while the company's access
+/// is paused for billing: paying, signing in and out, the app shell, the
+/// bell, superuser tools, the onboarding call / plan invites, and the phone
+/// (calls, texts and 911 must keep working; homeowners still call in) but
+/// for its paid admin setup ([`phone_admin_paused`]).
+const OPEN_WHILE_PAUSED: [&str; 8] = [
+    "/v1/billing",
+    "/v1/auth",
+    "/v1/app/shell",
+    "/v1/notifications",
+    "/v1/superuser",
+    "/v1/onboarding-call",
+    "/v1/plan-invites",
+    "/v1/phone",
+];
+
+/// The path itself or anything below it, so `/v1/billing` does not also open
+/// `/v1/billing-reminders` or `/v1/billingx`.
+fn is_path_or_child(path: &str, base: &str) -> bool {
+    path.strip_prefix(base)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// The phone's admin setup, refused while paused (402): numbers (search,
+/// buy, import, edit), porting, 10DLC, connecting Telnyx, hours and call
+/// recording. The admins' device list and revoke stay open (a lost phone).
+const PHONE_ADMIN: &str = "/v1/phone/admin";
+const PHONE_ADMIN_OPEN: &str = "/v1/phone/admin/devices";
+
+/// A phone admin setup path, refused while the company is paused.
+pub fn phone_admin_paused(path: &str) -> bool {
+    is_path_or_child(path, PHONE_ADMIN) && !is_path_or_child(path, PHONE_ADMIN_OPEN)
+}
+
+/// Whether a request works while its company's access is paused. Reading
+/// `/v1/me` works too (the SPA needs who is signed in), but not its children.
+pub fn open_while_paused(method: &Method, path: &str) -> bool {
+    (method == Method::GET && path == "/v1/me")
+        || (OPEN_WHILE_PAUSED
+            .iter()
+            .any(|base| is_path_or_child(path, base))
+            && !phone_admin_paused(path))
 }
 
 pub struct CurrentUser(pub SessionUser);
@@ -419,8 +513,23 @@ impl FromRequestParts<AppState> for BillingManager {
     }
 }
 
-/// Someone holding the Manager position in the company the request acts in
-/// (the app shell's `can_manage_billing`), whatever their other rights: a
+/// Any signed-in user, with their positions in every company: for routes
+/// that check a position in a company other than the one the request acts
+/// in (a plan invite's company).
+pub struct PositionedUser(pub SessionUser, pub Vec<session::UserPositionRow>);
+
+impl FromRequestParts<AppState> for PositionedUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        Ok(Self(user, positions))
+    }
+}
+
+/// Someone holding the Manager position in the company the request acts in.
+///
+/// The app shell's `can_manage_billing`, whatever their other rights: a
 /// company admin or a superuser without it is refused. Used where only the
 /// company's Managers may act (the 10DLC texting registration).
 pub struct CompanyManager(pub SessionUser);
@@ -438,6 +547,124 @@ impl FromRequestParts<AppState> for CompanyManager {
         } else {
             Err(ApiError::Forbidden)
         }
+    }
+}
+
+/// The origin custom header CloudFront adds to every request it forwards.
+///
+/// Set by `infra/api-domain.yaml` (parameter `OriginVerifySecret`). A viewer
+/// cannot set it: CloudFront replaces a viewer header of that name.
+pub const ORIGIN_VERIFY_HEADER: &str = "x-granite-origin-verify";
+
+/// `CLOUDFRONT_ORIGIN_SECRET`, the value CloudFront sends in
+/// [`ORIGIN_VERIFY_HEADER`]; read once. Unset: every request is trusted to
+/// come through CloudFront (the behaviour before the header existed).
+pub fn origin_secret() -> Option<&'static str> {
+    static SECRET: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| {
+        let secret = std::env::var("CLOUDFRONT_ORIGIN_SECRET")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if secret.is_none() {
+            tracing::warn!("{}", crate::env_check::ORIGIN_SECRET_WARNING);
+        }
+        secret
+    });
+    SECRET.as_deref()
+}
+
+/// Whether the request carries CloudFront's origin secret. Compared as
+/// SHA-256 digests in constant time, so neither the value nor its length
+/// leaks.
+fn from_cloudfront(headers: &axum::http::HeaderMap, secret: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    headers.get(ORIGIN_VERIFY_HEADER).is_some_and(|value| {
+        constant_time_eq(
+            &Sha256::digest(value.as_bytes()),
+            &Sha256::digest(secret.as_bytes()),
+        )
+    })
+}
+
+/// The client address, for consent records, the login throttle and the
+/// per-IP signup limit.
+///
+/// The api runs behind CloudFront in front of its Lambda function URL, but
+/// the function URL is public too. With `origin_secret` set
+/// ([`origin_secret`]), `X-Forwarded-For` is read only when the request
+/// carries that secret in [`ORIGIN_VERIFY_HEADER`]; any other request is a
+/// direct call and its client is `source_ip` (the request context's
+/// `sourceIp`), else "unknown". Without the secret every request is read as
+/// coming through CloudFront (rollout compatibility; `env_check` warns).
+///
+/// Through CloudFront: CloudFront appends the viewer's address to
+/// `X-Forwarded-For`, and the function URL may append its own caller,
+/// CloudFront (`source_ip`). Entries the client sent come first and are
+/// never trusted: the address is the right-most entry once trailing copies of
+/// `source_ip` are dropped, else `source_ip`, else "unknown".
+pub fn client_ip_from(
+    source_ip: Option<&str>,
+    headers: &axum::http::HeaderMap,
+    origin_secret: Option<&str>,
+) -> String {
+    let source = source_ip.map(str::trim).filter(|ip| !ip.is_empty());
+    if origin_secret.is_some_and(|secret| !from_cloudfront(headers, secret)) {
+        return source.unwrap_or("unknown").to_string();
+    }
+    let forwarded: Vec<&str> = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    let mut hops = forwarded.as_slice();
+    while let Some((last, rest)) = hops.split_last()
+        && Some(*last) == source
+    {
+        hops = rest;
+    }
+    hops.last()
+        .copied()
+        .or(source)
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// The `sourceIp` of the Lambda request context, when there is one.
+pub fn source_ip(extensions: &axum::http::Extensions) -> Option<String> {
+    match extensions.get::<lambda_http::request::RequestContext>()? {
+        lambda_http::request::RequestContext::ApiGatewayV2(context) => {
+            context.http.source_ip.clone()
+        }
+        _ => None,
+    }
+}
+
+/// [`client_ip_from`] without the request context.
+///
+/// The right-most `X-Forwarded-For` entry of a request that came through
+/// CloudFront. Prefer [`ClientIp`], which also drops the function URL's own
+/// hop and knows a direct call's address.
+pub fn client_ip(headers: &axum::http::HeaderMap) -> String {
+    client_ip_from(None, headers, origin_secret())
+}
+
+/// [`client_ip_from`] of a request: the client address, as a handler
+/// argument.
+pub struct ClientIp(pub String);
+
+impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
+    type Rejection = std::convert::Infallible;
+
+    #[allow(clippy::unused_async_trait_impl)] // the trait's signature
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(client_ip_from(
+            source_ip(&parts.extensions).as_deref(),
+            &parts.headers,
+            origin_secret(),
+        )))
     }
 }
 
@@ -460,8 +687,172 @@ pub fn sha256_hex(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::device_route;
-    use axum::http::Method;
+    use super::*;
+
+    fn open(path: &str) -> bool {
+        open_while_paused(&Method::GET, path)
+    }
+
+    #[test]
+    fn paused_companies_reach_billing_sign_in_and_notifications_only() {
+        for path in [
+            "/v1/billing",
+            "/v1/billing/gate",
+            "/v1/billing/reactivation/finish",
+            "/v1/auth/login",
+            "/v1/auth/logout",
+            "/v1/auth/session",
+            "/v1/app/shell",
+            "/v1/notifications",
+            "/v1/notifications/done",
+            "/v1/superuser/companies",
+            "/v1/onboarding-call",
+            "/v1/plan-invites/abc",
+            "/v1/phone/calls",
+            "/v1/phone/texts/index",
+            "/v1/phone/e911",
+            "/v1/phone/devices",
+            "/v1/phone/admin/devices",
+            "/v1/phone/admin/devices/7",
+            "/v1/me",
+        ] {
+            assert!(open(path), "{path} should stay open");
+        }
+        for path in [
+            "/v1/customers",
+            "/v1/deals/1",
+            "/v1/stones",
+            "/v1/me/todos",
+            "/",
+        ] {
+            assert!(!open(path), "{path} should be paused");
+        }
+    }
+
+    #[test]
+    fn the_phones_paid_admin_setup_is_paused() {
+        for path in [
+            "/v1/phone/admin",
+            "/v1/phone/admin/numbers",
+            "/v1/phone/admin/numbers/buy",
+            "/v1/phone/admin/numbers/import",
+            "/v1/phone/admin/ports/7/submit",
+            "/v1/phone/admin/tendlc",
+            "/v1/phone/admin/tendlc/ready",
+            "/v1/phone/admin/hours",
+            "/v1/phone/admin/recording",
+            "/v1/phone/admin/connect",
+        ] {
+            assert!(phone_admin_paused(path), "{path}");
+            assert!(
+                !open_while_paused(&Method::POST, path),
+                "{path} should be paused"
+            );
+        }
+        assert!(!phone_admin_paused("/v1/phone/adminx"));
+        assert!(phone_admin_paused("/v1/phone/admin/devicesx"));
+    }
+
+    fn forwarded(forwarded: &str, origin: Option<&str>) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", forwarded.parse().unwrap());
+        if let Some(origin) = origin {
+            headers.insert(ORIGIN_VERIFY_HEADER, origin.parse().unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn the_client_address_is_the_hop_cloudfront_added() {
+        let headers = |value: &str| forwarded(value, None);
+        let cloudfront = Some("130.176.1.1");
+        // No origin secret configured: every request is read as CloudFront's.
+        // The client's own entry is skipped; the function URL's hop dropped.
+        assert_eq!(
+            client_ip_from(
+                cloudfront,
+                &headers("6.6.6.6, 203.0.113.9, 130.176.1.1"),
+                None
+            ),
+            "203.0.113.9"
+        );
+        assert_eq!(
+            client_ip_from(cloudfront, &headers("6.6.6.6, 203.0.113.9"), None),
+            "203.0.113.9"
+        );
+        assert_eq!(
+            client_ip_from(None, &headers("6.6.6.6, 203.0.113.9"), None),
+            "203.0.113.9"
+        );
+        // A direct call: its source address.
+        assert_eq!(
+            client_ip_from(Some("198.51.100.4"), &axum::http::HeaderMap::new(), None),
+            "198.51.100.4"
+        );
+        assert_eq!(
+            client_ip_from(None, &axum::http::HeaderMap::new(), None),
+            "unknown"
+        );
+        let mut real_ip = axum::http::HeaderMap::new();
+        real_ip.insert("x-real-ip", "6.6.6.6".parse().unwrap());
+        assert_eq!(client_ip_from(None, &real_ip, None), "unknown");
+    }
+
+    #[test]
+    fn forwarded_for_is_read_only_with_the_origin_secret() {
+        let secret = Some("origin-secret-value");
+        let cloudfront = Some("130.176.1.1");
+        // Through CloudFront: the header matches, the viewer's hop is read.
+        assert_eq!(
+            client_ip_from(
+                cloudfront,
+                &forwarded(
+                    "6.6.6.6, 203.0.113.9, 130.176.1.1",
+                    Some("origin-secret-value")
+                ),
+                secret,
+            ),
+            "203.0.113.9"
+        );
+        // A direct call to the function URL forging X-Forwarded-For: its
+        // source address, whatever the forged entries say.
+        let attacker = Some("198.51.100.4");
+        for origin in [None, Some("guess"), Some("origin-secret-valuX"), Some("")] {
+            assert_eq!(
+                client_ip_from(attacker, &forwarded("203.0.113.9", origin), secret),
+                "198.51.100.4",
+                "{origin:?}"
+            );
+        }
+        assert_eq!(
+            client_ip_from(None, &forwarded("203.0.113.9", Some("guess")), secret),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn allowed_prefixes_match_whole_path_segments_only() {
+        for path in [
+            "/v1/billing-reminders/process",
+            "/v1/billingx",
+            "/v1/notifications-export",
+            "/v1/authx",
+            "/v1/app/shellx",
+            "/v1/mex",
+            "/v1/me/",
+            "/v1/phonex",
+        ] {
+            assert!(!open(path), "{path} should be paused");
+        }
+    }
+
+    #[test]
+    fn only_reading_me_stays_open() {
+        assert!(open_while_paused(&Method::GET, "/v1/me"));
+        assert!(!open_while_paused(&Method::PUT, "/v1/me"));
+        assert!(!open_while_paused(&Method::PUT, "/v1/me/account"));
+        assert!(open_while_paused(&Method::POST, "/v1/billing/checkout"));
+    }
 
     #[test]
     fn device_routes_are_whole_prefixes() {

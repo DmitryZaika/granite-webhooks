@@ -1,6 +1,7 @@
 use crate::ai::Ai;
 use crate::billing::BillingPlan;
 use crate::billing::stripe::Stripe;
+use crate::env_check::{ConfigError, EnvSnapshot, config_problems};
 use crate::maps::Maps;
 use crate::phone_config::PhoneConfig;
 use crate::push::Push;
@@ -99,6 +100,8 @@ pub struct AppState {
     /// `SIGNATURE_SESSION_SECRET`: keys the native signer's CSRF token
     /// (32+ bytes); unset, native signing links answer 503.
     pub signing_session_secret: Option<Arc<str>>,
+    /// Self-serve signup settings.
+    pub signup: crate::signup::SignupConfig,
     /// Telnyx, for Granite Phone (a stub in tests; disabled without
     /// `TELNYX_API_KEY`).
     pub telnyx: Telnyx,
@@ -108,6 +111,11 @@ pub struct AppState {
     /// Granite Phone settings (`PHONE_*`, `TELNYX_PUBLIC_KEY`,
     /// `TELNYX_FALLBACK_TEXML_URL`).
     pub phone: PhoneConfig,
+    /// Onboarding with Dima: Calendly and `ONBOARDING_ADVANCE_CHARGING`.
+    pub onboarding_call: crate::onboarding_call::Config,
+    /// `BILLING_ALERT_EMAIL`: where internal payment notices go (returned
+    /// bank debits, blocked accounts, disputes); unset, none are sent.
+    pub billing_alert_email: Option<Arc<str>>,
     /// State of the crates above this one, one value per type (see
     /// [`Extensions`]).
     pub extensions: Extensions,
@@ -190,10 +198,6 @@ impl SignWellWebhookKeys {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("SESSION_SECRET environment variable must be set")]
-pub struct MissingSessionSecret;
-
 impl AppState {
     pub fn new(pool: MySqlPool, session_secret: &str, allowed_origins: &str) -> Self {
         Self {
@@ -230,11 +234,28 @@ impl AppState {
             dns: crate::deliverability::AppDns::Fixed(Arc::default()),
             ses: SesIdentities::Fixed(None),
             signing_session_secret: None,
+            signup: crate::signup::SignupConfig::default(),
             telnyx: Telnyx::disabled(),
             push: Push::disabled(),
             phone: PhoneConfig::default(),
+            onboarding_call: crate::onboarding_call::Config::disabled(),
+            billing_alert_email: None,
             extensions: Extensions::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_onboarding_call(mut self, config: crate::onboarding_call::Config) -> Self {
+        self.onboarding_call = config;
+        self
+    }
+
+    /// `BILLING_ALERT_EMAIL`; blank leaves internal payment notices off.
+    #[must_use]
+    pub fn with_billing_alert_email(mut self, email: &str) -> Self {
+        let email = email.trim();
+        self.billing_alert_email = (!email.is_empty()).then(|| Arc::from(email));
+        self
     }
 
     #[must_use]
@@ -271,6 +292,12 @@ impl AppState {
     #[must_use]
     pub fn with_signature_app_origin(mut self, origin: &str) -> Self {
         self.signature_app_origin = Arc::from(origin.trim().trim_end_matches('/'));
+        self
+    }
+
+    #[must_use]
+    pub fn with_signup(mut self, signup: crate::signup::SignupConfig) -> Self {
+        self.signup = signup;
         self
     }
 
@@ -428,8 +455,14 @@ impl AppState {
         self
     }
 
-    pub fn from_env(pool: MySqlPool) -> Result<Self, MissingSessionSecret> {
-        let secret = std::env::var("SESSION_SECRET").map_err(|_| MissingSessionSecret)?;
+    /// Fails, naming the variables (never their values), when the environment
+    /// lacks something a switched-on feature needs or holds a malformed value.
+    pub fn from_env(pool: MySqlPool) -> Result<Self, ConfigError> {
+        let problems = config_problems(&EnvSnapshot::from_process());
+        if !problems.is_empty() {
+            return Err(ConfigError(problems));
+        }
+        let secret = std::env::var("SESSION_SECRET").unwrap_or_default();
         let origins = std::env::var("API_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_string());
         let storage = Storage::from_env();
@@ -477,7 +510,10 @@ impl AppState {
             .with_ses(SesIdentities::Aws)
             .with_signing_session_secret(
                 &std::env::var("SIGNATURE_SESSION_SECRET").unwrap_or_default(),
-            ))
+            )
+            .with_onboarding_call(crate::onboarding_call::Config::from_env())
+            .with_billing_alert_email(&std::env::var("BILLING_ALERT_EMAIL").unwrap_or_default())
+            .with_signup(crate::signup::SignupConfig::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the
@@ -508,6 +544,8 @@ impl AppState {
                 Method::DELETE,
             ])
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+            // The payments app reads a 429's wait (`too_many_signups`).
+            .expose_headers([header::RETRY_AFTER])
     }
 }
 

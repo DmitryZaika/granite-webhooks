@@ -26,7 +26,8 @@ pub mod sales;
 
 use crate::auth::session::SessionUser;
 use crate::auth::{AdminUser, EmployeeUser};
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
@@ -96,6 +97,9 @@ async fn refuse_installer(state: &AppState, user: &SessionUser) -> ApiResult<()>
 /// What a `QuickBooks` failure means to the page.
 #[allow(clippy::needless_pass_by_value)] // used as `map_err(qbo_error)`
 fn qbo_error(err: QboError) -> ApiError {
+    if matches!(err, QboError::AddonRequired) {
+        return ApiError::AddonRequired(AddonKey::Quickbooks);
+    }
     if err.is_not_connected() {
         return ApiError::Conflict("QuickBooks is not connected".into());
     }
@@ -317,7 +321,7 @@ async fn invoices_for(
     responses(
         (status = 200, description = "Invoices", body = CustomerInvoices),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 404, description = "No such customer in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -328,6 +332,7 @@ pub async fn customer_invoices(
     EmployeeUser(user): EmployeeUser,
     Path(customer_id): Path<i32>,
 ) -> ApiResult<Json<CustomerInvoices>> {
+    user.plan.require(AddonKey::Quickbooks)?;
     refuse_installer(&state, &user).await?;
     invoices_of_customer(&state, user.company_id, customer_id)
         .await
@@ -368,6 +373,8 @@ pub async fn invoices_of_customer(
     Ok(match result {
         Ok(found) => found,
         Err(err) if err.is_not_connected() => CustomerInvoices::empty(InvoicesStatus::NotConnected),
+        // Public and commission callers have no session; they see no invoices.
+        Err(QboError::AddonRequired) => CustomerInvoices::empty(InvoicesStatus::NotConnected),
         Err(QboError::Database(err)) => return Err(err.into()),
         Err(err) => {
             tracing::error!(error = %err, customer_id, "QuickBooks invoices failed");
@@ -701,7 +708,7 @@ async fn fetch_invoice(
         (status = 200, description = "Invoice", body = EditableInvoice),
         (status = 400, description = "Invalid invoice id", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Not an invoice of this customer", body = ErrorBody),
+        (status = 403, description = "Not an invoice of this customer, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 404, description = "No such customer, or it is not linked to QuickBooks", body = ErrorBody),
         (status = 409, description = "QuickBooks is not connected", body = ErrorBody),
         (status = 502, description = "QuickBooks failed", body = ErrorBody),
@@ -767,7 +774,7 @@ async fn save(
         (status = 200, description = "The saved invoice", body = EditableInvoice),
         (status = 400, description = "Invalid invoice, or a sales line without an item", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Not an invoice of this customer", body = ErrorBody),
+        (status = 403, description = "Not an invoice of this customer, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 404, description = "No such customer, or it is not linked to QuickBooks", body = ErrorBody),
         (status = 409, description = "QuickBooks is not connected", body = ErrorBody),
         (status = 502, description = "QuickBooks failed", body = ErrorBody),
@@ -830,7 +837,7 @@ fn pdf_response(invoice_id: &str, bytes: Vec<u8>) -> impl IntoResponse + use<> {
         (status = 200, description = "The PDF", content_type = "application/pdf", body = Vec<u8>),
         (status = 400, description = "Invalid invoice id", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Not an invoice of this customer", body = ErrorBody),
+        (status = 403, description = "Not an invoice of this customer, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 404, description = "No such customer, or it is not linked to QuickBooks", body = ErrorBody),
         (status = 409, description = "QuickBooks is not connected", body = ErrorBody),
         (status = 502, description = "QuickBooks failed", body = ErrorBody),
@@ -877,7 +884,7 @@ pub async fn customer_invoice_pdf_of(
         (status = 200, description = "The PDF", content_type = "application/pdf", body = Vec<u8>),
         (status = 400, description = "Invalid invoice id", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 409, description = "QuickBooks is not connected", body = ErrorBody),
         (status = 502, description = "QuickBooks failed", body = ErrorBody),
     ),
@@ -956,7 +963,7 @@ pub struct QboCustomers {
         (status = 200, description = "Matches", body = QboCustomers),
         (status = 400, description = "Neither email nor name", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 502, description = "QuickBooks failed", body = ErrorBody),
     ),
     security(("session_cookie" = []))

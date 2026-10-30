@@ -102,6 +102,8 @@ pub struct CompanyFacts {
     pub ringcentral_jwt_set: bool,
     pub qbo_realm_id: Option<String>,
     pub quickbooks_enabled: bool,
+    /// A self-serve company: it lives on the apex, a subdomain is not expected.
+    pub self_serve: bool,
 }
 
 /// The select list for [`CompanyFacts`] over `company c`.
@@ -109,7 +111,8 @@ pub const FACTS_SQL: &str = "c.id, c.subdomain, c.domain,
     (COALESCE(c.cloudtalk_access_key, '') <> '' AND COALESCE(c.cloudtalk_access_secret, '') <> '') AS cloudtalk,
     (COALESCE(TRIM(c.ringcentral_client_id), '') <> '' AND COALESCE(TRIM(c.ringcentral_client_secret), '') <> ''
      AND COALESCE(TRIM(c.ringcentral_jwt), '') <> '') AS ringcentral_jwt_set,
-    c.qbo_realm_id, COALESCE(c.quickbooks_enabled, 1) <> 0 AS quickbooks_enabled";
+    c.qbo_realm_id, COALESCE(c.quickbooks_enabled, 1) <> 0 AS quickbooks_enabled,
+    c.plan_source = 'subscription' AS self_serve";
 
 /// The domain of a domain field or email address (the checklist's lenient reading).
 fn domain_host(value: Option<&str>) -> Option<String> {
@@ -281,10 +284,11 @@ pub async fn checklists(
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty());
         let base = base.clone();
+        let self_serve = company.self_serve;
         async move {
             match subdomain {
                 Some(subdomain) => resolves(&state.dns, &format!("{subdomain}.{base}")).await,
-                None => false,
+                None => self_serve,
             }
         }
     }))
@@ -312,7 +316,13 @@ pub async fn checklists(
                     Some(subdomain_infra),
                     manual("subdomain_infra"),
                     Some(subdomain.map_or_else(
-                        || "Set subdomain first".to_string(),
+                        || {
+                            if company.self_serve {
+                                "Not needed: this company has no subdomain".to_string()
+                            } else {
+                                "Set subdomain first".to_string()
+                            }
+                        },
                         |s| format!("Expect DNS for {s}.granite-manager.com"),
                     )),
                 ),

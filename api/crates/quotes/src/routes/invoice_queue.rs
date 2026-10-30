@@ -6,7 +6,8 @@
 //! Replaces the Remix `admin.invoices` and `admin.invoices.$saleId` loaders.
 
 use crate::auth::AdminUser;
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::openapi::{OpenApiRouter, routes};
 use crate::serde_helpers::js_date;
@@ -75,7 +76,7 @@ const COLUMNS: &str = "s.id, s.sale_date, c.name AS customer_name, u.name AS sel
     responses(
         (status = 200, description = "Sales without an invoice", body = Vec<QueuedSale>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -84,6 +85,7 @@ pub async fn list(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<Vec<QueuedSale>>> {
+    user.plan.require(AddonKey::Quickbooks)?;
     Ok(Json(
         sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {COLUMNS} FROM sales s
@@ -111,7 +113,7 @@ pub async fn list(
     responses(
         (status = 200, description = "The sale", body = QueuedSaleDetail),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
         (status = 404, description = "No such sale in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -122,6 +124,7 @@ pub async fn get(
     AdminUser(user): AdminUser,
     Path(sale_id): Path<i32>,
 ) -> ApiResult<Json<QueuedSaleDetail>> {
+    user.plan.require(AddonKey::Quickbooks)?;
     let row: Option<QueuedSaleDetail> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS}, primary_email.email AS email, c.phone, c.address, c.qbo_id
            FROM sales s

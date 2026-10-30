@@ -1,0 +1,433 @@
+//! `POST /v1/jobs/billing-reminders`: the billing upkeep that runs on every
+//! one-minute tick, then the reminder emails.
+//!
+//! In order, each step failing on its own: a daily prune of old Stripe
+//! webhook event ids, a 6-hourly reconciliation of Stripe-billed companies
+//! with Stripe, and the reminder emails to managers (payment method hold,
+//! first charge coming, payment failed, asked to pay). Port of the CRM's
+//! `api.subscription-reminders.process.ts`.
+
+use crate::auth::job::JobCaller;
+use crate::billing::CompanyBilling;
+use crate::billing::account::{default_card, reconcile_batch};
+use crate::billing::amount_notice::process_amount_notices;
+use crate::billing::cancellation::resend_confirmations;
+use crate::billing::gate::settle_company_locked;
+use crate::billing::lock::{CompanyLock, LockError};
+use crate::billing::reminder_store::MySqlReminderStore;
+use crate::billing::reminders::{
+    DunningKind, FirstChargeQuote, ReminderEffects, ReminderEmail, ReminderError, ReminderLimits,
+    ReminderSendResult, ReminderStep, ReminderTickResult, ReportContext, classify_send_failure,
+    describe_card, first_charge_quote_from, process_billing_reminders,
+};
+use crate::billing::stripe::StripeError;
+use crate::error::{ApiResult, ErrorBody};
+use crate::job_runs::{self, Claim};
+use crate::openapi::ToSchema;
+use crate::state::AppState;
+use crate::webhooks_client::OutgoingEmail;
+use axum::Json;
+use axum::extract::State;
+use chrono::{Duration, NaiveDateTime};
+use lambda_http::tracing;
+use serde::Serialize;
+use std::sync::LazyLock;
+use std::time::Instant;
+
+static POSTHOG_HTTP: LazyLock<reqwest::Client> = LazyLock::new(common::http::client);
+
+const PRUNE_KEY: &str = "billing-prune-webhook-events";
+const RECONCILE_KEY: &str = "billing-reconcile";
+/// Stripe retries a webhook for 3 days; ids older than this are safe to drop.
+const WEBHOOK_EVENT_RETENTION_DAYS: u32 = 90;
+/// Well under the 10 s other billing writers wait for the company lock, which
+/// is held while the email is sent.
+const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Companies re-read from Stripe per run, and the time they may take.
+const RECONCILE_BATCH: u32 = 50;
+const RECONCILE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+/// No amount-change notice is started after this much of the run.
+const AMOUNT_NOTICE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(17);
+/// No cancellation confirmation is resent after this much of the run. With
+/// `SEND_TIMEOUT` the run ends by 25 s, inside the gateway's 30 s.
+const CONFIRMATION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// What this run's batch of the Stripe reconciliation did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ReconcileRun {
+    /// Stripe-billed companies re-read from Stripe successfully.
+    pub checked: usize,
+    /// Companies Stripe could not be read for, or whose billing was busy.
+    pub failed: usize,
+}
+
+/// What one run did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ToSchema)]
+pub struct BillingRemindersRun {
+    /// Reminders claimed this run (each then sent, failed or unknown); what
+    /// the scheduler logs.
+    pub processed: usize,
+    /// Reminder emails delivered to the mail service.
+    pub sent: usize,
+    /// Reminder emails the mail service refused; retried on a later run, up
+    /// to 3 attempts.
+    pub failed: usize,
+    /// Reminder emails whose outcome is unknown (timeout, 5xx); never resent.
+    pub unknown: usize,
+    /// Claims found still sending after 15 minutes, now marked unknown.
+    pub stuck: usize,
+    /// Companies skipped after an error (busy billing lock, database, Stripe);
+    /// the next run picks them up again.
+    pub company_errors: usize,
+    /// This run's batch of the Stripe reconciliation (up to 50 companies; a
+    /// pass starts every 6 hours and continues over the next runs), or null
+    /// when no pass is running or Stripe is not configured.
+    pub reconciled: Option<ReconcileRun>,
+    /// Self-serve companies whose Managers were emailed this run that their
+    /// monthly total changed (at most one notice per company a day; up to 50
+    /// companies looked at per run; a Manager whose email failed gets it the
+    /// next day, up to 3 tries).
+    pub amount_notices: usize,
+    /// Cancellation requests whose confirmation email reached no Manager when
+    /// requested and was resent to their Managers this run (10 minutes after
+    /// the request at the earliest, up to 20 a run, retried every run until
+    /// one Manager gets it).
+    pub confirmations_resent: usize,
+}
+
+const fn run_of(
+    tick: ReminderTickResult,
+    reconciled: Option<ReconcileRun>,
+    amount_notices: usize,
+    confirmations_resent: usize,
+) -> BillingRemindersRun {
+    BillingRemindersRun {
+        processed: tick.processed,
+        sent: tick.sent,
+        failed: tick.failed,
+        unknown: tick.unknown,
+        stuck: tick.stuck,
+        company_errors: tick.company_errors,
+        reconciled,
+        amount_notices,
+        confirmations_resent,
+    }
+}
+
+/// The lock, Stripe, mail and reporting the reminders use.
+struct LiveReminders<'a> {
+    state: &'a AppState,
+    started: Instant,
+    from_address: String,
+}
+
+impl ReminderEffects for LiveReminders<'_> {
+    type Lock = CompanyLock;
+
+    async fn lock(&self, company_id: i32) -> Result<CompanyLock, ReminderError> {
+        CompanyLock::acquire(&self.state.pool, company_id)
+            .await
+            .map_err(|err| match err {
+                LockError::Busy => ReminderError::Busy,
+                LockError::Database(err) => ReminderError::Database(err),
+            })
+    }
+
+    async fn unlock(&self, lock: CompanyLock) {
+        lock.release().await;
+    }
+
+    async fn settle(
+        &self,
+        company_id: i32,
+        required_since: Option<NaiveDateTime>,
+        now: NaiveDateTime,
+    ) -> Result<Option<CompanyBilling>, ReminderError> {
+        Ok(settle_company_locked(
+            &self.state.stripe,
+            &self.state.pool,
+            company_id,
+            required_since,
+            now,
+        )
+        .await?)
+    }
+
+    async fn first_charge_quote(
+        &self,
+        record: &CompanyBilling,
+    ) -> Result<Option<FirstChargeQuote>, ReminderError> {
+        let stripe = &self.state.stripe;
+        let Some(id) = record.stripe_subscription_id.as_deref() else {
+            return Ok(None);
+        };
+        let subscription = match stripe.subscription(id).await {
+            Ok(subscription) => subscription,
+            Err(StripeError::NotConfigured) => return Ok(None),
+            Err(StripeError::Api(_) | StripeError::Missing(_)) => {
+                return Err(ReminderError::Stripe("Stripe refused the request".into()));
+            }
+            Err(StripeError::Request(_) | StripeError::Server(_)) => {
+                return Err(ReminderError::Stripe("Stripe request failed".into()));
+            }
+        };
+        let card = default_card(stripe, Some(record)).await;
+        Ok(first_charge_quote_from(
+            &subscription,
+            card.map(|card| describe_card(&card)),
+        ))
+    }
+
+    async fn send(&self, email: &ReminderEmail) -> ReminderSendResult {
+        let message = OutgoingEmail {
+            from_name: Some("Granite Manager".into()),
+            from_address: self.from_address.clone(),
+            to: vec![email.to.clone()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            subject: email.subject.clone(),
+            body: email.html.clone(),
+            signature: None,
+            reply_to: Vec::new(),
+            in_reply_to: None,
+            references: Vec::new(),
+            attachments: Vec::new(),
+            transactional: true,
+        };
+        match self
+            .state
+            .webhooks
+            .send_notice(&message, &email.text, SEND_TIMEOUT)
+            .await
+        {
+            Ok(message_id) => ReminderSendResult::Sent {
+                message_id: Some(message_id).filter(|id| !id.is_empty()),
+            },
+            Err(failure) => classify_send_failure(&failure),
+        }
+    }
+
+    async fn report(&self, problem: &str, context: &ReportContext) {
+        let fields = (
+            context.company_id,
+            context.reminder_id,
+            context.user_id,
+            context.kind.map(DunningKind::as_str),
+            context.step.map(ReminderStep::as_str),
+            context.error_code.as_deref(),
+        );
+        if context.error_code.as_deref() == Some("busy") {
+            tracing::warn!(?fields, "billing reminder skipped, company busy");
+            return;
+        }
+        tracing::error!(problem, ?fields, "billing reminder problem");
+        report_exception("BillingReminderError", problem, context).await;
+    }
+
+    fn elapsed(&self) -> std::time::Duration {
+        self.started.elapsed()
+    }
+
+    fn app_url(&self) -> &str {
+        &self.state.app_url
+    }
+}
+
+/// An `$exception` for Error Tracking: ids, kind, step and error code only.
+async fn report_exception(kind: &str, problem: &str, context: &ReportContext) {
+    let properties = serde_json::json!({
+        "$exception_list": [{
+            "type": kind,
+            "value": problem,
+            "mechanism": { "handled": true, "synthetic": false },
+        }],
+        "$process_person_profile": false,
+        "error_source": "api",
+        "job": "billing_reminders",
+        "company_id": context.company_id,
+        "reminder_id": context.reminder_id,
+        "user_id": context.user_id,
+        "cycle_kind": context.kind.map(DunningKind::as_str),
+        "step": context.step.map(ReminderStep::as_str),
+        "error_code": context.error_code,
+    });
+    crate::posthog::capture(&POSTHOG_HTTP, "$exception", "granite-api", properties).await;
+}
+
+/// A step failed: log it and tell Error Tracking, then carry on.
+async fn report_step(step: &str, err: &str) {
+    tracing::error!(step, error = %err, "billing job step failed");
+    let context = ReportContext {
+        error_code: Some(step.to_string()),
+        ..ReportContext::default()
+    };
+    report_exception(
+        "BillingJobError",
+        &format!("{step} failed: {err}"),
+        &context,
+    )
+    .await;
+}
+
+/// Ends a claimed run: stamped finished, or given back so the next tick
+/// retries.
+async fn settle_claim(state: &AppState, claim: Claim, failed: bool) {
+    let result = if failed {
+        claim.undo(&state.pool).await
+    } else {
+        claim.finish(&state.pool, crate::billing::now()).await
+    };
+    if let Err(err) = result {
+        tracing::warn!(error = %err, "job run not recorded");
+    }
+}
+
+/// Drops processed Stripe event ids older than the retention, in a bounded
+/// batch. Daily.
+async fn prune(state: &AppState, now: NaiveDateTime) {
+    let claim = match job_runs::claim(&state.pool, PRUNE_KEY, Duration::days(1), now).await {
+        Ok(Some(claim)) => claim,
+        Ok(None) => return,
+        Err(err) => return report_step("prune_webhook_events", &err.to_string()).await,
+    };
+    let pruned = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DELETE FROM stripe_webhook_events
+          WHERE processed_at < UTC_TIMESTAMP() - INTERVAL {WEBHOOK_EVENT_RETENTION_DAYS} DAY
+          LIMIT 5000"
+    )))
+    .execute(&state.pool)
+    .await;
+    if let Err(err) = &pruned {
+        report_step("prune_webhook_events", &err.to_string()).await;
+    }
+    settle_claim(state, claim, pruned.is_err()).await;
+}
+
+/// Re-reads Stripe-billed companies from Stripe: a pass every 6 hours, in
+/// batches of `RECONCILE_BATCH` within `RECONCILE_BUDGET` per run, so the
+/// reminders always get their time.
+async fn reconcile(state: &AppState, now: NaiveDateTime) -> Option<ReconcileRun> {
+    let claim =
+        match job_runs::claim_batch(&state.pool, RECONCILE_KEY, Duration::hours(6), now).await {
+            Ok(Some(claim)) => claim,
+            Ok(None) => return None,
+            Err(err) => {
+                report_step("reconcile", &err.to_string()).await;
+                return None;
+            }
+        };
+    let after = claim.after;
+    let batch = reconcile_batch(
+        &state.stripe,
+        &state.pool,
+        after,
+        RECONCILE_BATCH,
+        Some(RECONCILE_BUDGET),
+    )
+    .await;
+    let (advanced, run) = match batch {
+        Ok(Some(batch)) => (
+            claim
+                .advance(&state.pool, batch.last_id, batch.done, now)
+                .await,
+            Some(ReconcileRun {
+                checked: batch.reconciled.checked,
+                failed: batch.reconciled.failed,
+            }),
+        ),
+        // Stripe is off: nothing to reconcile this pass.
+        Ok(None) => (claim.advance(&state.pool, None, true, now).await, None),
+        Err(err) => {
+            // The cursor stays: the next run retries this batch.
+            report_step("reconcile", &err.to_string()).await;
+            return None;
+        }
+    };
+    if let Err(err) = advanced {
+        tracing::warn!(error = %err, "reconcile progress not recorded");
+    }
+    run
+}
+
+/// Run the billing upkeep and reminder emails
+///
+/// Called by the `time-triggered` Lambda every minute with
+/// `Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on
+/// its own: it prunes Stripe webhook event ids older than 90 days (at most
+/// once a day), reconciles Stripe-billed companies with Stripe (a pass every
+/// 6 hours, at most 50 companies or 10 seconds per run), then sends the
+/// billing reminder emails to each company's Managers. Reminders are a failed
+/// renewal or a first payment asked for (day 0, three days left, paused
+/// tomorrow, paused, settled) and one notice 7 days before the first charge
+/// of a self-serve subscription (dated by Stripe's trial end; none when the
+/// subscription is set to cancel by then), and the hold email of a
+/// self-serve company whose saved payment method stopped working (a blocked
+/// bank account or a dispute: the Stripe webhook sends it first, a run sends
+/// it to the Managers who did not get it). Each recipient gets each reminder
+/// once; a refused email is retried up to 3 times, 5 minutes apart; an email
+/// whose outcome is unknown is never resent, except a hold email (retried
+/// like a refused one). Hold emails and first-charge notices go before the
+/// dunning reminders. A run sends at most 20 emails and starts no new
+/// company after 14 seconds. Then the amount-change
+/// notices (none started after 17 seconds): when a self-serve company's
+/// monthly total changed (users or add-ons), its Managers get one email a day
+/// with the old and new totals and the charge the new total first applies to
+/// (`amount_notices`); a Manager whose email failed gets it the next day (up
+/// to 3 tries), and nothing is announced while a scheduled cancellation ends
+/// the subscription first. Last, the confirmation of a cancellation request
+/// that reached no Manager is resent (none after 20 seconds, so the run ends
+/// by 25 s, inside the API Gateway's 30 s) to the company's Managers, 10 minutes after the request at the earliest
+/// (`confirmations_resent`). Reminders, notices and confirmations are skipped
+/// while the mail service is not configured.
+#[crate::openapi::path(
+    post,
+    path = "/v1/jobs/billing-reminders",
+    operation_id = "run_billing_reminders",
+    tag = "jobs",
+    responses(
+        (status = 200, description = "What the run did", body = BillingRemindersRun),
+        (status = 401, description = "Missing or wrong job key", body = ErrorBody),
+    ),
+    security(("job_key" = []))
+)]
+pub async fn run(
+    State(state): State<AppState>,
+    _caller: JobCaller,
+) -> ApiResult<Json<BillingRemindersRun>> {
+    let started = Instant::now();
+    let now = crate::billing::now();
+    prune(&state, now).await;
+    let reconciled = reconcile(&state, now).await;
+    if !state.webhooks.is_enabled() {
+        // A send could never succeed and would turn every claim into unknown.
+        tracing::warn!("billing reminders skipped: the mail service is not configured");
+        return Ok(Json(run_of(
+            ReminderTickResult::default(),
+            reconciled,
+            0,
+            0,
+        )));
+    }
+    let effects = LiveReminders {
+        state: &state,
+        started,
+        from_address: crate::billing::from_address(),
+    };
+    let tick = process_billing_reminders(
+        &MySqlReminderStore(&state.pool),
+        &effects,
+        now,
+        ReminderLimits::default(),
+    )
+    .await;
+    let amount_notices =
+        process_amount_notices(&state, now, started + AMOUNT_NOTICE_DEADLINE).await;
+    let confirmations_resent =
+        resend_confirmations(&state, now, started + CONFIRMATION_DEADLINE).await;
+    Ok(Json(run_of(
+        tick,
+        reconciled,
+        amount_notices,
+        confirmations_resent,
+    )))
+}

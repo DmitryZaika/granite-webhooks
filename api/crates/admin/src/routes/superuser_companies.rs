@@ -11,14 +11,23 @@
 //! - `GET    /v1/superuser/companies/{id}/setup-checklist`    → the setup checklist
 //! - `PUT    /v1/superuser/companies/{id}/setup-checklist/items/{key}` → tick an item by hand
 //! - `PUT    /v1/superuser/companies/{id}/features/{feature}` → switch a feature
+//! - `PUT    /v1/superuser/companies/{id}/addons/{key}`      → grant or take back a free add-on
 //! - `PUT    /v1/superuser/companies/{id}/billing-required`   → require Stripe payment
+//! - `POST   /v1/superuser/companies/{id}/billing/payment-hold/clear` → lift its payment method hold
 //!
 //! Superusers only. Replaces the Remix `admin.superuser-dashboard.companies*`
 //! routes.
 
 use crate::auth::CurrentUser;
 use crate::auth::session::SessionUser;
+use crate::billing::MethodHold;
+use crate::billing::methods::{HOLDING_DISPUTE, clear_hold_by_staff};
+use crate::billing::seats::COUNTS_TOWARD_LIMIT;
+use crate::company_create::{
+    CompanyInit, PlanSource, RESERVED_SUBDOMAINS, create_company_tx, valid_subdomain,
+};
 use crate::deliverability::{self, DomainTrust};
+use crate::entitlements::{ACTIVE_ADDON, AddonKey};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
@@ -32,6 +41,7 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -46,7 +56,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(setup_checklist))
         .routes(routes!(tick_setup_item))
         .routes(routes!(switch_feature))
+        .routes(routes!(switch_addon))
         .routes(routes!(set_billing_required))
+        .routes(routes!(clear_payment_hold))
 }
 
 const CHECK_IN: i32 = 8;
@@ -60,12 +72,6 @@ const fn superuser(user: &SessionUser) -> ApiResult<()> {
         Err(ApiError::Forbidden)
     }
 }
-
-/// Active users that count toward `max_users` (walk-in-only accounts do not).
-const COUNTS_TOWARD_LIMIT: &str = "u.is_deleted = 0 AND (
-    EXISTS (SELECT 1 FROM users_positions up WHERE up.user_id = u.id AND up.company_id = u.company_id
-                                              AND up.position_id <> 8)
-    OR NOT EXISTS (SELECT 1 FROM users_positions up WHERE up.user_id = u.id AND up.company_id = u.company_id))";
 
 /// Users who can run the guided tours (not installer or walk-in accounts).
 const RUNS_ONBOARDING: &str = "(u.is_superuser = 1 OR NOT EXISTS (
@@ -127,7 +133,93 @@ pub struct CompanySummary {
     pub quickbooks_connected: bool,
     /// Access depends on the Stripe subscription.
     pub billing_required: bool,
+    /// `legacy` (every add-on included) or `subscription` (only bought or
+    /// granted add-ons).
+    pub plan_source: String,
+    /// Add-on keys (`signatures`, `quotes`, `quickbooks`) the company may use
+    /// now: all three on a legacy plan, else its active add-ons of any source.
+    pub addons: Vec<String>,
+    /// Add-on keys granted free by a superuser and in force now.
+    pub comp_addons: Vec<String>,
+    /// Live users holding the Manager position in this company.
+    pub manager_count: i64,
+    /// When Stripe payment became required (ISO 8601, UTC), or null.
+    pub billing_required_since: Option<DateTime<Utc>>,
+    /// When its first-payment window ends and access pauses (ISO 8601, UTC):
+    /// payment is required and it has no paying subscription; else null.
+    pub first_payment_pauses_at: Option<DateTime<Utc>>,
+    /// Access is paused for want of a first payment (the rule of the session
+    /// check): that window is over and no bank account is still verifying.
+    pub first_payment_paused: bool,
+    /// Its stored Stripe subscription, or null when it never had one.
+    pub billing: Option<CompanyBillingSummary>,
+    /// Its live plan invite (open and not expired, or being accepted), or
+    /// null.
+    pub plan_invite: Option<CompanyPlanInvite>,
+    /// Its payment method hold (a blocked bank account or a dispute), or
+    /// null when none runs. Lift it with
+    /// `POST /v1/superuser/companies/{id}/billing/payment-hold/clear`.
+    pub payment_hold: Option<CompanyPaymentHold>,
     pub features: Features,
+}
+
+/// A company's payment method hold: access pauses at `until`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CompanyPaymentHold {
+    /// `blocked` (the bank blocked debits from its saved account: lifted when
+    /// a Manager saves a new method) or `disputed` (a payment was disputed:
+    /// lifted when no dispute is open or lost, or by a superuser; a new
+    /// method does not lift it).
+    pub reason: String,
+    /// When the hold started (ISO 8601, UTC).
+    pub since: DateTime<Utc>,
+    /// When access pauses, or paused (ISO 8601, UTC); null if unknown.
+    pub until: Option<DateTime<Utc>>,
+    /// Disputes still holding the company: open, or lost and not yet
+    /// cleared by a superuser. 0 for a blocked-account hold.
+    pub open_disputes: i64,
+}
+
+/// A company's live plan invite.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CompanyPlanInvite {
+    /// `open` (waiting for a Manager) or `accepting` (a Manager accepted;
+    /// being finished).
+    pub status: String,
+    /// When its links stop working (ISO 8601, UTC).
+    pub expires_at: DateTime<Utc>,
+}
+
+/// A company's stored Stripe subscription state.
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+pub struct CompanyBillingSummary {
+    /// `active`, `past_due`, `suspended` or `none`.
+    pub payment_status: String,
+    /// Stripe's subscription status (`active`, `trialing`, `canceled`, ...).
+    pub subscription_status: String,
+    /// Next billing date (ISO 8601), or null.
+    pub current_period_end: Option<DateTime<Utc>>,
+    /// End of the grace period after a failed payment (ISO 8601), or null.
+    pub grace_period_ends_at: Option<DateTime<Utc>>,
+    /// When the first charge is due, while on a trial (ISO 8601), or null.
+    pub trial_end_at: Option<DateTime<Utc>>,
+}
+
+#[derive(sqlx::FromRow)]
+struct BillingRow {
+    company_id: i32,
+    payment_status: String,
+    subscription_status: String,
+    current_period_end: Option<NaiveDateTime>,
+    grace_period_ends_at: Option<NaiveDateTime>,
+    trial_end_at: Option<NaiveDateTime>,
+}
+
+#[derive(sqlx::FromRow)]
+struct AddonRow {
+    company_id: i32,
+    addon_key: String,
+    source: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -144,15 +236,120 @@ struct SummaryRow {
     cloudtalk_connected: bool,
     quickbooks_connected: bool,
     billing_required: bool,
+    plan_source: String,
+    manager_count: i64,
+    billing_required_at: Option<NaiveDateTime>,
+    bank_window_open: bool,
     #[sqlx(flatten)]
     features: Features,
+}
+
+/// Every add-on row in force now, by company.
+async fn active_addons(pool: &sqlx::MySqlPool) -> ApiResult<HashMap<i32, Vec<AddonRow>>> {
+    let rows: Vec<AddonRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT ca.company_id, ca.addon_key, ca.source FROM company_addons ca
+          WHERE {ACTIVE_ADDON}"
+    )))
+    .fetch_all(pool)
+    .await?;
+    let mut active: HashMap<i32, Vec<AddonRow>> = HashMap::new();
+    for row in rows {
+        active.entry(row.company_id).or_default().push(row);
+    }
+    Ok(active)
+}
+
+/// Every live plan invite, by company.
+async fn plan_invites_by_company(
+    pool: &sqlx::MySqlPool,
+) -> ApiResult<HashMap<i32, CompanyPlanInvite>> {
+    let rows: Vec<(i32, String, NaiveDateTime)> = sqlx::query_as(
+        "SELECT company_id, CAST(status AS CHAR), expires_at FROM plan_invites
+          WHERE status = 'accepting' OR (status = 'open' AND expires_at > UTC_TIMESTAMP())",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(company_id, status, expires_at)| {
+            (
+                company_id,
+                CompanyPlanInvite {
+                    status,
+                    expires_at: expires_at.and_utc(),
+                },
+            )
+        })
+        .collect())
+}
+
+/// Every running payment method hold, by company.
+async fn payment_holds_by_company(
+    pool: &sqlx::MySqlPool,
+) -> ApiResult<HashMap<i32, CompanyPaymentHold>> {
+    let rows: Vec<(i32, String, NaiveDateTime, Option<NaiveDateTime>, i64)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT cb.company_id, CAST(cb.method_hold AS CHAR), cb.method_hold_at,
+                    cb.method_hold_until,
+                    (SELECT CAST(COUNT(*) AS SIGNED) FROM billing_disputes
+                      WHERE billing_disputes.company_id = cb.company_id AND {HOLDING_DISPUTE})
+               FROM company_billing cb
+              WHERE cb.method_hold IS NOT NULL AND cb.method_hold_at IS NOT NULL"
+        )))
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(company_id, reason, since, until, open_disputes)| {
+            let reason = MethodHold::parse(&reason)?;
+            Some((
+                company_id,
+                CompanyPaymentHold {
+                    reason: reason.as_str().to_string(),
+                    since: since.and_utc(),
+                    until: until.map(|d| d.and_utc()),
+                    open_disputes,
+                },
+            ))
+        })
+        .collect())
+}
+
+/// Every stored subscription, by company.
+async fn billing_by_company(
+    pool: &sqlx::MySqlPool,
+) -> ApiResult<HashMap<i32, CompanyBillingSummary>> {
+    let rows: Vec<BillingRow> = sqlx::query_as(
+        "SELECT company_id, payment_status, subscription_status, current_period_end,
+                grace_period_ends_at, trial_end_at
+           FROM company_billing",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.company_id,
+                CompanyBillingSummary {
+                    payment_status: row.payment_status,
+                    subscription_status: row.subscription_status,
+                    current_period_end: row.current_period_end.map(|d| d.and_utc()),
+                    grace_period_ends_at: row.grace_period_ends_at.map(|d| d.and_utc()),
+                    trial_end_at: row.trial_end_at.map(|d| d.and_utc()),
+                },
+            )
+        })
+        .collect())
 }
 
 /// List the companies
 ///
 /// Every live company, most users first: users counting toward the limit,
 /// tours progress, connected integrations, feature switches and whether
-/// Stripe payment is required. The slower checks are per company:
+/// Stripe payment is required, plus its plan, usable and free add-ons, Manager
+/// count, stored subscription, payment method hold and live plan invite (details with
+/// `get_platform_company_plan_move`). The slower checks are per company:
 /// `/domain-trust`, `/ses-inbound`, `/setup-checklist`.
 #[crate::openapi::path(
     get,
@@ -182,6 +379,16 @@ pub async fn list_companies(
                   AS cloudtalk_connected,
                 COALESCE(TRIM(c.qbo_realm_id), '') <> '' AS quickbooks_connected,
                 COALESCE(c.billing_required, 0) <> 0 AS billing_required,
+                c.plan_source AS plan_source, c.billing_required_at,
+                (SELECT CAST(COUNT(DISTINCT up.user_id) AS SIGNED)
+                   FROM users_positions up JOIN users mu ON mu.id = up.user_id
+                  WHERE up.company_id = c.id AND up.position_id = {MANAGER} AND mu.is_deleted = 0)
+                  AS manager_count,
+                EXISTS (SELECT 1 FROM signup_intents bank_signup
+                         WHERE bank_signup.company_id = c.id
+                           AND bank_signup.status = 'awaiting_bank_verification'
+                           AND bank_signup.bank_verification_until > UTC_TIMESTAMP())
+                  AS bank_window_open,
                 {features}
            FROM company c
            {joins}
@@ -196,22 +403,67 @@ pub async fn list_companies(
     let rows: Vec<SummaryRow> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .fetch_all(&state.pool)
         .await?;
+    let mut active = active_addons(&state.pool).await?;
+    let mut billing = billing_by_company(&state.pool).await?;
+    let mut plan_invites = plan_invites_by_company(&state.pool).await?;
+    let mut payment_holds = payment_holds_by_company(&state.pool).await?;
+    let now = crate::billing::now();
     Ok(Json(
         rows.into_iter()
-            .map(|row| CompanySummary {
-                id: row.id,
-                name: row.name,
-                subdomain: row.subdomain,
-                domain: row.domain,
-                logo_url: row.logo_url,
-                max_users: row.max_users,
-                user_count: row.user_count,
-                onboarding_finished: row.onboarding_finished,
-                onboarding_eligible: row.onboarding_eligible,
-                cloudtalk_connected: row.cloudtalk_connected,
-                quickbooks_connected: row.quickbooks_connected,
-                billing_required: row.billing_required,
-                features: row.features,
+            .map(|row| {
+                let billing = billing.remove(&row.id);
+                // The first-payment branch of the session's billing pause.
+                let paying = billing.as_ref().is_some_and(|b| {
+                    matches!(
+                        b.payment_status.as_str(),
+                        "active" | "past_due" | "suspended"
+                    )
+                });
+                let pauses_at = row
+                    .billing_required_at
+                    .filter(|_| row.billing_required && !paying)
+                    .map(crate::billing::first_payment_deadline);
+                let paused = pauses_at.is_some_and(|at| at <= now) && !row.bank_window_open;
+                let own = active.remove(&row.id).unwrap_or_default();
+                let held = |key: AddonKey| own.iter().any(|a| a.addon_key == key.as_str());
+                let addons = AddonKey::ALL
+                    .into_iter()
+                    .filter(|key| row.plan_source != "subscription" || held(*key))
+                    .map(|key| key.as_str().to_string())
+                    .collect();
+                let comp_addons = AddonKey::ALL
+                    .into_iter()
+                    .filter(|key| {
+                        own.iter()
+                            .any(|a| a.addon_key == key.as_str() && a.source == "comp")
+                    })
+                    .map(|key| key.as_str().to_string())
+                    .collect();
+                CompanySummary {
+                    id: row.id,
+                    name: row.name,
+                    subdomain: row.subdomain,
+                    domain: row.domain,
+                    logo_url: row.logo_url,
+                    max_users: row.max_users,
+                    user_count: row.user_count,
+                    onboarding_finished: row.onboarding_finished,
+                    onboarding_eligible: row.onboarding_eligible,
+                    cloudtalk_connected: row.cloudtalk_connected,
+                    quickbooks_connected: row.quickbooks_connected,
+                    billing_required: row.billing_required,
+                    plan_source: row.plan_source,
+                    addons,
+                    comp_addons,
+                    manager_count: row.manager_count,
+                    billing_required_since: row.billing_required_at.map(|d| d.and_utc()),
+                    first_payment_pauses_at: pauses_at.map(|d| d.and_utc()),
+                    first_payment_paused: paused,
+                    billing,
+                    plan_invite: plan_invites.remove(&row.id),
+                    payment_hold: payment_holds.remove(&row.id),
+                    features: row.features,
+                }
             })
             .collect(),
     ))
@@ -270,6 +522,14 @@ pub struct CompanyDetails {
     pub signature_enabled: bool,
     /// Stripe payment required.
     pub billing_required: bool,
+    /// `legacy` (every add-on included) or `subscription` (only bought or
+    /// granted add-ons).
+    pub plan_source: String,
+    /// Add-on keys (`signatures`, `quotes`, `quickbooks`) granted free by a
+    /// superuser and in force now. Change with
+    /// `PUT /v1/superuser/companies/{id}/addons/{key}`.
+    #[sqlx(skip)]
+    pub comp_addons: Vec<String>,
     /// Guided tours switch (own setting, else the platform default).
     #[sqlx(skip)]
     pub onboarding_enabled: bool,
@@ -310,6 +570,7 @@ pub async fn get_company(
                 c.qbo_realm_id, c.signwell_api_key,
                 COALESCE(c.quickbooks_enabled, 1) <> 0 AS quickbooks_enabled,
                 {LEGACY_SIGNATURE_SWITCH} AS signature_enabled, COALESCE(c.billing_required, 0) <> 0 AS billing_required,
+                c.plan_source AS plan_source,
                 {} AS onboarding, {} AS leaderboard
            FROM company c {}
           WHERE c.id = ? AND c.deleted_at IS NULL",
@@ -325,6 +586,14 @@ pub async fn get_company(
     let mut details = row.details;
     details.onboarding_enabled = row.onboarding;
     details.leaderboard_enabled = row.leaderboard;
+    details.comp_addons = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT ca.addon_key FROM company_addons ca
+          WHERE ca.company_id = ? AND ca.source = 'comp' AND {ACTIVE_ADDON}
+          ORDER BY ca.addon_key"
+    )))
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(details))
 }
 
@@ -399,15 +668,11 @@ fn text(value: Option<&String>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn valid_subdomain(value: &str) -> bool {
-    !value.is_empty()
-        && value.split('-').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-        })
+fn is_reserved(subdomain: &str) -> bool {
+    RESERVED_SUBDOMAINS.contains(&subdomain)
 }
+
+const RESERVED_MESSAGE: &str = "This subdomain is reserved for Granite Manager.";
 
 struct Clean {
     name: String,
@@ -421,7 +686,7 @@ fn validate(input: &CompanyInput) -> ApiResult<Clean> {
         return Err(ApiError::BadRequest("Company name is required".into()));
     }
     let subdomain = input.subdomain.trim().to_lowercase();
-    if !valid_subdomain(&subdomain) {
+    if !is_reserved(&subdomain) && !valid_subdomain(&subdomain) {
         return Err(ApiError::BadRequest(
             "Subdomain must contain only lowercase letters, numbers, and hyphens".into(),
         ));
@@ -460,21 +725,6 @@ async fn subdomain_taken(state: &AppState, subdomain: &str, except: i32) -> ApiR
     Ok(taken.is_some())
 }
 
-static DEFAULT_TEMPLATES: std::sync::LazyLock<Vec<DefaultTemplate>> =
-    std::sync::LazyLock::new(|| {
-        serde_json::from_str(include_str!(
-            "../../../../data/default_email_templates.json"
-        ))
-        .expect("valid default templates")
-    });
-
-#[derive(Deserialize)]
-struct DefaultTemplate {
-    name: String,
-    subject: String,
-    body: String,
-}
-
 /// Create a company
 ///
 /// Creates the company with its system calendars, the default company email
@@ -489,7 +739,7 @@ struct DefaultTemplate {
     request_body = CompanyInput,
     responses(
         (status = 201, description = "Created", body = CreatedId),
-        (status = 400, description = "Missing name, bad subdomain or tax", body = ErrorBody),
+        (status = 400, description = "Missing name, bad or reserved subdomain, or bad tax", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 409, description = "Subdomain already in use", body = ErrorBody),
@@ -504,73 +754,28 @@ pub async fn create_company(
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     superuser(&user)?;
     let clean = validate(&input)?;
+    if is_reserved(&clean.subdomain) {
+        return Err(ApiError::BadRequest(RESERVED_MESSAGE.into()));
+    }
     if subdomain_taken(&state, &clean.subdomain, 0).await? {
         return Err(ApiError::Conflict("Subdomain is already in use".into()));
     }
-    let password = bcrypt::hash("1111", 10).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let init = CompanyInit {
+        name: clean.name,
+        subdomain: Some(clean.subdomain),
+        address: text(input.address.as_ref()),
+        state_taxes: clean.tax,
+        domain: text(input.domain.as_ref()),
+        cloudtalk_access_key: text(input.cloudtalk_access_key.as_ref()),
+        cloudtalk_access_secret: text(input.cloudtalk_access_secret.as_ref()),
+        ringcentral_client_id: text(input.ringcentral_client_id.as_ref()),
+        ringcentral_client_secret: text(input.ringcentral_client_secret.as_ref()),
+        ringcentral_jwt: text(input.ringcentral_jwt.as_ref()),
+        ringcentral_server_url: text(input.ringcentral_server_url.as_ref()),
+        plan_source: PlanSource::Legacy,
+    };
     let mut tx = state.pool.begin().await?;
-    let id = sqlx::query(
-        "INSERT INTO company (name, subdomain, address, state_taxes, domain, cloudtalk_access_key,
-                              cloudtalk_access_secret, ringcentral_client_id, ringcentral_client_secret,
-                              ringcentral_jwt, ringcentral_server_url, statistics_widgets_hidden)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
-    )
-    .bind(&clean.name)
-    .bind(&clean.subdomain)
-    .bind(text(input.address.as_ref()))
-    .bind(&clean.tax)
-    .bind(text(input.domain.as_ref()))
-    .bind(text(input.cloudtalk_access_key.as_ref()))
-    .bind(text(input.cloudtalk_access_secret.as_ref()))
-    .bind(text(input.ringcentral_client_id.as_ref()))
-    .bind(text(input.ringcentral_client_secret.as_ref()))
-    .bind(text(input.ringcentral_jwt.as_ref()))
-    .bind(text(input.ringcentral_server_url.as_ref()))
-    .execute(&mut *tx)
-    .await?
-    .last_insert_id();
-    let id = i32::try_from(id).map_err(|_| ApiError::Internal("company id out of range".into()))?;
-    for (slug, name, color) in crate::routes::calendars::queries::SYSTEM_CALENDARS {
-        sqlx::query("INSERT INTO calendars (company_id, name, color, slug, created_by) VALUES (?, ?, ?, ?, NULL)")
-            .bind(id)
-            .bind(name)
-            .bind(color)
-            .bind(slug)
-            .execute(&mut *tx)
-            .await?;
-    }
-    for template in DEFAULT_TEMPLATES.iter() {
-        sqlx::query(
-            "INSERT INTO email_templates (template_name, template_subject, template_body, company_id, user_id)
-             VALUES (?, ?, ?, ?, NULL)",
-        )
-        .bind(&template.name)
-        .bind(&template.subject)
-        .bind(&template.body)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    sqlx::query(
-        "INSERT INTO users (name, email, password, company_id, is_employee, is_admin)
-         VALUES ('Walk-in', ?, ?, ?, 1, 0)",
-    )
-    .bind(format!("walk-in@{}.com", clean.subdomain))
-    .bind(password)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO customer_sources (company_id, source_key, label, is_system) VALUES
-           (?, 'check-in', 'Walk-in', 1), (?, 'leads', 'Leads', 1),
-           (?, 'call-in', 'Call-in', 1), (?, 'other', 'Other', 1)",
-    )
-    .bind(id)
-    .bind(id)
-    .bind(id)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    let id = create_company_tx(&mut tx, &init).await?;
     tx.commit().await?;
     deliverability::ensure_company_trust(&state.pool, &state.dns, id, input.domain.as_deref())
         .await?;
@@ -590,7 +795,7 @@ pub async fn create_company(
     request_body = CompanyInput,
     responses(
         (status = 204, description = "Saved"),
-        (status = 400, description = "Missing name, bad subdomain, tax, limit or logo", body = ErrorBody),
+        (status = 400, description = "Missing name, bad or newly reserved subdomain, tax, limit or logo", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "No such company", body = ErrorBody),
@@ -608,6 +813,16 @@ pub async fn update_company(
     superuser(&user)?;
     company_exists(&state, id).await?;
     let clean = validate(&input)?;
+    if is_reserved(&clean.subdomain) {
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT subdomain FROM company WHERE id = ?")
+                .bind(id)
+                .fetch_one(&state.pool)
+                .await?;
+        if stored.as_deref() != Some(clean.subdomain.as_str()) {
+            return Err(ApiError::BadRequest(RESERVED_MESSAGE.into()));
+        }
+    }
     if subdomain_taken(&state, &clean.subdomain, id).await? {
         return Err(ApiError::Conflict("Subdomain is already in use".into()));
     }
@@ -1156,10 +1371,87 @@ pub async fn switch_feature(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Grant or take back a free add-on
+///
+/// Gives the company the `signatures`, `quotes` or `quickbooks` add-on for
+/// free (`enabled` true) or takes that free grant back (false). Only the
+/// free (`comp`) grant is touched: an add-on the company pays for through
+/// Stripe stays. Granting an add-on already granted changes nothing; granting
+/// one that was taken back starts it again from now. Works for legacy
+/// companies too: the grant is stored and has no effect until the company
+/// moves to a subscription plan, since legacy companies already have every
+/// add-on. See `plan_source` and `comp_addons` on
+/// `GET /v1/superuser/companies/{id}`.
+#[crate::openapi::path(
+    put,
+    path = "/v1/superuser/companies/{id}/addons/{key}",
+    operation_id = "switch_platform_company_addon",
+    tag = "superuser",
+    params(("id" = i32, Path, description = "Company id"), ("key" = String, Path, description = "`signatures`, `quotes` or `quickbooks`")),
+    request_body = Switch,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 400, description = "Unknown add-on", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a superuser", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn switch_addon(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path((id, key)): Path<(i32, String)>,
+    JsonBody(input): JsonBody<Switch>,
+) -> ApiResult<StatusCode> {
+    superuser(&user)?;
+    let addon =
+        AddonKey::parse(&key).ok_or_else(|| ApiError::BadRequest("Invalid add-on".into()))?;
+    company_exists(&state, id).await?;
+    if input.enabled {
+        sqlx::query(
+            "INSERT INTO company_addons (company_id, addon_key, source, granted_by, started_at)
+             VALUES (?, ?, 'comp', ?, UTC_TIMESTAMP())
+             ON DUPLICATE KEY UPDATE
+               granted_by = VALUES(granted_by),
+               started_at = IF(ended_at IS NOT NULL AND ended_at <= UTC_TIMESTAMP(),
+                               UTC_TIMESTAMP(), started_at),
+               ended_at = NULL",
+        )
+        .bind(id)
+        .bind(addon.as_str())
+        .bind(user.id)
+        .execute(&state.pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE company_addons SET ended_at = UTC_TIMESTAMP()
+              WHERE company_id = ? AND addon_key = ? AND source = 'comp'
+                AND (ended_at IS NULL OR ended_at > UTC_TIMESTAMP())",
+        )
+        .bind(id)
+        .bind(addon.as_str())
+        .execute(&state.pool)
+        .await?;
+    }
+    crate::posthog::capture(
+        &state.telephony_http,
+        "company_addon_toggled",
+        &user.id.to_string(),
+        serde_json::json!({ "company_id": id, "addon": addon.as_str(), "value": input.enabled, "superuser_id": user.id }),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Require Stripe payment
 ///
 /// Whether the company's access depends on its Stripe subscription (off:
-/// it pays some other way).
+/// it pays some other way). Turning it on for a company that had it off
+/// starts the 7 day first-payment window: a company that has not subscribed
+/// by then has its access paused until it does. Turning it on again, or off,
+/// keeps the window's start.
 #[crate::openapi::path(
     put,
     path = "/v1/superuser/companies/{id}/billing-required",
@@ -1184,10 +1476,68 @@ pub async fn set_billing_required(
 ) -> ApiResult<StatusCode> {
     superuser(&user)?;
     company_exists(&state, id).await?;
-    sqlx::query("UPDATE company SET billing_required = ? WHERE id = ? AND deleted_at IS NULL")
-        .bind(i32::from(input.enabled))
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
+    // MySQL assigns left to right, so the IF still sees the old flag.
+    sqlx::query(
+        "UPDATE company
+            SET billing_required_at = IF(? = 1 AND billing_required = 0, UTC_TIMESTAMP(),
+                                         billing_required_at),
+                billing_required = ?
+          WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(i32::from(input.enabled))
+    .bind(i32::from(input.enabled))
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether a payment method hold was lifted.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaymentHoldCleared {
+    /// True when a hold ran and was lifted; false when the company had none
+    /// (its open and lost disputes are marked resolved either way).
+    pub cleared: bool,
+}
+
+/// Lift a company's payment method hold
+///
+/// Ends its hold (a blocked bank account or a dispute) so access does not
+/// pause, or comes back if it already did. Its open and lost disputes are
+/// marked resolved by the caller and never hold it again (a new dispute
+/// does); who lifted it and when are recorded, and staff get the internal
+/// billing alert. No body. Answers `cleared: false` when no hold ran (also
+/// when a dispute opened in the same instant keeps it). The hold shows as
+/// `payment_hold` in `GET /v1/superuser/companies`.
+#[crate::openapi::path(
+    post,
+    path = "/v1/superuser/companies/{id}/billing/payment-hold/clear",
+    operation_id = "clear_platform_company_payment_hold",
+    tag = "superuser",
+    params(("id" = i32, Path, description = "Company id")),
+    responses(
+        (status = 200, description = "Whether a hold was lifted", body = PaymentHoldCleared),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a superuser", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn clear_payment_hold(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<i32>,
+) -> ApiResult<Json<PaymentHoldCleared>> {
+    superuser(&user)?;
+    company_exists(&state, id).await?;
+    let cleared = clear_hold_by_staff(&state, id, user.id).await?;
+    crate::posthog::capture(
+        &state.telephony_http,
+        "company_payment_hold_cleared",
+        &user.id.to_string(),
+        serde_json::json!({ "company_id": id, "cleared": cleared, "superuser_id": user.id }),
+    )
+    .await;
+    Ok(Json(PaymentHoldCleared { cleared }))
 }

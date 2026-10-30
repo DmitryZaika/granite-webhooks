@@ -19,6 +19,7 @@ axum = "0.8"
 aes-gcm = "0.10"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 hmac = "0.13"
 lambda_http = "1.1"
 percent-encoding = "2.3"
@@ -43,3 +44,6 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 ring = "0.17"
 hickory-resolver = "0.25"
+
+[dev-dependencies]
+test-db = { path = "../../../test-db" }

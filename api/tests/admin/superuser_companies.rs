@@ -109,6 +109,131 @@ async fn superusers_list_the_companies(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn the_list_carries_plan_add_ons_managers_and_billing(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO company_billing (company_id, subscription_status, payment_status,
+                current_period_end, grace_period_ends_at, trial_end_at)
+         VALUES (20100, 'trialing', 'active', '2026-11-01 12:00:00', NULL, '2026-11-01 12:00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Company 100 has no Manager in the seed: a live one counts, a deleted one does not.
+    sqlx::query("INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 5, 100), (105, 5, 100)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE company SET billing_required_at = '2026-10-01 08:30:00' WHERE id = 20101")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let server = server(&pool).await;
+    let rows: Value = server
+        .get("/v1/superuser/companies")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    let find = |id: i32| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap()
+            .clone()
+    };
+
+    let legacy = find(100);
+    assert_eq!(legacy["plan_source"], "legacy");
+    assert_eq!(
+        legacy["addons"],
+        json!(["signatures", "quotes", "quickbooks"])
+    );
+    assert_eq!(legacy["comp_addons"], json!([]));
+    assert_eq!(legacy["manager_count"], 1);
+    assert_eq!(legacy["billing"], Value::Null);
+    assert_eq!(legacy["billing_required_since"], Value::Null);
+
+    let quotes_only = find(20100);
+    assert_eq!(quotes_only["plan_source"], "subscription");
+    assert_eq!(quotes_only["addons"], json!(["quotes"]));
+    assert_eq!(quotes_only["comp_addons"], json!([]));
+    assert_eq!(quotes_only["manager_count"], 1);
+    assert_eq!(
+        quotes_only["billing"],
+        json!({
+            "payment_status": "active",
+            "subscription_status": "trialing",
+            "current_period_end": "2026-11-01T12:00:00Z",
+            "grace_period_ends_at": null,
+            "trial_end_at": "2026-11-01T12:00:00Z",
+        })
+    );
+
+    // The ended Quotes row of 20101 does not count.
+    let comp = find(20101);
+    assert_eq!(comp["addons"], json!(["signatures"]));
+    assert_eq!(comp["comp_addons"], json!(["signatures"]));
+    assert_eq!(comp["manager_count"], 1);
+    assert_eq!(comp["billing"], Value::Null);
+    assert_eq!(comp["billing_required_since"], "2026-10-01T08:30:00Z");
+}
+
+#[test_db::test(seed)]
+async fn the_list_says_when_a_first_payment_pauses_access(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO company_billing (company_id, subscription_status, payment_status)
+         VALUES (20100, 'active', 'active')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // 20101 never paid and is 10 days in; 20100 pays; 100 is 1 day in.
+    sqlx::query(
+        "UPDATE company SET billing_required = 1,
+                billing_required_at = UTC_TIMESTAMP() - INTERVAL CASE id WHEN 100 THEN 1 ELSE 10 END DAY
+          WHERE id IN (100, 20100, 20101)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let rows: Value = server(&pool)
+        .await
+        .get("/v1/superuser/companies")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    let find = |id: i32| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let never_paid = find(20101);
+    assert_eq!(never_paid["first_payment_paused"], true);
+    let pauses = never_paid["first_payment_pauses_at"].as_str().unwrap();
+    let required = chrono::DateTime::parse_from_rfc3339(
+        never_paid["billing_required_since"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(pauses).unwrap() - required,
+        chrono::Duration::days(api::billing::FIRST_PAYMENT_DAYS)
+    );
+    let paying = find(20100);
+    assert_eq!(paying["first_payment_pauses_at"], Value::Null);
+    assert_eq!(paying["first_payment_paused"], false);
+    let early = find(100);
+    assert!(early["first_payment_pauses_at"].is_string());
+    assert_eq!(early["first_payment_paused"], false);
+    // Payment not required: nothing pauses.
+    let free = find(20500);
+    assert_eq!(free["first_payment_pauses_at"], Value::Null);
+    assert_eq!(free["first_payment_paused"], false);
+}
+
+#[test_db::test(seed)]
 async fn creating_a_company_seeds_it(pool: MySqlPool) {
     let server = server(&pool).await;
     for body in [
@@ -180,6 +305,33 @@ async fn creating_a_company_seeds_it(pool: MySqlPool) {
         walk_in,
         ("Walk-in".into(), "walk-in@granite-new.com".into())
     );
+    let (is_system, password): (i32, String) = sqlx::query_as(
+        "SELECT is_system, password FROM users WHERE company_id = ? AND email = 'walk-in@granite-new.com'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(is_system, 1);
+    assert!(!bcrypt::verify("1111", &password).unwrap_or(false));
+    server
+        .post("/v1/auth/login")
+        .json(&json!({ "email": "walk-in@granite-new.com", "password": "1111" }))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    let bodies: Vec<String> = sqlx::query_scalar(
+        "SELECT template_body FROM email_templates WHERE company_id = ? AND user_id IS NULL",
+    )
+    .bind(id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        bodies
+            .iter()
+            .any(|b| b.contains("https://granite-manager.com/customer/{{company.id}}/stones"))
+    );
+    assert!(bodies.iter().all(|b| !b.contains("{{company.subdomain}}")));
     // A free mail domain is high risk without asking DNS.
     let trust: Value = server
         .get(&format!("/v1/superuser/companies/{id}/domain-trust"))
@@ -189,6 +341,80 @@ async fn creating_a_company_seeds_it(pool: MySqlPool) {
     assert_eq!(trust["domain"], "gmail.com");
     assert_eq!(trust["risk_level"], "HIGH_RISK");
     assert_eq!(trust["reputation_score"], 85);
+}
+
+#[test_db::test(seed)]
+async fn reserved_subdomains_are_refused_on_create_and_change(pool: MySqlPool) {
+    let server = server(&pool).await;
+    let response = server
+        .post("/v1/superuser/companies")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Pay", "subdomain": "payments" }))
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.json::<Value>()["error"],
+        "This subdomain is reserved for Granite Manager."
+    );
+    server
+        .put("/v1/superuser/companies/101")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Other", "subdomain": "www" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    // A company that already holds a reserved subdomain can still save.
+    sqlx::query("UPDATE company SET subdomain = 'docs' WHERE id = 101")
+        .execute(&pool)
+        .await
+        .unwrap();
+    server
+        .put("/v1/superuser/companies/101")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Renamed", "subdomain": "docs", "max_users": 5 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .put("/v1/superuser/companies/101")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Renamed", "subdomain": "api" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[test_db::test(seed)]
+async fn only_a_self_serve_company_needs_no_subdomain_infra(pool: MySqlPool) {
+    sqlx::query("UPDATE company SET subdomain = NULL WHERE id = 101")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let server = server(&pool).await;
+    let infra = || async {
+        let checklist: Value = server
+            .get("/v1/superuser/companies/101/setup-checklist")
+            .with_session(sessions::ADMIN)
+            .await
+            .json();
+        checklist["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["key"] == "subdomain_infra")
+            .unwrap()
+            .clone()
+    };
+    let legacy = infra().await;
+    assert_eq!(legacy["done"], false);
+    assert_eq!(legacy["detail"], "Set subdomain first");
+    sqlx::query("UPDATE company SET plan_source = 'subscription' WHERE id = 101")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let self_serve = infra().await;
+    assert_eq!(self_serve["done"], true);
+    assert_eq!(
+        self_serve["detail"],
+        "Not needed: this company has no subdomain"
+    );
 }
 
 #[test_db::test(seed)]

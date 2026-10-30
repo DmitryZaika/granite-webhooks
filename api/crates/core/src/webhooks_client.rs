@@ -119,8 +119,39 @@ impl WebhooksClient {
         }
     }
 
+    /// Whether the Lambda is configured (`WEBHOOKS_URL` and `WEBHOOKS_KEY`).
+    pub const fn is_enabled(&self) -> bool {
+        self.target.is_some()
+    }
+
     /// Sends one email (`POST /email/send`); returns its `Message-ID`.
     pub async fn send_email(&self, email: &OutgoingEmail) -> Result<String, SendFailure> {
+        self.post_email(email, Duration::from_secs(90)).await
+    }
+
+    /// Sends a system notice (`transactional`) with its own plain-text part,
+    /// giving up after `timeout` (the outcome is then unknown). Without a
+    /// text part the Lambda derives one from the HTML.
+    pub async fn send_notice(
+        &self,
+        email: &OutgoingEmail,
+        text: &str,
+        timeout: Duration,
+    ) -> Result<String, SendFailure> {
+        #[derive(Serialize)]
+        struct WithText<'a> {
+            #[serde(flatten)]
+            email: &'a OutgoingEmail,
+            text: &'a str,
+        }
+        self.post_email(&WithText { email, text }, timeout).await
+    }
+
+    async fn post_email(
+        &self,
+        email: &(impl Serialize + Sync),
+        timeout: Duration,
+    ) -> Result<String, SendFailure> {
         let Some(target) = &self.target else {
             return Err(SendFailure::Failed(
                 "email sending is not configured".to_string(),
@@ -131,7 +162,7 @@ impl WebhooksClient {
             .http
             .post(format!("{url}/email/send"))
             .header("Authorization", key)
-            .timeout(Duration::from_secs(90))
+            .timeout(timeout)
             .json(email)
             .send()
             .await
@@ -149,7 +180,12 @@ impl WebhooksClient {
             .await
             .map(|reply| reply.error)
             .unwrap_or_default();
-        if status == reqwest::StatusCode::BAD_REQUEST && !error.is_empty() {
+        // A refusal (or SES throttling): nothing was sent, safe to retry.
+        if matches!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::TOO_MANY_REQUESTS
+        ) && !error.is_empty()
+        {
             return Err(SendFailure::Rejected(error));
         }
         Err(SendFailure::Failed(format!("{status} {error}")))
@@ -421,8 +457,8 @@ struct ErrorReply {
 
 #[derive(Debug)]
 pub enum SendFailure {
-    /// The message was refused (bad address, unreadable attachment): the
-    /// reason is for the user.
+    /// The message was refused (bad address, unreadable attachment) or SES
+    /// is throttling: nothing was sent, and the reason is for the user.
     Rejected(String),
     /// SES or the Lambda failed.
     Failed(String),
