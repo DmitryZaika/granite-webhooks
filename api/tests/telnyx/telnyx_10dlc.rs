@@ -2278,6 +2278,124 @@ async fn claude_double_checks_gpts_answer(pool: MySqlPool) {
     );
 }
 
+#[test_db::test(seed)]
+async fn the_manager_sends_it_anyway_when_the_ai_is_wrong(pool: MySqlPool) {
+    setup(&pool).await;
+    let (server, fake, base) = check_server(&pool).await;
+    fake.page("/quote", QUOTE_PAGE);
+    fake.page("/privacy", PRIVACY_PAGE);
+    fake.page("/terms", TERMS_PAGE);
+    fake.page("/", HOME_PAGE);
+    let mut form = form();
+    form["brand"]["website"] = json!(format!("{base}/site/"));
+    form["campaign"]["optinFormLink"] = json!(format!("{base}/site/quote"));
+    form["campaign"]["privacyPolicyLink"] = json!(format!("{base}/site/privacy"));
+    form["campaign"]["termsAndConditionsLink"] = json!(format!("{base}/site/terms"));
+    form["campaign"]["messageFlow"] = json!(format!(
+        "Customers ask for a quote on our quote form at {base}/site/quote and agree to texts from \
+         Acme Stone. Privacy policy: {base}/site/privacy"
+    ));
+    save_form(&server, sessions::MANAGER, &form)
+        .await
+        .assert_status_ok();
+    upload_letter(&server, &fake, irs_letter())
+        .await
+        .assert_status_ok();
+    let send_anyway = || {
+        server
+            .post("/v1/phone/admin/tendlc/send-anyway")
+            .with_session(sessions::MANAGER)
+    };
+    // The AI asked for nothing yet: refused.
+    send_anyway().await.assert_status(StatusCode::BAD_REQUEST);
+    let marked = ready(&server, &form).await;
+    assert_eq!(marked["actions"]["sendAnyway"], false);
+
+    fake.answer_with(ai_answer(
+        "One change is needed.",
+        &[(
+            "privacy_no_sharing",
+            json!({ "status": "fail", "evidence": "We may share your information with marketing partners.",
+                    "note": "", "fixes": [{
+                        "location": "page:privacyPolicy",
+                        "problem": "Carriers require the policy to say phone numbers are never shared for marketing.",
+                        "current": "We may share your information with marketing partners.",
+                        "replacement": "No mobile information will be shared with third parties or affiliates for marketing or promotional purposes.",
+                    }] }),
+        )],
+    ));
+    assert_eq!(run_checks(&server).await["processed"], 1);
+    let changes: Value = server
+        .get("/v1/phone/admin/tendlc")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(changes["aiCheck"]["status"], "changes");
+    assert_eq!(changes["actions"]["sendAnyway"], true);
+    let mark = email_of(&pool, 101).await;
+    assert!(
+        fake.emails()
+            .iter()
+            .any(|(to, _, body)| to == &mark && body.contains("Send anyway"))
+    );
+
+    // Mark is sure the AI is wrong: ready as it is, and the superusers get
+    // the AI's changes to look at.
+    let sent = send_anyway().await;
+    sent.assert_status_ok();
+    let sent: Value = sent.json();
+    assert_eq!(sent["status"], "ready");
+    assert_eq!(sent["aiCheck"]["status"], "overridden");
+    assert_eq!(
+        sent["aiCheck"]["fixes"][0]["location"],
+        "page:privacyPolicy"
+    );
+    assert_eq!(sent["actions"]["sendAnyway"], false);
+    assert_eq!(sent["actions"]["markReady"], false);
+    let told = bell(&pool, "tendlc_ready").await;
+    assert!(!told.is_empty());
+    assert!(told.iter().all(|(_, message)| message
+        == "Acme Stone sent its texting registration (10DLC) on although the AI check asked for \
+            changes: look at them before sending it to Telnyx."));
+    let sam = email_of(&pool, 103).await;
+    let to_sam = fake
+        .emails()
+        .into_iter()
+        .find(|(to, _, _)| to == &sam)
+        .expect("Sam is emailed");
+    assert_eq!(
+        to_sam.1,
+        "[Granite Manager] Acme Stone is ready, though the AI check asked for changes"
+    );
+    assert!(
+        to_sam
+            .2
+            .contains("We may share your information with marketing partners.")
+    );
+    assert!(
+        audit_actions(&pool)
+            .await
+            .iter()
+            .any(|(_, action)| action == "tendlc_ai_check_overridden")
+    );
+    // Days later, the AI check still does not hold a superuser's send (it
+    // fails here only because Telnyx is not set up), nor runs again.
+    sql(
+        &pool,
+        "UPDATE tendlc_registrations SET ai_checked_at = UTC_TIMESTAMP() - INTERVAL 2 DAY
+          WHERE company_id = 100",
+    )
+    .await;
+    let send = superuser_post(&server, "send", &json!({})).await;
+    assert_ne!(send.status_code(), StatusCode::CONFLICT, "{}", send.text());
+    assert_eq!(
+        review(&server).await["registration"]["aiCheck"]["status"],
+        "overridden"
+    );
+    // Again: nothing left to override.
+    send_anyway().await.assert_status(StatusCode::BAD_REQUEST);
+}
+
 /// The API with an AI on a stand-in that streams `pieces` as its answer;
 /// the AI requests it received.
 async fn helper_server(pool: &MySqlPool, pieces: &[&str]) -> (TestServer, Arc<Mutex<Vec<Value>>>) {

@@ -61,6 +61,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_tendlc_registration, save_tendlc_registration))
         .routes(routes!(mark_tendlc_registration_ready))
+        .routes(routes!(send_tendlc_registration_anyway))
         .routes(routes!(list_tendlc_registrations))
         .routes(routes!(get_company_tendlc, save_company_tendlc))
         .routes(routes!(get_company_tendlc_cost))
@@ -90,6 +91,10 @@ pub struct TenDlcActions {
     /// one Telnyx refused once it is fixed (`problems` must be empty); not
     /// while its AI check waits or runs.
     pub mark_ready: bool,
+    /// Send it to the superusers although the AI check asked for changes
+    /// (`POST .../send-anyway`; the AI can be wrong): a complete form whose
+    /// check's result is `changes`.
+    pub send_anyway: bool,
 }
 
 /// A company's 10DLC texting registration.
@@ -187,11 +192,15 @@ fn registration_view(
             actions: TenDlcActions {
                 edit: true,
                 mark_ready: false,
+                send_anyway: false,
             },
         };
     };
     let draft = row.draft();
     let problems = form::problems_with_letter(&draft, letter_needed);
+    let waiting = matches!(row.status, TenDlcStatus::Draft | TenDlcStatus::Rejected);
+    let send_anyway =
+        waiting && problems.is_empty() && row.ai_check_status.as_deref() == Some("changes");
     TenDlcRegistration {
         saved: true,
         status: row.status,
@@ -213,8 +222,8 @@ fn registration_view(
         ai_check: ai_check::view(row),
         actions: TenDlcActions {
             edit: row.status.editable(),
-            mark_ready: matches!(row.status, TenDlcStatus::Draft | TenDlcStatus::Rejected)
-                && !ai_check::checking(row),
+            mark_ready: waiting && !ai_check::checking(row),
+            send_anyway,
         },
         draft,
     }
@@ -456,6 +465,64 @@ pub async fn mark_tendlc_registration_ready(
             .await?;
         }
     }
+    let row = form::load(pool, user.company_id).await?;
+    Ok(Json(registration_view(
+        row.as_ref(),
+        TenDlcDraft::default(),
+        state.ai.is_enabled(),
+    )))
+}
+
+/// Send the texting registration (10DLC) on despite the AI check
+///
+/// When the AI check asked for changes (`aiCheck.status` `changes`) and the
+/// Manager is sure the AI is wrong: the registration becomes ready as it
+/// is, the AI check's status `overridden`, and the superusers are told
+/// (bell and email) with the changes the AI asked for; one of them decides
+/// and sends it to Telnyx. 400 when nothing is saved, it is not complete,
+/// or the AI check did not ask for changes; 409 once it is with Telnyx.
+/// Audited. The company's Managers only.
+#[crate::openapi::path(
+    post,
+    path = "/v1/phone/admin/tendlc/send-anyway",
+    operation_id = "send_tendlc_registration_anyway",
+    tag = "phone",
+    responses(
+        (status = 200, description = "The registration, ready", body = TenDlcRegistration),
+        (status = 400, description = "Nothing saved, not complete, or no changes asked for", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a Manager of the company", body = ErrorBody),
+        (status = 409, description = "It is with Telnyx already", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn send_tendlc_registration_anyway(
+    State(state): State<AppState>,
+    CompanyManager(user): CompanyManager,
+) -> ApiResult<Json<TenDlcRegistration>> {
+    let pool = &state.pool;
+    let row = form::load(pool, user.company_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest("Save the registration first.".into()))?;
+    if !row.status.editable() {
+        return Err(ApiError::Conflict(
+            "The registration is with Telnyx already.".into(),
+        ));
+    }
+    if row.status == TenDlcStatus::Ready || row.ai_check_status.as_deref() != Some("changes") {
+        return Err(ApiError::BadRequest(
+            "Only a registration the AI check asked to change can be sent anyway.".into(),
+        ));
+    }
+    registry::complete(&row.draft(), state.ai.is_enabled()).map_err(api_error)?;
+    let by = user
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(user.email.as_str());
+    ai_check::send_anyway(&state, &row, user.id, by).await?;
     let row = form::load(pool, user.company_id).await?;
     Ok(Json(registration_view(
         row.as_ref(),

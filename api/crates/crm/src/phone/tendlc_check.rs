@@ -104,6 +104,9 @@ wire_enum! {
         Changes = "changes",
         /// The AI could not run: it went to the superusers unchecked.
         Failed = "failed",
+        /// The AI asked for changes and the Manager sent it on anyway (the
+        /// AI can be wrong): it went to the superusers with the changes.
+        Overridden = "overridden",
     }
 }
 
@@ -195,16 +198,19 @@ pub fn view(row: &Row) -> Option<TenDlcAiCheck> {
         .as_deref()
         .and_then(|json| serde_json::from_str(json).ok())
         .unwrap_or_default();
-    let done = matches!(
+    let done = !matches!(
         status,
-        TenDlcAiCheckStatus::Passed | TenDlcAiCheckStatus::Changes | TenDlcAiCheckStatus::Failed
+        TenDlcAiCheckStatus::Pending | TenDlcAiCheckStatus::Running
     );
     Some(TenDlcAiCheck {
         status,
         requested_at: row.ai_check_requested_at,
         checked_at: if done { row.ai_checked_at } else { None },
         summary: (done && !report.summary.is_empty()).then_some(report.summary),
-        fixes: if status == TenDlcAiCheckStatus::Changes {
+        fixes: if matches!(
+            status,
+            TenDlcAiCheckStatus::Changes | TenDlcAiCheckStatus::Overridden
+        ) {
             report.fixes
         } else {
             Vec::new()
@@ -241,7 +247,8 @@ pub async fn request(pool: &MySqlPool, registration_id: i32, by: i32) -> sqlx::R
 /// this form (or could not run, and the superusers looked by hand) within
 /// [`FRESH_HOURS`]: pages change. An older check, or none, is asked for
 /// again now, for whoever asked last (they get the changes to make), else
-/// for `actor`.
+/// for `actor`. One the Manager sent on despite the AI's changes
+/// ([`send_anyway`]) is never blocked: the superusers decide.
 pub async fn blocks_sending(
     state: &AppState,
     row: &Row,
@@ -258,6 +265,7 @@ pub async fn blocks_sending(
             "The AI check is running: send it once it passes, in a few minutes."
         }
         Some("passed" | "failed") if fresh => return Ok(None),
+        Some("overridden") => return Ok(None),
         Some("changes") => {
             "The AI check asked for changes: the company makes them and marks it ready again."
         }
@@ -1732,7 +1740,8 @@ async fn changes(state: &AppState, row: &Row, report: &Report) -> sqlx::Result<(
             "<p>We checked your texting registration (10DLC), your quote form, privacy policy and \
              texting terms the way the carriers will. The carriers would refuse it as it is. \
              Make {these} {count} change{s}, then open the registration and press \
-             <strong>Mark as ready</strong> again.</p>\
+             <strong>Mark as ready</strong> again. The AI can be wrong: if you are sure it is, \
+             press <strong>Send anyway</strong> instead and our team reviews it as it is.</p>\
              {summary}{fixes}\
              <p><a href=\"{link}\" style=\"display:inline-block;padding:10px 16px;\
              background:#18181b;color:#ffffff;border-radius:6px;text-decoration:none\">\
@@ -1817,6 +1826,66 @@ async fn could_not_run(state: &AppState, row: &Row, error: &str) -> sqlx::Result
         .await;
     }
     Ok(())
+}
+
+/// The Manager sends it on although the AI asked for changes (the AI can be
+/// wrong): whether it moved.
+///
+/// It becomes ready and the superusers are told, with the changes the AI
+/// asked for to look at. Only while its check's result is `changes`.
+pub async fn send_anyway(state: &AppState, row: &Row, by_id: i32, by: &str) -> sqlx::Result<bool> {
+    let pool = &state.pool;
+    let overridden = sqlx::query(
+        "UPDATE tendlc_registrations SET ai_check_status = 'overridden'
+          WHERE id = ? AND ai_check_status = 'changes'",
+    )
+    .bind(row.id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if overridden != 1 || !move_status(pool, row.id, row.status, TenDlcStatus::Ready, Some(by_id)).await?
+    {
+        return Ok(false);
+    }
+    let report: Report = row
+        .ai_check_report
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+    audit(
+        pool,
+        row.company_id,
+        Some(by_id),
+        "tendlc_ai_check_overridden",
+        row.id,
+        &json!({ "from": row.status.as_str(), "fixes": report.fixes.len() }),
+    )
+    .await?;
+    let name = company_name(row);
+    registry::notify_superusers(
+        state,
+        &format!(
+            "{name} sent its texting registration (10DLC) on although the AI check asked for \
+             changes: look at them before sending it to Telnyx."
+        ),
+        by,
+    )
+    .await?;
+    let body = format!(
+        "<p>The AI check asked for these changes; {by} sent the registration on anyway (the AI can \
+         be wrong). Look at them before you send it to Telnyx.</p>{fixes}{rest}",
+        by = escape(if by.is_empty() { "the company" } else { by }),
+        fixes = fixes_html(&report.fixes),
+        rest = superuser_body(state, row, &report, "", None),
+    );
+    email_superusers(
+        state,
+        row,
+        &format!("{name} is ready, though the AI check asked for changes"),
+        &body,
+    )
+    .await?;
+    Ok(true)
 }
 
 // ---------------------------------------------------------------- emails
