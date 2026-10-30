@@ -1,3 +1,4 @@
+use crate::axum_helpers::access_token::Transitional;
 use crate::axum_helpers::guards::RemixBackend;
 use crate::libs::types::BasicResponse;
 use axum::http::StatusCode;
@@ -30,7 +31,7 @@ pub struct TemplatePayload {
 }
 
 pub async fn get_template_variables(
-    _: RemixBackend,
+    _: Transitional<RemixBackend>,
     State(pool): State<MySqlPool>,
     Path((company_id, user_id)): Path<(i32, i32)>,
     Query(query): Query<TemplateDataQuery>,
@@ -52,7 +53,7 @@ pub async fn get_template_variables(
 }
 
 pub async fn get_complete_template(
-    _: RemixBackend,
+    _: Transitional<RemixBackend>,
     State(pool): State<MySqlPool>,
     Path((company_id, user_id)): Path<(i32, i32)>,
     Query(query): Query<TemplateDataQuery>,

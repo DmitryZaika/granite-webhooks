@@ -18,6 +18,7 @@ mod jobs;
 mod notifications;
 mod openapi;
 mod public;
+mod ringcentral_subscriptions;
 
 /// Each file of `tests/<area>/` is a module of that area's binary; a file
 /// not listed in its `main.rs` would never run.

@@ -1,3 +1,5 @@
+use crate::axum_helpers::access_token::Transitional;
+use crate::axum_helpers::guards::SesEventBridge;
 use axum::extract::{Json, State};
 use axum::http::header::RETRY_AFTER;
 use axum::http::{HeaderValue, StatusCode};
@@ -48,6 +50,7 @@ fn parse_error_kind(error: &str) -> &'static str {
 }
 
 pub async fn read_receipt_handler(
+    _: Transitional<SesEventBridge>,
     State(pool): State<MySqlPool>,
     Json(info): Json<SesEvent>,
 ) -> BasicResponse {
@@ -239,6 +242,7 @@ fn into_http_response(response: BasicResponse) -> Response {
 }
 
 pub async fn receive_handler(
+    _: Transitional<SesEventBridge>,
     State(pool): State<MySqlPool>,
     Json(event): Json<S3Event>,
 ) -> Response {

@@ -1,4 +1,6 @@
+use crate::axum_helpers::access_token::Transitional;
 use crate::axum_helpers::guards::CloudTalkWebhookUser;
+use crate::axum_helpers::guards::RemixBackend;
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::{
     CloudtalkSMS, inbound_customer_phone_from_call_payload, outbound_call_followup_check,
@@ -82,7 +84,7 @@ async fn resolve_unscoped_cloudtalk_company(
 }
 
 pub async fn sms_received_unscoped(
-    _: CloudTalkWebhookUser,
+    _: Transitional<CloudTalkWebhookUser>,
     State(pool): State<MySqlPool>,
     body: Bytes,
 ) -> BasicResponse {
@@ -119,7 +121,7 @@ pub async fn sms_received_unscoped(
 }
 
 pub async fn sms_received(
-    _: CloudTalkWebhookUser,
+    _: Transitional<CloudTalkWebhookUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -187,7 +189,7 @@ async fn process_inbound_sms(
 }
 
 pub async fn call_received(
-    _: CloudTalkWebhookUser,
+    _: Transitional<CloudTalkWebhookUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -275,7 +277,7 @@ pub async fn call_received(
 }
 
 pub async fn sms_sent(
-    _: CloudTalkWebhookUser,
+    _: Transitional<CloudTalkWebhookUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -293,7 +295,7 @@ pub async fn sms_sent(
     }
 }
 pub async fn sync_cloudtalk(
-    _: crate::axum_helpers::guards::RemixBackend,
+    _: Transitional<RemixBackend>,
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
@@ -304,7 +306,7 @@ pub async fn sync_cloudtalk(
 /// `DELETE /cloudtalk/sync/{company_id}/{customer_id}`: drop the contact of a
 /// deleted customer.
 pub async fn unsync_cloudtalk(
-    _: crate::axum_helpers::guards::RemixBackend,
+    _: Transitional<RemixBackend>,
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {

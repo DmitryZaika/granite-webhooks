@@ -45422,7 +45422,7 @@
           "jobs"
         ],
         "summary": "Sync missing contacts",
-        "description": "Pushes a few customers without a `RingCentral` or `CloudTalk` contact to\ntheir company's provider.",
+        "description": "Pushes a few customers without a `RingCentral` or `CloudTalk` contact to\ntheir company's provider, and renews up to 2 `RingCentral` SMS\nsubscriptions whose token is not the current webhooks token (a failed\nrenewal waits 2 hours; none is ever created here).",
         "operationId": "run_contact_sync",
         "responses": {
           "200": {
@@ -68647,7 +68647,8 @@
         "required": [
           "processed",
           "ringcentral",
-          "cloudtalk"
+          "cloudtalk",
+          "ringcentral_subscriptions"
         ],
         "properties": {
           "processed": {
@@ -68663,6 +68664,11 @@
           "cloudtalk": {
             "type": "integer",
             "description": "Pushed to `CloudTalk`.",
+            "minimum": 0
+          },
+          "ringcentral_subscriptions": {
+            "type": "integer",
+            "description": "`RingCentral` SMS subscriptions renewed with the current webhooks\ntoken.",
             "minimum": 0
           }
         }

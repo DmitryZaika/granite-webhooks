@@ -972,6 +972,7 @@ pub async fn finish_ringcentral(
     if let Err(error) = common::telephony::ringcentral::ensure_sms_subscription(
         &state.pool,
         &state.telephony_http,
+        state.ringcentral_subscriptions.as_ref(),
         user.company_id,
     )
     .await

@@ -1,3 +1,5 @@
+use crate::axum_helpers::access_token::Transitional;
+use crate::axum_helpers::guards::TelnyxCallback;
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::telnyx::api::{ConversationMessage, api_messages_to_text, fetch_conversation_messages};
@@ -13,7 +15,11 @@ use sqlx::MySqlPool;
 /// each kind into the same `telnyx_calls` row (keyed by `CallSid`) with an
 /// event-specific upsert so call, recording, and transcript data can arrive in
 /// any order without overwriting each other.
-pub async fn event_progress(State(pool): State<MySqlPool>, body: Bytes) -> BasicResponse {
+pub async fn event_progress(
+    _: Transitional<TelnyxCallback>,
+    State(pool): State<MySqlPool>,
+    body: Bytes,
+) -> BasicResponse {
     let event = match TelnyxEvent::from_form(body.as_ref()) {
         Ok(event) => event,
         Err(_) => {

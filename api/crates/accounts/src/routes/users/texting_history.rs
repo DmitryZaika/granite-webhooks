@@ -35,8 +35,13 @@ pub async fn follow(
     let pool = &state.pool;
     if let Some(extension) = after.ringcentral_extension.as_deref()
         && (matched || before.ringcentral_extension.as_deref() != Some(extension))
-        && let Err(error) =
-            ringcentral::ensure_sms_subscription(pool, &state.telephony_http, company_id).await
+        && let Err(error) = ringcentral::ensure_sms_subscription(
+            pool,
+            &state.telephony_http,
+            state.ringcentral_subscriptions.as_ref(),
+            company_id,
+        )
+        .await
     {
         tracing::error!(company_id, ?error, "RingCentral SMS subscription failed");
     }

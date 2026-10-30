@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Granite Manager Webhooks API",
-    "description": "Lead intake for Make, Zapier, and website forms.\n\nFor `/v1/webhooks/new-lead-form/{company_id}`:\n- `referral_source` is optional; when set, prefer `website` or `facebook` for statistics.\n- `form_name` is optional; when set, use the specific form id (e.g. `cabinet_quote`, `facebook_form`, `facebook_cabinet_quote_form`, `quick_quote`).",
+    "description": "Lead intake for Make, Zapier, and website forms.\n\nFor `/v1/webhooks/new-lead-form/{company_id}`:\n- `referral_source` is optional; when set, prefer `website` or `facebook` for statistics.\n- `form_name` is optional; when set, use the specific form id (e.g. `cabinet_quote`, `facebook_form`, `facebook_cabinet_quote_form`, `quick_quote`).\n\nAuthenticate with the access token Granite Manager gave you: `Authorization: Bearer gmk_...`. Each token works for one company.",
     "license": {
       "name": ""
     },
@@ -217,6 +217,18 @@
           "referral_source": "website"
         }
       }
+    },
+    "securitySchemes": {
+      "access_token": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An access token (`gmk_...`)."
+      }
     }
-  }
+  },
+  "security": [
+    {
+      "access_token": []
+    }
+  ]
 }

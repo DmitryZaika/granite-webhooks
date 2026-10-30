@@ -111,6 +111,15 @@ deploy-time-triggered: build-time-triggered
 		--binary-name time-triggered \
 		time-triggered
 
+# --- Access tokens (webhooks auth, see README.md) ---
+#   make access-token ARGS="create --name 'Acme Zapier' --scopes leads --company-id 12 --expires 2027-10-25"
+#   make access-token ARGS="list"
+#   make access-token ARGS="revoke 7"
+# Uses the local database unless ACCESS_TOKEN_DATABASE_URL names another.
+.PHONY: access-token
+access-token:
+	cargo run -q -p common --bin access-token -- $(ARGS)
+
 # --- Tests ---
 # Refuses to run cargo test against the shared RDS. DATABASE_URL is read from
 # the environment, falling back to .env, and is never printed.

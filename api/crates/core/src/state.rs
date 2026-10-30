@@ -94,6 +94,9 @@ pub struct AppState {
     pub signature_app_origin: Arc<str>,
     /// Granite Manager's `RingCentral` app, for companies that press Connect.
     pub ringcentral_app: Option<crate::ringcentral_connect::RingCentralApp>,
+    /// Where `RingCentral` pushes texts and the token it sends back
+    /// (`LAMBDA_URL`, `WEBHOOKS_KEY`); `None` turns SMS subscriptions off.
+    pub ringcentral_subscriptions: Option<common::telephony::ringcentral::SubscriptionTarget>,
     /// DNS for the email deliverability and setup checks (fixed answers in
     /// tests).
     pub dns: crate::deliverability::AppDns,
@@ -231,6 +234,7 @@ impl AppState {
             signwell_webhook: SignWellWebhookKeys::default(),
             signature_app_origin: Arc::from(""),
             ringcentral_app: None,
+            ringcentral_subscriptions: None,
             dns: crate::deliverability::AppDns::Fixed(Arc::default()),
             ses: SesIdentities::Fixed(None),
             signing_session_secret: None,
@@ -369,6 +373,15 @@ impl AppState {
     }
 
     #[must_use]
+    pub fn with_ringcentral_subscriptions(
+        mut self,
+        target: Option<common::telephony::ringcentral::SubscriptionTarget>,
+    ) -> Self {
+        self.ringcentral_subscriptions = target;
+        self
+    }
+
+    #[must_use]
     pub fn with_cloudtalk_base(mut self, base: &str) -> Self {
         self.cloudtalk_base = Arc::from(base.trim_end_matches('/'));
         self
@@ -484,6 +497,9 @@ impl AppState {
                 &std::env::var("APP_URL").unwrap_or_else(|_| "https://granite-manager.com".into()),
             )
             .with_ringcentral_app(crate::ringcentral_connect::RingCentralApp::from_env())
+            .with_ringcentral_subscriptions(
+                common::telephony::ringcentral::SubscriptionTarget::from_env(),
+            )
             .with_dns(crate::deliverability::AppDns::system())
             .with_ses(SesIdentities::Aws)
             .with_signing_session_secret(

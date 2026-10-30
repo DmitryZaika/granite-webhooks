@@ -36,5 +36,6 @@ utoipa = { version = "5.5.0", features = ["axum_extras"], optional = true }
 uuid = "1.23"
 
 [dev-dependencies]
+axum-test = "19"
 test-db = { path = "../../../test-db" }
 tracing-test = "0.2.6"
