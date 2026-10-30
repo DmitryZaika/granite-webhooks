@@ -1,6 +1,7 @@
 use crate::ai::Ai;
 use crate::billing::BillingPlan;
 use crate::billing::stripe::Stripe;
+use crate::claude::Claude;
 use crate::maps::Maps;
 use crate::phone_config::PhoneConfig;
 use crate::push::Push;
@@ -54,6 +55,8 @@ pub struct AppState {
     pub cloudtalk_base: Arc<str>,
     /// `OpenAI`, for the AI helpers.
     pub ai: Ai,
+    /// Claude: the 10DLC check's second reviewer.
+    pub claude: Claude,
     /// The `SignWell` API (a stub in tests).
     pub signwell_base: Arc<str>,
     /// `AssemblyAI`, for call transcripts.
@@ -211,6 +214,7 @@ impl AppState {
             telephony_http: common::http::client(),
             cloudtalk_base: Arc::from(common::telephony::cloudtalk::BASE_URL),
             ai: Ai::disabled(),
+            claude: Claude::disabled(),
             signwell_base: Arc::from("https://www.signwell.com/api/v1"),
             transcriber: Transcriber::disabled(),
             qbo: Qbo::disabled(),
@@ -389,6 +393,12 @@ impl AppState {
     }
 
     #[must_use]
+    pub fn with_claude(mut self, claude: Claude) -> Self {
+        self.claude = claude;
+        self
+    }
+
+    #[must_use]
     pub fn with_transcriber(mut self, transcriber: Transcriber) -> Self {
         self.transcriber = transcriber;
         self
@@ -442,6 +452,7 @@ impl AppState {
             .with_webhooks(WebhooksClient::from_env())
             .with_maps(Maps::from_env())
             .with_ai(Ai::from_env())
+            .with_claude(Claude::from_env())
             .with_transcriber(Transcriber::from_env())
             .with_qbo(Qbo::from_env())
             .with_job_key(&std::env::var("LAMBDA_KEY").unwrap_or_default())
