@@ -58661,6 +58661,83 @@
         ]
       }
     },
+    "/v1/phone/admin/tendlc/send-anyway": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Send the texting registration (10DLC) on despite the AI check",
+        "description": "When the AI check asked for changes (`aiCheck.status` `changes`) and the\nManager is sure the AI is wrong: the registration becomes ready as it\nis, the AI check's status `overridden`, and the superusers are told\n(bell and email) with the changes the AI asked for; one of them decides\nand sends it to Telnyx. 400 when nothing is saved, it is not complete,\nor the AI check did not ask for changes; 409 once it is with Telnyx.\nAudited. The company's Managers only.",
+        "operationId": "send_tendlc_registration_anyway",
+        "responses": {
+          "200": {
+            "description": "The registration, ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenDlcRegistration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing saved, not complete, or no changes asked for",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is with Telnyx already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/superuser/tendlc": {
       "get": {
         "tags": [
@@ -94631,7 +94708,8 @@
         "description": "What the company's Managers may do with the registration now.",
         "required": [
           "edit",
-          "markReady"
+          "markReady",
+          "sendAnyway"
         ],
         "properties": {
           "edit": {
@@ -94641,6 +94719,10 @@
           "markReady": {
             "type": "boolean",
             "description": "Mark it ready for a superuser (`POST .../ready`): a saved draft, or\none Telnyx refused once it is fixed (`problems` must be empty); not\nwhile its AI check waits or runs."
+          },
+          "sendAnyway": {
+            "type": "boolean",
+            "description": "Send it to the superusers although the AI check asked for changes\n(`POST .../send-anyway`; the AI can be wrong): a complete form whose\ncheck's result is `changes`."
           }
         }
       },
@@ -94703,7 +94785,8 @@
           "Running",
           "Passed",
           "Changes",
-          "Failed"
+          "Failed",
+          "Overridden"
         ]
       },
       "TenDlcAiFix": {
