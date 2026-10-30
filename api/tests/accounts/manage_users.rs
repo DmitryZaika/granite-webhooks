@@ -249,6 +249,7 @@ async fn moving_a_rep_to_ringcentral_keeps_their_texts(pool: MySqlPool) {
             .with_session(ADA)
             .json(&json!({
                 "name": "Rita Rep",
+                "email": "rep@acme.test",
                 "company_id": 100,
                 "positions": [1],
                 "ringcentral_phone_number": "3175550111",
