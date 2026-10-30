@@ -12,7 +12,12 @@ from helpers import ISSUE_ID, run_context
 from autofix import agent, http, open_prs
 
 BODY = (
-    "**Issue:** Print fails on /employee/quote/:quoteId\n"
+    "**Given** a company with calling turned off\n"
+    "**When** a user opens /employee/quote/:quoteId\n"
+    "**Then** the API answers 403\n"
+    "\n"
+    "**Actual:** Print fails on /employee/quote/:quoteId\n"
+    "**Expected:** Print opens\n"
     "**Fix:** Adds a check\n"
     "**Bug ID:** `0123456789ab` · [PostHog issue](https://us.posthog.com/x)\n"
     "Verified: the test failed before the fix and passes after it.\n"
@@ -57,6 +62,12 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(
             open_prs.parse_body(BODY), ("0123456789ab", "Print fails on /employee/quote/:quoteId")
         )
+
+    def test_older_bodies_have_an_issue_line(self) -> None:
+        old = "**Issue:** Old summary\n**Fix:** x\n**Bug ID:** `0123456789ab` · link\n"
+        self.assertEqual(open_prs.parse_body(old), ("0123456789ab", "Old summary"))
+        both = "**Issue:** Old\n**Actual:** New\n"
+        self.assertEqual(open_prs.parse_body(both), ("", "New"))
 
     def test_missing_or_malformed_lines(self) -> None:
         self.assertEqual(open_prs.parse_body(None), ("", ""))

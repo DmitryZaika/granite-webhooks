@@ -62320,7 +62320,35 @@
           },
           "summary": {
             "type": "string",
-            "description": "One line: what went wrong."
+            "description": "One short sentence: what goes wrong and on which route (the title when\nthere is no `pr_title`, and the Issue line of an older report)."
+          },
+          "given": {
+            "type": "string",
+            "description": "The bug report's Given: the state the bug needs, e.g. `a company with\ncalling turned off`. Empty from a workflow older than these fields."
+          },
+          "when": {
+            "type": "string",
+            "description": "When: the user's action, with the page and the API route."
+          },
+          "then": {
+            "type": "string",
+            "description": "Then: what the system does at that point, e.g. `the API answers 403\ncalling_disabled`."
+          },
+          "actual": {
+            "type": "string",
+            "description": "What goes wrong now."
+          },
+          "expected": {
+            "type": "string",
+            "description": "What should happen instead."
+          },
+          "impact": {
+            "type": "string",
+            "description": "What users notice, in one sentence; the email adds the counts."
+          },
+          "check": {
+            "type": "string",
+            "description": "How a developer sees the fix by hand, in one line; empty without a fix."
           },
           "root_cause": {
             "type": "string",
@@ -62328,7 +62356,7 @@
           },
           "fix_summary": {
             "type": "string",
-            "description": "What changed and why that fixes it; empty without a fix."
+            "description": "One or two short sentences: what the fix changes, naming the function\nand file (the Fix line); empty without a fix."
           },
           "risk": {
             "type": "string",

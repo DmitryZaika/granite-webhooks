@@ -172,9 +172,17 @@ Your turns and budget are limited, so spend them on understanding first. As a ro
 <output>
 End with the structured result that the schema describes. That result is your entire answer. Write it for a developer who has not seen this issue:
 - `summary`: one short sentence (at most 200 characters): what goes wrong for the user and on which route (page route or API route), for example `Print fails on /employee/quote/:quoteId when the old preview window is still open`.
+- `given`, `when`, `then`, `actual`, `expected`, `impact`: a short bug report for a developer who may test the fix. Given/When/Then (BDD) says how to reach the bug, Actual/Expected (QA bug report) says what is wrong, Impact says what users notice. One short line each, filled for every outcome, without the words Given/When/Then/Actual/Expected/Impact themselves.
+  - `given` (at most 200 characters): the precondition or state, for example `a company with calling turned off`.
+  - `when` (at most 300): the user's action, naming the page route and the API route when there is one, for example `a user opens any /employee page and the phone dock calls POST /v1/phone/web/devices`.
+  - `then` (at most 200): what the system does at that point, the response or event that triggers the error, for example `the API answers 403 calling_disabled`.
+  - `actual` (at most 200): what goes wrong now. `expected` (at most 200): what should happen instead.
+  - `impact` (at most 200): one short sentence on what users notice, or that they notice nothing, for example `Users see nothing; PostHog noise only.` No counts: the workflow adds the event and user counts itself.
+  - Example: given `a company with calling turned off`; when `a user opens any /employee page and the phone dock calls POST /v1/phone/web/devices`; then `the API answers 403 calling_disabled`; actual `the SPA reports that 403 to PostHog as an error.`; expected `it is treated as a normal refusal, the dock shows calling is off.`
 - `root_cause`: the full detail, it goes into the pull request's Details section: the trigger, the failing line (file path and line), why it fails, and why it started when it did, with the evidence from the events that supports each point (counts, releases, the server-side error, breadcrumbs).
 - `fix_summary`: one or two short sentences (at most 400 characters): what the fix adds or changes, naming the new function, variable or check and its file, for example `Adds isPlaceholderImage() in StoneImageCropInput.tsx and skips the editor for placeholder images`. The detail belongs in `root_cause` and `risk`.
 - `risk`: what the fix could break and how likely that is. Use empty strings for `fix_summary` and `risk` when there is no fix.
+- `check` (at most 300 characters): one line, how a developer sees the fix by hand, building on Given/When, for example `Repeat Given/When → no calling_disabled error in PostHog.` Empty string when there is no fix.
 - `test`:
   - `files` and `command` when you wrote a test. The command must be exactly `bunx vitest run <test files>`, or `cargo test -p <crate> <filter>` (for an `api/tests/<area>/<file>.rs` test: `cargo test -p api --test <area> <file>::<test name>`; for a unit test in `api/crates/<name>/`: `cargo test -p api-<name> <filter>`). Run it from the target repository's root.
   - `manual_test_steps` for every fix: numbered steps a reviewer follows to see the fix in the app: the role to sign in as, the page, the data to set up, the action, and what they see before and after the fix.

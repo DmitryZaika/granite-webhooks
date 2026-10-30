@@ -7,10 +7,17 @@
     "outcome",
     "target_repo",
     "summary",
+    "given",
+    "when",
+    "then",
+    "actual",
+    "expected",
+    "impact",
     "root_cause",
     "fix_summary",
     "risk",
     "test",
+    "check",
     "recommendation",
     "duplicate_of",
     "pr_title"
@@ -36,6 +43,36 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 300
+    },
+    "given": {
+      "description": "The precondition or state, without the word `Given`, e.g. `a company with calling turned off`.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "when": {
+      "description": "The user's action that leads to the error, naming the page route and the API route when there is one, without the word `When`, e.g. `a user opens any /employee page and the phone dock calls POST /v1/phone/web/devices`.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "then": {
+      "description": "What the system does at that point (the response or event that triggers the error), without the word `Then`, e.g. `the API answers 403 calling_disabled`.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "actual": {
+      "description": "What goes wrong now.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "expected": {
+      "description": "What should happen instead.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "impact": {
+      "description": "One short sentence on what users notice, or that they notice nothing, e.g. `Users see nothing; PostHog noise only.` No counts: the api adds the event and user counts itself.",
+      "type": "string",
+      "maxLength": 500
     },
     "root_cause": {
       "description": "Why it happens, with file paths and line references.",
@@ -84,6 +121,11 @@
           "maxLength": 2000
         }
       }
+    },
+    "check": {
+      "description": "One line: how a developer sees the fix by hand, building on Given/When, e.g. `Repeat Given/When → no calling_disabled error in PostHog.` Empty string without a fix.",
+      "type": "string",
+      "maxLength": 500
     },
     "recommendation": {
       "description": "The concrete next step for a person when there is no fix: a migration to apply, a PostHog suppression or grouping rule, a setting to change.",

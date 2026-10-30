@@ -23,6 +23,8 @@ MAX_FILES = 30
 MAX_TOTAL = 10_000
 _TEXT_LIMIT = 300
 _BUG_ID_LINE = re.compile(r"\*\*Bug ID:\*\* `([0-9a-f]{12})`")
+_ACTUAL_LINE = re.compile(r"^\*\*Actual:\*\* (.+)$", re.MULTILINE)
+# Older open pull requests have an Issue line instead.
 _ISSUE_LINE = re.compile(r"^\*\*Issue:\*\* (.+)$", re.MULTILINE)
 
 
@@ -43,10 +45,10 @@ def one_line(text: object, limit: int = _TEXT_LIMIT) -> str:
 
 
 def parse_body(body: object) -> tuple[str, str]:
-    """The Bug ID and the Issue line of a pull request body ("" when absent)."""
+    """The Bug ID and the Actual line (else the older Issue line) of a body ("" when absent)."""
     text = body if isinstance(body, str) else ""
     bug = _BUG_ID_LINE.search(text)
-    issue = _ISSUE_LINE.search(text)
+    issue = _ACTUAL_LINE.search(text) or _ISSUE_LINE.search(text)
     return (bug.group(1) if bug else "", one_line(issue.group(1)) if issue else "")
 
 
