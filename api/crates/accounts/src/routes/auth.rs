@@ -31,7 +31,9 @@ use crate::auth::cookie::{
     SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, SessionData, cookie_values, decode_session_map,
     encode_session, encode_session_map, request_session_id,
 };
-use crate::auth::session::{SUPER_ADMIN_POSITION, SessionUser, find_session_user, user_positions};
+use crate::auth::session::{
+    SUPER_ADMIN_POSITION, SessionUser, find_session_user, keep_session, user_positions,
+};
 use crate::auth::{CurrentUser, sha256_hex};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -442,6 +444,13 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
 /// The signed-in user (for a super admin, in the company they act in), the
 /// path they start at, the acting company's subdomain and the companies a
 /// super admin can switch to. 401 when signed out.
+///
+/// The CRM asks this as every page opens, so it also keeps the session: it
+/// lives another 60 days from now, and the cookie is set again with its full
+/// lifetime. The CRM's own hosts answer this path too (their CloudFront
+/// passes it here): Safari keeps a cookie set by a server on another IP
+/// range than the page (this API) for 7 days only, but not one set by the
+/// page's own host.
 #[crate::openapi::path(
     get,
     path = "/v1/auth/session",
@@ -456,14 +465,20 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
 )]
 pub async fn session(
     State(state): State<AppState>,
+    headers: HeaderMap,
     CurrentUser(user): CurrentUser,
 ) -> ApiResult<Response> {
     let body = auth_session(&state.pool, user).await?;
-    let mut response = Json(body).into_response();
-    response
-        .headers_mut()
-        .insert("cache-control", HeaderValue::from_static("no-store"));
-    Ok(response)
+    let mut cookies = Vec::new();
+    if let Some(id) = request_session_id(&headers, &state.session_secret)
+        && let Some(session) = request_session(&headers, &state.session_secret)
+    {
+        keep_session(&state.pool, &id).await?;
+        cookies = state
+            .cookie
+            .set_session(&encode_session_map(&session, &state.session_secret));
+    }
+    Ok(with_cookies(Json(body).into_response(), cookies))
 }
 
 /// Body of `PUT /v1/auth/active-company`.
