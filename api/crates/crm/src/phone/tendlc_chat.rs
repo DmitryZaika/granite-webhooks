@@ -80,6 +80,7 @@ Step 1. Business (\"Carriers check these against public records: use your exact 
 - Business name = brand.displayName: the name customers know them by (DBA); every text must name it. At most {NAME_CHARS} characters.
 - Legal name = brand.companyName: exactly as the IRS has it for the EIN (CP 575 letter, or the 147C letter the IRS sends on request). A mismatch with the EIN is the most common reason the registry fails the business.
 - Tax id (EIN) = brand.ein: 9 digits like 12-3456789; Canada: the 9-digit business number.
+- IRS EIN letter = brand.einLetter: US businesses with an EIN (private, public, non-profit) upload the CP 575 (or 147C) as a PDF or photo; Granite Manager reads its legal name, EIN and address, and the form then requires the Legal name, Tax id, Street address, City, State and ZIP exactly as on the letter (case and spacing aside: \"Street\" for \"St\" is a mismatch), because the registry leaves a brand unverified for good when they differ.
 - Country of registration = brand.country: US or CA only.
 - Contact: Business phone (US or Canada number), Business email, Website (starts with https://, must open and show the business name; not parked or under construction), Contact first/last name (optional).
 - Business address: Street address, City, State or province (2 letters), ZIP or postal code; as on the tax records, no PO boxes.
@@ -88,11 +89,11 @@ Step 1. Business (\"Carriers check these against public records: use your exact 
 Step 2. How you text
 - The texts are = campaign.usecase. Several kinds (mixed) MIXED is the usual choice; Low volume, several kinds LOW_VOLUME is under 6,000 texts a month with a lower fee and lower limits; or a single kind (Customer care, Account updates, Delivery updates, Marketing, Surveys, Sign-in codes, Security alerts, Fraud alerts, Public service announcements, Higher education).
 - Kinds of texts = campaign.subUsecases: mixed picks 2 to 5, low volume 1 to 5 (for example Customer care, Account updates, Marketing).
-- What you text and why = campaign.description: {description_min} to {description_max} characters. Who sends (the business name), to whom (customers who agreed) and what about, matching the kinds of texts and the samples.
-- How customers opt in = campaign.messageFlow: {flow_min} to {flow_max} characters. The quote form's exact address, that customers tick an optional checkbox (not pre-checked) to agree to texts, the opt-in words quoted, every other way they agree (phone, showroom) and how that is recorded, and the privacy policy and terms links.
-- Sample texts = campaign.samples: {samples_min} to {samples_max}, each {message_min} to {message_max} characters, each names the business, says how to opt out (\"Reply STOP to opt out.\"), different from the others, full links only (no bit.ly or other shorteners). Together they show every chosen kind of text. \"Use examples\" fills three with the business name.
-- Replies to keywords, each {message_min} to {message_max} characters and naming the business: Answer to HELP (how to reach the business: phone, email or website, and STOP to opt out) with Help keywords (must include HELP); Answer to opting in (what texts they get, message frequency varies, Msg & data rates may apply, Reply HELP for help, Reply STOP to opt out) with Opt-in keywords; Answer to STOP (confirms they are unsubscribed and get no more texts) with Opt-out keywords (must include STOP). Keywords are single words of letters and digits separated by commas, at most {LIST_CHARS} characters.
-- About the texts: The texts contain links (required when a sample has a link; optional Example link), The texts contain phone numbers (required when a sample has a phone number), We text from a pool of 50 or more numbers (most companies do not), age-restricted products, loans or direct lending (leave unticked for a countertop shop).
+- What you text and why = campaign.description: {description_min} to {description_max} characters. Must name the business (who sends); to whom (customers who agreed) and what about, matching the kinds of texts and the samples.
+- How customers opt in = campaign.messageFlow: {flow_min} to {flow_max} characters. Must give the quote form's exact address and the privacy policy's address; that customers tick an optional checkbox (not pre-checked) to agree to texts, the opt-in words quoted, and every other way they agree (phone, showroom) with its own consent words (with marketing, a phone or in-person opt-in needs a confirmation text answered YES; leave such ways out when there is none).
+- Sample texts = campaign.samples: {samples_min} to {samples_max}, at least one per chosen kind of text, each {message_min} to {message_max} characters, each names the business, says how to opt out (\"Reply STOP to opt out.\"), different from the others, full links only (no bit.ly or other shorteners). \"Use examples\" fills three with the business name.
+- Replies to keywords, each {message_min} to {message_max} characters and naming the business (Telnyx's code 611): Answer to HELP (how to reach the business: phone, email or website; STOP is optional) with Help keywords (must include HELP); Answer to opting in (what texts they get, message frequency varies, Msg & data rates may apply, Reply HELP for help, Reply STOP to opt out, and with marketing \"Consent is not a condition of purchase\") with Opt-in keywords; Answer to STOP (confirms they get no further texts) with Opt-out keywords (must include STOP). Keywords are single words of letters and digits separated by commas, at most {LIST_CHARS} characters.
+- About the texts: The texts contain links (yes exactly when a sample has a link; optional Example link), The texts contain phone numbers (yes exactly when a sample has a phone number), We text from a pool of 50 or more numbers (most companies do not), age-restricted products, loans or direct lending (leave unticked for a countertop shop).
 - Your website pages, each a full https:// address: Quote form (the page where customers give their phone number and agree to texts), Privacy policy, Texting terms. Carriers open them; the AI check reads them when the form is marked ready.
 - Carrier rules: the checkbox \"We text only people who agreed to get texts from us, stop right away when they reply STOP, and follow the carriers' rules for business texting.\"
 
@@ -232,7 +233,8 @@ async fn company_context(pool: &MySqlPool, company_id: i32) -> sqlx::Result<Stri
 /// The form on screen, its step and what blocks marking it ready.
 fn screen_context(draft: &TenDlcDraft, step: &str) -> String {
     let form = serde_json::to_string_pretty(draft).unwrap_or_default();
-    let problems = form::problems(draft);
+    // The helper runs on an AI, so the server reads IRS letters.
+    let problems = form::problems_with_letter(draft, true);
     let mut text = format!(
         "The form on the user's screen now (step {}):\n```json\n{form}\n```\n",
         step_title(step)

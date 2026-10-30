@@ -29,6 +29,7 @@ use super::tendlc::{
     self, BRAND_FAILED, Row, TenDlcDraft, TenDlcFeedback, TenDlcStatus, audit, brand_body,
     campaign_body, campaign_update_body, editable_fields_changed, move_status,
 };
+use super::tendlc_check as ai_check;
 use crate::auth::sha256_hex;
 use crate::state::AppState;
 use crate::telnyx::tendlc::{Brand, Campaign, TenDlcError};
@@ -115,9 +116,10 @@ fn failed(err: &TenDlcError, what: &'static str) -> RegistryError {
     }
 }
 
-/// 400 naming the first thing missing, when the form is not complete.
-pub fn complete(draft: &TenDlcDraft) -> Result<(), RegistryError> {
-    match tendlc::problems(draft).first() {
+/// 400 naming the first thing missing, when the form is not complete (the
+/// IRS letter too when `letter_needed`: the server reads letters).
+pub fn complete(draft: &TenDlcDraft, letter_needed: bool) -> Result<(), RegistryError> {
+    match tendlc::problems_with_letter(draft, letter_needed).first() {
         Some(problem) => Err(RegistryError::Invalid(format!(
             "The registration is not complete: {}",
             problem.message
@@ -537,7 +539,10 @@ pub async fn send(state: &AppState, company_id: i32, actor: i32) -> Result<Row, 
         return Err(RegistryError::Conflict("It is with Telnyx already.".into()));
     }
     let draft = row.draft();
-    complete(&draft)?;
+    complete(&draft, state.ai.is_enabled())?;
+    if let Some(why) = ai_check::blocks_sending(state, &row, actor).await? {
+        return Err(RegistryError::Conflict(why));
+    }
     let config = setup(state, company_id).await?;
     if !lock(pool, row.id).await? {
         return Err(RegistryError::Conflict(
@@ -670,7 +675,10 @@ pub async fn resend(
         ));
     }
     let draft = row.draft();
-    complete(&draft)?;
+    complete(&draft, state.ai.is_enabled())?;
+    if let Some(why) = ai_check::blocks_sending(state, &row, actor).await? {
+        return Err(RegistryError::Conflict(why));
+    }
     let config = setup(state, company_id).await?;
     if !lock(pool, row.id).await? {
         return Err(RegistryError::Conflict(
@@ -698,7 +706,10 @@ async fn send_again(
     // A refusal after something was taken is kept on the registration.
     let mut refusal: Option<RegistryError> = None;
     let brand_id = row.telnyx_brand_id.clone().unwrap_or_default();
-    if row.sent_brand().as_ref() != Some(&draft.brand) || row.brand_failed() {
+    let brand_changed = row
+        .sent_brand()
+        .is_none_or(|sent| tendlc::brand_as_sent(&sent) != tendlc::brand_as_sent(&draft.brand));
+    if brand_changed || row.brand_failed() {
         match telnyx
             .update_brand(&brand_id, &brand_body(&draft.brand, &hook))
             .await

@@ -1,6 +1,8 @@
 //! The company's web pages the 10DLC AI check reads ([`super::tendlc_check`]):
 //! the quote form customers fill out, the privacy policy, the texting terms
-//! and the website, fetched the way a carrier's reviewer opens them.
+//! and the website, fetched the way a carrier's reviewer opens them; and the
+//! privacy and terms pages the quote form itself links to, when they are
+//! other pages ([`policy_links`]).
 //!
 //! Each page is reduced to what a reviewer sees: its text and its form
 //! (fields, checkboxes and whether they are checked or required, labels,
@@ -36,6 +38,11 @@ pub enum PageKind {
     PrivacyPolicy,
     Terms,
     Website,
+    /// A privacy page the quote form links to that is not the registered one.
+    LinkedPrivacy,
+    /// A terms (or texting policy) page the quote form links to that is not
+    /// the registered one.
+    LinkedTerms,
 }
 
 impl PageKind {
@@ -46,6 +53,8 @@ impl PageKind {
             Self::PrivacyPolicy => "page:privacyPolicy",
             Self::Terms => "page:terms",
             Self::Website => "page:website",
+            Self::LinkedPrivacy => "page:linkedPrivacy",
+            Self::LinkedTerms => "page:linkedTerms",
         }
     }
 
@@ -56,6 +65,8 @@ impl PageKind {
             Self::PrivacyPolicy => "Your privacy policy",
             Self::Terms => "Your texting terms",
             Self::Website => "Your website",
+            Self::LinkedPrivacy => "The privacy page your quote form links to",
+            Self::LinkedTerms => "The terms page your quote form links to",
         }
     }
 
@@ -65,6 +76,8 @@ impl PageKind {
             Self::PrivacyPolicy,
             Self::Terms,
             Self::Website,
+            Self::LinkedPrivacy,
+            Self::LinkedTerms,
         ]
         .into_iter()
         .find(|kind| kind.location() == location)
@@ -439,6 +452,10 @@ static HIDDEN_INPUT: LazyLock<regex::Regex> = LazyLock::new(|| {
 });
 static IFRAME_SRC: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r#"<iframe\b[^>]*\bsrc="([^"]+)""#).expect("valid pattern"));
+/// A link of cleaned HTML (`href` is its only attribute) and its content.
+static ANCHOR: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"(?s)<a href="([^"]+)">(.*?)</a>"#).expect("valid pattern")
+});
 
 /// Iframes that are never a form.
 const NOT_FORMS: &[&str] = &[
@@ -518,6 +535,31 @@ fn frame_sources(html: &str) -> Vec<String> {
         found.push(src);
     }
     found
+}
+
+/// The links of cleaned HTML to a privacy policy and to terms (a texting or
+/// SMS policy counts as terms), by their address or their words; absolute
+/// web links only, once each, in page order.
+pub fn policy_links(html: &str) -> (Vec<String>, Vec<String>) {
+    let mut privacy: Vec<String> = Vec::new();
+    let mut terms: Vec<String> = Vec::new();
+    for capture in ANCHOR.captures_iter(html) {
+        let href = capture[1].replace("&amp;", "&");
+        let lower = href.to_lowercase();
+        if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+            continue;
+        }
+        let words = format!("{lower} {}", text_of(&capture[2]).to_lowercase());
+        if words.contains("privacy") && !privacy.contains(&href) {
+            privacy.push(href.clone());
+        }
+        if (words.contains("terms") || words.contains("conditions") || words.contains("sms"))
+            && !terms.contains(&href)
+        {
+            terms.push(href);
+        }
+    }
+    (privacy, terms)
 }
 
 /// Letters and digits only, lower case: text compared whatever its
@@ -601,6 +643,35 @@ mod tests {
         assert!(!private_host(
             &Url::parse("https://acmestone.com/x").unwrap()
         ));
+    }
+
+    #[test]
+    fn the_policy_links_are_found_by_address_or_words() {
+        let page = r#"<html><body><form><input type="checkbox" name="sms">
+            <label>I agree to texts. <a href="/legal/sms-policy/">SMS Policy</a></label></form>
+            <footer><a href="/your-privacy-choices/">Your Privacy Choices</a>
+            <a href="/privacy-policy-terms-of-use/">Legal</a>
+            <a href="/terms-and-conditions/"><span>Terms</span> &amp; Conditions</a>
+            <a href="/air-conditioning/">Air conditioning</a>
+            <a href="mailto:privacy@acmestone.com">Privacy questions</a>
+            <a href="/your-privacy-choices/">Privacy</a></footer></body></html>"#;
+        let (html, _, _) = cleaned(page, "https://acmestone.com/quote");
+        let (privacy, terms) = policy_links(&html);
+        assert_eq!(
+            privacy,
+            [
+                "https://acmestone.com/your-privacy-choices/",
+                "https://acmestone.com/privacy-policy-terms-of-use/",
+            ]
+        );
+        assert_eq!(
+            terms,
+            [
+                "https://acmestone.com/legal/sms-policy/",
+                "https://acmestone.com/privacy-policy-terms-of-use/",
+                "https://acmestone.com/terms-and-conditions/",
+            ]
+        );
     }
 
     #[test]

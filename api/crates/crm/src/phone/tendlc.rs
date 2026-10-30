@@ -234,6 +234,37 @@ pub struct TenDlcBrandDraft {
     pub stock_exchange: Option<StockExchange>,
     /// `PUBLIC_PROFIT` only: the business contact email Telnyx requires.
     pub business_contact_email: String,
+    /// The IRS letter that gave the business its EIN, as read when it was
+    /// uploaded (`POST .../tendlc/ein-letter`); null before. TCR matches the
+    /// legal name, EIN and address to the IRS's records exactly, so they
+    /// must be as on the letter. Read-only: a save keeps the stored one.
+    pub ein_letter: Option<TenDlcEinLetter>,
+}
+
+/// The IRS letter that gave the business its EIN (CP 575, or the 147C that
+/// confirms it), as read from the uploaded file. Only what it says is kept,
+/// not the file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TenDlcEinLetter {
+    /// Which letter: `CP575` or `147C`.
+    pub kind: String,
+    /// The file's name as uploaded.
+    pub file_name: String,
+    /// When it was uploaded (RFC 3339, UTC).
+    pub uploaded_at: String,
+    /// The legal name on the letter (its first name line), as written.
+    pub legal_name: String,
+    /// The EIN on the letter (`12-3456789`).
+    pub ein: String,
+    /// The letter's street address line, as written.
+    pub street: String,
+    /// The letter's city.
+    pub city: String,
+    /// The letter's state, 2 letters.
+    pub state: String,
+    /// The letter's ZIP code.
+    pub postal_code: String,
 }
 
 /// How the business texts (the 10DLC campaign). Any field may be empty
@@ -363,6 +394,25 @@ static SHORTENER: LazyLock<Regex> = LazyLock::new(|| {
 });
 static OPT_OUT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\bstop\b").expect("valid pattern"));
+static HELP_WORD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bhelp\b").expect("valid pattern"));
+/// "Message frequency varies", "Msg freq may vary".
+static FREQUENCY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bfreq(uency)?\b").expect("valid pattern"));
+/// "Message and data rates may apply", "Msg & data rates may apply".
+static RATES: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bdata\s+rates?\b").expect("valid pattern"));
+static NOT_A_CONDITION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bnot\s+a\s+condition\s+of\s+(any\s+)?purchase").expect("valid pattern")
+});
+/// "will receive no further messages", "won't get more texts".
+static NO_MORE_TEXTS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bno\s+(more|further|longer)\b|\b(will\s+not|won't|won’t)\s+(get|receive|be\s+sent)\b")
+        .expect("valid pattern")
+});
+static EMAIL_IN_TEXT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}").expect("valid pattern")
+});
 
 fn chars(text: &str) -> usize {
     text.chars().count()
@@ -421,6 +471,60 @@ fn mentions(text: &str, names: &[String]) -> bool {
     names.iter().any(|name| text.contains(name.as_str()))
 }
 
+/// The campaign's texts include marketing.
+fn has_marketing(campaign: &TenDlcCampaignDraft) -> bool {
+    campaign.usecase == Some(UseCase::Marketing)
+        || campaign.sub_usecases.contains(&UseCase::Marketing)
+}
+
+/// A link without its scheme, `www.` and last slash, lower case: the same
+/// page however it is written.
+pub fn link_core(link: &str) -> String {
+    let lower = link.trim().to_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(lower.as_str());
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    rest.trim_end_matches('/').to_string()
+}
+
+/// `text` gives the link, however it writes it (see [`link_core`]).
+pub fn gives_link(text: &str, link: &str) -> bool {
+    let core = link_core(link);
+    !core.is_empty() && text.to_lowercase().contains(&core)
+}
+
+/// Text compared the way the IRS's records are: case and spacing aside,
+/// every word and its punctuation as written.
+fn same_text(ours: &str, theirs: &str) -> bool {
+    let words = |text: &str| {
+        text.split_whitespace()
+            .map(str::to_uppercase)
+            .collect::<Vec<_>>()
+    };
+    words(ours) == words(theirs)
+}
+
+/// The business has an EIN from the IRS (a US company, public company or
+/// non-profit): TCR matches the brand to the IRS's letter.
+pub fn needs_ein_letter(brand: &TenDlcBrandDraft) -> bool {
+    brand.country == "US"
+        && matches!(
+            brand.entity_type,
+            Some(EntityType::PrivateProfit | EntityType::PublicProfit | EntityType::NonProfit)
+        )
+}
+
+/// The brand without what is never sent to Telnyx (the IRS letter): to tell
+/// whether the brand Telnyx has changed.
+pub fn brand_as_sent(brand: &TenDlcBrandDraft) -> TenDlcBrandDraft {
+    TenDlcBrandDraft {
+        ein_letter: None,
+        ..brand.clone()
+    }
+}
+
 /// The form as saved: text trimmed, the phone as E.164 when it is a US or
 /// Canada number, codes upper case, keyword lists `A,B`, empty samples
 /// dropped, sub use cases only for the use cases that have them.
@@ -460,6 +564,7 @@ pub fn normalized(draft: &TenDlcDraft) -> TenDlcDraft {
             stock_symbol: brand.stock_symbol.trim().to_uppercase(),
             stock_exchange: brand.stock_exchange,
             business_contact_email: trim(&brand.business_contact_email),
+            ein_letter: brand.ein_letter.clone(),
         },
         campaign: TenDlcCampaignDraft {
             usecase,
@@ -693,6 +798,66 @@ fn brand_problems(brand: &TenDlcBrandDraft, problems: &mut Vec<TenDlcProblem>) {
             ));
         }
     }
+    letter_problems(brand, problems);
+}
+
+/// What differs from the IRS letter, once one is uploaded: TCR leaves a
+/// brand unverified for good when its legal name, EIN or address is not
+/// written as the IRS has it ("Street" for "St" is enough).
+fn letter_problems(brand: &TenDlcBrandDraft, problems: &mut Vec<TenDlcProblem>) {
+    let Some(letter) = &brand.ein_letter else {
+        return;
+    };
+    if brand.country != "US" {
+        return;
+    }
+    if tax_id(&brand.ein, "US") != tax_id(&letter.ein, "US") {
+        problems.push(problem(
+            "brand.ein",
+            format!(
+                "Your IRS letter gives the EIN {}: enter it exactly.",
+                letter.ein
+            ),
+        ));
+    }
+    for (field, name, ours, theirs) in [
+        (
+            "brand.companyName",
+            "legal name",
+            &brand.company_name,
+            &letter.legal_name,
+        ),
+        (
+            "brand.street",
+            "street address",
+            &brand.street,
+            &letter.street,
+        ),
+        ("brand.city", "city", &brand.city, &letter.city),
+        ("brand.state", "state", &brand.state, &letter.state),
+    ] {
+        if !same_text(ours, theirs) {
+            problems.push(problem(
+                field,
+                format!("Enter the {name} exactly as on your IRS letter: \"{theirs}\"."),
+            ));
+        }
+    }
+    let zip = |code: &str| {
+        code.chars()
+            .filter(char::is_ascii_digit)
+            .take(5)
+            .collect::<String>()
+    };
+    if zip(&brand.postal_code) != zip(&letter.postal_code) {
+        problems.push(problem(
+            "brand.postalCode",
+            format!(
+                "Enter the ZIP code as on your IRS letter: \"{}\".",
+                letter.postal_code
+            ),
+        ));
+    }
 }
 
 fn keyword_problems(
@@ -719,6 +884,58 @@ fn keyword_problems(
         problems.push(problem(
             field,
             format!("The {name} must include {required}."),
+        ));
+    }
+}
+
+/// What Telnyx's code 611 requires of the answers to opting in, HELP and
+/// STOP (the business name is checked with their length).
+fn answer_problems(campaign: &TenDlcCampaignDraft, problems: &mut Vec<TenDlcProblem>) {
+    let optin = &campaign.optin_message;
+    if chars(optin) >= MESSAGE_CHARS.0 {
+        let mut missing: Vec<&str> = Vec::new();
+        if !HELP_WORD.is_match(optin) {
+            missing.push("Reply HELP for help");
+        }
+        if !FREQUENCY.is_match(optin) {
+            missing.push("Msg frequency varies");
+        }
+        if !RATES.is_match(optin) {
+            missing.push("Msg & data rates may apply");
+        }
+        if !OPT_OUT.is_match(optin) {
+            missing.push("Reply STOP to opt out");
+        }
+        if has_marketing(campaign) && !NOT_A_CONDITION.is_match(optin) {
+            missing.push("Consent is not a condition of purchase");
+        }
+        if !missing.is_empty() {
+            problems.push(problem(
+                "campaign.optinMessage",
+                format!(
+                    "Carriers require the opt-in message to say: {}.",
+                    missing.join("; ")
+                ),
+            ));
+        }
+    }
+    let help = &campaign.help_message;
+    if chars(help) >= MESSAGE_CHARS.0
+        && mask_numbers(help) == *help
+        && !EMAIL_IN_TEXT.is_match(help)
+        && !LINK.is_match(help)
+    {
+        problems.push(problem(
+            "campaign.helpMessage",
+            "The help message must say how to reach you: your phone number, email or website.",
+        ));
+    }
+    let optout = &campaign.optout_message;
+    if chars(optout) >= MESSAGE_CHARS.0 && !NO_MORE_TEXTS.is_match(optout) {
+        problems.push(problem(
+            "campaign.optoutMessage",
+            "The opt-out message must confirm they get no more texts, like \"You will receive no \
+             further messages.\"",
         ));
     }
 }
@@ -779,6 +996,15 @@ fn campaign_problems(
             "campaign.samples",
             format!("Write at most {} sample texts.", SAMPLES.1),
         ));
+    } else if samples.len() < campaign.sub_usecases.len() {
+        // Telnyx: a mixed campaign shows a sample of each kind of texts.
+        problems.push(problem(
+            "campaign.samples",
+            format!(
+                "Write a sample text for each kind of texts you chose ({} kinds).",
+                campaign.sub_usecases.len()
+            ),
+        ));
     }
     let mut has_link = false;
     let mut has_phone = false;
@@ -836,6 +1062,20 @@ fn campaign_problems(
             "A sample text has a phone number: say the texts carry phone numbers.",
         ));
     }
+    // Telnyx's code 601: an answer of yes needs a sample that shows it.
+    if campaign.embedded_link && !has_link && !samples.is_empty() {
+        problems.push(problem(
+            "campaign.embeddedLink",
+            "You say the texts carry links: a sample text must have one, or say they don't.",
+        ));
+    }
+    if campaign.embedded_phone && !has_phone && !samples.is_empty() {
+        problems.push(problem(
+            "campaign.embeddedPhone",
+            "You say the texts carry phone numbers: a sample text must have one, or say they \
+             don't.",
+        ));
+    }
     for (field, name, text) in [
         (
             "campaign.helpMessage",
@@ -861,6 +1101,31 @@ fn campaign_problems(
                 field,
                 format!("The {name} must name the business."),
             ));
+        }
+    }
+    answer_problems(campaign, problems);
+    // Telnyx's checklist: the description says who sends the texts, and
+    // the message flow gives the opt-in page and the privacy policy.
+    if chars(&campaign.description) >= DESCRIPTION_CHARS.0
+        && !names.is_empty()
+        && !mentions(&campaign.description, names)
+    {
+        problems.push(problem(
+            "campaign.description",
+            "The description must say who sends the texts: name the business.",
+        ));
+    }
+    if chars(&campaign.message_flow) >= MESSAGE_FLOW_CHARS.0 {
+        for (link, name) in [
+            (&campaign.optin_form_link, "quote form"),
+            (&campaign.privacy_policy_link, "privacy policy"),
+        ] {
+            if web_url(link) && !gives_link(&campaign.message_flow, link) {
+                problems.push(problem(
+                    "campaign.messageFlow",
+                    format!("The message flow must give the {name}'s address: {link}"),
+                ));
+            }
         }
     }
     keyword_problems(
@@ -934,11 +1199,28 @@ fn campaign_problems(
 /// What blocks marking the (normalized) form ready or sending it: every
 /// field Telnyx and the carriers need, in the formats they take, and the
 /// carriers' content rules (each sample names the business and says how to
-/// opt out; links and phone numbers declared; no link shorteners). Empty
-/// when it is complete.
+/// opt out; links and phone numbers declared both ways; no link shorteners;
+/// a sample per kind of texts; the answers to opting in, HELP and STOP as
+/// Telnyx's code 611 has them; the business named in the description; the
+/// opt-in page and privacy policy in the message flow), and the legal
+/// details as on the IRS letter once one is uploaded. Empty when it is
+/// complete.
 pub fn problems(draft: &TenDlcDraft) -> Vec<TenDlcProblem> {
+    problems_with_letter(draft, false)
+}
+
+/// [`problems`], and the IRS letter itself when `letter_needed` (the server
+/// reads letters: an AI is set up) and the business has an EIN from the IRS.
+pub fn problems_with_letter(draft: &TenDlcDraft, letter_needed: bool) -> Vec<TenDlcProblem> {
     let mut problems = Vec::new();
     brand_problems(&draft.brand, &mut problems);
+    if letter_needed && needs_ein_letter(&draft.brand) && draft.brand.ein_letter.is_none() {
+        problems.push(problem(
+            "brand.einLetter",
+            "Upload your IRS EIN letter (CP 575, or the 147C that replaces it): carriers check \
+             the legal name, EIN and address against it.",
+        ));
+    }
     campaign_problems(
         &draft.campaign,
         &business_names(&draft.brand),
@@ -986,8 +1268,14 @@ pub fn suggestion(
     let mut contact = contact_name.unwrap_or_default().split_whitespace();
     let first_name = contact.next().unwrap_or_default().to_string();
     let last_name = contact.collect::<Vec<_>>().join(" ");
+    let website = domain
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty() && !domain.contains('/'))
+        .map(|domain| format!("https://{domain}"));
+    // Telnyx: the answer to HELP says how to reach the business.
     let call = main_line
         .map(|line| format!(" or call {}", display_number(line)))
+        .or_else(|| website.as_ref().map(|site| format!(" or visit {site}")))
         .unwrap_or_default();
     TenDlcDraft {
         brand: TenDlcBrandDraft {
@@ -999,11 +1287,7 @@ pub fn suggestion(
             last_name: last_name.chars().take(NAME_CHARS).collect(),
             phone: main_line.unwrap_or_default().to_string(),
             email: email.trim().chars().take(NAME_CHARS).collect(),
-            website: domain
-                .map(str::trim)
-                .filter(|domain| !domain.is_empty() && !domain.contains('/'))
-                .map(|domain| format!("https://{domain}"))
-                .unwrap_or_default(),
+            website: website.unwrap_or_default(),
             vertical: Some(Vertical::Construction),
             ..TenDlcBrandDraft::default()
         },
@@ -1021,12 +1305,14 @@ pub fn suggestion(
                  to receive them."
             ),
             message_flow: format!(
-                "Customers give {name} their mobile number when they request a quote on our \
-                 website, call us or visit our showroom, and agree to receive texts. They are \
-                 told: \"By giving us your number you agree to receive texts from {name} about \
-                 your project, appointments and offers. Msg frequency varies. Msg & data rates \
-                 may apply. Reply HELP for help, STOP to opt out.\" We only text customers who \
-                 agreed and stop as soon as they reply STOP."
+                "Customers opt in on the quote form of {name}'s website: they enter their mobile \
+                 number and check a box that is not checked in advance and not required to send \
+                 the form. Next to it they read: \"By checking this box, I agree to receive texts \
+                 from {name} about my quote, appointments, project updates and offers. Message \
+                 frequency varies. Message and data rates may apply. Reply STOP to opt out. \
+                 Reply HELP for help. Consent is not a condition of purchase. We will not share \
+                 mobile information with third parties for promotional or marketing purposes.\" \
+                 Links to our privacy policy and terms are next to the box."
             ),
             samples: vec![
                 format!(
@@ -1049,8 +1335,8 @@ pub fn suggestion(
             help_keywords: "HELP,INFO".into(),
             optin_message: format!(
                 "{name}: you will get texts about your project, appointments and offers. Msg \
-                 frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to opt \
-                 out."
+                 frequency varies. Msg & data rates may apply. Consent is not a condition of \
+                 purchase. Reply HELP for help, STOP to opt out."
             ),
             optin_keywords: "START,UNSTOP".into(),
             optout_message: format!(
@@ -1488,8 +1774,34 @@ mod tests {
         draft.campaign.optin_form_link = "https://acmestone.com/quote".into();
         draft.campaign.privacy_policy_link = "https://acmestone.com/privacy".into();
         draft.campaign.terms_and_conditions_link = "https://acmestone.com/terms".into();
+        draft.campaign.message_flow = format!(
+            "{} The quote form: https://acmestone.com/quote. Privacy policy: \
+             https://acmestone.com/privacy/.",
+            draft.campaign.message_flow
+        );
         draft.campaign.terms_accepted = true;
         normalized(&draft)
+    }
+
+    fn letter() -> TenDlcEinLetter {
+        TenDlcEinLetter {
+            kind: "CP575".into(),
+            file_name: "cp575.pdf".into(),
+            uploaded_at: "2026-10-29T12:00:00Z".into(),
+            legal_name: "ACME STONE LLC".into(),
+            ein: "12-3456789".into(),
+            street: "100 MAIN ST".into(),
+            city: "INDIANAPOLIS".into(),
+            state: "IN".into(),
+            postal_code: "46204-1234".into(),
+        }
+    }
+
+    fn messages(draft: &TenDlcDraft) -> Vec<(String, String)> {
+        problems(draft)
+            .into_iter()
+            .map(|problem| (problem.field, problem.message))
+            .collect()
     }
 
     fn fields(draft: &TenDlcDraft) -> Vec<String> {
@@ -1621,6 +1933,142 @@ mod tests {
                 "campaign.optoutKeywords"
             ]
         );
+    }
+
+    #[test]
+    fn the_answers_say_what_telnyx_requires() {
+        let mut draft = complete();
+        draft.campaign.optin_message =
+            "Acme Stone: thanks for signing up! Reply STOP to opt out.".into();
+        draft.campaign.help_message = "Acme Stone: reply to this text for help.".into();
+        draft.campaign.optout_message = "Acme Stone: you are unsubscribed.".into();
+        assert_eq!(
+            messages(&normalized(&draft)),
+            [
+                (
+                    "campaign.optinMessage".to_string(),
+                    "Carriers require the opt-in message to say: Reply HELP for help; Msg \
+                     frequency varies; Msg & data rates may apply; Consent is not a condition of \
+                     purchase."
+                        .to_string()
+                ),
+                (
+                    "campaign.helpMessage".to_string(),
+                    "The help message must say how to reach you: your phone number, email or \
+                     website."
+                        .to_string()
+                ),
+                (
+                    "campaign.optoutMessage".to_string(),
+                    "The opt-out message must confirm they get no more texts, like \"You will \
+                     receive no further messages.\""
+                        .to_string()
+                ),
+            ]
+        );
+        // In other words, and without marketing no purchase condition.
+        draft.campaign.sub_usecases = vec![UseCase::CustomerCare, UseCase::AccountNotification];
+        draft.campaign.optin_message =
+            "Acme Stone: you're in! Msg freq may vary. Std msg&data rates apply. Text HELP for \
+             help, STOP to end."
+                .into();
+        draft.campaign.help_message = "Acme Stone: write to help@acmestone.com.".into();
+        draft.campaign.optout_message =
+            "Acme Stone: you won't receive any more texts from us.".into();
+        assert_eq!(
+            messages(&normalized(&draft)),
+            Vec::<(String, String)>::new()
+        );
+    }
+
+    #[test]
+    fn samples_flow_and_description_match_the_campaign() {
+        let mut draft = complete();
+        draft.campaign.samples.truncate(2);
+        draft.campaign.embedded_link = true;
+        draft.campaign.embedded_phone = true;
+        draft.campaign.description =
+            "We text customers about quotes, appointments and occasional offers.".into();
+        draft.campaign.message_flow =
+            "Customers check a box on our quote form at https://acmestone.com/quote to agree."
+                .into();
+        let found: Vec<String> = messages(&normalized(&draft))
+            .into_iter()
+            .map(|(field, message)| format!("{field}: {message}"))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                "campaign.samples: Write a sample text for each kind of texts you chose (3 kinds).",
+                "campaign.embeddedLink: You say the texts carry links: a sample text must have \
+                 one, or say they don't.",
+                "campaign.embeddedPhone: You say the texts carry phone numbers: a sample text \
+                 must have one, or say they don't.",
+                "campaign.description: The description must say who sends the texts: name the \
+                 business.",
+                "campaign.messageFlow: The message flow must give the privacy policy's address: \
+                 https://acmestone.com/privacy",
+            ]
+        );
+        assert!(gives_link(
+            "see WWW.AcmeStone.com/Quote/ now",
+            "https://acmestone.com/quote"
+        ));
+        assert!(!gives_link(
+            "see acmestone.com",
+            "https://acmestone.com/quote"
+        ));
+    }
+
+    #[test]
+    fn the_legal_details_must_be_as_on_the_irs_letter() {
+        let mut draft = complete();
+        // Needed once the server reads letters, for businesses with an EIN.
+        assert_eq!(
+            problems_with_letter(&draft, true)
+                .iter()
+                .map(|problem| problem.field.as_str())
+                .collect::<Vec<_>>(),
+            ["brand.einLetter"]
+        );
+        assert!(problems_with_letter(&draft, false).is_empty());
+        draft.brand.entity_type = Some(EntityType::Government);
+        assert!(problems_with_letter(&draft, true).is_empty());
+        draft.brand.entity_type = Some(EntityType::PrivateProfit);
+        // Case and spacing aside, as the IRS writes them.
+        draft.brand.company_name = "acme  stone llc".into();
+        draft.brand.ein_letter = Some(letter());
+        assert!(problems_with_letter(&normalized(&draft), true).is_empty());
+        draft.brand.company_name = "Acme Stone, LLC".into();
+        draft.brand.ein = "98-7654321".into();
+        draft.brand.street = "100 Main Street".into();
+        draft.brand.postal_code = "46205".into();
+        assert_eq!(
+            messages(&normalized(&draft)),
+            [
+                (
+                    "brand.ein".to_string(),
+                    "Your IRS letter gives the EIN 12-3456789: enter it exactly.".to_string()
+                ),
+                (
+                    "brand.companyName".to_string(),
+                    "Enter the legal name exactly as on your IRS letter: \"ACME STONE LLC\"."
+                        .to_string()
+                ),
+                (
+                    "brand.street".to_string(),
+                    "Enter the street address exactly as on your IRS letter: \"100 MAIN ST\"."
+                        .to_string()
+                ),
+                (
+                    "brand.postalCode".to_string(),
+                    "Enter the ZIP code as on your IRS letter: \"46204-1234\".".to_string()
+                ),
+            ]
+        );
+        // Never sent to Telnyx: not a change of the brand.
+        assert_eq!(brand_as_sent(&draft.brand).ein_letter, None);
+        assert!(brand_body(&draft.brand, "h").get("einLetter").is_none());
     }
 
     #[test]
