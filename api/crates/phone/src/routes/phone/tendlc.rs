@@ -7,12 +7,14 @@
 //!
 //! - `GET  /v1/phone/admin/tendlc`         → the form (a suggested first draft before any save), status, problems, feedback
 //! - `PUT  /v1/phone/admin/tendlc`         → save the form as a draft
+//! - `POST /v1/phone/admin/tendlc/ein-letter` → upload the IRS EIN letter (read, then kept as text)
 //! - `POST /v1/phone/admin/tendlc/ready`   → mark it ready (the superusers are told)
 //!
 //! Only superusers send it to Telnyx (fees) and follow it:
 //!
 //! - `GET  /v1/superuser/tendlc`                         → every company's registration, by status
 //! - `GET|PUT /v1/superuser/companies/{id}/tendlc`       → review it, edit it
+//! - `POST /v1/superuser/companies/{id}/tendlc/ein-letter` → upload its IRS EIN letter
 //! - `GET  /v1/superuser/companies/{id}/tendlc/cost`     → what Telnyx charges for its campaign
 //! - `POST /v1/superuser/companies/{id}/tendlc/send`     → register the brand, then the campaign
 //! - `POST /v1/superuser/companies/{id}/tendlc/resend`   → again after a rejection (changes, appeal)
@@ -37,11 +39,12 @@ use crate::phone::tendlc::{
 };
 use crate::phone::tendlc_chat::{self as chat, Asker, ChatRole, ChatTurn};
 use crate::phone::tendlc_check::{self as ai_check, TenDlcAiCheck};
+use crate::phone::tendlc_letter::{self as letter, LetterError};
 use crate::phone::tendlc_registry::{self as registry, APPEAL_CHARS, RegistryError};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::HeaderValue;
 use axum::response::sse::{self, Sse};
 use axum::response::{IntoResponse, Response};
@@ -67,6 +70,13 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(assign_company_tendlc_numbers))
         .routes(routes!(ask_tendlc_helper))
         .routes(routes!(ask_company_tendlc_helper))
+        .merge(
+            // A letter's file is more than axum's default 2 MB.
+            OpenApiRouter::new()
+                .routes(routes!(upload_tendlc_ein_letter))
+                .routes(routes!(upload_company_tendlc_ein_letter))
+                .layer(DefaultBodyLimit::max(letter::MAX_LETTER_BODY_BYTES)),
+        )
 }
 
 /// What the company's Managers may do with the registration now.
@@ -145,9 +155,15 @@ pub struct TenDlcRegistration {
     pub actions: TenDlcActions,
 }
 
-fn registration_view(row: Option<&Row>, suggestion: TenDlcDraft) -> TenDlcRegistration {
+/// The registration as the API shows it; `letter_needed` when the server
+/// reads IRS letters (an AI is set up), so the problems ask for one.
+fn registration_view(
+    row: Option<&Row>,
+    suggestion: TenDlcDraft,
+    letter_needed: bool,
+) -> TenDlcRegistration {
     let Some(row) = row else {
-        let problems = form::problems(&suggestion);
+        let problems = form::problems_with_letter(&suggestion, letter_needed);
         return TenDlcRegistration {
             saved: false,
             status: TenDlcStatus::Draft,
@@ -175,7 +191,7 @@ fn registration_view(row: Option<&Row>, suggestion: TenDlcDraft) -> TenDlcRegist
         };
     };
     let draft = row.draft();
-    let problems = form::problems(&draft);
+    let problems = form::problems_with_letter(&draft, letter_needed);
     TenDlcRegistration {
         saved: true,
         status: row.status,
@@ -221,9 +237,10 @@ fn api_error(err: RegistryError) -> ApiError {
 
 /// Saves the form for the company (Managers and superusers): 400 for a
 /// field longer than Telnyx takes or a change Telnyx no longer takes, 409
-/// once it is with Telnyx. A ready registration that is no longer complete
-/// goes back to draft, and so does one a Manager changed while the AI
-/// checks forms (`by_manager`): it is checked again when marked ready.
+/// once it is with Telnyx. The IRS letter is kept as uploaded, whatever the
+/// form sent. A ready registration that is no longer complete goes back to
+/// draft, and so does one a Manager changed while the AI checks forms
+/// (`by_manager`): it is checked again when marked ready.
 async fn save(
     state: &AppState,
     company_id: i32,
@@ -232,11 +249,12 @@ async fn save(
     by_manager: bool,
 ) -> ApiResult<Row> {
     let pool = &state.pool;
-    let draft = form::normalized(input);
+    let mut draft = form::normalized(input);
     if let Some(message) = form::too_long(&draft) {
         return Err(ApiError::BadRequest(message));
     }
     let before = form::load(pool, company_id).await?;
+    draft.brand.ein_letter = before.as_ref().and_then(|row| row.draft().brand.ein_letter);
     if let Some(row) = &before {
         if !row.status.editable() {
             return Err(ApiError::Conflict(
@@ -258,7 +276,7 @@ async fn save(
     let row = form::load(pool, company_id)
         .await?
         .ok_or_else(|| ApiError::Internal("the registration was not saved".into()))?;
-    let problems = form::problems(&draft);
+    let problems = form::problems_with_letter(&draft, state.ai.is_enabled());
     let changed = before
         .as_ref()
         .is_some_and(|before| before.draft() != draft);
@@ -315,7 +333,11 @@ pub async fn get_tendlc_registration(
             form::suggestion_for(pool, user.company_id, &user.email, user.name.as_deref()).await?
         }
     };
-    Ok(Json(registration_view(row.as_ref(), suggestion)))
+    Ok(Json(registration_view(
+        row.as_ref(),
+        suggestion,
+        state.ai.is_enabled(),
+    )))
 }
 
 /// Save the company's texting registration (10DLC)
@@ -352,7 +374,11 @@ pub async fn save_tendlc_registration(
     JsonBody(input): JsonBody<TenDlcDraft>,
 ) -> ApiResult<Json<TenDlcRegistration>> {
     let row = save(&state, user.company_id, &input, user.id, true).await?;
-    Ok(Json(registration_view(Some(&row), TenDlcDraft::default())))
+    Ok(Json(registration_view(
+        Some(&row),
+        TenDlcDraft::default(),
+        state.ai.is_enabled(),
+    )))
 }
 
 /// Mark the texting registration (10DLC) ready
@@ -397,7 +423,7 @@ pub async fn mark_tendlc_registration_ready(
                 "The registration is with Telnyx already.".into(),
             ));
         }
-        registry::complete(&row.draft()).map_err(api_error)?;
+        registry::complete(&row.draft(), state.ai.is_enabled()).map_err(api_error)?;
         if state.ai.is_enabled() {
             // The job checks it (`tendlc_check`) and moves it on.
             if ai_check::request(pool, row.id, user.id).await? {
@@ -434,6 +460,120 @@ pub async fn mark_tendlc_registration_ready(
     Ok(Json(registration_view(
         row.as_ref(),
         TenDlcDraft::default(),
+        state.ai.is_enabled(),
+    )))
+}
+
+/// Body of `POST .../tendlc/ein-letter`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TenDlcEinLetterInput {
+    /// The letter as a `data:` URL: a PDF (`data:application/pdf;base64,...`)
+    /// or a photo (`image/png`, `image/jpeg`, `image/webp`); at most 4 MB.
+    pub file: String,
+    /// The file's name, for people (`cp575.pdf`); may be empty.
+    #[serde(default)]
+    pub file_name: String,
+}
+
+/// Reads the IRS letter and keeps what it says on the company's
+/// registration (Managers and superusers). Like a save, a ready
+/// registration a Manager changes (or that the letter leaves incomplete)
+/// goes back to a draft.
+async fn upload_letter(
+    state: &AppState,
+    company_id: i32,
+    input: &TenDlcEinLetterInput,
+    actor: i32,
+    by_manager: bool,
+) -> ApiResult<Row> {
+    let pool = &state.pool;
+    let row = form::load(pool, company_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest("Save the registration first.".into()))?;
+    if !row.status.editable() {
+        return Err(ApiError::Conflict(
+            "The registration is with Telnyx: it can't change now.".into(),
+        ));
+    }
+    if !state.ai.is_enabled() {
+        return Err(ApiError::Unavailable(
+            "Reading letters is not set up on the server.".into(),
+        ));
+    }
+    let read = letter::read(state, company_id, actor, &input.file, &input.file_name)
+        .await
+        .map_err(|err| match err {
+            LetterError::Invalid(message) => ApiError::BadRequest(message),
+            LetterError::Ai(err) => {
+                tracing::warn!(error = %err, "IRS letter not read");
+                ApiError::Upstream(
+                    "The letter could not be read now. Try again in a minute.".into(),
+                )
+            }
+        })?;
+    let kind = read.kind.clone();
+    let mut draft = row.draft();
+    draft.brand.ein_letter = Some(read);
+    form::save_draft(pool, company_id, &draft, actor).await?;
+    let problems = form::problems_with_letter(&draft, true);
+    if row.status == TenDlcStatus::Ready && (by_manager || !problems.is_empty()) {
+        move_status(pool, row.id, TenDlcStatus::Ready, TenDlcStatus::Draft, None).await?;
+    }
+    audit(
+        pool,
+        company_id,
+        Some(actor),
+        "tendlc_ein_letter",
+        row.id,
+        &json!({ "kind": kind, "problems": problems.len() }),
+    )
+    .await?;
+    Ok(form::load(pool, company_id).await?.unwrap_or(row))
+}
+
+/// Upload the company's IRS EIN letter (10DLC)
+///
+/// The IRS letter that gave the business its EIN (the CP 575, or the 147C
+/// that confirms it), as a PDF or a photo in a `data:` URL (at most 4 MB).
+/// An AI reads its legal name, EIN and address; only those are kept (on
+/// `draft.brand.einLetter`), never the file. From then on `problems` asks
+/// for the Legal name, Tax id, Street address, City, State and ZIP exactly
+/// as on the letter (case and spacing aside): TCR leaves a brand whose
+/// details differ from the IRS's unverified. US businesses with an EIN must
+/// upload one before marking the registration ready. Returns the
+/// registration. 400 when nothing is saved yet, the file is not a PDF or
+/// photo, is over 4 MB, is not an IRS EIN letter or could not be read
+/// clearly; 409 once it is with Telnyx; 502 when the AI did not answer; 503
+/// without an AI on the server. Audited. The company's Managers only.
+#[crate::openapi::path(
+    post,
+    path = "/v1/phone/admin/tendlc/ein-letter",
+    operation_id = "upload_tendlc_ein_letter",
+    tag = "phone",
+    request_body = TenDlcEinLetterInput,
+    responses(
+        (status = 200, description = "The registration with what the letter says", body = TenDlcRegistration),
+        (status = 400, description = "Nothing saved yet, or not a readable IRS EIN letter (PDF or photo, at most 4 MB)", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a Manager of the company", body = ErrorBody),
+        (status = 409, description = "It is with Telnyx: it can't change now", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+        (status = 502, description = "The AI did not answer", body = ErrorBody),
+        (status = 503, description = "No AI on the server to read letters", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn upload_tendlc_ein_letter(
+    State(state): State<AppState>,
+    CompanyManager(user): CompanyManager,
+    JsonBody(input): JsonBody<TenDlcEinLetterInput>,
+) -> ApiResult<Json<TenDlcRegistration>> {
+    let row = upload_letter(&state, user.company_id, &input, user.id, true).await?;
+    Ok(Json(registration_view(
+        Some(&row),
+        TenDlcDraft::default(),
+        state.ai.is_enabled(),
     )))
 }
 
@@ -621,7 +761,7 @@ async fn review(state: &AppState, company_id: i32) -> ApiResult<TenDlcReview> {
             form::suggestion_for(pool, company_id, &email, name.as_deref()).await?
         }
     };
-    let registration = registration_view(row.as_ref(), suggestion);
+    let registration = registration_view(row.as_ref(), suggestion, state.ai.is_enabled());
     let config = company::load(pool, company_id).await?;
     let company_name: String = match &row {
         Some(row) => row.company_name.clone(),
@@ -718,7 +858,7 @@ pub async fn list_tendlc_registrations(
                     company_id: row.company_id,
                     company_name: row.company_name.clone(),
                     status: row.status,
-                    problem_count: form::problems(&draft).len(),
+                    problem_count: form::problems_with_letter(&draft, state.ai.is_enabled()).len(),
                     display_name: draft.brand.display_name,
                     brand_status: row.brand_status.clone(),
                     campaign_status: row.campaign_status.clone(),
@@ -800,6 +940,49 @@ pub async fn save_company_tendlc(
     superuser(&user)?;
     company_exists(&state, id).await?;
     save(&state, id, &input, user.id, false).await?;
+    Ok(Json(review(&state, id).await?))
+}
+
+/// Upload a company's IRS EIN letter (10DLC)
+///
+/// As `POST /v1/phone/admin/tendlc/ein-letter` does for the company's
+/// Managers: the IRS letter that gave the business its EIN (CP 575 or
+/// 147C, a PDF or a photo in a `data:` URL, at most 4 MB) is read by an AI
+/// and its legal name, EIN and address are kept on `draft.brand.einLetter`
+/// (never the file); `problems` then asks for those details exactly as on
+/// it. Returns the review. 400 when nothing is saved yet or the file is not
+/// a readable IRS EIN letter; 404 when the company does not exist; 409 once
+/// it is with Telnyx; 502 when the AI did not answer; 503 without an AI on
+/// the server. Audited. Superusers only.
+#[crate::openapi::path(
+    post,
+    path = "/v1/superuser/companies/{id}/tendlc/ein-letter",
+    operation_id = "upload_company_tendlc_ein_letter",
+    tag = "phone",
+    params(("id" = i32, Path, description = "Company id")),
+    request_body = TenDlcEinLetterInput,
+    responses(
+        (status = 200, description = "The review with what the letter says", body = TenDlcReview),
+        (status = 400, description = "Nothing saved yet, or not a readable IRS EIN letter (PDF or photo, at most 4 MB)", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a superuser", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 409, description = "It is with Telnyx: it can't change now", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+        (status = 502, description = "The AI did not answer", body = ErrorBody),
+        (status = 503, description = "No AI on the server to read letters", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn upload_company_tendlc_ein_letter(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<TenDlcEinLetterInput>,
+) -> ApiResult<Json<TenDlcReview>> {
+    superuser(&user)?;
+    company_exists(&state, id).await?;
+    upload_letter(&state, id, &input, user.id, false).await?;
     Ok(Json(review(&state, id).await?))
 }
 
@@ -888,12 +1071,16 @@ pub async fn get_company_tendlc_cost(
 /// brand: a send whose answer never came looks the brand up on Telnyx
 /// first. The form must be complete (the company's Managers usually mark it
 /// ready first) and the company needs its Telnyx setup (Telnyx reports to
-/// its webhooks). Returns the review: `sent` while the brand registers,
-/// `campaign_pending`, or `rejected` with Telnyx's reasons. 400 when not
-/// complete, without a Telnyx setup, or when Telnyx refused the brand
-/// (nothing was made); 409 when sent already (use `.../resend`) or another
-/// send runs; 502 when Telnyx did not answer about the brand; 503 when
-/// Telnyx is not set up on the server. Audited. Superusers only.
+/// its webhooks). With an AI on the server, its check must have passed this
+/// form within the last 24 hours (pages change): an older check, or none,
+/// is asked for again and the send answers 409 until it passes (the
+/// superusers are told, in minutes). Returns the review: `sent` while the
+/// brand registers, `campaign_pending`, or `rejected` with Telnyx's reasons.
+/// 400 when not complete, without a Telnyx setup, or when Telnyx refused
+/// the brand (nothing was made); 409 when sent already (use `.../resend`),
+/// another send runs, or the AI check has not passed this form within a
+/// day; 502 when Telnyx did not answer about the brand; 503 when Telnyx is
+/// not set up on the server. Audited. Superusers only.
 #[crate::openapi::path(
     post,
     path = "/v1/superuser/companies/{id}/tendlc/send",
@@ -906,7 +1093,7 @@ pub async fn get_company_tendlc_cost(
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "No such company", body = ErrorBody),
-        (status = 409, description = "Sent already, or another send runs", body = ErrorBody),
+        (status = 409, description = "Sent already, another send runs, or the AI check has not passed this form within a day (it runs again)", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 502, description = "Telnyx did not answer", body = ErrorBody),
         (status = 503, description = "Telnyx is not set up on the server", body = ErrorBody),
@@ -944,10 +1131,13 @@ pub struct TenDlcResendInput {
 /// Telnyx takes on a registered campaign; it reviews it again), and the
 /// appeal when `appealReason` is written (for a fix outside the form); a
 /// new campaign when TCR refused the first one or Telnyx refused to create
-/// it. Returns the review. 400 when not complete, nothing changed and no
-/// appeal is written, or Telnyx refused the first change; 409 when it was
-/// never sent or Telnyx is reviewing it; 502 when Telnyx did not answer;
-/// 503 when Telnyx is not set up on the server. Audited. Superusers only.
+/// it. As for the first send, the AI check must have passed this form
+/// within a day (else it runs again first). Returns the review. 400 when
+/// not complete, nothing changed and no appeal is written, or Telnyx
+/// refused the first change; 409 when it was never sent, Telnyx is
+/// reviewing it, or the AI check has not passed this form within a day;
+/// 502 when Telnyx did not answer; 503 when Telnyx is not set up on the
+/// server. Audited. Superusers only.
 #[crate::openapi::path(
     post,
     path = "/v1/superuser/companies/{id}/tendlc/resend",
@@ -961,7 +1151,7 @@ pub struct TenDlcResendInput {
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "No such company", body = ErrorBody),
-        (status = 409, description = "Never sent, Telnyx is reviewing it, or another send runs", body = ErrorBody),
+        (status = 409, description = "Never sent, Telnyx is reviewing it, another send runs, or the AI check has not passed this form within a day (it runs again)", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 502, description = "Telnyx did not answer", body = ErrorBody),
         (status = 503, description = "Telnyx is not set up on the server", body = ErrorBody),
