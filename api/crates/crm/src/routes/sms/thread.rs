@@ -33,6 +33,9 @@ struct MessageRow {
     status: String,
     agent: Option<String>,
     conversation_at: DateTime<Utc>,
+    /// The `CloudTalk` row a `RingCentral` copy was made from.
+    #[sqlx(default)]
+    copy_of: Option<i64>,
 }
 
 /// The thread's rows (`s`) visible to the caller, before `before_id`.
@@ -148,8 +151,14 @@ async fn message_rows(
         )
     } else {
         let order = provider.order_column();
+        let copy_of = if provider == SmsProvider::Ringcentral {
+            ", CAST(IF(s.idempotency_key LIKE 'cloudtalk:%', SUBSTRING(s.idempotency_key, 11), NULL)
+                    AS SIGNED) AS copy_of"
+        } else {
+            ""
+        };
         format!(
-            "SELECT {columns}, s.created_date AS conversation_at FROM {table} s
+            "SELECT {columns}, s.created_date AS conversation_at{copy_of} FROM {table} s
               WHERE {filter}
               ORDER BY s.created_date DESC, s.{order} DESC, s.id DESC
               LIMIT ?"
@@ -465,6 +474,7 @@ async fn to_messages(
                 },
                 text: row.text,
                 agent: row.agent,
+                copy_of: row.copy_of,
                 agent_id,
                 agent_name,
                 created_at: row.conversation_at,

@@ -1,6 +1,6 @@
-//! A rep's texting line changed, from My Account or the Users page: the
-//! `RingCentral` SMS webhook covers their extension, and a rep who moved
-//! from `CloudTalk` to `RingCentral` keeps every text.
+//! A rep's texting line saved, from My Account or the Users page: the
+//! `RingCentral` SMS webhook covers their extension, and a rep on
+//! `RingCentral` has every text they had on `CloudTalk`.
 
 use crate::state::AppState;
 use common::telephony::ringcentral;
@@ -24,8 +24,9 @@ pub struct Line {
 /// After a save turned `before` into `after`. `matched`: `RingCentral` found
 /// the saved number, so the subscription is renewed with the current
 /// extensions (it never expires, so a rep added since is covered only by a
-/// renewal). A rep who left `CloudTalk`, or moved the same number, keeps
-/// their `CloudTalk` texts. Failures are logged; the save stands.
+/// renewal). A rep on `RingCentral` gets their `CloudTalk` texts copied:
+/// their agent's, and those on their `CloudTalk` or `RingCentral` number.
+/// Failures are logged; the save stands.
 pub async fn follow(state: &AppState, company_id: i32, before: &Line, after: &Line, matched: bool) {
     let Some(extension) = after.ringcentral_extension.as_deref() else {
         return;
@@ -39,21 +40,11 @@ pub async fn follow(state: &AppState, company_id: i32, before: &Line, after: &Li
     }
     let agent =
         filled(after.cloudtalk_agent.as_deref()).or(filled(before.cloudtalk_agent.as_deref()));
-    let line =
-        filled(after.cloudtalk_phone.as_deref()).or(filled(before.cloudtalk_phone.as_deref()));
-    if agent.is_none() && line.is_none() {
-        return;
-    }
-    let left_cloudtalk = filled(after.cloudtalk_agent.as_deref()).is_none()
-        && filled(after.cloudtalk_phone.as_deref()).is_none();
-    let same_number = line.is_some() && line == filled(after.ringcentral_phone.as_deref());
-    if !left_cloudtalk && !same_number {
-        return;
-    }
-    // No CloudTalk number saved: CloudTalk only has texts on the rep's
-    // RingCentral number if it was their CloudTalk line too.
-    let line = line.or(filled(after.ringcentral_phone.as_deref()));
-    if let Err(error) = copy_cloudtalk_history(pool, company_id, line, agent, extension).await {
+    let lines = [
+        filled(after.cloudtalk_phone.as_deref()).or(filled(before.cloudtalk_phone.as_deref())),
+        filled(after.ringcentral_phone.as_deref()),
+    ];
+    if let Err(error) = copy_cloudtalk_history(pool, company_id, lines, agent, extension).await {
         tracing::error!(company_id, %error, "copying CloudTalk history failed");
     }
 }
@@ -63,12 +54,13 @@ fn filled(value: Option<&str>) -> Option<&str> {
 }
 
 /// Copies the rep's `CloudTalk` texts (their agent's, and untagged ones on
-/// their line), pictures and read state to the `RingCentral` tables. Each
-/// copy carries `cloudtalk:<id>`, so repeat saves copy nothing twice.
+/// their lines), pictures and read state to the `RingCentral` tables. Each
+/// copy carries `cloudtalk:<id>`, so repeat saves copy nothing twice; the
+/// inbox of a rep on both shows each text once.
 async fn copy_cloudtalk_history(
     pool: &MySqlPool,
     company_id: i32,
-    line: Option<&str>,
+    lines: [Option<&str>; 2],
     cloudtalk_agent: Option<&str>,
     extension: &str,
 ) -> sqlx::Result<u64> {
@@ -85,7 +77,8 @@ async fn copy_cloudtalk_history(
            FROM cloudtalk_sms s
           WHERE s.company_id = ?
             AND s.is_echo = 0
-            AND (s.agent = ? OR (s.agent IS NULL AND (s.recipient10 = ? OR s.sender10 = ?)))
+            AND (s.agent = ?
+                 OR (s.agent IS NULL AND (s.recipient10 IN (?, ?) OR s.sender10 IN (?, ?))))
             AND s.id NOT IN (
               SELECT CAST(SUBSTRING(r.idempotency_key, ?) AS UNSIGNED) FROM ringcentral_sms r
                WHERE r.company_id = ? AND r.idempotency_key LIKE CONCAT(?, '%')
@@ -95,8 +88,10 @@ async fn copy_cloudtalk_history(
     .bind(extension)
     .bind(company_id)
     .bind(cloudtalk_agent)
-    .bind(line)
-    .bind(line)
+    .bind(lines[0])
+    .bind(lines[1])
+    .bind(lines[0])
+    .bind(lines[1])
     .bind(MARKER_END)
     .bind(company_id)
     .bind(COPY_MARKER)

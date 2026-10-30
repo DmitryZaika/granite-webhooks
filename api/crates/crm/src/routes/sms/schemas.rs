@@ -172,6 +172,9 @@ pub struct Message {
     pub text: String,
     /// Agent id stored on the row.
     pub agent: Option<String>,
+    /// `RingCentral` copy of this `CloudTalk` row (a rep moved over).
+    #[serde(skip)]
+    pub copy_of: Option<i64>,
     /// The rep who sent it, or whose number received it.
     pub agent_id: Option<String>,
     /// That rep's name.

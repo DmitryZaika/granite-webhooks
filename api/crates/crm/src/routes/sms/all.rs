@@ -30,7 +30,7 @@ use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::MySqlPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The providers to read and the agent id to narrow each to: every provider
 /// unfiltered without a rep, else those the rep (a user id) has an agent id on.
@@ -486,6 +486,13 @@ async fn merged_thread(
         all.extend(rows);
         unread_count += thread_unread(pool, provider, user, &digits, &access).await?;
     }
+    // A rep on both keeps one of each text moved from CloudTalk to RingCentral.
+    let originals: HashSet<i64> = all
+        .iter()
+        .filter(|message| message.provider == SmsProvider::Cloudtalk)
+        .map(|message| i64::from(message.id))
+        .collect();
+    all.retain(|message| message.copy_of.is_none_or(|id| !originals.contains(&id)));
     all.sort_by_key(|message| message.created_at);
     let keep = usize::try_from(limit).unwrap_or(0);
     if all.len() > keep {
