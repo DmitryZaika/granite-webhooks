@@ -13,11 +13,12 @@
 //!    [`CLAIM_TTL_MINUTES`] minutes, [`MAX_ATTEMPTS`] attempts in all), so
 //!    overlapping runs take different ones;
 //! 3. transcribes a call (speaker labels on; the transcript is kept on the
-//!    scan) and has the AI list what the rep promised and by when, which of
-//!    the customer's open promises it keeps (those are closed), and the
-//!    changes the customer asked for in their quote (kept as kind `quote`,
-//!    with their newest quote to open); the AI sees the open ones, so it
-//!    never lists one twice;
+//!    scan) and has the AI list what the rep promised and by when (with what
+//!    in the CRM finishes it), which of the customer's open promises it keeps
+//!    (those are closed), and the quote work it gives the rep: one general
+//!    task per customer (kind `quote`), what the customer asked for in their
+//!    quote added to its details; the AI sees the open ones, so it never
+//!    lists one twice;
 //! 4. writes the message that keeps each promise a text or email can keep,
 //!    as the AI Reply writes a custom draft (the rep's notes and voice, the
 //!    whole conversation, the customer's quotes), and saves the promises
@@ -25,12 +26,15 @@
 //! 5. reminds the rep of each promise once it is due ([`remind_due`]): a bell
 //!    notification pushed to their phones, else sent to their Telegram;
 //! 6. from 8 AM their time, once a day, sends the rep's morning list
-//!    ([`send_digests`]): due today, overdue, without a time, quote changes,
-//!    what waits for the customer's approval, and the customers whose text
-//!    waits for their reply;
+//!    ([`send_digests`]): due today, overdue, without a time, quotes to make
+//!    or update, what waits for the customer's approval, and the customers
+//!    whose text waits for their reply;
 //! 7. a day after the rep sent something for the customer's approval (kind
 //!    `approval`), closes it when the customer has replied since, else
-//!    reminds the rep once to check with them ([`check_approvals`]).
+//!    reminds the rep once to check with them ([`check_approvals`]);
+//! 8. closes the tasks the rep finished in the CRM ([`close_finished`]): a
+//!    quote of the customer's saved or emailed, a document sent to sign, an
+//!    event on the schedule, a call with them.
 
 use crate::ai::{AiError, Caller, Chat, MINI_FALLBACK_MODEL, MINI_MODEL};
 use crate::auth::session::{SessionUser, find_live_user};
@@ -69,6 +73,9 @@ const SMS_CONTEXT_MESSAGES: i64 = 8;
 /// The most of the messages an email quotes the AI reads.
 const QUOTED_MAX_CHARS: usize = 3_000;
 const MAX_PROMISES: usize = 5;
+/// What a quote task's details keep of the customer's asks: a call's, and in all.
+const MAX_ASKS: usize = 10;
+const MAX_DETAIL_LINES: usize = 30;
 const TITLE_MAX_CHARS: usize = 160;
 const SAID_MAX_CHARS: usize = 500;
 /// The text tables a scan's `source_key` may name.
@@ -82,25 +89,28 @@ pub const APPROVAL_WAIT_HOURS: i64 = 24;
 const DUE: &str = "status = 'pending' AND attempts < ?
      AND (claimed_at IS NULL OR claimed_at < UTC_TIMESTAMP() - INTERVAL ? MINUTE)";
 
-pub const PROMISES_SYSTEM_PROMPT: &str = r#"You read what a countertop sales rep said to a customer: a phone call transcript, a text the rep sent (with the texts before it), or an email the rep sent (with the messages it quotes). Answer these things.
+pub const PROMISES_SYSTEM_PROMPT: &str = r#"You read what a countertop sales rep said to a customer: a phone call transcript, a text the rep sent (with the texts before it), or an email the rep sent (with the messages it quotes). The rep keeps a short list of real tasks, not every phrase. Answer these things.
 1. "promises": every promise the rep made to the customer: something the rep said THEY would do later ("I'll text you our inventory link", "I'll send you the price tonight", "I'll call you back Tuesday", "Let me check if that slab is in stock", "I'll come measure Friday at 10").
 Only the rep's own promises to this customer. Not what the customer will do, and not something the rep only starts to say when the customer then takes the next step (the rep: "I can check it. I'll—", the customer: "I'll take a picture of the elevator and send it to you"): the rep waits for the customer, which is not a promise. Not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages and calls under AFTER THIS are context only: a promise they already keep is not listed (an email to another address counts when it is clearly to this same customer, e.g. "Contract - Cedarbrook" after "I'll send you the contract").
-Only what THIS REP personally has to do. Not what another person or team will do ("our scheduling manager will call you", "the installers will…", "the office will send…", "we'll let you know the exact day and time once we have it" when another person or team sets it), and not the company's standard work that happens anyway as part of measuring, templating, fabrication or installation ("we will drill the faucet holes on site during installation", "we'll seal the stone", "we'll haul away the old tops"): those are how the job is done, not promises. Combine promises about the same thing into one ("I'll text Andrew" and "I'll let you know his answer" are one: "Ask Andrew and get back to her").
-2. "kept": the numbers (#) of OPEN PROMISES this call or message keeps. A promise is there to solve the customer's issue, so judge by the outcome, not the exact step: it is kept when the rep did it here (sent the link or the price, called back, answered, came by), when the rep gives the result it was for (after "I'll call the shop manager about the cutout", telling what happened to the cutout; after "I'll try to expedite the installation", giving the installation date; after "I'll remind you next time", the reminder itself), or when the issue is settled another way (the customer approved what the rep was to remind them about). Not kept while the issue is still open. An OPEN APPROVAL is kept once the customer answered it (approved, signed, chose, or turned it down). OPEN PROMISES TO CALLERS NOT ON FILE are the rep's promises to people whose number matched no customer: count one kept only when this message clearly goes to that same person (their name, what was promised, the timing).
-3. "quote_changes": changes the CUSTOMER asked for in their countertop quote, anywhere in what you read: a different sink, color or stone, edge, backsplash, sizes, adding or removing a piece or a cutout. Not questions about the price, nothing already in OPEN QUOTE CHANGES, and not a change the rep says is already made ("updated as you requested", "attached is the revised quote").
+Only what THIS REP personally has to do. Not what another person or team will do ("our scheduling manager will call you", "the installers will…", "the office will send…", "we'll let you know the exact day and time once we have it" when another person or team sets it), and not the company's standard work that happens anyway as part of measuring, templating, fabrication or installation ("we will drill the faucet holes on site during installation", "we'll seal the stone", "we'll haul away the old tops"): those are how the job is done, not promises. Combine promises about the same thing into one ("I'll text Andrew" and "I'll let you know his answer" are one: "Ask Andrew and get back to her"). Making, changing or pricing a quote is never a promise: it is the quote task (3).
+2. "kept": the numbers (#) of OPEN PROMISES this call or message keeps. A promise is there to solve the customer's issue, so judge by the outcome, not the exact step: it is kept when the rep did it here (sent the link or the price, called back, answered, came by), when the rep gives the result it was for (after "I'll call the shop manager about the cutout", telling what happened to the cutout; after "I'll try to expedite the installation", giving the installation date; after "I'll remind you next time", the reminder itself), or when the issue is settled another way (the customer approved what the rep was to remind them about). Not kept while the issue is still open. An OPEN APPROVAL is kept once the customer answered it (approved, signed, chose, or turned it down). An OPEN QUOTE TASK is kept once the rep sends the made or changed quote, or its new price. OPEN PROMISES TO CALLERS NOT ON FILE are the rep's promises to people whose number matched no customer: count one kept only when this message clearly goes to that same person (their name, what was promised, the timing).
+3. "quote": the quote work this call or message gives the rep, as ONE general task, or null: the customer asks for a quote or for changes in theirs (a different sink, color or stone, edge, backsplash, sizes, adding or removing a piece or a cutout, a cheaper option), anywhere in what you read, or the rep promises to make, change or price one ("I'll redo the quote", "I'll send you the new price tonight"). Null for a question the rep answers right there, and for quote work the rep says is already done ("updated as you requested", "attached is the revised quote"). With an OPEN QUOTE TASK, give only the asks it does not have yet (null when there are none and no new time).
 4. "approvals": what THIS call or message (the rep's part; in texts, the LAST text) sends or shows the customer for THEM to approve, sign or choose: a quote or a revised quote, a contract, a drawing or layout, slab photos to pick from, a deposit invoice. Only when it is sent here (attached, linked, "I just emailed you the quote") and waits on the customer's answer; not what the rep only promises to send later (that is a promise), not what the customer already answered in what you read, and nothing already in OPEN APPROVALS.
 5. "customer_name": the name the customer goes by in what you read ("Donna"), or null.
 In a transcript the speakers are labeled A, B...; the rep is the one from the countertop company.
-Return JSON {"promises": [...], "kept": [numbers], "quote_changes": [...], "approvals": [...], "customer_name": ...}, with empty lists when there is nothing. Each promise:
+Return JSON {"promises": [...], "kept": [numbers], "quote": {...} or null, "approvals": [...], "customer_name": ...}, with empty lists and a null quote when there is nothing. Each promise:
 - "title": what the rep has to do, a short imperative of at most 8 words ("Send the inventory link", "Call back about the sink").
 - "said": the rep's words that made the promise, as said (at most 200 characters).
 - "due": when the rep promised it, "YYYY-MM-DD HH:MM" in the same local time as WHEN and NOW, or null when they named no time. "Tonight" is 19:00, "tomorrow" with no hour is 10:00, "this week" is Friday 17:00, "right after this call" or "in a minute" is 15 minutes after WHEN.
 - "visit": true when it is an appointment at a set time: a visit, measuring or templating, a showroom meeting, an installation; else false.
+- "action": what the rep does in the CRM that finishes it, or null: "contract" when it is sending a contract or another document to sign; "schedule" when it is putting a visit, measuring, templating or installation on the schedule (an appointment at a time set here too); "call" when it is calling the customer.
 - "message": "sms" or "email" only when a text or an email TO THIS CUSTOMER, needing only words and a link, keeps the promise (a promise to contact someone else, or to answer once someone else replies, is null) (send the inventory link, send the online quote link, answer with facts the rep already has, confirm a time); "email" only when the rep said they would email. null when keeping it takes anything else: a call, a visit, measuring, ordering, checking stock, a price or a document the rep must prepare, photos.
 - "link": "inventory" when the message is about our stones, colors or inventory; "quote" when it is about sending their measurements or the online quote form; else null.
-Each quote change:
-- "change": what to change in the quote, a short imperative of at most 12 words ("Replace the sink with a 33-inch undermount", "Switch the color to Calacatta Gold").
-- "said": the customer's words that asked for it (at most 200 characters).
+The quote task:
+- "title": the task, short and general, at most 8 words, without the details ("Make the quote for the Newport Bay house", "Update the kitchen quote").
+- "asks": each thing the quote must have or change, at most 12 words each, with the sizes, colors and models said ("Add four pieces: 44x25, 70x25, 14.5x25, 45x35", "Switch the color to Calacatta Gold", "Replace the sink with a 33-inch undermount"); [] when the rep only promised to make or change it.
+- "said": the words that asked for it or promised it, as said (at most 200 characters).
+- "due": when the rep promised it, as for a promise, or null.
 Each approval:
 - "title": what waits for the customer, at most 8 words ("Approve the revised kitchen quote", "Sign the contract").
 - "said": the rep's words that sent it (at most 200 characters)."#;
@@ -148,6 +158,36 @@ impl Channel {
     }
 }
 
+/// What the rep does in the CRM that finishes a promise ([`close_finished`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrmAction {
+    /// A contract or another document sent to sign.
+    Contract,
+    /// An event for the customer on the schedule.
+    Schedule,
+    /// A call with the customer.
+    Call,
+}
+
+impl CrmAction {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "contract" => Some(Self::Contract),
+            "schedule" => Some(Self::Schedule),
+            "call" => Some(Self::Call),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Contract => "contract",
+            Self::Schedule => "schedule",
+            Self::Call => "call",
+        }
+    }
+}
+
 /// The page a promised message links to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Link {
@@ -169,12 +209,26 @@ pub struct Found {
     /// Set when a text or an email keeps it.
     pub channel: Option<Channel>,
     pub link: Option<Link>,
+    /// Set when doing something in the CRM finishes it.
+    pub action: Option<CrmAction>,
 }
 
-/// A change the customer asked for in their quote.
+/// The quote work a call or message gives the rep: one general task, with
+/// what the customer asked for in their quote.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QuoteChange {
-    pub change: String,
+pub struct QuoteTask {
+    pub title: String,
+    /// Each thing the quote must have or change.
+    pub asks: Vec<String>,
+    pub said: String,
+    /// In the company's time zone.
+    pub due: Option<NaiveDateTime>,
+}
+
+/// Something the rep sent for the customer's approval.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Approval {
+    pub title: String,
     pub said: String,
 }
 
@@ -184,20 +238,22 @@ pub struct Reading {
     pub promises: Vec<Found>,
     /// Open promises (their ids) this call or message keeps.
     pub kept: Vec<u64>,
-    pub quote_changes: Vec<QuoteChange>,
-    /// What was sent for the customer's approval (`change` is its title).
-    pub approvals: Vec<QuoteChange>,
+    pub quote: Option<QuoteTask>,
+    pub approvals: Vec<Approval>,
     /// The name the customer goes by in it.
     pub customer_name: Option<String>,
 }
 
-/// An open promise or quote change of the customer, as the AI is shown it.
+/// An open promise, quote task or approval of the customer, as the AI is
+/// shown it.
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct OpenItem {
     pub id: u64,
-    /// `promise` or `quote`.
+    /// `promise`, `quote` or `approval`.
     pub kind: String,
     pub title: String,
+    /// A quote task's asks, one per line.
+    pub details: Option<String>,
     /// It is this customer's; else a promise to a caller not on file.
     pub same_customer: bool,
     /// Whom it is for: a name, phone or email.
@@ -245,35 +301,29 @@ pub fn parse_reading(raw: &str, open: &[OpenItem]) -> Reading {
             id.as_u64()
                 .or_else(|| id.as_str()?.trim().trim_start_matches('#').parse().ok())
         })
-        .filter(|id| {
-            open.iter()
-                .any(|item| item.id == *id && item.kind != "quote")
-        })
+        .filter(|id| open.iter().any(|item| item.id == *id))
         .collect();
     kept.sort_unstable();
     kept.dedup();
-    // Quote changes and approvals: their text under `name`, and "said".
-    let changes = |key: &str, name: &str| -> Vec<QuoteChange> {
-        list(key)
-            .iter()
-            .filter_map(|item| {
-                let change = clip(item.get(name)?.as_str()?, TITLE_MAX_CHARS);
-                (!change.is_empty()).then(|| QuoteChange {
-                    change,
-                    said: clip(
-                        item.get("said").and_then(Value::as_str).unwrap_or(""),
-                        SAID_MAX_CHARS,
-                    ),
-                })
+    let approvals = list("approvals")
+        .iter()
+        .filter_map(|item| {
+            let title = clip(item.get("title")?.as_str()?, TITLE_MAX_CHARS);
+            (!title.is_empty()).then(|| Approval {
+                title,
+                said: clip(
+                    item.get("said").and_then(Value::as_str).unwrap_or(""),
+                    SAID_MAX_CHARS,
+                ),
             })
-            .take(MAX_PROMISES)
-            .collect()
-    };
+        })
+        .take(MAX_PROMISES)
+        .collect();
     Reading {
         promises: parse_promises(&list("promises")),
         kept,
-        quote_changes: changes("quote_changes", "change"),
-        approvals: changes("approvals", "title"),
+        quote: value.get("quote").and_then(parse_quote),
+        approvals,
         customer_name: value
             .get("customer_name")
             .and_then(Value::as_str)
@@ -282,8 +332,83 @@ pub fn parse_reading(raw: &str, open: &[OpenItem]) -> Reading {
     }
 }
 
+/// The quote task of the model's reply; none without a title or an ask.
+fn parse_quote(item: &Value) -> Option<QuoteTask> {
+    let text = |key: &str| item.get(key).and_then(Value::as_str).map(str::trim);
+    let mut asks: Vec<String> = Vec::new();
+    for ask in item
+        .get("asks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        // One ask per line of the details.
+        let ask = clip(
+            &ask.as_str().unwrap_or("").replace(['\r', '\n'], " "),
+            TITLE_MAX_CHARS,
+        );
+        if !ask.is_empty()
+            && !asks
+                .iter()
+                .any(|seen| seen.to_lowercase() == ask.to_lowercase())
+        {
+            asks.push(ask);
+        }
+    }
+    asks.truncate(MAX_ASKS);
+    let title = clip(text("title").unwrap_or(""), TITLE_MAX_CHARS);
+    if title.is_empty() && asks.is_empty() {
+        return None;
+    }
+    Some(QuoteTask {
+        title: if title.is_empty() {
+            "Update the quote".to_owned()
+        } else {
+            title
+        },
+        asks,
+        said: clip(text("said").unwrap_or(""), SAID_MAX_CHARS),
+        due: text("due").and_then(|due| NaiveDateTime::parse_from_str(due, "%Y-%m-%d %H:%M").ok()),
+    })
+}
+
+/// What an open quote task has: its details, one ask per line.
+fn asks_of(item: &OpenItem) -> Vec<String> {
+    item.details
+        .as_deref()
+        .unwrap_or("")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A quote task's details with `asks` added: one per line, each once
+/// (without case), the newest [`MAX_DETAIL_LINES`]; none when empty.
+pub fn merged_details(details: Option<&str>, asks: &[String]) -> Option<String> {
+    let mut lines: Vec<String> = details
+        .unwrap_or("")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+    for ask in asks {
+        if !lines
+            .iter()
+            .any(|line| line.to_lowercase() == ask.to_lowercase())
+        {
+            lines.push(ask.clone());
+        }
+    }
+    let older = lines.len().saturating_sub(MAX_DETAIL_LINES);
+    (lines.len() > older).then(|| lines[older..].join("\n"))
+}
+
 /// Drops what is already open, and what is listed twice (titles compared
-/// without case).
+/// without case); the quote task keeps only the asks the customer's open
+/// quote task does not have.
 pub fn without_repeats(reading: &mut Reading, open: &[OpenItem]) {
     let mut seen: Vec<String> = open
         .iter()
@@ -302,11 +427,19 @@ pub fn without_repeats(reading: &mut Reading, open: &[OpenItem]) {
         .promises
         .retain(|promise| first(format!("promise:{}", promise.title.to_lowercase())));
     reading
-        .quote_changes
-        .retain(|change| first(format!("quote:{}", change.change.to_lowercase())));
-    reading
         .approvals
-        .retain(|approval| first(format!("approval:{}", approval.change.to_lowercase())));
+        .retain(|approval| first(format!("approval:{}", approval.title.to_lowercase())));
+    if let Some(quote) = reading.quote.as_mut() {
+        let asked: Vec<String> = open
+            .iter()
+            .filter(|item| item.kind == "quote" && item.same_customer)
+            .flat_map(asks_of)
+            .map(|ask| ask.to_lowercase())
+            .collect();
+        quote
+            .asks
+            .retain(|ask| !asked.contains(&ask.to_lowercase()));
+    }
 }
 
 fn parse_promises(items: &[Value]) -> Vec<Found> {
@@ -334,6 +467,7 @@ fn parse_promises(items: &[Value]) -> Vec<Found> {
                     Some("quote") => Some(Link::Quote),
                     _ => None,
                 },
+                action: text("action").and_then(CrmAction::parse),
             })
         })
         .take(MAX_PROMISES)
@@ -372,7 +506,15 @@ pub fn extraction_prompt(
         let lines: Vec<String> = open
             .iter()
             .filter(|item| item.kind == kind && item.same_customer)
-            .map(|item| format!("- #{} {}", item.id, item.title))
+            .map(|item| match item.details.as_deref().map(str::trim) {
+                Some(details) if !details.is_empty() => format!(
+                    "- #{} {} (has: {})",
+                    item.id,
+                    item.title,
+                    details.lines().collect::<Vec<_>>().join("; ")
+                ),
+                _ => format!("- #{} {}", item.id, item.title),
+            })
             .collect();
         if lines.is_empty() {
             "(none)".to_string()
@@ -394,7 +536,7 @@ pub fn extraction_prompt(
         )
     };
     format!(
-        "SALES REP: {rep_name}\nWHEN: {when}\nNOW: {now}\nOPEN PROMISES (already on the rep's list):\n{}\nOPEN QUOTE CHANGES (already on the list):\n{}\nOPEN APPROVALS (sent, waiting for the customer's answer):\n{}\n{not_on_file}\n{what}:\n{text}",
+        "SALES REP: {rep_name}\nWHEN: {when}\nNOW: {now}\nOPEN PROMISES (already on the rep's list):\n{}\nOPEN QUOTE TASK (already on the list, with the asks it has):\n{}\nOPEN APPROVALS (sent, waiting for the customer's answer):\n{}\n{not_on_file}\n{what}:\n{text}",
         listed("promise"),
         listed("quote"),
         listed("approval"),
@@ -457,7 +599,7 @@ pub struct JobRun {
     pub queued: u64,
     /// Read (with or without promises).
     pub read: usize,
-    /// Promises and quote changes saved.
+    /// Promises, quote tasks and approvals saved.
     pub promises: usize,
     /// Due promises, and approvals with no reply, the rep was reminded of.
     pub reminded: usize,
@@ -522,8 +664,8 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
             tracing::error!(error = %err, "approval checks failed; continuing");
             0
         });
-    if let Err(err) = check_quote_changes(state).await {
-        tracing::error!(error = %err, "quote change checks failed; continuing");
+    if let Err(err) = close_finished(pool).await {
+        tracing::error!(error = %err, "finished tasks not closed; continuing");
     }
     let digests = send_digests(state).await.unwrap_or_else(|err| {
         tracing::error!(error = %err, "morning lists failed; continuing");
@@ -601,122 +743,88 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
     failed.map_or(Ok(run), Err)
 }
 
-pub const QUOTE_CHECK_SYSTEM_PROMPT: &str = r#"You check whether a countertop quote already includes a change the customer asked for. You get the change, the customer's words, and the quote's LATEST version with the version BEFORE it (drawings as JSON: counters with their runs, cutouts and sinks, splashes and edges, and line items with names and prices).
-Return JSON {"done": true} when the LATEST version clearly has the change (e.g. the backsplash on those sides is there, the sink is that model, the color is that one), else {"done": false}. When unsure, false."#;
-
-/// Drawing keys that only place things on the page.
-const LAYOUT_KEYS: [&str; 10] = [
-    "x",
-    "y",
-    "id",
-    "along",
-    "across",
-    "anchorCorner",
-    "areaId",
-    "layouts",
-    "pageBreaks",
-    "turn",
-];
-
-/// A quote drawing without what only places things on the page, cut to
-/// `max` characters.
-pub fn compact_drawing(json: &str, max: usize) -> String {
-    fn strip(value: &mut Value) {
-        match value {
-            Value::Object(map) => {
-                map.retain(|key, _| !LAYOUT_KEYS.contains(&key.as_str()));
-                map.values_mut().for_each(strip);
-            }
-            Value::Array(items) => items.iter_mut().for_each(strip),
-            _ => {}
-        }
-    }
-    let Ok(mut value) = serde_json::from_str::<Value>(json) else {
-        return clip(json, max);
-    };
-    strip(&mut value);
-    clip(&value.to_string(), max)
+/// SQL condition: `column` (a customer id) is task `p`'s customer: its
+/// `customer_id`, else (a caller or address on no customer then) a customer
+/// with its phone or email now.
+fn of_task_customer(column: &str) -> String {
+    format!(
+        "({column} = p.customer_id
+          OR (p.customer_id IS NULL
+              AND ({column} IN (SELECT i.customer_id FROM customer_phone_index i
+                                 WHERE i.company_id = p.company_id AND i.last10 = p.customer_digits)
+                   OR {column} IN (SELECT ce.customer_id FROM customers_emails ce
+                                    WHERE LOWER(TRIM(ce.email)) = p.customer_email))))"
+    )
 }
 
-/// Open quote changes against their quote, once per new version of it: the
-/// AI compares the latest version (and the one before) with the change and
-/// closes it when the quote has it (it was made in the quote).
-pub async fn check_quote_changes(state: &AppState) -> sqlx::Result<usize> {
-    let pool = &state.pool;
-    let open: Vec<(u64, i32, i32, i32, String, String)> = sqlx::query_as(
-        "SELECT p.id, p.user_id, p.company_id, p.quote_id, p.title, p.said
-           FROM ai_promises p
+/// SQL: task `p`'s phone (10 digits), else its customer `c`'s.
+const TASK_DIGITS: &str =
+    "COALESCE(p.customer_digits, RIGHT(REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', ''), 10))";
+
+/// Step 8: the open tasks the rep finished in the CRM after they were said
+/// (for the reps AI promises is on for), closed:
+/// - a quote task once one of the customer's quotes is saved (a new
+///   version) or emailed after its last ask;
+/// - a promise to send a contract once a document is sent them to sign;
+/// - a promise to put something on the schedule once an event for the
+///   customer is made, or one is on the schedule within 12 hours of the
+///   appointment's time;
+/// - a promise to call once a call of [`MIN_CALL_SECONDS`] or more with them
+///   starts 5 minutes or more after it was said (not the call it was made on).
+///
+/// Plain reads first, then updates by id: an `UPDATE` with these subqueries
+/// would hold shared locks on the quotes, events and calls it reads.
+pub async fn close_finished(pool: &MySqlPool) -> sqlx::Result<u64> {
+    let quotes = of_task_customer("q.customer_id");
+    let signed = of_task_customer("s.customer_id");
+    let events = of_task_customer("e.customer_id");
+    let finished: Vec<u64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT p.id FROM ai_promises p
            JOIN users u ON u.id = p.user_id AND u.ai_promises = 1 AND u.is_deleted = 0
-          WHERE p.status = 'open' AND p.kind = 'quote' AND p.quote_id IS NOT NULL
-            AND EXISTS (SELECT 1 FROM quote_revisions r
-                         WHERE r.quote_id = p.quote_id
-                           AND (p.reminded_at IS NULL OR r.created_at > p.reminded_at))
-          ORDER BY p.id LIMIT 3",
-    )
+           LEFT JOIN customers c ON c.id = p.customer_id
+          WHERE p.status = 'open'
+            AND ((p.kind = 'quote'
+                  AND EXISTS (SELECT 1 FROM quotes q
+                               WHERE q.company_id = p.company_id AND q.deleted_at IS NULL AND {quotes}
+                                 AND (EXISTS (SELECT 1 FROM quote_revisions r
+                                               WHERE r.quote_id = q.id AND r.created_at > p.promised_at)
+                                      OR EXISTS (SELECT 1 FROM quote_emails m
+                                                  WHERE m.quote_id = q.id AND m.sent_at > p.promised_at))))
+              OR (p.crm_action = 'contract'
+                  AND EXISTS (SELECT 1 FROM signature_requests s
+                               WHERE s.company_id = p.company_id AND {signed}
+                                 AND s.status <> 'draft' AND s.created_at > p.promised_at))
+              OR (p.crm_action = 'schedule'
+                  AND EXISTS (SELECT 1 FROM events e
+                               WHERE {events} AND e.deleted_date IS NULL
+                                 AND COALESCE(e.unscheduled, 0) = 0
+                                 AND (e.created_date > p.promised_at
+                                      OR e.start_date BETWEEN p.due_at - INTERVAL 12 HOUR
+                                                          AND p.due_at + INTERVAL 12 HOUR)))
+              OR (p.crm_action = 'call'
+                  AND (EXISTS (SELECT 1 FROM provider_calls k
+                                WHERE k.company_id = p.company_id AND k.customer_digits = {TASK_DIGITS}
+                                  AND k.started_at >= p.promised_at + INTERVAL 5 MINUTE
+                                  AND CAST(COALESCE(k.item->>'$.Cdr.talking_time', '0') AS UNSIGNED)
+                                      >= {MIN_CALL_SECONDS})
+                       OR EXISTS (SELECT 1 FROM phone_calls k
+                                   WHERE k.company_id = p.company_id AND k.other_last10 = {TASK_DIGITS}
+                                     AND k.started_at >= p.promised_at + INTERVAL 5 MINUTE
+                                     AND k.duration_secs >= {MIN_CALL_SECONDS}))))
+          LIMIT 50"
+    )))
     .fetch_all(pool)
     .await?;
     let mut closed = 0;
-    for (id, user_id, company_id, quote_id, change, said) in open {
-        // Checked against what is there now; a newer version checks again.
-        sqlx::query("UPDATE ai_promises SET reminded_at = UTC_TIMESTAMP() WHERE id = ?")
-            .bind(id)
-            .execute(pool)
-            .await?;
-        let versions: Vec<(Option<String>,)> = sqlx::query_as(
-            "SELECT CAST(drawing_json AS CHAR) FROM quote_revisions
-              WHERE quote_id = ? ORDER BY id DESC LIMIT 2",
+    for id in finished {
+        closed += sqlx::query(
+            "UPDATE ai_promises SET status = 'done', closed_at = UTC_TIMESTAMP()
+              WHERE id = ? AND status = 'open'",
         )
-        .bind(quote_id)
-        .fetch_all(pool)
-        .await?;
-        let drawing = |at: usize| {
-            versions
-                .get(at)
-                .and_then(|(json,)| json.as_deref())
-                .map_or_else(
-                    || "(none)".to_string(),
-                    |json| compact_drawing(json, 15_000),
-                )
-        };
-        let prompt = format!(
-            "CHANGE ASKED FOR: {change}\nCUSTOMER'S WORDS: \"{said}\"\n\nLATEST VERSION:\n{}\n\nVERSION BEFORE:\n{}",
-            drawing(0),
-            drawing(1)
-        );
-        let caller = Caller {
-            feature: FEATURE,
-            user_id: Some(user_id),
-            company_id: Some(company_id),
-        };
-        let mut chat = Chat::new(MINI_MODEL)
-            .message("system", QUOTE_CHECK_SYSTEM_PROMPT)
-            .message("user", &prompt);
-        chat.json = true;
-        let done = match state.ai.chat(pool, caller, &chat).await {
-            Ok(raw) => serde_json::from_str::<Value>(raw.trim())
-                .ok()
-                .and_then(|value| value.get("done").and_then(Value::as_bool))
-                .unwrap_or(false),
-            Err(err) => {
-                tracing::warn!(promise_id = id, error = %err, "quote change not checked");
-                // Checked again next run.
-                sqlx::query("UPDATE ai_promises SET reminded_at = NULL WHERE id = ?")
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
-                continue;
-            }
-        };
-        if done {
-            sqlx::query(
-                "UPDATE ai_promises SET status = 'done', closed_at = UTC_TIMESTAMP()
-                  WHERE id = ? AND status = 'open'",
-            )
-            .bind(id)
-            .execute(pool)
-            .await?;
-            closed += 1;
-        }
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected();
     }
     Ok(closed)
 }
@@ -734,9 +842,10 @@ struct DuePromise {
     telegram: bool,
 }
 
-/// Step 5: the open promises that came due, each once: a bell notification
-/// (`ai_promise_due`) pushed to the rep's phones, else sent to their Telegram
-/// when they get activity reminders there (as deal activity reminders are).
+/// Step 5: the open promises and quote tasks that came due, each once: a
+/// bell notification (`ai_promise_due`) pushed to the rep's phones, else sent
+/// to their Telegram when they get activity reminders there (as deal
+/// activity reminders are).
 /// One more than a day past due when first seen (the job was off) is not.
 /// The notification names the customer in its text, not by `customer_id`: an
 /// open notification on a customer holds back the CRM's own reminders for
@@ -749,7 +858,7 @@ pub async fn remind_due(state: &AppState) -> sqlx::Result<usize> {
            FROM ai_promises p
            JOIN users u ON u.id = p.user_id AND u.ai_promises = 1 AND u.is_deleted = 0
            LEFT JOIN customers c ON c.id = p.customer_id
-          WHERE p.status = 'open' AND p.kind = 'promise' AND p.reminded_at IS NULL
+          WHERE p.status = 'open' AND p.kind IN ('promise', 'quote') AND p.reminded_at IS NULL
             AND p.due_at <= UTC_TIMESTAMP() AND p.due_at > UTC_TIMESTAMP() - INTERVAL 1 DAY
           ORDER BY p.due_at LIMIT 20",
     )
@@ -987,7 +1096,7 @@ async fn notify(
 /// later, so a late run still sends it, but never in the evening).
 pub const DIGEST_HOUR: u32 = 8;
 
-/// An open promise or quote change for the morning list.
+/// An open promise, quote task or approval for the morning list.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ListedPromise {
     pub kind: String,
@@ -1156,7 +1265,7 @@ pub fn morning_list(
         ("Overdue", &overdue),
         ("Due today", &due_today),
         ("No time set", &undated),
-        ("Quote changes customers asked for", &quotes),
+        ("Quotes to make or update", &quotes),
         ("Waiting for the customer's approval", &approvals),
         ("Waiting for your reply", &waiting_lines),
     ];
@@ -1167,7 +1276,7 @@ pub fn morning_list(
         (overdue.len(), "overdue"),
         (due_today.len(), "due today"),
         (undated.len(), "without a time"),
-        (quotes.len(), "quote changes"),
+        (quotes.len(), "quotes to update"),
         (approvals.len(), "waiting for approval"),
         (waiting_lines.len(), "waiting for your reply"),
     ]
@@ -1503,7 +1612,7 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
     let open: Vec<OpenItem> = sqlx::query_as(
         // The customer's, and the rep's recent promises to callers whose
         // number matched no customer (this message may be to one of them).
-        "SELECT id, CAST(kind AS CHAR) AS kind, title,
+        "SELECT id, CAST(kind AS CHAR) AS kind, title, details,
                 (customer_id = ? OR customer_digits = ? OR customer_email = ?) IS TRUE AS same_customer,
                 COALESCE(customer_label, customer_digits, customer_email, '') AS who
            FROM ai_promises
@@ -1567,8 +1676,18 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         };
         drafts.push(draft);
     }
-    let quote_id = match customer_id {
-        Some(customer_id) if !reading.quote_changes.is_empty() => {
+    // The customer's open quote task takes what was asked here (with nothing
+    // new, it stays as it is); else it is a new task.
+    let open_quote = open
+        .iter()
+        .filter(|item| item.kind == "quote" && item.same_customer)
+        .max_by_key(|item| item.id);
+    let quote = reading
+        .quote
+        .as_ref()
+        .filter(|quote| open_quote.is_none() || !quote.asks.is_empty() || quote.due.is_some());
+    let quote_id = match (customer_id, quote, open_quote) {
+        (Some(customer_id), Some(_), None) => {
             newest_quote(pool, scan.company_id, customer_id).await?
         }
         _ => None,
@@ -1577,15 +1696,16 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
     for (promise, draft) in found.iter().zip(&drafts) {
         sqlx::query(
             "INSERT INTO ai_promises
-                    (company_id, user_id, scan_id, source, promised_at, customer_id,
+                    (company_id, user_id, scan_id, source, crm_action, promised_at, customer_id,
                      customer_digits, customer_email, customer_label, title, said, due_at, is_appointment,
                      channel, draft)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(scan.company_id)
         .bind(user.id)
         .bind(scan.id)
         .bind(source.as_str())
+        .bind(promise.action.map(CrmAction::as_str))
         .bind(scan.happened_at)
         .bind(customer_id)
         .bind(scan.customer_digits.as_deref())
@@ -1600,27 +1720,60 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         .execute(&mut *tx)
         .await?;
     }
-    for change in &reading.quote_changes {
-        sqlx::query(
-            "INSERT INTO ai_promises
-                    (company_id, user_id, scan_id, source, kind, promised_at, customer_id,
-                     customer_digits, customer_email, customer_label, quote_id, title, said)
-             VALUES (?, ?, ?, ?, 'quote', ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(scan.company_id)
-        .bind(user.id)
-        .bind(scan.id)
-        .bind(source.as_str())
-        .bind(scan.happened_at)
-        .bind(customer_id)
-        .bind(scan.customer_digits.as_deref())
-        .bind(scan.customer_email.as_deref())
-        .bind(reading.customer_name.as_deref())
-        .bind(quote_id)
-        .bind(&change.change)
-        .bind(&change.said)
-        .execute(&mut *tx)
-        .await?;
+    if let Some(quote) = quote {
+        let due = quote.due.and_then(|due| due_utc(due, tz));
+        match open_quote {
+            Some(task) => {
+                // The words and the time of the latest ask (assignments run
+                // left to right: `promised_at` changes last).
+                sqlx::query(
+                    "UPDATE ai_promises
+                        SET details = ?,
+                            said = IF(? >= promised_at, ?, said),
+                            source = IF(? >= promised_at, ?, source),
+                            promised_at = GREATEST(promised_at, ?),
+                            due_at = COALESCE(?, due_at),
+                            reminded_at = IF(? IS NULL, reminded_at, NULL)
+                      WHERE id = ? AND status = 'open'",
+                )
+                .bind(merged_details(task.details.as_deref(), &quote.asks))
+                .bind(scan.happened_at)
+                .bind(&quote.said)
+                .bind(scan.happened_at)
+                .bind(source.as_str())
+                .bind(scan.happened_at)
+                .bind(due)
+                .bind(due)
+                .bind(task.id)
+                .execute(&mut *tx)
+                .await?;
+            }
+            None => {
+                sqlx::query(
+                    "INSERT INTO ai_promises
+                            (company_id, user_id, scan_id, source, kind, promised_at, customer_id,
+                             customer_digits, customer_email, customer_label, quote_id, title, said,
+                             details, due_at)
+                     VALUES (?, ?, ?, ?, 'quote', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(scan.company_id)
+                .bind(user.id)
+                .bind(scan.id)
+                .bind(source.as_str())
+                .bind(scan.happened_at)
+                .bind(customer_id)
+                .bind(scan.customer_digits.as_deref())
+                .bind(scan.customer_email.as_deref())
+                .bind(reading.customer_name.as_deref())
+                .bind(quote_id)
+                .bind(&quote.title)
+                .bind(&quote.said)
+                .bind(merged_details(None, &quote.asks))
+                .bind(due)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
     }
     for approval in &reading.approvals {
         sqlx::query(
@@ -1638,7 +1791,7 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         .bind(scan.customer_digits.as_deref())
         .bind(scan.customer_email.as_deref())
         .bind(reading.customer_name.as_deref())
-        .bind(&approval.change)
+        .bind(&approval.title)
         .bind(&approval.said)
         .bind(scan.happened_at)
         .bind(APPROVAL_WAIT_HOURS)
@@ -1663,11 +1816,11 @@ async fn scan_one(state: &AppState, scan: &Scan) -> sqlx::Result<Outcome> {
         .await?;
     tx.commit().await?;
     Ok(Outcome::Read(
-        found.len() + reading.quote_changes.len() + reading.approvals.len(),
+        found.len() + usize::from(quote.is_some()) + reading.approvals.len(),
     ))
 }
 
-/// The customer's newest quote, the one a change they asked for goes in.
+/// The customer's newest quote, the one their quote task is about.
 async fn newest_quote(
     pool: &MySqlPool,
     company_id: i32,
@@ -2110,8 +2263,17 @@ mod tests {
             id,
             kind: kind.into(),
             title: title.into(),
+            details: None,
             same_customer: true,
             who: String::new(),
+        }
+    }
+
+    /// An open quote task with these asks.
+    fn quote_task(id: u64, details: &str) -> OpenItem {
+        OpenItem {
+            details: Some(details.into()),
+            ..open(id, "quote", "Update the quote")
         }
     }
 
@@ -2119,16 +2281,16 @@ mod tests {
     fn the_model_json_is_read() {
         let shown = [
             open(7, "promise", "Send the price"),
-            open(9, "quote", "Swap the sink"),
+            quote_task(9, "Swap the sink"),
         ];
         let reading = parse_reading(
             r##"{"promises": [
                 {"title": " Send the inventory link ", "said": "I'll text you our inventory link", "due": "2026-10-28 17:00", "visit": false, "message": "sms", "link": "inventory"},
-                {"title": "Measure the kitchen", "said": "I'll come measure Friday at 10", "due": "2026-10-30 10:00", "visit": true, "message": null, "link": null},
+                {"title": "Measure the kitchen", "said": "I'll come measure Friday at 10", "due": "2026-10-30 10:00", "visit": true, "action": "schedule", "message": null, "link": null},
                 {"title": "", "said": "nothing"}
             ],
             "kept": [7, "#7", 9, 12],
-            "quote_changes": [{"change": "Replace the sink with a 33-inch undermount", "said": "Can we do a bigger sink?"}, {"change": " "}],
+            "quote": {"title": " Update the kitchen quote ", "asks": ["Replace the sink with a 33-inch undermount", "replace the sink with a 33-inch UNDERMOUNT", " ", "Add a\nbacksplash"], "said": "Can we do a bigger sink?", "due": "2026-10-29 19:00"},
             "approvals": [{"title": "Approve the revised quote", "said": "Here is the revised quote"}, {"title": ""}]}"##,
             &shown,
         );
@@ -2142,6 +2304,7 @@ mod tests {
                     visit: false,
                     channel: Some(Channel::Sms),
                     link: Some(Link::Inventory),
+                    action: None,
                 },
                 Found {
                     title: "Measure the kitchen".into(),
@@ -2150,24 +2313,43 @@ mod tests {
                     visit: true,
                     channel: None,
                     link: None,
+                    action: Some(CrmAction::Schedule),
                 },
             ]
         );
-        // Only open promises it was shown count; quote changes are not kept.
-        assert_eq!(reading.kept, vec![7]);
+        // Only open items it was shown count (a quote task too).
+        assert_eq!(reading.kept, vec![7, 9]);
+        // One task; each ask once, on one line.
         assert_eq!(
-            reading.quote_changes,
-            vec![QuoteChange {
-                change: "Replace the sink with a 33-inch undermount".into(),
+            reading.quote,
+            Some(QuoteTask {
+                title: "Update the kitchen quote".into(),
+                asks: vec![
+                    "Replace the sink with a 33-inch undermount".into(),
+                    "Add a backsplash".into(),
+                ],
                 said: "Can we do a bigger sink?".into(),
-            }]
+                due: Some(at("2026-10-29 19:00")),
+            })
         );
         assert_eq!(
             reading.approvals,
-            vec![QuoteChange {
-                change: "Approve the revised quote".into(),
+            vec![Approval {
+                title: "Approve the revised quote".into(),
                 said: "Here is the revised quote".into(),
             }]
+        );
+        // No quote work; asks without a title are the quote to update.
+        assert_eq!(parse_reading(r#"{"quote": null}"#, &shown).quote, None);
+        assert_eq!(
+            parse_reading(r#"{"quote": {"title": " ", "asks": []}}"#, &shown).quote,
+            None
+        );
+        assert_eq!(
+            parse_reading(r#"{"quote": {"asks": ["Use Alto quartz"]}}"#, &shown)
+                .quote
+                .map(|quote| quote.title),
+            Some("Update the quote".into())
         );
         // An open approval the customer answered is kept too.
         assert_eq!(
@@ -2195,14 +2377,16 @@ mod tests {
             "now",
             &[
                 open(7, "promise", "Send the price"),
-                open(9, "quote", "Swap the sink"),
+                quote_task(9, "Swap the sink\nAdd a backsplash"),
             ],
             "Speaker A: hi",
         );
         assert!(
             prompt.contains("OPEN PROMISES (already on the rep's list):\n- #7 Send the price\n")
         );
-        assert!(prompt.contains("OPEN QUOTE CHANGES (already on the list):\n- #9 Swap the sink\n"));
+        assert!(prompt.contains(
+            "OPEN QUOTE TASK (already on the list, with the asks it has):\n- #9 Update the quote (has: Swap the sink; Add a backsplash)\n"
+        ));
         assert!(
             prompt.contains("OPEN APPROVALS (sent, waiting for the customer's answer):\n(none)\n")
         );
@@ -2226,7 +2410,7 @@ mod tests {
                 promise("promise", "Call back", Some("2026-10-28 18:00")),
                 promise("promise", "Send photos", None),
                 promise("promise", "Visit next week", Some("2026-11-03 15:00")),
-                promise("quote", "Swap the sink", None),
+                promise("quote", "Update the quote", None),
                 promise("approval", "Sign the contract", Some("2026-10-28 20:00")),
             ],
             &[Waiting {
@@ -2242,7 +2426,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             summary,
-            "Morning list: 1 overdue, 1 due today, 1 without a time, 1 quote changes, 1 waiting for approval, 1 waiting for your reply"
+            "Morning list: 1 overdue, 1 due today, 1 without a time, 1 quotes to update, 1 waiting for approval, 1 waiting for your reply"
         );
         assert!(
             text.contains(
@@ -2253,7 +2437,7 @@ mod tests {
         assert!(text.contains("Overdue (1):\n• Send the price — Ann Lee (due Oct 27, 5:00 PM)"));
         assert!(text.contains("Due today (1):\n• 2:00 PM Call back — Ann Lee"));
         assert!(text.contains("No time set (1):\n• Send photos — Ann Lee"));
-        assert!(text.contains("Quote changes customers asked for (1):\n• Swap the sink — Ann Lee"));
+        assert!(text.contains("Quotes to make or update (1):\n• Update the quote — Ann Lee"));
         assert!(text.contains(
             "Waiting for your reply (1):\n• (317) 555-0100 — \"Can you send the price?\" (3 h)"
         ));
@@ -2283,6 +2467,7 @@ mod tests {
             visit: false,
             channel: None,
             link: None,
+            action: None,
         };
         let mut reading = Reading {
             promises: vec![
@@ -2291,10 +2476,12 @@ mod tests {
                 promise("Call back"),
             ],
             kept: Vec::new(),
-            quote_changes: vec![QuoteChange {
-                change: "Swap the sink".into(),
+            quote: Some(QuoteTask {
+                title: "Update the quote".into(),
+                asks: vec!["Swap the sink".into(), "Add a backsplash".into()],
                 said: String::new(),
-            }],
+                due: None,
+            }),
             approvals: Vec::new(),
             customer_name: None,
         };
@@ -2302,11 +2489,36 @@ mod tests {
             &mut reading,
             &[
                 open(1, "promise", "Call back"),
-                open(2, "quote", "swap the sink"),
+                quote_task(2, "swap the SINK"),
             ],
         );
         assert_eq!(reading.promises, vec![promise("Send the price")]);
-        assert!(reading.quote_changes.is_empty());
+        // The open quote task has the sink already.
+        assert_eq!(
+            reading.quote.map(|quote| quote.asks),
+            Some(vec!["Add a backsplash".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_quote_task_gathers_each_ask_once() {
+        assert_eq!(merged_details(None, &[]), None);
+        assert_eq!(
+            merged_details(None, &["Swap the sink".into()]),
+            Some("Swap the sink".into())
+        );
+        assert_eq!(
+            merged_details(
+                Some("Swap the sink\n\nAdd a backsplash\n"),
+                &["add a BACKSPLASH".into(), "Use Alto quartz".into()]
+            ),
+            Some("Swap the sink\nAdd a backsplash\nUse Alto quartz".into())
+        );
+        // The newest asks are kept.
+        let many: Vec<String> = (1..=35).map(|n| format!("Ask {n}")).collect();
+        let details = merged_details(None, &many).unwrap();
+        assert_eq!(details.lines().count(), MAX_DETAIL_LINES);
+        assert!(details.starts_with("Ask 6\n") && details.ends_with("Ask 35"));
     }
 
     #[test]
@@ -2357,6 +2569,7 @@ mod tests {
             visit: false,
             channel: Some(Channel::Sms),
             link: Some(Link::Inventory),
+            action: None,
         };
         let request = draft_request(&found, Source::Call, "2026-10-28 15:06 (Wed)", &links);
         assert!(request.contains("on our call"));

@@ -42753,7 +42753,7 @@
           "ai"
         ],
         "summary": "List the caller's open promises",
-        "description": "What the caller promised customers on calls, texts and emails and has not\ndone yet, and the changes customers asked for in their quotes, newest\nfirst: each promise with the message that keeps it when a text or email\ncan, each appointment with its event on the schedule and what it clashes\nwith. With a customer, phone or email: only that customer's; without,\nalso the customers whose text waits for the caller's reply.",
+        "description": "What the caller promised customers on calls, texts and emails and has not\ndone yet, the quotes customers asked them to make or update (one task per\ncustomer, with what they asked for), and what waits for a customer's\napproval, newest first: each promise with the message that keeps it when\na text or email can, each appointment with its event on the schedule and\nwhat it clashes with. With a customer, phone or email: only that\ncustomer's; without, also the customers whose text waits for the\ncaller's reply.",
         "operationId": "list_ai_promises",
         "parameters": [
           {
@@ -44966,7 +44966,7 @@
           "jobs"
         ],
         "summary": "Read reps' calls and messages for promises",
-        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, sends their morning list (once a day from 8 AM their time), queues\ntheir calls, texts and emails of the last 3 days not read yet, then reads\nup to 4 (a call is transcribed first): saves what the rep promised the\ncustomer and by when, closes the open promises it keeps, saves the quote\nchanges the customer asked for, and writes the text or email that keeps\neach promise a message can keep, in the rep's own style.",
+        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, closes the tasks they finished in the CRM (a quote saved or emailed,\na document sent to sign, an event on the schedule, a call), sends their\nmorning list (once a day from 8 AM their time), queues their calls, texts\nand emails of the last 3 days not read yet, then reads up to 4 (a call is\ntranscribed first): saves what the rep promised the customer and by when,\ncloses the open promises it keeps, adds the quote work the customer gave\nthem to that customer's one quote task, and writes the text or email that\nkeeps each promise a message can keep, in the rep's own style.",
         "operationId": "run_promises",
         "responses": {
           "200": {
@@ -62404,7 +62404,7 @@
       },
       "AiPromise": {
         "type": "object",
-        "description": "A promise the rep made a customer, or a change a customer asked for in\ntheir quote.",
+        "description": "A promise the rep made a customer, the quote work a customer gave them,\nor something they sent a customer to approve.",
         "required": [
           "id",
           "kind",
@@ -62423,7 +62423,14 @@
           },
           "kind": {
             "type": "string",
-            "description": "`promise`: the rep's; `quote`: a change the customer asked for in\ntheir quote; `approval`: something the rep sent for the customer's\napproval (due a day later)."
+            "description": "`promise`: the rep's; `quote`: the customer's quote to make or update\n(one task per customer, what they asked for in `details`); `approval`:\nsomething the rep sent for the customer's approval (due a day later)."
+          },
+          "crm_action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the rep does in the CRM that closes the promise by itself:\n`contract` (a document sent to sign), `schedule` (an event for the\ncustomer on the schedule) or `call` (a call with them); null when only\na message that keeps it, or Done, closes it. A quote task closes once\none of the customer's quotes is saved or emailed."
           },
           "source": {
             "type": "string",
@@ -62476,7 +62483,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "A quote change's quote: the customer's newest."
+            "description": "A quote task's quote: the customer's newest."
           },
           "title": {
             "type": "string",
@@ -62484,7 +62491,14 @@
           },
           "said": {
             "type": "string",
-            "description": "The words that made it (the customer's, for a quote change)."
+            "description": "The words that made it (for a quote task, its latest ask's)."
+          },
+          "details": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A quote task's asks, one per line: what the quote must have or change."
           },
           "due_at": {
             "type": [
@@ -83910,7 +83924,7 @@
           },
           "promises": {
             "type": "integer",
-            "description": "Promises and quote changes saved.",
+            "description": "Promises, quote tasks and approvals saved.",
             "minimum": 0
           },
           "reminded": {
