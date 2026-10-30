@@ -222,6 +222,16 @@ async fn concurrent_runs_send_a_reminder_once(pool: MySqlPool) {
     assert_eq!(s.remind(day(3)).await.0, 0);
 }
 
+/// On the Lambda's one-connection pool the reminder must not wait for a
+/// second connection while its transaction holds the only one.
+#[test_db::test(seed)]
+async fn a_reminder_goes_out_on_the_lambda_pool(pool: MySqlPool) {
+    let mut s = setup(pool).await;
+    s.state.pool = api::db::lambda_pool((*s.pool.connect_options()).clone());
+    assert_eq!(s.remind(day(3)).await, (1, 0));
+    assert_eq!(s.sent().len(), 1);
+}
+
 #[test_db::test(seed)]
 async fn reminders_go_out_on_days_3_6_and_10_only(pool: MySqlPool) {
     let s = setup(pool).await;
