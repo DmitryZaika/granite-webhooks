@@ -1,15 +1,14 @@
 //! `POST /v1/jobs/sms-followups`: the scheduled follow-up texts and emails.
 //!
 //! The due steps of SMS / email flows, the drip texts of lead lists
-//! (`scheduled_sms`) and everyone's scheduled emails and texts; then tells reps
-//! about follow-ups that ended (`followups::alerts`) and, at 9 AM, who is
-//! waiting on them (`followups::digest`). Replaces the
+//! (`scheduled_sms`) and everyone's scheduled emails and texts. Replaces the
 //! Remix `api.sms-followups.process` route.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::auth::session::find_user;
 use crate::error::{ApiResult, ErrorBody};
 use crate::followups::processor::{FollowupRun, process_due_followups, rep_sms_provider};
+use crate::openapi::ToSchema;
 use crate::routes::calls::to_e164;
 use crate::routes::delayed::{DueRun, process_due_in};
 use crate::routes::sms::flows::variable_names;
@@ -20,7 +19,6 @@ use axum::Json;
 use axum::extract::State;
 use lambda_http::tracing;
 use serde::Serialize;
-use utoipa::ToSchema;
 
 const DRIP_BATCH_LIMIT: i64 = 50;
 const SMS_MAX_TEXT: usize = 1600;
@@ -283,7 +281,7 @@ pub async fn process_due_drips(state: &AppState) -> Result<DripRun, sqlx::Error>
 ///
 /// Sends the due steps of SMS / email flows, the drip texts of lead lists
 /// and everyone's scheduled emails and texts.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/sms-followups",
     operation_id = "run_sms_followups",
@@ -305,17 +303,6 @@ pub async fn run(
         failed,
         stopped,
     } = process_due_followups(&state).await?;
-    // Telling reps never holds up the sends.
-    match crate::followups::alerts::alert_ended_followups(&state).await {
-        Ok(0) => {}
-        Ok(alerted) => tracing::info!(alerted, "follow-up end alerts sent"),
-        Err(err) => tracing::warn!(?err, "follow-up end alerts failed"),
-    }
-    match crate::followups::digest::send_quiet_digests(&state, chrono::Utc::now()).await {
-        Ok(0) => {}
-        Ok(sent) => tracing::info!(sent, "follow-up digests sent"),
-        Err(err) => tracing::warn!(?err, "follow-up digests failed"),
-    }
     let scheduled_sms = process_due_drips(&state).await?;
     let delayed = process_due_in(&state, None).await?;
     Ok(Json(SmsFollowupsRun {

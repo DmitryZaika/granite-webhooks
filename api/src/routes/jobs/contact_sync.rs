@@ -13,8 +13,9 @@
 //! creates a subscription (see `renew_sms_subscription`); a failed one is
 //! tried again after [`SUBSCRIPTION_RETRY_HOURS`].
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -22,7 +23,6 @@ use common::telephony::ringcentral::{SubscriptionOutcome, renew_sms_subscription
 use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 /// `RingCentral` subscriptions renewed per run (three calls each).
 const SUBSCRIPTIONS_PER_RUN: i64 = 2;
@@ -221,7 +221,7 @@ async fn renew_subscriptions(state: &AppState) -> Result<usize, sqlx::Error> {
 /// their company's provider, and renews up to 2 `RingCentral` SMS
 /// subscriptions whose token is not the current webhooks token (a failed
 /// renewal waits 2 hours; none is ever created here).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/contact-sync",
     operation_id = "run_contact_sync",

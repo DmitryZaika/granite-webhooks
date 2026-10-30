@@ -16,6 +16,8 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::calls::push_in_recents;
 use crate::state::AppState;
 use axum::Json;
@@ -24,8 +26,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{MySql, QueryBuilder};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -172,7 +172,7 @@ fn push_incoming(builder: &mut QueryBuilder<MySql>, user: &SessionUser) {
 /// read and the listed Granite Phone calls seen (for the caller only, as in
 /// the phone app). With `clear_all`, dismisses every one of them, marks all
 /// unread incoming mail read and the bell's Granite Phone calls seen.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/notifications/done",
     operation_id = "dismiss_notifications",
@@ -204,6 +204,13 @@ pub async fn done(
     if !input.clear_all && input.items.is_empty() {
         return Err(ApiError::BadRequest("notification target required".into()));
     }
+    // Read before the transaction: the Lambda pool has one connection, which
+    // the transaction holds until it commits.
+    let listed = if input.hide_only && input.clear_all {
+        unread_email(&state, &user).await?
+    } else {
+        Vec::new()
+    };
     let mut tx = state.pool.begin().await?;
     if input.clear_all || !phone_calls.is_empty() {
         let mut builder = QueryBuilder::<MySql>::new(
@@ -250,9 +257,7 @@ pub async fn done(
         builder.build().execute(&mut *tx).await?;
     }
     if input.hide_only {
-        let listed;
         let threads: Vec<&str> = if input.clear_all {
-            listed = unread_email(&state, &user).await?;
             listed.iter().map(|item| item.id.as_str()).collect()
         } else {
             threads
@@ -367,14 +372,24 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "quote_signed" => "Quote Signed",
         "delayed_message_sent" => "Scheduled Message Sent",
         "delayed_message_failed" => "Scheduled Message Failed",
-        crate::followups::alerts::FOLLOWUP_REPLIED => "Replied to Your Follow-up",
-        crate::followups::alerts::FOLLOWUP_FAILED => "Follow-up Stopped",
         "e911_alert" => "Emergency Call",
         TENDLC_READY | TENDLC_STATUS => "Texting Registration",
         PHONE_PORT => "Number Port",
+        PROMISE_DUE => "Promise Reminder",
+        PROMISE_DIGEST => "Morning List",
+        PROMISE_APPROVAL => "Approval Reminder",
         _ => return None,
     })
 }
+
+/// AI promises' notifications (`crate::promises`): a promise came due, the
+/// morning list, and an approval got no reply. They may name a customer but
+/// no deal, and open the rep's promise list.
+const PROMISE_DUE: &str = "ai_promise_due";
+const PROMISE_DIGEST: &str = "ai_promise_digest";
+/// Something sent for a customer's approval got no reply in a day.
+const PROMISE_APPROVAL: &str = "ai_promise_approval";
+const PROMISES_HREF: &str = "/employee/promises";
 
 /// `notifications.notification_type` of a 911 alert (`phone::alerts`): it
 /// names no deal or customer.
@@ -522,11 +537,12 @@ async fn activity(
            LEFT JOIN deals d ON d.id = n.deal_id AND d.deleted_at IS NULL
            LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, n.customer_id)
           WHERE n.user_id = ? AND n.is_done = 0 AND (? IS NULL OR n.id = ?)
-            -- On a live deal, except 911 alerts, the texting registration's
-            -- and number ports' (they name no deal).
+            -- On a live deal, except 911 alerts, the texting registration's,
+            -- number ports' and AI promises' (they name no deal).
             AND ((d.id IS NOT NULL AND c.id IS NOT NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
-                                            'phone_port'))
+                                            'phone_port', 'ai_promise_due', 'ai_promise_digest',
+                                            'ai_promise_approval'))
             -- Signature status is emailed to the sender, so it is not listed here.
             AND (n.notification_type IS NULL OR n.notification_type NOT IN
                  ('signature_viewed', 'signature_signed', 'signature_declined'))
@@ -553,9 +569,11 @@ async fn activity(
             let alert = kind == Some(E911_ALERT);
             let texting = matches!(kind, Some(TENDLC_READY | TENDLC_STATUS));
             let port = kind == Some(PHONE_PORT);
+            let promise = matches!(kind, Some(PROMISE_DUE | PROMISE_DIGEST | PROMISE_APPROVAL));
             let customer = row.customer_name.unwrap_or_default();
             let href = match (row.deal_id, row.customer_id) {
                 _ if alert => E911_ALERT_HREF.to_string(),
+                _ if promise => PROMISES_HREF.to_string(),
                 _ if kind == Some(TENDLC_READY) => TENDLC_READY_HREF.to_string(),
                 _ if texting || port => E911_ALERT_HREF.to_string(),
                 (Some(deal), _) => format!("/employee/deals/edit/{deal}/project"),
@@ -570,6 +588,10 @@ async fn activity(
                     "Texting registration".to_string()
                 } else if port {
                     "Number port".to_string()
+                } else if kind == Some(PROMISE_DIGEST) {
+                    "Morning list".to_string()
+                } else if promise && customer.is_empty() {
+                    "Promise".to_string()
                 } else {
                     customer.clone()
                 },
@@ -821,7 +843,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
 /// that ring them; `telnyx-call-<id>`, `type_title` names the line), newest
 /// first. The onboarding tour's sample notifications are left out unless
 /// `samples` is set.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/notifications",
     operation_id = "list_notifications",
@@ -879,7 +901,7 @@ pub async fn list(
 /// The phone app reads it for a `notification` push, which names only the
 /// id. 404 for another user's, a dismissed one, or one `GET
 /// /v1/notifications` would not list.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/notifications/{id}",
     operation_id = "get_notification",

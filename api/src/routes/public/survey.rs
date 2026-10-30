@@ -3,6 +3,7 @@
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::jobs::survey_notifications::survey_token;
 use crate::state::AppState;
 use axum::Json;
@@ -10,7 +11,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// Sales rep and installer positions (`positions.id`).
 const SALES_REP: i32 = 1;
@@ -57,7 +57,7 @@ async fn people(
 ///
 /// The company's name, sales reps and installers, for the customer to pick
 /// who they worked with. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/survey",
     operation_id = "get_public_survey",
@@ -135,7 +135,7 @@ fn comment(value: Option<&String>) -> Option<&str> {
 /// they give one (otherwise anonymous). With a valid link
 /// (`checklist_id` and `token`) the checklist's reminders stop; a missing or
 /// forged token only skips that. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/companies/{company_id}/surveys",
     operation_id = "create_public_survey",

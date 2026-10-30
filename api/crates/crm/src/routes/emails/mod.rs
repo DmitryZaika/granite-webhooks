@@ -1,0 +1,81 @@
+//! Emails: the caller's mailbox and conversations.
+//!
+//! - `GET  /v1/emails/threads`                    → a page of a folder (inbox, sent, trash, drafts;
+//!   `scope=admin`: the whole company's mail)
+//! - `GET  /v1/emails/folder-counts`              → unread inbox, trash and draft counts
+//! - `GET  /v1/emails/unread`                     → the inbox badge
+//! - `GET  /v1/deals/{id}/emails`                → a deal's email history
+//! - `GET  /v1/emails/search-suggestions`         → typeahead of the search box
+//! - `GET  /v1/emails/threads/{thread_id}`        → one conversation
+//! - `POST /v1/emails/threads/{thread_id}/read`   → mark an opened conversation read
+//! - `POST /v1/emails/threads/{mark-read,mark-unread,delete,restore,purge}` → bulk changes
+//! - `DELETE /v1/emails/{id}` → one message to the trash
+//! - `POST /v1/emails`                            → send (or schedule) an email
+//! - `POST /v1/email-attachments/{id}/deal`      → save an attachment to a deal
+//! - `GET  /v1/email-attachments/{id}/preview`   → a picture attachment for an `<img>` (HEIC → JPEG)
+//! - `GET  /v1/deals/file-urls`                   → file URLs of a deal or a customer's deals
+//! - `GET  /v1/emails/{id}/images`                 → an email's pictures, for the photo viewer
+//! - `GET  /v1/emails/{id}/reads`                  → every time the recipient opened a sent email
+//! - `POST /v1/emails/drafts`, `GET|PUT|DELETE /v1/emails/drafts/{id}` → the caller's drafts
+//! - `GET  /v1/superuser/sales-emails[/{thread_id}]` → the sales mailbox (super admins)
+//! - `POST /v1/emails/inbound-push`                → push a stored inbound email to its
+//!   recipients' phones (the `webhooks` Lambda, by its key)
+//!
+//! Replaces the Remix `employee.emails*` and `admin.emails*` loaders and `api.emails.*` routes.
+//! The `webhooks` Lambda builds and sends the MIME message (it owns SES).
+
+mod admin_list;
+mod attachment_preview;
+pub mod attachment_token;
+mod attachments;
+mod conversation;
+pub mod deal_history;
+mod drafts;
+mod handlers;
+mod inbound_push;
+mod list;
+mod names;
+mod reads;
+mod sales_mailbox;
+pub mod schemas;
+pub mod send;
+pub mod signature_mail;
+pub mod signatures;
+pub mod sql;
+pub mod thread;
+
+use crate::openapi::{OpenApiRouter, routes};
+use crate::state::AppState;
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(handlers::list))
+        .routes(routes!(sales_mailbox::list))
+        .routes(routes!(sales_mailbox::thread))
+        .routes(routes!(handlers::counts))
+        .routes(routes!(handlers::unread))
+        .routes(routes!(handlers::get_thread))
+        .routes(routes!(handlers::read_thread))
+        .routes(routes!(handlers::mark_read))
+        .routes(routes!(handlers::mark_unread))
+        .routes(routes!(handlers::delete_threads))
+        .routes(routes!(handlers::restore_threads))
+        .routes(routes!(handlers::purge))
+        .routes(routes!(handlers::delete_message))
+        .routes(routes!(handlers::suggest))
+        .routes(routes!(deal_history::deal_emails))
+        .routes(routes!(send::send))
+        .routes(routes!(drafts::create_draft))
+        .routes(routes!(attachments::add_to_deal))
+        .routes(routes!(attachments::deal_file_urls))
+        .routes(routes!(attachments::email_images))
+        .routes(routes!(reads::email_reads))
+        .routes(routes!(attachment_preview::preview))
+        .routes(routes!(conversation::conversation))
+        .routes(routes!(inbound_push::inbound_push))
+        .routes(routes!(
+            drafts::get_draft,
+            drafts::update_draft,
+            drafts::delete_draft
+        ))
+}

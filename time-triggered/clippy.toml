@@ -1,0 +1,8 @@
+# reqwest has no bundled TLS crypto provider here; build clients through
+# `common::http`, which installs ring first.
+disallowed-methods = [
+    { path = "reqwest::Client::new", reason = "use common::http::client()" },
+    { path = "reqwest::Client::builder", reason = "use common::http::client_builder()" },
+    { path = "reqwest::ClientBuilder::new", reason = "use common::http::client_builder()" },
+    { path = "reqwest::get", reason = "use common::http::client()" },
+]

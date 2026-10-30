@@ -12,7 +12,7 @@ from autofix import callback
 from autofix.callback import Api, CallbackError
 from autofix.http import HttpError, Response
 
-MODEL_RS = TOOLS_DIR.parent.parent / "api" / "src" / "posthog_autofix" / "model.rs"
+MODEL_RS = TOOLS_DIR.parent.parent / "api" / "crates" / "admin" / "src" / "posthog_autofix" / "model.rs"
 
 
 def rust_fields(struct: str) -> set[str]:

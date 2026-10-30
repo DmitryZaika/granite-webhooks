@@ -1,42 +1,16 @@
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
-#![allow(
-    clippy::option_if_let_else,
-    clippy::missing_errors_doc,
-    clippy::must_use_candidate,
-    clippy::missing_panics_doc
-)]
-use axum_helpers::axum_app::new_main_app;
 use common::crud::setup::create_db_pool;
-use lambda_http::{Error, run};
+use lambda_http::{Error, tracing};
 use std::env::set_var;
-
-pub mod amazon;
-pub mod amazonses;
-pub mod axum_helpers;
-pub mod cloudtalk;
-pub mod crud;
-pub mod google;
-pub mod libs;
-pub mod middleware;
-pub mod openai;
-pub mod outbound;
-pub mod posthog;
-pub mod ringcentral;
-pub mod schemas;
-pub mod telegram;
-pub mod telnyx;
-pub mod template;
-pub mod tests;
-pub mod webhooks;
-use lambda_http::tracing;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    // Here, not where it is reported: a new commit then rebuilds only this.
+    common::release::set(option_env!("GIT_SHA"));
     tracing::init_default_subscriber();
+    common::amazon::secrets::load_into_env().await?;
     unsafe {
         set_var("AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH", "true");
     }
     let pool = create_db_pool().await?;
-    let app = new_main_app(pool);
-    run(app).await
+    webhooks::run(pool).await
 }

@@ -1,17 +1,23 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PostHog auto-fix result",
-  "description": "What the fixer agent concluded about one PostHog issue. Mirrors AgentResult in api/src/posthog_autofix/model.rs.",
+  "description": "What the fixer agent concluded about one PostHog issue. Mirrors AgentResult in api/crates/admin/src/posthog_autofix/model.rs.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "outcome",
     "target_repo",
     "summary",
+    "given",
+    "when",
+    "then",
+    "actual",
+    "expected",
+    "impact",
     "root_cause",
     "fix_summary",
     "risk",
     "test",
+    "check",
     "recommendation",
     "duplicate_of",
     "pr_title"
@@ -33,10 +39,40 @@
       "enum": ["granite-webhooks", "general_datebase", null]
     },
     "summary": {
-      "description": "One line: what goes wrong for the user, in plain words.",
+      "description": "One short sentence: what goes wrong for the user and on which route (page route or API route), e.g. `Print fails on /employee/quote/:quoteId when the old preview window is still open`.",
       "type": "string",
       "minLength": 1,
       "maxLength": 300
+    },
+    "given": {
+      "description": "The precondition or state, without the word `Given`, e.g. `a company with calling turned off`.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "when": {
+      "description": "The user's action that leads to the error, naming the page route and the API route when there is one, without the word `When`, e.g. `a user opens any /employee page and the phone dock calls POST /v1/phone/web/devices`.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "then": {
+      "description": "What the system does at that point (the response or event that triggers the error), without the word `Then`, e.g. `the API answers 403 calling_disabled`.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "actual": {
+      "description": "What goes wrong now.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "expected": {
+      "description": "What should happen instead.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "impact": {
+      "description": "One short sentence on what users notice, or that they notice nothing, e.g. `Users see nothing; PostHog noise only.` No counts: the api adds the event and user counts itself.",
+      "type": "string",
+      "maxLength": 500
     },
     "root_cause": {
       "description": "Why it happens, with file paths and line references.",
@@ -45,9 +81,9 @@
       "maxLength": 3000
     },
     "fix_summary": {
-      "description": "What the fix changes and why that removes the cause. Empty string without a fix.",
+      "description": "One or two short sentences: what the fix adds or changes, naming the new function, variable or check and its file, e.g. `Adds isPlaceholderImage() in StoneImageCropInput.tsx and skips the editor for placeholder images`. Empty string without a fix.",
       "type": "string",
-      "maxLength": 3000
+      "maxLength": 1000
     },
     "risk": {
       "description": "What the fix could break and how likely that is. Empty string without a fix.",
@@ -70,7 +106,7 @@
           "items": { "type": "string", "maxLength": 300 }
         },
         "command": {
-          "description": "Exactly `bunx vitest run <test files>` or `cargo test -p <crate> [--test <file>] <filter>`. null without a test.",
+          "description": "Exactly `bunx vitest run <test files>` or `cargo test -p <crate> [--test <target>] <filter>` (an `api/tests/<area>/<file>.rs` test: `cargo test -p api --test <area> <file>::<test name>`). null without a test.",
           "type": ["string", "null"],
           "maxLength": 500
         },
@@ -85,6 +121,11 @@
           "maxLength": 2000
         }
       }
+    },
+    "check": {
+      "description": "One line: how a developer sees the fix by hand, building on Given/When, e.g. `Repeat Given/When → no calling_disabled error in PostHog.` Empty string without a fix.",
+      "type": "string",
+      "maxLength": 500
     },
     "recommendation": {
       "description": "The concrete next step for a person when there is no fix: a migration to apply, a PostHog suppression or grouping rule, a setting to change.",

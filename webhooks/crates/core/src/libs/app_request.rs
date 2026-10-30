@@ -1,0 +1,63 @@
+use lambda_http::tracing;
+use serde::{Deserialize, Serialize};
+use sqlx::MySqlPool;
+
+use crate::crud::deals::maybe_move_deal_on_outbound_call;
+
+/// Body of the API's `POST /v1/followups/call-check`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SmsFollowupCallCheckBody {
+    pub company_id: i32,
+    pub phone_digits: u64,
+    pub call_id: u64,
+    pub talking_time: u64,
+    pub is_voicemail: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_link: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SmsFollowupCallCheckResponse {
+    #[serde(default)]
+    customer_responded: bool,
+}
+
+/// Fire-and-forget POST to the API. Returns immediately; failures are logged.
+/// When the call's transcript shows the customer answered, the deal moves to Contacted.
+pub fn spawn_sms_followup_call_check(pool: MySqlPool, body: SmsFollowupCallCheckBody) {
+    tokio::spawn(async move {
+        let company_id = body.company_id;
+        let phone_digits = body.phone_digits;
+        match post_sms_followup_call_check(body).await {
+            Ok(response) if response.customer_responded => {
+                maybe_move_deal_on_outbound_call(&pool, company_id, phone_digits).await;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(?error, "Failed to enqueue sms follow-up call check");
+            }
+        }
+    });
+}
+
+async fn post_sms_followup_call_check(
+    body: SmsFollowupCallCheckBody,
+) -> Result<SmsFollowupCallCheckResponse, String> {
+    let api_url = std::env::var("API_URL").map_err(|error| error.to_string())?;
+    let lambda_key = std::env::var("LAMBDA_KEY").map_err(|error| error.to_string())?;
+    let url = format!("{}/v1/followups/call-check", api_url.trim_end_matches('/'));
+    let response = common::http::client()
+        .post(url)
+        .header("Authorization", lambda_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("status {}", response.status().as_u16()));
+    }
+    response
+        .json::<SmsFollowupCallCheckResponse>()
+        .await
+        .map_err(|error| error.to_string())
+}

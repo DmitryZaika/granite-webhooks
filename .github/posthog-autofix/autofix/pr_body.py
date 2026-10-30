@@ -22,7 +22,9 @@ _MENTION_BREAK = "@\u200b"
 _TEMPLATE = Path(__file__).with_name("pr_body.md")
 
 
-def branch_name(issue_id: str, run_id: str) -> str:
+def branch_name(issue_id: str, run_id: str, bug_id: str = "") -> str:
+    if bug_id:
+        return f"ai-fix/bug-{bug_id}-{run_id}"
     return f"ai-fix/posthog-{issue_id[:8]}-{run_id}"
 
 
@@ -69,15 +71,23 @@ class BodyInputs:
     notes: str | None
     run_url: str
     cost_usd: float | None
+    bug_id: str = ""
 
 
 def render(inputs: BodyInputs) -> str:
     result = inputs.result
     values = {
-        "summary": escape(result["summary"], 300),
-        "posthog_url": f"https://us.posthog.com/project/{POSTHOG_PROJECT}/error-tracking/{inputs.issue_id}",
+        "given": escape(result["given"], 500),
+        "when": escape(result["when"], 500),
+        "then": escape(result["then"], 500),
+        "actual": escape(result["actual"], 500),
+        "expected": escape(result["expected"], 500),
+        "impact": escape(result["impact"], 500),
+        "links": _links(inputs.issue_id, inputs.bug_id),
+        "verdict": _verdict(inputs.verification),
         "root_cause": escape(result["root_cause"]),
-        "fix_summary": escape(result["fix_summary"]),
+        "fix_summary": escape(result["fix_summary"], 1000),
+        "check": escape(result["check"], 500),
         "test_section": _test_section(result["test"]),
         "verification_section": _verification_section(inputs.verification, inputs.notes),
         "risk": escape(result["risk"]),
@@ -86,6 +96,21 @@ def render(inputs: BodyInputs) -> str:
     }
     template = string.Template(_TEMPLATE.read_text())
     return template.substitute(values)
+
+
+def _links(issue_id: str, bug_id: str) -> str:
+    """The bug id and the PostHog link, both built from trusted values."""
+    url = f"https://us.posthog.com/project/{POSTHOG_PROJECT}/error-tracking/{issue_id}"
+    link = f"[PostHog issue]({url})"
+    return f"**Bug ID:** `{bug_id}` · {link}" if bug_id else link
+
+
+def _verdict(verification: str) -> str:
+    if verification == "verified":
+        return "Verified: the test failed before the fix and passes after it."
+    if verification == "not_applicable":
+        return "Not verified by a test: checks passed, needs a manual test."
+    return "Unverified: a check failed, so this is a draft."
 
 
 def _test_section(test: dict[str, Any]) -> str:

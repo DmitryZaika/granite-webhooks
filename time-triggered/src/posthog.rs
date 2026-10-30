@@ -2,7 +2,7 @@
 //! auto-fix pipeline picks them up. Reporting never fails the tick.
 
 use lambda_runtime::tracing;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fmt::Display;
 use std::time::Duration;
 
@@ -80,7 +80,7 @@ pub async fn report_failure(job: &str, error: &(impl Display + ?Sized)) {
         env_lookup,
     );
     let sent = async {
-        reqwest::Client::builder()
+        common::http::client_builder()
             .timeout(REQUEST_TIMEOUT)
             .build()?
             .post(API_ENDPOINT)

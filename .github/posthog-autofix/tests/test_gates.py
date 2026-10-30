@@ -119,6 +119,23 @@ class CratesTest(unittest.TestCase):
         touched = ["api/src/sms.rs", "test-db/macros/src/lib.rs", "README.md", "migrations/x.sql"]
         self.assertEqual(touched_crates(crates, touched), ["api", "test-db-macros"])
 
+    def test_an_api_crate_brings_the_api_integration_tests(self) -> None:
+        crates = {"api": "api", "api/crates/crm": "api-crm", "common": "common"}
+        touched = ["api/crates/crm/src/routes/sms/send.rs"]
+        self.assertEqual(touched_crates(crates, touched), ["api", "api-crm"])
+
+    def test_a_webhooks_crate_brings_every_webhooks_crate(self) -> None:
+        crates = {
+            "webhooks": "webhooks",
+            "webhooks/crates/core": "webhooks-core",
+            "webhooks/crates/phone": "webhooks-phone",
+            "common": "common",
+        }
+        touched = ["webhooks/crates/core/src/crud/deals.rs"]
+        self.assertEqual(
+            touched_crates(crates, touched), ["webhooks", "webhooks-core", "webhooks-phone"]
+        )
+
 
 class DatebaseGatesTest(unittest.TestCase):
     """The checks run for real git checkouts; the commands are faked."""

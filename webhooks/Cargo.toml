@@ -3,39 +3,27 @@ name = "webhooks"
 version = "0.1.0"
 edition = "2024"
 
+# The routes of the crates in crates/ (see src/lib.rs); main.rs only starts
+# the Lambda, so a new `GIT_SHA` (read there) rebuilds the binary alone.
+[lib]
+# No doc tests; rustdoc would still compile the whole crate looking for them.
+doctest = false
+# The tests are in the crates' own: one test binary less to link and start.
+test = false
+
+[[bin]]
+name = "webhooks"
+path = "src/main.rs"
+test = false
+
 [dependencies]
+webhooks-core = { path = "crates/core" }
+webhooks-email = { path = "crates/email" }
+webhooks-leads = { path = "crates/leads" }
+webhooks-phone = { path = "crates/phone" }
 common = { path = "../common" }
-utoipa = { version = "5.5.0", features = ["axum_extras"] }
 axum = "0.8"
-chrono = { version = "0.4", features = ["serde"] }
 lambda_http = "1.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
-
-http-body-util = "0.1"
-teloxide = { git = "https://github.com/colin99d/teloxide", features = ["macros"] }
-openssl-sys = { version = "0.9", features = ["vendored"] }
-rand = "0.10"
-aws-config = { version = "1.8", features = ["behavior-version-latest"] }
-reqwest = { version = "0.13", features = ["json", "multipart"] }
-sha2 = "0.11"
-uuid = "1.23"
-aws-sdk-s3 = "1.127"
-mail-parser = "0.11"
-bytes = "1.11"
-email_reply_parser = "0.1"
-thiserror = "2.0"
-base64 = "0.22"
-regex = "1"
-urlencoding = "2.1.3"
-serde_urlencoded = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tower-http = { version = "0.6", features = ["cors"] }
-mail-builder = "1.0.0"
-
-[dev-dependencies]
-test-db = { path = "../test-db" }
-axum-test = "19"
-dotenvy = "0.15"
-tracing-test = "0.2.6"

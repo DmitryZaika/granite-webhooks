@@ -1,15 +1,27 @@
 name: API tests
 
-# Pull requests to main: the api crate's OpenAPI checks (every route
-# documented, api/openapi.json current), the Granite Phone integration
+# Pull requests to main: the api crate's OpenAPI checks (every documented
+# route served), the Granite Phone integration
 # tests, the follow-up tests and the manual chat tests. The tests make their own databases (test-db) on the MySQL below;
 # .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local, where
 # common's query! macros check their SQL at compile time, so every migration
-# is applied there first, as in deploy-lambda.yml.
+# is applied there before the first cargo command.
+#
+# MySQL is a plain container rather than a service, so it starts, and applies
+# the migrations, while the toolchain and the cache are set up instead of
+# before the job's first step; `docker run` is in the background, so pulling
+# the image overlaps with that setup too. Its data is disposable: it lives on
+# a tmpfs, without the binlog or fsyncs (as in docker-compose.local.yml),
+# which makes the ~400 DDL statements of the migrations take seconds, not
+# half a minute.
 #
 # On demand from any branch, with optional cargo test arguments in place of the
 # fixed suites below:
-#   gh workflow run "API tests" --ref <branch> [-f cargo_args="-p api --test sms_flows"]
+#   gh workflow run "API tests" --ref <branch> [-f cargo_args="-p api --test followups sms_flows::"]
+#
+# Every integration test file of api is a module of its area's test binary
+# (api/tests/<area>/main.rs, run with `--test <area>`); a filter `<file>::`
+# selects one file's tests.
 on:
   pull_request:
     branches: [main]
@@ -35,87 +47,119 @@ jobs:
     name: api tests
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: granite
-          MYSQL_DATABASE: granite_local
-        ports:
-          - 3307:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -pgranite --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=30
     steps:
       - uses: actions/checkout@v4
 
+      # The image's entrypoint runs every file of /docker-entrypoint-initdb.d
+      # (the migrations, in name order) against MYSQL_DATABASE, and listens on
+      # TCP only once they have all applied.
+      - name: Start MySQL with the migrations
+        run: >-
+          docker run --detach --name mysql
+          --publish 3307:3306
+          --env MYSQL_ROOT_PASSWORD=granite
+          --env MYSQL_DATABASE=granite_local
+          --tmpfs /var/lib/mysql
+          --volume "$PWD/migrations:/docker-entrypoint-initdb.d:ro"
+          mysql:8.0
+          --default-authentication-plugin=mysql_native_password
+          --log-bin-trust-function-creators=1
+          --skip-log-bin
+          --innodb-flush-log-at-trx-commit=0
+          --sync-binlog=0
+          --innodb-doublewrite=0
+          --innodb-flush-method=nosync
+          --table-definition-cache=20000
+          --table-open-cache=20000
+          --innodb-redo-log-capacity=1073741824
+          --innodb-buffer-pool-size=1073741824
+          > "$RUNNER_TEMP/mysql-start.log" 2>&1 &
+
       - uses: dtolnay/rust-toolchain@stable
 
+      # rust-cache's key leaves out Cargo.toml's [profile] sections, and a run
+      # that restored its exact key never saves: renamed when a profile
+      # changes, or every run would rebuild the dependencies.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: api-tests
+          shared-key: api-tests-o1
 
-      - name: Apply migrations to the test database
+      - name: Wait for MySQL and the migrations
+        timeout-minutes: 5
         run: |
-          for f in migrations/*.sql; do
-            mysql -h 127.0.0.1 -P 3307 -uroot -pgranite granite_local < "$f" \
-              || { echo "::error::Migration $f failed"; exit 1; }
+          until mysqladmin ping -h 127.0.0.1 -P 3307 -uroot -pgranite --silent 2>/dev/null; do
+            if ! docker inspect mysql >/dev/null 2>&1; then
+              # Still pulling the image, unless `docker run` gave up.
+              if ! pgrep -f "docker run --detach --name mysql" >/dev/null; then
+                cat "$RUNNER_TEMP/mysql-start.log"
+                echo "::error::MySQL did not start (see docker's output above)"
+                exit 1
+              fi
+            elif [ "$(docker inspect --format '{{.State.Running}}' mysql)" != true ]; then
+              docker logs mysql 2>&1 | tail -n 40
+              echo "::error::MySQL stopped: a migration failed (see its log above)"
+              exit 1
+            fi
+            sleep 1
           done
+          docker logs mysql 2>&1 | grep -E 'Entrypoint\]: (Initializing|MySQL init process done)' || true
 
       - name: OpenAPI checks
         if: inputs.cargo_args == ''
-        run: cargo test -p api --test openapi
+        # Same build as the other steps: no `--features openapi`, so the
+        # generated-spec checks (`openapi::generated`) run locally only.
+        run: "cargo test -p api --test app -- openapi::"
 
       - name: Granite Phone tests
         if: inputs.cargo_args == ''
         run: >-
-          cargo test -p api
-          --test phone_admin
-          --test phone_auth
-          --test phone_bootstrap
-          --test phone_calls
-          --test phone_contacts
-          --test phone_crm_push
-          --test phone_devices
-          --test phone_email_push
-          --test phone_jobs
-          --test phone_revocation
-          --test phone_settings
-          --test phone_telnyx_dial
-          --test phone_telnyx_inbound
-          --test phone_telnyx_outbound
-          --test phone_telnyx_recording
-          --test phone_telnyx_via_cell
-          --test telnyx_10dlc
-          --test phone_porting
-          --test telnyx_sms
-          --test phone_texts
-          --test phone_web
-          --test phone_web_recording
-          --test telnyx_calls
-          --test server_errors
+          cargo test -p api --test phone --test telnyx --
+          phone_admin::
+          phone_auth::
+          phone_bootstrap::
+          phone_calls::
+          phone_contacts::
+          phone_crm_push::
+          phone_devices::
+          phone_email_push::
+          phone_jobs::
+          phone_revocation::
+          phone_settings::
+          phone_telnyx_dial::
+          phone_telnyx_inbound::
+          phone_telnyx_outbound::
+          phone_telnyx_recording::
+          phone_telnyx_via_cell::
+          telnyx_10dlc::
+          phone_porting::
+          telnyx_sms::
+          phone_texts::
+          phone_web::
+          phone_web_recording::
+          telnyx_calls::
+
+      - name: Server error reports
+        if: inputs.cargo_args == ''
+        run: cargo test -p api --test server_errors
 
       - name: Follow-up tests
         if: inputs.cargo_args == ''
         run: >-
-          cargo test -p api
-          --test followup_flows
-          --test followup_ai_cadence
-          --test followup_generation
-          --test followup_instruction
-          --test followup_settings
-          --test sms_flows
+          cargo test -p api --test followups --
+          followup_flows::
+          followup_ai_cadence::
+          followup_generation::
+          followup_instruction::
+          sms_flows::
 
       - name: Manual chat tests
         if: inputs.cargo_args == ''
         run: >-
-          cargo test -p api
-          --test ai_chat
-          --test crm_manual_eval
-          --test crm_manual_feedback
-          --test manual_feedback_reviews
+          cargo test -p api --test ai --
+          ai_chat::
+          crm_manual_eval::
+          crm_manual_feedback::
+          manual_feedback_reviews::
 
       - name: Requested tests
         if: inputs.cargo_args != ''

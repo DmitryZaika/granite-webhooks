@@ -36,12 +36,24 @@ on:
         description: PostHog issue UUID
         type: string
         required: true
+      event_id:
+        description: Sample $exception event uuid of the bug to fix (may be empty)
+        type: string
+        required: false
+        default: ""
+      bug_id:
+        description: Short id of the bug, 12 lowercase hex (may be empty)
+        type: string
+        required: false
+        default: ""
 
 permissions: {}
 
 env:
   RUN_ID: ${{ inputs.run_id }}
   ISSUE_ID: ${{ inputs.issue_id }}
+  EVENT_ID: ${{ inputs.event_id }}
+  BUG_ID: ${{ inputs.bug_id }}
   CARGO_TERM_COLOR: never
 
 jobs:
@@ -84,7 +96,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: /srv/autofix/work/granite-webhooks
-          shared-key: posthog-autofix
+          shared-key: posthog-autofix-o1
 
       - name: Apply migrations
         working-directory: /srv/autofix/tools
@@ -122,6 +134,7 @@ jobs:
           owner: DmitryZaika
           repositories: granite-webhooks,general_datebase
           permission-contents: read
+          permission-pull-requests: read
 
       # The tools come from this workflow's own commit; the repos the agent
       # works on are `main`. No checkout keeps credentials.
@@ -173,6 +186,14 @@ jobs:
           POSTHOG_AUTOFIX_MCP_KEY: ${{ secrets.POSTHOG_AUTOFIX_MCP_KEY }}
         run: python3 -m autofix issue-context
 
+      # Best effort too: the open auto-fix pull requests, so the agent can
+      # answer `duplicate` instead of opening a second fix for the same bug.
+      - name: List the open auto-fix pull requests
+        working-directory: /srv/autofix/tools
+        env:
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
+        run: python3 -m autofix open-prs
+
       # Fails the job unless the api accepts the run: only runs the ledger
       # dispatched go further.
       - name: Report started
@@ -204,7 +225,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: /srv/autofix/work/granite-webhooks
-          shared-key: posthog-autofix
+          shared-key: posthog-autofix-o1
           save-if: false
 
       - uses: oven-sh/setup-bun@v2

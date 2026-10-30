@@ -8,8 +8,9 @@
 //! Port of `processDueAppointmentReminders` and
 //! `processDueAppointmentRepReminders`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::phone::crm_push::push_notification_logged;
 use crate::routes::events::notify::{Booking, NotifyKind, appointment_when, notify_booking};
 use crate::routes::schedule::notifications;
@@ -21,7 +22,6 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 /// What a run did.
 #[derive(Debug, Default, Serialize, ToSchema)]
@@ -54,6 +54,7 @@ struct CustomerReminder {
     reminder_kind: String,
     customer_name: Option<String>,
     customer_email: Option<String>,
+    customer_phone: Option<String>,
     user_name: Option<String>,
     user_id: i32,
     start_date: NaiveDateTime,
@@ -117,7 +118,9 @@ async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(
     .await?;
     let due: Vec<CustomerReminder> = sqlx::query_as(
         "SELECT r.id, r.company_id, r.customer_id, CAST(r.reminder_kind AS CHAR) AS reminder_kind,
-                c.name AS customer_name, primary_email.email AS customer_email,
+                c.name AS customer_name,
+                COALESCE(NULLIF(TRIM(e.contact_email), ''), primary_email.email) AS customer_email,
+                NULLIF(TRIM(e.contact_phone), '') AS customer_phone,
                 creator.name AS user_name, e.created_user_id AS user_id,
                 e.start_date, e.end_date, e.location
            FROM appointment_reminders r
@@ -158,6 +161,7 @@ async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(
             user_name: reminder.user_name.as_deref(),
             user_id: reminder.user_id,
             customer_email: reminder.customer_email.as_deref(),
+            customer_phone: reminder.customer_phone.as_deref(),
             start,
             end: reminder.end_date.and_utc(),
             location: reminder.location.as_deref(),
@@ -307,7 +311,7 @@ async fn rep_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(), sq
 /// Texts (else emails) customers their 24-hour and 1-hour reminders, and
 /// notifies reps the day before and an hour before. Reminders for
 /// appointments that already started are marked failed.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/appointment-reminders",
     operation_id = "run_appointment_reminders",

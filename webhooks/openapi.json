@@ -1,0 +1,234 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Granite Manager Webhooks API",
+    "description": "Lead intake for Make, Zapier, and website forms.\n\nFor `/v1/webhooks/new-lead-form/{company_id}`:\n- `referral_source` is optional; when set, prefer `website` or `facebook` for statistics.\n- `form_name` is optional; when set, use the specific form id (e.g. `cabinet_quote`, `facebook_form`, `facebook_cabinet_quote_form`, `quick_quote`).\n\nAuthenticate with the access token Granite Manager gave you: `Authorization: Bearer gmk_...`. Each token works for one company.",
+    "license": {
+      "name": ""
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/webhooks/new-lead-form/{company_id}": {
+      "post": {
+        "tags": [],
+        "description": "Create a marketing lead from Make, Zapier, or the website.\n\n**`referral_source`** is optional. When provided, prefer `website` or `facebook` so statistics group correctly. Aliases such as `Facebook Form` or `WordPress` are rewritten automatically; other unrecognized values are stored as sent and flagged for review.\n\n**`form_name`** is optional. When provided, use the specific form id, for example `cabinet_quote`, `facebook_form`, `facebook_cabinet_quote_form`, or `quick_quote`.",
+        "operationId": "new_lead_form",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewLeadForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "NewLeadForm": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "ad_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "adset_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "backsplash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "campaign_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contact_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "details": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "form_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional specific form that produced the lead. Prefer snake_case.\nExamples: `cabinet_quote`, `facebook_form`, `quick_quote`.",
+            "example": "cabinet_quote"
+          },
+          "improve_offer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_size": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "referral_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional marketing channel for statistics. Prefer `website` or `facebook`\nwhen provided. Put the specific form identifier in `form_name` instead.",
+            "example": "website"
+          },
+          "remodel_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sink": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stove_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tear_out": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "your_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "example": {
+          "email": "jane@example.com",
+          "form_name": "cabinet_quote",
+          "name": "Jane Doe",
+          "phone": "+13175551212",
+          "referral_source": "website"
+        }
+      }
+    },
+    "securitySchemes": {
+      "access_token": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An access token (`gmk_...`)."
+      }
+    }
+  },
+  "security": [
+    {
+      "access_token": []
+    }
+  ]
+}

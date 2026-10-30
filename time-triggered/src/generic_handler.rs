@@ -2,24 +2,22 @@ use crate::posthog::{report_failure, reported};
 use crate::schemas::{EventBridgeEvent, OutgoingMessage};
 use common::amazon::email::{assigned_sender_from, send_message_from};
 use common::crud::notifications::{
-    DueActivityDeadlineReminder, get_due_activity_deadline_reminders,
-    mark_deadline_reminder_telegram_sent, unmark_deadline_reminder_telegram_sent,
+    get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
+    unmark_deadline_reminder_telegram_sent, DueActivityDeadlineReminder,
 };
-use common::crud::outbound_email::{OutboundScheduledEmail, record_outbound_scheduled_email};
+use common::crud::outbound_email::{record_outbound_scheduled_email, OutboundScheduledEmail};
 use common::crud::phone_app::has_app;
 use common::crud::scheduled_emails::{
-    ScheduledEmail, cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
+    cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
-    mark_scheduled_email_failed_with_reason,
+    mark_scheduled_email_failed_with_reason, ScheduledEmail,
 };
 use common::crud::template::fetch_template_variable_data;
+use common::telegram::bot::{Bot, ChatId, InlineKeyboardButton, InlineKeyboardMarkup};
 use common::utils::email_send_window::automated_email_send_window_is_open_now;
 use common::utils::template::replace_template_variables;
-use lambda_runtime::{Error, LambdaEvent, tracing};
-use reqwest::Client;
+use lambda_runtime::{tracing, Error, LambdaEvent};
 use sqlx::MySqlPool;
-use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 fn activity_reminder_needs_telegram(
     telegram_activity_notifications: bool,
@@ -40,7 +38,7 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
     let bot = match std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
         .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"))
     {
-        Ok(token) => Some(teloxide::Bot::new(token)),
+        Ok(token) => Some(Bot::new(token)),
         Err(error) => {
             tracing::warn!(
                 ?error,
@@ -81,7 +79,7 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
 /// The reminder's Telegram message, with a button to its deal: whether
 /// Telegram took it.
 async fn send_deadline_reminder_telegram(
-    bot: &teloxide::Bot,
+    bot: &Bot,
     telegram_id: i64,
     reminder: &DueActivityDeadlineReminder,
 ) -> bool {
@@ -101,12 +99,11 @@ async fn send_deadline_reminder_telegram(
         return false;
     };
     let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
-        message.button_label.to_string(),
-        button_url,
+        message.button_label,
+        button_url.to_string(),
     )]]);
     match bot
-        .send_message(ChatId(telegram_id), message.text)
-        .reply_markup(keyboard)
+        .send_message(ChatId(telegram_id), &message.text, Some(&keyboard), None)
         .await
     {
         Ok(_) => true,
@@ -137,7 +134,7 @@ async fn push_notification_to_phones(notification_id: u64) -> usize {
         "{}/v1/phone/pushes/notification",
         api_url.trim_end_matches('/')
     );
-    let sent = Client::new()
+    let sent = common::http::client()
         .post(url)
         .header("Authorization", lambda_key)
         .timeout(PHONE_PUSH_TIMEOUT)
@@ -249,7 +246,7 @@ async fn post_api_job_within(
         }
     };
     let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
-    let response = Client::new()
+    let response = common::http::client()
         .post(url)
         .header("Authorization", lambda_key)
         .timeout(timeout)
@@ -329,21 +326,39 @@ async fn process_contact_sync() -> Result<usize, JobError> {
 
 /// Starts the supplier price file job without waiting for it: a big PDF takes
 /// minutes, and the API Lambda keeps working after this request gives up.
-/// Sent to the long-running deployment (`API_STREAM_URL`) when there is one.
 async fn start_supplier_files_job() {
+    start_api_job("supplier-files", "supplier files").await;
+}
+
+/// Starts the AI check of 10DLC texting registrations without waiting for
+/// it: one check takes minutes.
+async fn start_tendlc_checks_job() {
+    start_api_job("tendlc-checks", "10DLC AI checks").await;
+}
+
+/// Starts the AI promises job without waiting for it: it transcribes calls
+/// and writes messages, which takes longer than a tick waits.
+async fn start_promises_job() {
+    start_api_job("promises", "AI promises").await;
+}
+
+/// Starts a long API job (`POST <API_URL>/v1/jobs/<job>`) without waiting
+/// for it. Sent to the long-running deployment (`API_STREAM_URL`) when there
+/// is one.
+async fn start_api_job(job: &str, label: &str) {
     let Some(api_url) = std::env::var("API_STREAM_URL")
         .ok()
         .or_else(|| std::env::var("API_URL").ok())
     else {
-        tracing::warn!("API_URL is not set; skipping supplier files");
+        tracing::warn!("API_URL is not set; skipping {label}");
         return;
     };
     let Ok(lambda_key) = std::env::var("LAMBDA_KEY") else {
-        tracing::warn!("LAMBDA_KEY is not set; skipping supplier files");
+        tracing::warn!("LAMBDA_KEY is not set; skipping {label}");
         return;
     };
-    let url = format!("{}/v1/jobs/supplier-files", api_url.trim_end_matches('/'));
-    let sent = Client::new()
+    let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
+    let sent = common::http::client()
         .post(url)
         .header("Authorization", lambda_key)
         .timeout(std::time::Duration::from_secs(5))
@@ -352,10 +367,10 @@ async fn start_supplier_files_job() {
     match sent {
         Ok(response) if !response.status().is_success() => tracing::warn!(
             status = response.status().as_u16(),
-            "Failed to start supplier files"
+            "Failed to start {label}"
         ),
         Err(error) if !error.is_timeout() => {
-            tracing::warn!(?error, "Failed to start supplier files");
+            tracing::warn!(?error, "Failed to start {label}");
         }
         _ => {}
     }
@@ -529,6 +544,8 @@ pub(crate) async fn function_handler(
     )
     .await;
     start_supplier_files_job().await;
+    start_tendlc_checks_job().await;
+    start_promises_job().await;
     let call_points_count = match report_job("call-points", process_call_points().await).await {
         Ok(count) => count,
         Err(error) => {
@@ -554,6 +571,12 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    let call_history_count = or_logged(
+        "call-history",
+        post_api_job("call-history", "call history").await,
+        "call history",
+    )
+    .await;
     if let Err(error) = report_job("phone", post_api_job("phone", "Phone").await).await {
         tracing::error!(?error, "Failed to process Phone; continuing");
     }
@@ -566,7 +589,7 @@ pub(crate) async fn function_handler(
             }
         };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, {} contact syncs, and {} PostHog auto-fix changes",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, {} contact syncs, {} saved calls, and {} PostHog auto-fix changes",
         processed_email_count,
         reminder_count,
         estimate_reminder_count,
@@ -576,6 +599,7 @@ pub(crate) async fn function_handler(
         call_points_count,
         signature_reminder_count,
         contact_sync_count,
+        call_history_count,
         posthog_autofix_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
@@ -693,7 +717,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_errors_are_reported() {
-        let error = Client::new()
+        let error = common::http::client()
             .post("http://127.0.0.1:1/v1/jobs/x")
             .send()
             .await

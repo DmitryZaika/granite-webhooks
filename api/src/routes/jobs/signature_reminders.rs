@@ -7,12 +7,13 @@
 //! never send it twice; a send whose outcome is unknown is never retried.
 //! Port of the CRM's `nativeSignatureReminders.server.ts`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::native_signing::{
     CompletedFile, FrozenSettings, LifecycleEvent, NativeSigning, Recipient, reminder_schedule,
     sha256_hex,
 };
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingAttachment, OutgoingEmail, SendFailure};
 use axum::Json;
@@ -21,7 +22,6 @@ use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::{MySql, MySqlPool, Transaction};
-use utoipa::ToSchema;
 
 /// Most sends per run.
 const MAX_SENDS: usize = 100;
@@ -240,16 +240,23 @@ fn sender(from: &str) -> (Option<String>, String) {
 /// blocked for a person to look at).
 async fn build_message(
     state: &AppState,
+    tx: &mut Transaction<'_, MySql>,
     signing: &NativeSigning,
     kind: &str,
     job_key: &str,
     row: &DocumentRow,
     settings: &FrozenSettings,
 ) -> Option<OutgoingEmail> {
-    let invitation = signing
-        .lifecycle_mail(&state.pool, row.request_id, row.company_id)
+    let invitation = match signing
+        .lifecycle_mail(&mut **tx, row.request_id, row.company_id)
         .await
-        .ok()?;
+    {
+        Ok(invitation) => invitation,
+        Err(err) => {
+            tracing::warn!(%err, request_id = row.request_id, "native signature invitation unavailable");
+            return None;
+        }
+    };
     let (from_name, from_address) = sender(&invitation.snapshot.from);
     let mut message = OutgoingEmail {
         from_name,
@@ -399,7 +406,8 @@ async fn dispatch(
         tx.commit().await?;
         return Ok(Outcome::Cancelled);
     }
-    let Some(message) = build_message(state, signing, &kind, &job_key, &row, &settings).await
+    let Some(message) =
+        build_message(state, &mut tx, signing, &kind, &job_key, &row, &settings).await
     else {
         set_state(&mut tx, job.id, "blocked").await?;
         tx.commit().await?;
@@ -588,7 +596,7 @@ pub async fn process_expired(pool: &MySqlPool, now: DateTime<Utc>) -> Result<usi
 /// the senders' notifications. Called by the `time-triggered` Lambda with
 /// `Authorization: <LAMBDA_KEY>`. While native signatures are not enabled
 /// it does nothing.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/signature-reminders",
     operation_id = "run_signature_reminders",

@@ -14,7 +14,29 @@ from pathlib import PurePosixPath
 
 from .paths import is_vitest_file
 
-DEFAULT_CRATES = frozenset({"api", "webhooks", "common", "time-triggered"})
+DEFAULT_CRATES = frozenset(
+    {
+        "api",
+        "api-accounts",
+        "api-admin",
+        "api-ai",
+        "api-core",
+        "api-crm",
+        "api-followups",
+        "api-inventory",
+        "api-media",
+        "api-phone",
+        "api-quotes",
+        "api-schedule",
+        "webhooks",
+        "webhooks-core",
+        "webhooks-email",
+        "webhooks-leads",
+        "webhooks-phone",
+        "common",
+        "time-triggered",
+    }
+)
 
 _NAME = re.compile(r"[A-Za-z0-9_:]+")
 _PATH = re.compile(r"[A-Za-z0-9_.$()/+-]+")
