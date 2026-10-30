@@ -20,7 +20,8 @@ pub const CREDENTIAL_DAYS: i64 = 30;
 
 /// SQL condition: the phone `pd` and its device session `ds` are signed in
 /// (not revoked, not expired, used in the last 30 days); a browser phone
-/// also needs its web session (the CRM's sign-in) to be live.
+/// also needs its web session (the CRM's sign-in) to be live, by the rule of
+/// `auth::session::find_session_user` (60 days = `SESSION_MAX_AGE_SECONDS`).
 pub const LIVE_DEVICE: &str = "pd.revoked_at IS NULL AND ds.revoked_at IS NULL
      AND ds.expires_at > UTC_TIMESTAMP()
      AND COALESCE(ds.last_seen_at, ds.created_at) > UTC_TIMESTAMP() - INTERVAL 30 DAY
@@ -28,7 +29,8 @@ pub const LIVE_DEVICE: &str = "pd.revoked_at IS NULL AND ds.revoked_at IS NULL
           SELECT 1 FROM sessions ws
            WHERE ws.id = ds.web_session_id AND ws.is_deleted = 0
              AND ws.expiration_date > CURRENT_TIMESTAMP
-             AND ws.created_date > CURRENT_TIMESTAMP - INTERVAL 2 MONTH))";
+             AND (ws.expiration_date <= CURRENT_TIMESTAMP + INTERVAL 60 DAY
+                  OR ws.created_date > CURRENT_TIMESTAMP - INTERVAL 2 MONTH)))";
 
 /// This session's phone, as the app sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]

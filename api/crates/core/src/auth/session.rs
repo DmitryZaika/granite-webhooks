@@ -1,13 +1,18 @@
 //! Port of `getUser` + `handlePermissions` from the Remix app's
 //! `app/utils/session.server.ts`. Keep the two in sync until Remix is gone.
 
+use crate::auth::cookie::SESSION_MAX_AGE_SECONDS;
 use crate::openapi::ToSchema;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
 
-/// Sessions older than this are rejected even if `expiration_date` is later
-/// (Remix `SESSION_MAX_AGE_MONTHS`).
+/// Remix sessions carry an `expiration_date` years away: they still end this
+/// long after sign-in. Every other session ends at its `expiration_date`,
+/// which [`keep_session`] moves forward while the session is used.
 pub const SESSION_MAX_AGE_MONTHS: i32 = 2;
+
+/// [`keep_session`] writes at most once in this many seconds per session.
+const KEEP_EVERY_SECONDS: i64 = 86_400;
 
 /// `Positions.SuperAdmin` in the Remix app.
 pub const SUPER_ADMIN_POSITION: i32 = 9;
@@ -82,15 +87,52 @@ pub async fn find_session_user(
         JOIN sessions ON sessions.user_id = users.id
         WHERE sessions.id = ?
           AND sessions.expiration_date > CURRENT_TIMESTAMP
-          AND sessions.created_date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? MONTH)
+          AND (sessions.expiration_date <= CURRENT_TIMESTAMP + INTERVAL ? SECOND
+               OR sessions.created_date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? MONTH))
           AND sessions.is_deleted = 0
           AND users.is_deleted = 0
         ",
     )
     .bind(session_id)
+    .bind(SESSION_MAX_AGE_SECONDS)
     .bind(SESSION_MAX_AGE_MONTHS)
     .fetch_optional(pool)
     .await
+}
+
+/// A session in use lives another [`SESSION_MAX_AGE_SECONDS`] from now, and
+/// so do its browser phones: only a session left unused that long ends. A
+/// Remix session's far-off date is brought in at the same time. At most one
+/// write a day; a session that no longer signs in (as `find_session_user`
+/// decides) is left alone.
+pub async fn keep_session(pool: &MySqlPool, session_id: &str) -> Result<(), sqlx::Error> {
+    let kept = sqlx::query(
+        "UPDATE sessions SET expiration_date = NOW() + INTERVAL ? SECOND
+          WHERE id = ? AND is_deleted = 0 AND expiration_date > NOW()
+            AND (expiration_date <= NOW() + INTERVAL ? SECOND
+                 OR created_date > DATE_SUB(NOW(), INTERVAL ? MONTH))
+            AND expiration_date NOT BETWEEN NOW() + INTERVAL ? SECOND
+                                        AND NOW() + INTERVAL ? SECOND",
+    )
+    .bind(SESSION_MAX_AGE_SECONDS)
+    .bind(session_id)
+    .bind(SESSION_MAX_AGE_SECONDS)
+    .bind(SESSION_MAX_AGE_MONTHS)
+    .bind(SESSION_MAX_AGE_SECONDS - KEEP_EVERY_SECONDS)
+    .bind(SESSION_MAX_AGE_SECONDS)
+    .execute(pool)
+    .await?;
+    if kept.rows_affected() > 0 {
+        sqlx::query(
+            "UPDATE device_sessions ds JOIN sessions s ON s.id = ds.web_session_id
+                SET ds.expires_at = s.expiration_date
+              WHERE s.id = ? AND ds.revoked_at IS NULL",
+        )
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
 }
 
 /// All of a user's position rows, across every company.
