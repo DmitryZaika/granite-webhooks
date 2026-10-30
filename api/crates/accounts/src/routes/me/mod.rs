@@ -26,6 +26,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::me))
         .routes(routes!(account::account, account::update_account))
+        .routes(routes!(account::set_recording_voice))
         .routes(routes!(handlers::positions))
         .routes(routes!(handlers::sales_goal, handlers::set_sales_goal))
         .routes(routes!(handlers::telegram))
