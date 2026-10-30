@@ -8,8 +8,8 @@
 //! In order:
 //! 1. signs out the phones of users who may no longer use Granite Phone
 //!    (deleted, moved to another company, no longer an employee or admin,
-//!    or their company deleted), and the sign-ins that expired (12 months)
-//!    or idled 30 days;
+//!    or their company deleted), and browser phones whose CRM sign-in
+//!    ended (no sign-in ends by time);
 //! 2. deletes the Telnyx credentials of signed-out phones that are still on
 //!    Telnyx (a delete that failed before; each failure waits longer before
 //!    the next try, up to a day);
@@ -126,8 +126,7 @@ pub struct PhoneJobRun {
     /// Phones signed out because their user may no longer use Granite
     /// Phone (or their company was deleted).
     pub phones_signed_out: usize,
-    /// Phones signed out because their sign-in expired (12 months) or went
-    /// unused for 30 days.
+    /// Browser phones signed out because their CRM sign-in ended.
     pub sessions_expired: usize,
     /// Telnyx credentials of signed-out phones deleted (left over from a
     /// failed delete).
@@ -179,7 +178,7 @@ pub struct PhoneJobRun {
 /// Run Granite Phone's upkeep
 ///
 /// Signs out the phones of users who may no longer use Granite Phone (or
-/// whose company was deleted) and expired or idle sign-ins, deletes
+/// whose company was deleted) and browser phones whose CRM sign-in ended, deletes
 /// leftover Telnyx credentials of signed-out phones (backing off on
 /// failures), deletes Telnyx callbacks older than 30 days, closes calls
 /// Telnyx never reported the end of (after 6 hours), keeps the customer
@@ -268,12 +267,12 @@ enum Sessions {
     /// Of users who may no longer use Granite Phone, or of a deleted
     /// company.
     LostAccess,
-    /// Expired (12 months) or unused for 30 days.
+    /// Browser phones whose CRM sign-in ended.
     Expired,
 }
 
 /// Step 1: the phones of users who may no longer use Granite Phone, and
-/// sign-ins that expired or idled (through `revoke_device_session`, so their
+/// browser phones whose CRM sign-in ended (through `revoke_device_session`, so their
 /// credentials and push tokens go too).
 async fn sign_out(state: &AppState, which: Sessions, deadline: Instant) -> sqlx::Result<usize> {
     let (sessions, reason) = match which {

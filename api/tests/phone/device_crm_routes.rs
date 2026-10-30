@@ -161,8 +161,8 @@ async fn the_app_reads_emails_and_the_schedule_with_its_device_token(pool: MySql
         );
     }
 
-    // Nothing without a token or cookie; a bad, revoked or idle token is out
-    // even with a cookie (the header decides alone).
+    // Nothing without a token or cookie; a bad or revoked token is out even
+    // with a cookie (the header decides alone). One long unused is still in.
     server
         .get(UNREAD)
         .await
@@ -192,7 +192,7 @@ async fn the_app_reads_emails_and_the_schedule_with_its_device_token(pool: MySql
         .get(UNREAD)
         .add_header(HEADER, token(303))
         .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .assert_status_ok();
 
     // Elsewhere the cookie routes still need the cookie, even right next to
     // the prefixes (`/v1/email-attachments` is not under `/v1/emails`).
