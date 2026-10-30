@@ -357,17 +357,18 @@ async fn only_the_senders_failed_texts_can_be_retried(pool: MySqlPool) {
         .execute(&pool)
         .await
         .unwrap();
-    for (session, id) in [
-        (sessions::REP, theirs),
-        (sessions::REP, mine),
-        (sessions::OTHER_COMPANY_REP, theirs),
+    // The other company's rep has no agent id, so is refused before the lookup.
+    for (session, id, status) in [
+        (sessions::REP, theirs, StatusCode::NOT_FOUND),
+        (sessions::REP, mine, StatusCode::NOT_FOUND),
+        (sessions::OTHER_COMPANY_REP, theirs, StatusCode::FORBIDDEN),
     ] {
         setup
             .server
             .post(&format!("/v1/sms/cloudtalk/messages/{id}/retry"))
             .with_session(session)
             .await
-            .assert_status(StatusCode::NOT_FOUND);
+            .assert_status(status);
     }
     assert!(setup.seen().is_empty());
     assert_eq!(status_of(&pool, theirs).await.as_deref(), Some("failed"));
