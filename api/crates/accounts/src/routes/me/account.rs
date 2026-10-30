@@ -16,11 +16,11 @@ use crate::phone::settings as phone_settings;
 use crate::routes::company::queries::company_features;
 use crate::routes::onboarding::{self, Credit, CreditOutcome, store};
 use crate::routes::users::manage::resolve_ringcentral_extension;
+use crate::routes::users::texting_history;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use common::telephony::ringcentral;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
@@ -129,6 +129,18 @@ struct Stored {
     cloudtalk_phone_number: Option<String>,
     ringcentral_extension_id: Option<String>,
     ringcentral_phone_number: Option<String>,
+}
+
+impl Stored {
+    /// The stored texting line.
+    fn line(&self) -> texting_history::Line {
+        texting_history::Line {
+            cloudtalk_agent: self.cloudtalk_agent_id.clone(),
+            cloudtalk_phone: line10(self.cloudtalk_phone_number.as_deref()),
+            ringcentral_extension: self.ringcentral_extension_id.clone(),
+            ringcentral_phone: line10(self.ringcentral_phone_number.as_deref()),
+        }
+    }
 }
 
 async fn stored(pool: &MySqlPool, actor: store::Actor) -> ApiResult<Stored> {
@@ -516,92 +528,6 @@ fn ringcentral_status(
     }
 }
 
-const COPY_MARKER: &str = "cloudtalk:";
-
-/// A rep who moves the same number from `CloudTalk` to `RingCentral` keeps
-/// their texting history: the line's `CloudTalk` texts, pictures and read
-/// state are copied to the `RingCentral` tables. Each copy carries
-/// `cloudtalk:<id>`, so repeat saves copy nothing twice.
-async fn copy_cloudtalk_history(
-    pool: &MySqlPool,
-    company_id: i32,
-    line: &str,
-    cloudtalk_agent: Option<&str>,
-    extension: &str,
-) -> sqlx::Result<u64> {
-    let mut tx = pool.begin().await?;
-    let messages = sqlx::query(
-        "INSERT INTO ringcentral_sms
-           (ringcentral_id, sender, recipient, text, direction, status, error_message,
-            idempotency_key, agent, sender_user_id, company_id, created_date,
-            sender10, recipient10, phone_digits, is_echo, echo_of_sms_id, is_automated)
-         SELECT NULL, s.sender, s.recipient, s.text, s.direction, s.status, s.error_message,
-                CONCAT(?, s.id), IF(s.agent IS NULL, NULL, ?), s.sender_user_id, s.company_id,
-                s.created_date, s.sender10, s.recipient10, s.phone_digits, 0, NULL,
-                s.is_automated
-           FROM cloudtalk_sms s
-          WHERE s.company_id = ?
-            AND s.is_echo = 0
-            AND (s.agent = ? OR (s.agent IS NULL AND (s.recipient10 = ? OR s.sender10 = ?)))
-            AND NOT EXISTS (
-              SELECT 1 FROM ringcentral_sms r
-               WHERE r.company_id = s.company_id AND r.idempotency_key = CONCAT(?, s.id)
-            )",
-    )
-    .bind(COPY_MARKER)
-    .bind(extension)
-    .bind(company_id)
-    .bind(cloudtalk_agent.unwrap_or_default())
-    .bind(line)
-    .bind(line)
-    .bind(COPY_MARKER)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    sqlx::query(
-        "INSERT INTO ringcentral_sms_attachments
-           (ringcentral_sms_id, content_type, filename, s3_key, s3_url, width, height,
-            position, created_date)
-         SELECT r.id, a.content_type, a.filename, a.s3_key, a.s3_url, a.width, a.height,
-                a.position, a.created_date
-           FROM ringcentral_sms r
-           JOIN cloudtalk_sms_attachments a
-             ON a.cloudtalk_sms_id = CAST(SUBSTRING(r.idempotency_key, ?) AS UNSIGNED)
-          WHERE r.company_id = ?
-            AND r.idempotency_key LIKE CONCAT(?, '%')
-            AND NOT EXISTS (
-              SELECT 1 FROM ringcentral_sms_attachments x WHERE x.ringcentral_sms_id = r.id
-            )",
-    )
-    .bind(i32::try_from(COPY_MARKER.len() + 1).unwrap_or(11))
-    .bind(company_id)
-    .bind(COPY_MARKER)
-    .execute(&mut *tx)
-    .await?;
-    // Without read state every copied inbound text would show as unread again.
-    sqlx::query(
-        "INSERT INTO ringcentral_sms_thread_reads
-           (user_id, company_id, customer_phone_digits, last_read_at)
-         SELECT cr.user_id, cr.company_id, cr.customer_phone_digits, cr.last_read_at
-           FROM cloudtalk_sms_thread_reads cr
-          WHERE cr.company_id = ?
-            AND cr.customer_phone_digits IN (
-              SELECT DISTINCT r.phone_digits FROM ringcentral_sms r
-               WHERE r.company_id = ? AND r.idempotency_key LIKE CONCAT(?, '%')
-            )
-         ON DUPLICATE KEY UPDATE
-           last_read_at = GREATEST(ringcentral_sms_thread_reads.last_read_at,
-                                   VALUES(last_read_at))",
-    )
-    .bind(company_id)
-    .bind(company_id)
-    .bind(COPY_MARKER)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(messages)
-}
-
 /// The texting line a save submits, resolved with its provider.
 struct TextingLine {
     status: LineStatus,
@@ -731,54 +657,6 @@ async fn save(
     Ok(())
 }
 
-/// After a `RingCentral` link: the SMS webhook covers a new extension, and a
-/// number moved from `CloudTalk` brings its history. Failures are logged; the
-/// save stands.
-async fn follow_ringcentral_link(
-    state: &AppState,
-    actor: store::Actor,
-    input: &Checked,
-    before: &Stored,
-    line: &TextingLine,
-) {
-    let Some(extension) = &line.extension else {
-        return;
-    };
-    let pool = &state.pool;
-    if before.ringcentral_extension_id.as_ref() != Some(extension)
-        && let Err(error) =
-            ringcentral::ensure_sms_subscription(pool, &state.telephony_http, actor.company_id)
-                .await
-    {
-        tracing::error!(
-            company_id = actor.company_id,
-            ?error,
-            "RingCentral SMS subscription failed"
-        );
-    }
-    let Some(rc_line) = input.ringcentral_phone.value().filter(|_| line.matched) else {
-        return;
-    };
-    let ct_line = input
-        .cloudtalk_phone
-        .value()
-        .map(str::to_string)
-        .or_else(|| line10(before.cloudtalk_phone_number.as_deref()));
-    if ct_line.as_deref() != Some(rc_line) {
-        return;
-    }
-    let agent = input
-        .cloudtalk_agent_id
-        .value()
-        .map(str::to_string)
-        .or_else(|| before.cloudtalk_agent_id.clone());
-    if let Err(error) =
-        copy_cloudtalk_history(pool, actor.company_id, rc_line, agent.as_deref(), extension).await
-    {
-        tracing::error!(company_id = actor.company_id, %error, "copying CloudTalk history failed");
-    }
-}
-
 /// What this save finished (empty before, filled now) pays its setup task.
 async fn finished_setup_credit(
     state: &AppState,
@@ -883,7 +761,31 @@ pub async fn update_account(
         )
         .await?;
     }
-    follow_ringcentral_link(&state, actor, &input, &before, &line).await;
+    texting_history::follow(
+        &state,
+        actor.company_id,
+        &before.line(),
+        &texting_history::Line {
+            cloudtalk_agent: input
+                .cloudtalk_agent_id
+                .or_kept(before.cloudtalk_agent_id.as_ref()),
+            cloudtalk_phone: line10(
+                input
+                    .cloudtalk_phone
+                    .or_kept(before.cloudtalk_phone_number.as_ref())
+                    .as_deref(),
+            ),
+            ringcentral_extension: line.extension.clone(),
+            ringcentral_phone: line10(
+                input
+                    .ringcentral_phone
+                    .or_kept(before.ringcentral_phone_number.as_ref())
+                    .as_deref(),
+            ),
+        },
+        line.matched,
+    )
+    .await;
     let credit = finished_setup_credit(&state, actor, &input, &before).await;
     Ok(Json(AccountSaved {
         texting_line_status: line.status.as_str().into(),
