@@ -2,7 +2,7 @@
 
 use super::history::{History, record};
 use super::reminders;
-use crate::auth::EmployeeUser;
+use crate::auth::ShopOrEmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -472,14 +472,14 @@ const fn not_found() -> ApiError {
         (status = 201, description = "Added", body = CreatedEvent),
         (status = 400, description = "Invalid field, or unknown calendar or customer", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn create(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     JsonBody(input): JsonBody<EventInput>,
 ) -> ApiResult<(StatusCode, Json<CreatedEvent>)> {
     let pool = &state.pool;
@@ -602,7 +602,7 @@ fn change_messages(
         (status = 204, description = "Saved"),
         (status = 400, description = "Invalid field, or unknown calendar or customer", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -610,7 +610,7 @@ fn change_messages(
 )]
 pub async fn update(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<EventInput>,
 ) -> ApiResult<StatusCode> {
@@ -687,6 +687,13 @@ pub async fn update(
         )
         .await;
     }
+    // The crew's On my way, Arrived and Completed belong to the job's day.
+    if input.unscheduled
+        || super::crew::job_days(event.start, event.end, input.all_day).0
+            != super::crew::job_days(existing.start_date, existing.end_date, existing.all_day).0
+    {
+        super::crew::clear(pool, id).await?;
+    }
     if input.unscheduled {
         reminders::cancel(pool, id).await?;
     } else if moved {
@@ -714,7 +721,7 @@ pub async fn update(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -722,7 +729,7 @@ pub async fn update(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     let pool = &state.pool;

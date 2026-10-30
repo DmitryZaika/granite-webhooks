@@ -18,6 +18,7 @@ mod manage_users;
 mod me;
 mod me_account;
 mod onboarding;
+mod position_sections;
 mod signup;
 mod signup_bank;
 mod signup_provisioning;

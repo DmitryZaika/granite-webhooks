@@ -447,17 +447,17 @@ fn form() -> Value {
         "campaign": {
             "usecase": "MIXED", "subUsecases": ["CUSTOMER_CARE", "ACCOUNT_NOTIFICATION"],
             "description": "Acme Stone texts customers about their quotes, appointments and countertop projects.",
-            "messageFlow": "Customers give us their mobile number on our quote form and agree to receive texts from Acme Stone.",
+            "messageFlow": "Customers ask for a quote on our quote form at https://acmestone.test/quote and check an optional box to agree to texts from Acme Stone. Privacy policy: https://acmestone.test/privacy",
             "samples": [
                 "Acme Stone: your countertop quote is ready. Reply STOP to opt out.",
                 "Acme Stone: your install is Friday at 9 AM. Reply STOP to opt out.",
                 "  "
             ],
-            "helpMessage": "Acme Stone: reply to this text for help. Reply STOP to opt out.",
+            "helpMessage": "Acme Stone: for help call 317-555-0100 or email office@acmestone.test. Reply STOP to opt out.",
             "helpKeywords": "help, info",
-            "optinMessage": "Acme Stone: you will get texts about your project. Reply STOP to opt out.",
+            "optinMessage": "Acme Stone: you will get texts about your quotes and projects. Msg frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to opt out.",
             "optinKeywords": "start",
-            "optoutMessage": "Acme Stone: you are unsubscribed. Reply START to subscribe again.",
+            "optoutMessage": "Acme Stone: you are unsubscribed and will get no more texts. Reply START to subscribe again.",
             "optoutKeywords": "stop quit",
             "optinFormLink": "https://acmestone.test/quote",
             "privacyPolicyLink": "https://acmestone.test/privacy",
@@ -1600,7 +1600,8 @@ const TERMS_PAGE: &str = "<html><body><h1>Acme Stone terms</h1><h2>Text messages
     rates may apply. Reply STOP to opt out, HELP for help. Carriers are not liable for delayed or \
     undelivered messages.</p></body></html>";
 const HOME_PAGE: &str = "<html><body><h1>Acme Stone</h1><p>Granite and quartz countertops in \
-    Indianapolis since 2004.</p></body></html>";
+    Indianapolis since 2004.</p><footer>100 Main St, Indianapolis, IN 46204 · (317) 555-0100 · \
+    office@acmestone.test</footer></body></html>";
 
 /// An answer of the AI: every check passes but those of `changed` (id,
 /// answer without its id).
@@ -1624,6 +1625,25 @@ fn ai_answer(summary: &str, changed: &[(&str, Value)]) -> Value {
     json!({ "summary": summary, "checks": checks })
 }
 
+/// What the AI reads off Acme's IRS letter.
+fn irs_letter() -> Value {
+    json!({ "isIrsEinLetter": true, "kind": "CP575", "legalName": "ACME STONE LLC",
+            "ein": "12-3456789", "street": "100 MAIN ST", "city": "INDIANAPOLIS", "state": "IN",
+            "postalCode": "46204", "unreadable": "" })
+}
+
+/// Mark uploads Acme's IRS letter; the AI reads `read` off it.
+async fn upload_letter(server: &TestServer, fake: &CheckFake, read: Value) -> TestResponse {
+    fake.answer_with(read);
+    server
+        .post("/v1/phone/admin/tendlc/ein-letter")
+        .with_session(sessions::MANAGER)
+        .json(
+            &json!({ "file": "data:application/pdf;base64,JVBERi0xLjQK", "fileName": "cp575.pdf" }),
+        )
+        .await
+}
+
 async fn run_checks(server: &TestServer) -> Value {
     let run = server
         .post("/v1/jobs/tendlc-checks")
@@ -1642,6 +1662,101 @@ async fn email_of(pool: &MySqlPool, user: i32) -> String {
 }
 
 #[test_db::test(seed)]
+async fn the_irs_letter_sets_the_legal_details(pool: MySqlPool) {
+    setup(&pool).await;
+    let (server, fake, _) = check_server(&pool).await;
+    // Nothing saved yet: nothing to put it on.
+    server
+        .post("/v1/phone/admin/tendlc/ein-letter")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "file": "data:application/pdf;base64,JVBERi0xLjQK" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    // With an AI on the server, a business with an EIN must upload it.
+    let saved: Value = save_form(&server, sessions::MANAGER, &form()).await.json();
+    assert_eq!(problem_fields(&saved), ["brand.einLetter"]);
+    server
+        .post("/v1/phone/admin/tendlc/ready")
+        .with_session(sessions::MANAGER)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // Not an IRS letter, or not a file the AI reads: refused, nothing kept.
+    let mut other = irs_letter();
+    other["isIrsEinLetter"] = json!(false);
+    other["kind"] = json!("other");
+    let refused = upload_letter(&server, &fake, other).await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    assert!(
+        refused.json::<Value>()["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("This is not an IRS EIN letter")
+    );
+    server
+        .post("/v1/phone/admin/tendlc/ein-letter")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "file": "data:image/heic;base64,AAAA" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // A clear CP 575: the form must have its details exactly.
+    let mut read = irs_letter();
+    read["street"] = json!("100 MAIN STREET");
+    let uploaded = upload_letter(&server, &fake, read).await;
+    uploaded.assert_status_ok();
+    let uploaded: Value = uploaded.json();
+    let letter = &uploaded["draft"]["brand"]["einLetter"];
+    assert_eq!(letter["legalName"], "ACME STONE LLC");
+    assert_eq!(letter["ein"], "12-3456789");
+    assert_eq!(letter["fileName"], "cp575.pdf");
+    assert_eq!(
+        uploaded["problems"],
+        json!([{ "field": "brand.street",
+                 "message": "Enter the street address exactly as on your IRS letter: \"100 MAIN STREET\"." }])
+    );
+    // The AI got the file itself.
+    let asked = fake.requests().last().cloned().unwrap();
+    assert_eq!(
+        asked["messages"][1]["content"][1]["file"]["file_data"],
+        "data:application/pdf;base64,JVBERi0xLjQK"
+    );
+
+    // A save keeps the letter as read, whatever the form sends.
+    let mut fixed = form();
+    fixed["brand"]["street"] = json!("100 Main Street");
+    fixed["brand"]["einLetter"] = json!({ "legalName": "SOMEONE ELSE" });
+    let saved: Value = save_form(&server, sessions::MANAGER, &fixed).await.json();
+    assert_eq!(
+        saved["draft"]["brand"]["einLetter"]["legalName"],
+        "ACME STONE LLC"
+    );
+    assert_eq!(saved["problems"], json!([]));
+
+    // Superusers upload one too.
+    fake.answer_with(irs_letter());
+    let review: Value = server
+        .post("/v1/superuser/companies/100/tendlc/ein-letter")
+        .with_session(sessions::SUPER_ADMIN)
+        .json(&json!({ "file": "data:image/png;base64,iVBORw0KGgo=" }))
+        .await
+        .json();
+    assert_eq!(
+        review["registration"]["draft"]["brand"]["einLetter"]["street"],
+        "100 MAIN ST"
+    );
+    assert_eq!(problem_fields(&review["registration"]), ["brand.street"]);
+    assert_eq!(
+        audit_actions(&pool)
+            .await
+            .iter()
+            .filter(|(_, action)| action == "tendlc_ein_letter")
+            .count(),
+        2
+    );
+}
+
+#[test_db::test(seed)]
 async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MySqlPool) {
     setup(&pool).await;
     let (server, fake, base) = check_server(&pool).await;
@@ -1654,8 +1769,18 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     form["campaign"]["optinFormLink"] = json!(format!("{base}/site/quote"));
     form["campaign"]["privacyPolicyLink"] = json!(format!("{base}/site/privacy"));
     form["campaign"]["termsAndConditionsLink"] = json!(format!("{base}/site/terms"));
+    form["campaign"]["messageFlow"] = json!(format!(
+        "Customers ask for a quote on our quote form at {base}/site/quote and agree to texts from \
+         Acme Stone. Privacy policy: {base}/site/privacy"
+    ));
     let mark = email_of(&pool, 101).await;
     let sam = email_of(&pool, 103).await;
+    save_form(&server, sessions::MANAGER, &form)
+        .await
+        .assert_status_ok();
+    upload_letter(&server, &fake, irs_letter())
+        .await
+        .assert_status_ok();
 
     // Marking it ready asks for the check: still a draft, nobody told yet.
     let marked = ready(&server, &form).await;
@@ -1670,7 +1795,8 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
         "Customers ask for a quote on our quote form at {base}/site/quote and check an optional \
          box, not checked in advance, to agree to texts from Acme Stone: \"I agree to receive \
          texts from Acme Stone about my quote and project. Message frequency varies. Msg & data \
-         rates may apply. Reply HELP for help, STOP to opt out.\""
+         rates may apply. Reply HELP for help, STOP to opt out.\" Privacy policy: \
+         {base}/site/privacy"
     );
     let sharing = "No mobile information will be shared with third parties or affiliates for \
                    marketing or promotional purposes.";
@@ -1707,12 +1833,15 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     ));
     let run = run_checks(&server).await;
     assert_eq!(run["processed"], 1);
+    // The letter's reading, then the check's two answers.
     let requests = fake.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
+    let requests = &requests[1..];
     assert_eq!(requests[0]["model"], api::ai::LARGE_MODEL);
     assert_eq!(requests[0]["response_format"]["type"], "json_schema");
     let read = requests[0]["messages"][1]["content"].as_str().unwrap();
-    // The pages as read: the form's fields and words, no scripts.
+    // The pages as read: the form's fields and words, no scripts; nothing
+    // code found on them.
     assert!(
         read.contains("I agree to receive texts from Acme Stone"),
         "{read}"
@@ -1720,6 +1849,7 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     assert!(read.contains("type=\\\"checkbox\\\""), "{read}");
     assert!(read.contains("We may share your information"), "{read}");
     assert!(!read.contains("track("), "{read}");
+    assert!(read.contains("\"facts\": []"), "{read}");
     let sent_back = requests[1]["messages"].as_array().unwrap();
     assert_eq!(sent_back.len(), 4);
     assert!(
@@ -1839,6 +1969,38 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     );
     assert_eq!(review(&server).await["actions"]["send"], true);
 
+    // A pass more than a day old is checked again before it is sent: still
+    // ready once it passes, and the superusers are told again.
+    sql(
+        &pool,
+        "UPDATE tendlc_registrations SET ai_checked_at = UTC_TIMESTAMP() - INTERVAL 2 DAY
+          WHERE company_id = 100",
+    )
+    .await;
+    let stale = superuser_post(&server, "send", &json!({})).await;
+    stale.assert_status(StatusCode::CONFLICT);
+    assert!(
+        stale.json::<Value>()["error"]
+            .as_str()
+            .unwrap()
+            .contains("runs again now")
+    );
+    let waiting = review(&server).await;
+    assert_eq!(waiting["registration"]["aiCheck"]["status"], "pending");
+    superuser_post(&server, "send", &json!({}))
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    fake.answer_with(ai_answer("Still in order.", &[]));
+    assert_eq!(run_checks(&server).await["processed"], 1);
+    let rechecked = review(&server).await;
+    assert_eq!(rechecked["registration"]["status"], "ready");
+    assert_eq!(rechecked["registration"]["readyByName"], "Mark Manager");
+    assert_eq!(rechecked["registration"]["aiCheck"]["status"], "passed");
+    assert_eq!(
+        bell(&pool, "tendlc_ready").await.len(),
+        2 * superusers.len()
+    );
+
     // A Manager's change after it passed takes it back to a draft, to be
     // checked again; nothing waits for the job.
     form["campaign"]["description"] =
@@ -1847,5 +2009,233 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     assert_eq!(changed["status"], "draft");
     assert_eq!(changed["actions"]["markReady"], true);
     assert_eq!(run_checks(&server).await["processed"], 0);
-    assert_eq!(fake.requests().len(), 3);
+    assert_eq!(fake.requests().len(), 5);
+}
+
+#[test_db::test(seed)]
+async fn code_finds_what_the_pages_miss_whatever_the_ai_says(pool: MySqlPool) {
+    setup(&pool).await;
+    let (server, fake, base) = check_server(&pool).await;
+    // The quote form's checkbox is checked in advance, it links to another
+    // privacy page and to no terms, and the website shows no phone, email
+    // or address.
+    fake.page(
+        "/quote",
+        &QUOTE_PAGE
+            .replace(
+                "<input type=\"checkbox\" id=\"sms\" name=\"sms\">",
+                "<input type=\"checkbox\" id=\"sms\" name=\"sms\" checked>",
+            )
+            .replace("/site/privacy\"", "/site/privacy-policy\"")
+            .replace("<a href=\"/site/terms\">Terms</a>", ""),
+    );
+    fake.page("/privacy", FIXED_PRIVACY_PAGE);
+    fake.page("/privacy-policy", FIXED_PRIVACY_PAGE);
+    fake.page("/terms", TERMS_PAGE);
+    fake.page(
+        "/",
+        "<html><body><h1>Acme Stone</h1><p>Granite and quartz countertops.</p></body></html>",
+    );
+    let mut form = form();
+    form["brand"]["website"] = json!(format!("{base}/site/"));
+    form["campaign"]["optinFormLink"] = json!(format!("{base}/site/quote"));
+    form["campaign"]["privacyPolicyLink"] = json!(format!("{base}/site/privacy"));
+    form["campaign"]["termsAndConditionsLink"] = json!(format!("{base}/site/terms"));
+    form["campaign"]["messageFlow"] = json!(format!(
+        "Customers ask for a quote on our quote form at {base}/site/quote and agree to texts from \
+         Acme Stone. Privacy policy: {base}/site/privacy"
+    ));
+    save_form(&server, sessions::MANAGER, &form)
+        .await
+        .assert_status_ok();
+    upload_letter(&server, &fake, irs_letter())
+        .await
+        .assert_status_ok();
+    ready(&server, &form).await;
+    // The AI passes everything.
+    fake.answer_with(ai_answer("Everything is in order.", &[]));
+    assert_eq!(run_checks(&server).await["processed"], 1);
+    let read = fake.requests()[1]["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The privacy page the quote form links to was read too.
+    assert!(read.contains("page:linkedPrivacy"), "{read}");
+    assert!(
+        read.contains("The texts checkbox is checked in advance."),
+        "{read}"
+    );
+
+    let after: Value = server
+        .get("/v1/phone/admin/tendlc")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(after["aiCheck"]["status"], "changes");
+    let fixes: Vec<(String, String)> = after["aiCheck"]["fixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|fix| {
+            (
+                fix["location"].as_str().unwrap().to_string(),
+                fix["replacement"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let locations: Vec<&str> = fixes
+        .iter()
+        .map(|(location, _)| location.as_str())
+        .collect();
+    assert_eq!(
+        locations,
+        [
+            "page:quoteForm",
+            "page:quoteForm",
+            "campaign.privacyPolicyLink",
+            "page:website",
+        ]
+    );
+    assert_eq!(fixes[1].1, format!("Terms: {base}/site/terms"));
+    assert_eq!(fixes[2].1, format!("{base}/site/privacy-policy"));
+    assert_eq!(
+        fixes[3].1,
+        "Phone: (317) 555-0100\nEmail: office@acmestone.test\nAddress: 100 Main St, \
+         Indianapolis, IN 46204"
+    );
+}
+
+/// The API with an AI on a stand-in that streams `pieces` as its answer;
+/// the AI requests it received.
+async fn helper_server(pool: &MySqlPool, pieces: &[&str]) -> (TestServer, Arc<Mutex<Vec<Value>>>) {
+    let asked: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let seen = asked.clone();
+    let body: String = pieces
+        .iter()
+        .map(|piece| {
+            let event = json!({ "choices": [{ "delta": { "content": piece } }] });
+            format!("data: {event}\n\n")
+        })
+        .chain(["data: [DONE]\n\n".to_string()])
+        .collect();
+    let router = Router::new().fallback(move |request: Request| {
+        let seen = seen.clone();
+        let body = body.clone();
+        async move {
+            let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            seen.lock()
+                .unwrap()
+                .push(serde_json::from_slice(&bytes).unwrap_or(Value::Null));
+            ([("content-type", "text/event-stream")], body).into_response()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN).with_ai(Ai::new(
+        Some("ai-key"),
+        &format!("http://{address}/openai/chat"),
+    ));
+    (TestServer::new(app(state)), asked)
+}
+
+fn question(text: &str, form: &Value) -> Value {
+    json!({
+        "messages": [
+            { "role": "user", "content": "Hi" },
+            { "role": "assistant", "content": "Hello! Ask me about the form." },
+            { "role": "user", "content": text }
+        ],
+        "draft": form,
+        "step": "business"
+    })
+}
+
+#[test_db::test(seed)]
+async fn the_helper_answers_from_the_form_on_screen(pool: MySqlPool) {
+    setup(&pool).await;
+    let (server, asked) = helper_server(&pool, &["Type your ", "EIN\nas 12-3456789."]).await;
+    let mut form = form();
+    form["brand"]["ein"] = json!("");
+
+    // Mark asks: the answer streams, then `done`.
+    let response = server
+        .post("/v1/phone/admin/tendlc/chat")
+        .with_session(sessions::MANAGER)
+        .json(&question("What goes in Tax id?", &form))
+        .await;
+    response.assert_status_ok();
+    let text = response.text();
+    assert!(text.contains("data: Type your "), "{text}");
+    assert!(text.contains("data: EIN\ndata: as 12-3456789."), "{text}");
+    assert!(text.contains("event: done"), "{text}");
+
+    // The AI read the rules, the company, the form on screen with what
+    // blocks it, and the conversation.
+    let request = asked.lock().unwrap()[0].clone();
+    assert_eq!(request["stream"], json!(true));
+    let messages = request["messages"].as_array().unwrap();
+    let rules = messages[0]["content"].as_str().unwrap();
+    assert!(rules.contains("a Manager of the company"));
+    assert!(rules.contains("Opt-in checkbox"));
+    let context = messages[1]["content"].as_str().unwrap();
+    assert!(context.contains("Acme Stone LLC"), "{context}");
+    assert!(context.contains("step 1. Business"), "{context}");
+    assert!(
+        context.contains("brand.ein: Enter the tax id (EIN)."),
+        "{context}"
+    );
+    assert!(context.contains("never saved"), "{context}");
+    let roles: Vec<&str> = messages[2..]
+        .iter()
+        .map(|message| message["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["user", "assistant", "user"]);
+    assert_eq!(messages[4]["content"], json!("What goes in Tax id?"));
+
+    // Sam reviews Acme's form: the superusers' helper.
+    server
+        .post("/v1/superuser/companies/100/tendlc/chat")
+        .with_session(sessions::SUPER_ADMIN)
+        .json(&question("Is it ready?", &form))
+        .await
+        .assert_status_ok();
+    let request = asked.lock().unwrap()[1].clone();
+    assert!(
+        request["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("superuser")
+    );
+
+    // No question: 400. Not a Manager, not a superuser, no such company.
+    let mut answered = question("x", &form);
+    answered["messages"] = json!([{ "role": "assistant", "content": "Hello" }]);
+    server
+        .post("/v1/phone/admin/tendlc/chat")
+        .with_session(sessions::MANAGER)
+        .json(&answered)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .post("/v1/phone/admin/tendlc/chat")
+        .with_session(sessions::ADMIN)
+        .json(&question("x", &form))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/v1/superuser/companies/100/tendlc/chat")
+        .with_session(sessions::MANAGER)
+        .json(&question("x", &form))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/v1/superuser/companies/999/tendlc/chat")
+        .with_session(sessions::SUPER_ADMIN)
+        .json(&question("x", &form))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(asked.lock().unwrap().len(), 2);
 }

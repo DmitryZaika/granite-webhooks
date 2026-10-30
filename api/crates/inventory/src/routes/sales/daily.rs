@@ -154,7 +154,7 @@ pub async fn daily(
     let pool = &state.pool;
     let sales: Vec<SaleRow> = sqlx::query_as(
         "SELECT s.id, s.sale_date, s.customer_id, c.name AS customer_name, u.name AS seller_name,
-                s.deal_id, CAST(s.price AS CHAR) AS price,
+                CAST(s.deal_id AS SIGNED) AS deal_id, CAST(s.price AS CHAR) AS price,
                 CAST(CAST(CASE WHEN s.price > ? THEN s.price / 2 ELSE s.price END
                           AS DECIMAL(14, 2)) AS CHAR) AS deposit
            FROM sales s
@@ -289,7 +289,7 @@ async fn packages(
         return Ok(HashMap::new());
     }
     let mut sql = QueryBuilder::<MySql>::new(
-        "SELECT q.deal_id, pl.name
+        "SELECT CAST(q.deal_id AS SIGNED) AS deal_id, pl.name
            FROM quotes q
            JOIN price_lists pl ON pl.id = q.price_list_id
           WHERE q.deleted_at IS NULL AND q.company_id = ",

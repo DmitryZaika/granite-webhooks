@@ -84,7 +84,7 @@ const DUE: &str = "status = 'pending' AND attempts < ?
 
 pub const PROMISES_SYSTEM_PROMPT: &str = r#"You read what a countertop sales rep said to a customer: a phone call transcript, a text the rep sent (with the texts before it), or an email the rep sent (with the messages it quotes). Answer these things.
 1. "promises": every promise the rep made to the customer: something the rep said THEY would do later ("I'll text you our inventory link", "I'll send you the price tonight", "I'll call you back Tuesday", "Let me check if that slab is in stock", "I'll come measure Friday at 10").
-Only the rep's own promises to this customer. Not what the customer will do, not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages and calls under AFTER THIS are context only: a promise they already keep is not listed (an email to another address counts when it is clearly to this same customer, e.g. "Contract - Cedarbrook" after "I'll send you the contract").
+Only the rep's own promises to this customer. Not what the customer will do, and not something the rep only starts to say when the customer then takes the next step (the rep: "I can check it. I'll—", the customer: "I'll take a picture of the elevator and send it to you"): the rep waits for the customer, which is not a promise. Not what is already done in the same call or message (a link the text itself contains is sent, not promised), not closings like "let me know if you have questions" or "talk soon", and nothing already in OPEN PROMISES. In texts, promises come only from the LAST text (the rep's); in an email, only from the rep's new text, not the quoted messages. Messages and calls under AFTER THIS are context only: a promise they already keep is not listed (an email to another address counts when it is clearly to this same customer, e.g. "Contract - Cedarbrook" after "I'll send you the contract").
 Only what THIS REP personally has to do. Not what another person or team will do ("our scheduling manager will call you", "the installers will…", "the office will send…", "we'll let you know the exact day and time once we have it" when another person or team sets it), and not the company's standard work that happens anyway as part of measuring, templating, fabrication or installation ("we will drill the faucet holes on site during installation", "we'll seal the stone", "we'll haul away the old tops"): those are how the job is done, not promises. Combine promises about the same thing into one ("I'll text Andrew" and "I'll let you know his answer" are one: "Ask Andrew and get back to her").
 2. "kept": the numbers (#) of OPEN PROMISES this call or message keeps. A promise is there to solve the customer's issue, so judge by the outcome, not the exact step: it is kept when the rep did it here (sent the link or the price, called back, answered, came by), when the rep gives the result it was for (after "I'll call the shop manager about the cutout", telling what happened to the cutout; after "I'll try to expedite the installation", giving the installation date; after "I'll remind you next time", the reminder itself), or when the issue is settled another way (the customer approved what the rep was to remind them about). Not kept while the issue is still open. An OPEN APPROVAL is kept once the customer answered it (approved, signed, chose, or turned it down). OPEN PROMISES TO CALLERS NOT ON FILE are the rep's promises to people whose number matched no customer: count one kept only when this message clearly goes to that same person (their name, what was promised, the timing).
 3. "quote_changes": changes the CUSTOMER asked for in their countertop quote, anywhere in what you read: a different sink, color or stone, edge, backsplash, sizes, adding or removing a piece or a cutout. Not questions about the price, nothing already in OPEN QUOTE CHANGES, and not a change the rep says is already made ("updated as you requested", "attached is the revised quote").
@@ -1831,7 +1831,10 @@ async fn email_text(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Text> {
     )))
 }
 
-/// The customer with the scan's phone or email.
+/// The customer with the scan's phone or email. An email whose address is
+/// on no customer is the customer's of another recipient (To, then Cc, then
+/// Bcc): a reply to the customer's husband with the customer copied keeps
+/// her promises.
 async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>> {
     if let Some(digits) = scan.customer_digits.as_deref().filter(|d| d.len() == 10) {
         return Ok(customer_by_digits(pool, scan.company_id, digits)
@@ -1839,7 +1842,7 @@ async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>>
             .map(|(id, _)| id));
     }
     if let Some(email) = scan.customer_email.as_deref().filter(|e| e.contains('@')) {
-        return sqlx::query_scalar(
+        let found: Option<i32> = sqlx::query_scalar(
             "SELECT c.id FROM customers c
                JOIN customers_emails ce ON ce.customer_id = c.id
               WHERE c.company_id = ? AND c.deleted_at IS NULL AND LOWER(TRIM(ce.email)) = ?
@@ -1848,9 +1851,32 @@ async fn customer_of(pool: &MySqlPool, scan: &Scan) -> sqlx::Result<Option<i32>>
         .bind(scan.company_id)
         .bind(email)
         .fetch_optional(pool)
-        .await;
+        .await?;
+        if found.is_some() {
+            return Ok(found);
+        }
     }
-    Ok(None)
+    let Some(email_id) = scan
+        .source_key
+        .strip_prefix("email:")
+        .and_then(|id| id.parse::<i64>().ok())
+    else {
+        return Ok(None);
+    };
+    sqlx::query_scalar(
+        "SELECT c.id FROM email_participants ep
+           JOIN customers c ON c.company_id = ? AND c.deleted_at IS NULL
+                AND (c.id = ep.customer_id
+                     OR c.id IN (SELECT ce.customer_id FROM customers_emails ce
+                                  WHERE LOWER(TRIM(ce.email)) = LOWER(TRIM(ep.email))))
+          WHERE ep.email_id = ? AND ep.type IN ('to', 'cc', 'bcc')
+          ORDER BY FIELD(ep.type, 'to', 'cc', 'bcc'), ep.position, c.id DESC
+          LIMIT 1",
+    )
+    .bind(scan.company_id)
+    .bind(email_id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// The customer (id, name) with this phone's last 10 digits: through the

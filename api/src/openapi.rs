@@ -75,6 +75,7 @@ use utoipa::{Modify, OpenApi};
         (name = "sms", description = "SMS conversations through CloudTalk or RingCentral"),
         (name = "notifications", description = "The notification bell"),
         (name = "quickbooks", description = "QuickBooks Online invoices and customers"),
+        (name = "invoices", description = "Invoices the CRM keeps itself, for companies without QuickBooks"),
         (name = "followups", description = "AI follow-ups: the company rule they obey, timelines and enrollments"),
         (name = "billing", description = "The company's Granite Manager subscription (Stripe)"),
         (name = "onboarding-call", description = "The self-serve onboarding call: complete it within 30 days of signup or pay the onboarding fee (Terms section 11)"),

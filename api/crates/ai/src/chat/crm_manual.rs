@@ -1397,6 +1397,23 @@ mod tests {
         assert!(manual.contains("Change a person's name") && manual.contains("→ **Edit**"));
     }
 
+    /// "The form for SMS" is the carriers' texting registration, not a template.
+    #[test]
+    fn sms_form_is_the_texting_registration() {
+        for question in [
+            "How to fill out a form for SMS",
+            "how do I fill out the 10DLC form",
+            "where is the sms registration",
+            "how do we register for texting",
+        ] {
+            let ids = section_ids_for(question);
+            assert!(
+                ids.iter().any(|id| id == "texting-registration-10dlc"),
+                "{question}: {ids:?}"
+            );
+        }
+    }
+
     #[test]
     fn articles_do_not_break_phrases() {
         for (question, id) in [

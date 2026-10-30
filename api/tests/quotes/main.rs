@@ -11,6 +11,7 @@ mod customer_view;
 mod entitlements_quotes;
 mod entitlements_signatures_qbo;
 mod invoice_queue;
+mod invoices;
 mod online_quotes;
 mod quickbooks;
 mod quote_editor;

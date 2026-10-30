@@ -11,6 +11,9 @@ use crate::entitlements::AddonKey;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
+use crate::phone::company as phone_company;
+use crate::phone::lines;
+use crate::phone::settings as phone_settings;
 use crate::routes::company::queries::company_features;
 use crate::routes::onboarding::{self, Credit, CreditOutcome, store};
 use crate::routes::users::manage::resolve_ringcentral_extension;
@@ -62,6 +65,14 @@ pub struct Account {
     pub has_onboarding_feedback: bool,
     /// The user dismissed the tours rating.
     pub feedback_dismissed: bool,
+    /// The home company calls through Granite Phone (Telnyx calling is on).
+    pub has_granite_phone: bool,
+    /// The Granite Phone numbers the user can call from (E.164); an admin
+    /// assigns them on the Phone page.
+    pub granite_phone_numbers: Vec<String>,
+    /// The user's calls say "This call is being recorded." to both sides when
+    /// their recording starts (`PUT /v1/me/recording-voice`).
+    pub recording_voice: bool,
 }
 
 /// Body of `PUT /v1/me/account`. A field left out keeps its value; an empty
@@ -184,6 +195,20 @@ pub async fn account(
             .fetch_one(pool)
             .await?;
     let progress = store::load_record(pool, actor.user_id).await?;
+    let has_granite_phone = phone_company::load(pool, actor.company_id)
+        .await?
+        .is_some_and(|config| config.calling_on());
+    let granite_phone_numbers = if has_granite_phone {
+        lines::caller_ids(pool, actor.company_id, actor.user_id)
+            .await?
+            .into_iter()
+            .map(|line| line.e164)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let recording_voice =
+        phone_settings::recording_voice(pool, actor.user_id, actor.company_id).await?;
     Ok(Json(Account {
         user_id: actor.user_id,
         name: row.name,
@@ -200,7 +225,57 @@ pub async fn account(
         shows_email_signature: !shop && user.plan.has(AddonKey::Signatures),
         has_onboarding_feedback,
         feedback_dismissed: progress.has_row && progress.state.feedback_dismissed,
+        has_granite_phone,
+        granite_phone_numbers,
+        recording_voice,
     }))
+}
+
+/// Body of `PUT /v1/me/recording-voice`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RecordingVoiceSwitch {
+    /// Say the recording notice on my calls.
+    pub on: bool,
+}
+
+/// Turn the recording voice of my calls on or off
+///
+/// My Account > Phone lines > Granite Manager. Off: the user's outgoing
+/// Granite Phone calls, Call via my cell calls and the Record button record
+/// without saying "This call is being recorded." (some states require
+/// telling the other side). Incoming calls keep their notice. 403 when the
+/// home company does not call through Granite Phone.
+#[crate::openapi::path(
+    put,
+    path = "/v1/me/recording-voice",
+    operation_id = "set_my_recording_voice",
+    tag = "me",
+    request_body = RecordingVoiceSwitch,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or of the shop, or the company has no Granite Phone", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn set_recording_voice(
+    State(state): State<AppState>,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
+    JsonBody(input): JsonBody<RecordingVoiceSwitch>,
+) -> ApiResult<axum::http::StatusCode> {
+    let pool = &state.pool;
+    let actor = home_actor(pool, user.id).await?;
+    let calling = phone_company::load(pool, actor.company_id)
+        .await?
+        .is_some_and(|config| config.calling_on());
+    if !calling {
+        return Err(ApiError::Denied(
+            "Your company doesn't call through Granite Phone".into(),
+        ));
+    }
+    phone_settings::set_recording_voice(pool, actor.user_id, actor.company_id, input.on).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// A submitted field: left out (the stored value stays), or set (empty

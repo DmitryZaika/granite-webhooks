@@ -187,6 +187,7 @@ impl FromRequestParts<AppState> for DeviceUser {
         let token = device_token(parts).ok_or(ApiError::Unauthorized)?;
         let device = authenticate_device(&token, state).await?;
         refuse_paid_setup_while_paused(parts, state, device.user.company_id).await?;
+        super::check_sections(parts, state, &device.user).await?;
         Ok(device)
     }
 }
@@ -242,6 +243,7 @@ impl FromRequestParts<AppState> for PhoneCaller {
         if let Some(token) = device_token(parts) {
             let device = authenticate_device(&token, state).await?;
             refuse_paid_setup_while_paused(parts, state, device.user.company_id).await?;
+            super::check_sections(parts, state, &device.user).await?;
             return Ok(Self {
                 user: device.user,
                 auth: CallerAuth::Device {

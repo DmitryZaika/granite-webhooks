@@ -195,6 +195,66 @@
         ]
       }
     },
+    "/v1/me/recording-voice": {
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Turn the recording voice of my calls on or off",
+        "description": "My Account > Phone lines > Granite Manager. Off: the user's outgoing\nGranite Phone calls, Call via my cell calls and the Record button record\nwithout saying \"This call is being recorded.\" (some states require\ntelling the other side). Incoming calls keep their notice. 403 when the\nhome company does not call through Granite Phone.",
+        "operationId": "set_my_recording_voice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordingVoiceSwitch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop, or the company has no Granite Phone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/positions": {
       "get": {
         "tags": [
@@ -16705,7 +16765,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin (`all`: not an admin)",
+            "description": "Caller is not an employee, admin or shop manager or worker (`all`: not an admin)",
             "content": {
               "application/json": {
                 "schema": {
@@ -25082,6 +25142,483 @@
         ]
       }
     },
+    "/v1/invoices": {
+      "get": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "List the company's invoices",
+        "description": "Returns the invoices the CRM keeps itself (not QuickBooks invoices, which\nare at `GET /v1/customers/{id}/qbo-invoices`), highest number first, at\nmost 500, with `next_number`: the number a new invoice gets. Filters\ncombine: `customer_id`, `quote_id`, `status`, and `search` (an invoice\nnumber, or part of the bill-to name, email or project address). Open one\nwith `GET /v1/invoices/{id}`.",
+        "operationId": "list_invoices",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "Only this customer's invoices.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "quote_id",
+            "in": "query",
+            "description": "Only invoices made from this quote.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only invoices with this status.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/InvoiceStatus"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Matches the invoice number exactly, or part of the bill-to name,\nemail or project address.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching invoices and the next number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A filter is not valid (unknown status, non-numeric id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Create an invoice",
+        "description": "Saves a new invoice as a `draft`, for companies that invoice without\nQuickBooks. Line amounts, the subtotal and the total (subtotal + tax)\nare computed here. Without `invoice_number` it takes the company's next\nnumber. With a `quote_id` and no `customer_id`, the quote's customer is\nbilled. Nothing is sent: email it to the customer with `POST /v1/emails`\n(the invoice PDF attached), then mark it sent with\n`PUT /v1/invoices/{id}/status`.",
+        "operationId": "create_invoice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmInvoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, bad date or email, no priced line, or an unknown customer or quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The invoice number is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/invoices/{id}": {
+      "get": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Get one invoice",
+        "description": "Returns the whole invoice: its lines, totals, status, customer and\nquote. Only the caller's company's invoices are found.",
+        "operationId": "get_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmInvoice"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Edit an invoice",
+        "description": "Replaces the invoice's number, customer, quote, dates, bill-to, lines,\ntax and notes with the body (same rules as `POST /v1/invoices`; leaving\nout `invoice_number` keeps the current one). The status is not changed:\nuse `PUT /v1/invoices/{id}/status`. Returns the saved invoice.",
+        "operationId": "update_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmInvoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, bad date or email, no priced line, or an unknown customer or quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The invoice number is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/invoices/{id}/status": {
+      "put": {
+        "tags": [
+          "invoices"
+        ],
+        "summary": "Change an invoice's status",
+        "description": "Marks the invoice `draft`, `sent`, `paid` or `void`. `sent` (and `paid`)\nrecord when it was first sent; `paid` records when it was paid, and any\nother status clears that. Call it with `sent` after emailing the invoice\nto the customer. Returns the invoice.",
+        "operationId": "set_invoice_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceStatusInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The invoice with its new status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmInvoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/shop/maintenance": {
       "get": {
         "tags": [
@@ -29606,6 +30143,85 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AddonRequiredBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/view-link": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get a link to look at the quote",
+        "description": "The page the customer gets, without Accept & Sign. A `GET` so the app's\ndevice token may ask; the customer link is made the first time, as the\n`POST` does.",
+        "operationId": "quote_view_link",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteViewLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -35587,7 +36203,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35669,7 +36285,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35739,7 +36355,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35782,7 +36398,7 @@
           "schedule"
         ],
         "summary": "Send a confirmation now",
-        "description": "Sends one of the company's templates to the event's customer right\naway, whenever the appointment is, and notes it in the event's history.",
+        "description": "Sends one of the company's templates to the event's customer right\naway, whenever the appointment is, and notes it in the event's history.\nThe event form offers the `confirmation` templates; any kind is accepted.",
         "operationId": "send_event_confirmation",
         "parameters": [
           {
@@ -35838,7 +36454,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35869,6 +36485,182 @@
           },
           "502": {
             "description": "The text or email failed to send",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/crew-status": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Tap On my way or Completed",
+        "description": "On my way (today's jobs, before arriving) marks the job and tells the\ncustomer once with the company's On my way message: a text, or an email\nwhen the company cannot text. The status is saved even when the message\ncannot go; `message_error` says why. Completed marks the job done. For the\njob's installer or template maker, or an admin.",
+        "operationId": "set_crew_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrewStatusInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrewStatusSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unscheduled, repeating, not today, already arrived, or not started yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the job's crew or an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/location": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Report the crew's position",
+        "description": "The crew's phone says where it is. Reaching one of today's jobs (its\naddress within 0.1 mi) marks it Arrived; getting 0.5 mi away from the\nshop or the job they were at marks the first of today's jobs with no\nstatus yet On my way. Nothing is sent to customers, and no job is marked\nCompleted. Positions less accurate than 200 m are ignored. Only\ninstallers and template makers report.",
+        "operationId": "report_crew_location",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a position on Earth",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an installer or template maker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
             "content": {
               "application/json": {
                 "schema": {
@@ -35935,7 +36727,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36026,7 +36818,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36095,7 +36887,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36187,7 +36979,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36289,7 +37081,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36369,7 +37161,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36461,7 +37253,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36543,7 +37335,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36635,7 +37427,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36717,7 +37509,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36799,7 +37591,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36889,7 +37681,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36968,7 +37760,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37050,7 +37842,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37131,7 +37923,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37208,7 +38000,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37307,7 +38099,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37367,7 +38159,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37526,7 +38318,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37605,7 +38397,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -38244,6 +39036,76 @@
         ]
       }
     },
+    "/v1/schedule/notifications/on-my-way": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Save the On my way message",
+        "description": "What the customer gets when the crew taps On my way: a text, or an email\nwhen the company cannot text. An empty message turns it off.",
+        "operationId": "set_on_my_way_message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnMyWayMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/schedule/notifications/templates": {
       "post": {
         "tags": [
@@ -38327,7 +39189,7 @@
           "schedule"
         ],
         "summary": "Edit a customer notification template",
-        "description": "The flows using it send the new text from then on.",
+        "description": "The flows using it send the new text from then on. It can't become a\nconfirmation while a flow uses it.",
         "operationId": "update_schedule_notification_template",
         "parameters": [
           {
@@ -38356,7 +39218,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Invalid field, or texting not set up",
+            "description": "Invalid field, texting not set up, or a confirmation a flow uses",
             "content": {
               "application/json": {
                 "schema": {
@@ -38774,7 +39636,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -49881,6 +50743,247 @@
         ]
       }
     },
+    "/v1/company/position-sections": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "List position access",
+        "description": "Every section of the app, and for Inventory Manager and Scheduling\nManager the sections they open in the company, their defaults and\nwhether the company changed them. Someone who holds only these positions\nreaches only their sections (with several, all of them together); any\nother position except the portal ones keeps the whole app. Superusers and\ncompany managers (admins with the Manager position); superusers may pass\n`company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
+        "operationId": "list_position_sections",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sections and each position's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionAccess"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/position-sections/{position_id}": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Save a position's sections",
+        "description": "Replaces the sections the position opens in the company, from then on\nfor every user holding it (their next request). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
+        "operationId": "save_position_sections",
+        "parameters": [
+          {
+            "name": "position_id",
+            "in": "path",
+            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionSectionsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not a sectioned position, or an unknown section",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Reset a position's sections",
+        "description": "The position opens its default sections again in the company.",
+        "operationId": "reset_position_sections",
+        "parameters": [
+          {
+            "name": "position_id",
+            "in": "path",
+            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Back to the defaults"
+          },
+          "400": {
+            "description": "Not a sectioned position",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/superuser/companies": {
       "get": {
         "tags": [
@@ -60449,7 +61552,7 @@
           "phone"
         ],
         "summary": "Send a company's texting registration to Telnyx",
-        "description": "The first send (Telnyx charges for the brand, and for the campaign\nthree months up front): registers the business as a brand, then, once\nTCR registered it, the campaign (Telnyx's notifications, a refresh or\nthe phone job create it when the brand takes longer). Never a second\nbrand: a send whose answer never came looks the brand up on Telnyx\nfirst. The form must be complete (the company's Managers usually mark it\nready first) and the company needs its Telnyx setup (Telnyx reports to\nits webhooks). Returns the review: `sent` while the brand registers,\n`campaign_pending`, or `rejected` with Telnyx's reasons. 400 when not\ncomplete, without a Telnyx setup, or when Telnyx refused the brand\n(nothing was made); 409 when sent already (use `.../resend`) or another\nsend runs; 502 when Telnyx did not answer about the brand; 503 when\nTelnyx is not set up on the server. Audited. Superusers only.",
+        "description": "The first send (Telnyx charges for the brand, and for the campaign\nthree months up front): registers the business as a brand, then, once\nTCR registered it, the campaign (Telnyx's notifications, a refresh or\nthe phone job create it when the brand takes longer). Never a second\nbrand: a send whose answer never came looks the brand up on Telnyx\nfirst. The form must be complete (the company's Managers usually mark it\nready first) and the company needs its Telnyx setup (Telnyx reports to\nits webhooks). With an AI on the server, its check must have passed this\nform within the last 24 hours (pages change): an older check, or none,\nis asked for again and the send answers 409 until it passes (the\nsuperusers are told, in minutes). Returns the review: `sent` while the\nbrand registers, `campaign_pending`, or `rejected` with Telnyx's reasons.\n400 when not complete, without a Telnyx setup, or when Telnyx refused\nthe brand (nothing was made); 409 when sent already (use `.../resend`),\nanother send runs, or the AI check has not passed this form within a\nday; 502 when Telnyx did not answer about the brand; 503 when Telnyx is\nnot set up on the server. Audited. Superusers only.",
         "operationId": "send_company_tendlc",
         "parameters": [
           {
@@ -60515,7 +61618,7 @@
             }
           },
           "409": {
-            "description": "Sent already, or another send runs",
+            "description": "Sent already, another send runs, or the AI check has not passed this form within a day (it runs again)",
             "content": {
               "application/json": {
                 "schema": {
@@ -60568,7 +61671,7 @@
           "phone"
         ],
         "summary": "Send a company's texting registration again after a rejection",
-        "description": "After Telnyx or a carrier refused it, and the form was fixed: the brand\nwhen it changed (or was refused); for a refused campaign its sample\ntexts, message flow and help message when they changed (the only parts\nTelnyx takes on a registered campaign; it reviews it again), and the\nappeal when `appealReason` is written (for a fix outside the form); a\nnew campaign when TCR refused the first one or Telnyx refused to create\nit. Returns the review. 400 when not complete, nothing changed and no\nappeal is written, or Telnyx refused the first change; 409 when it was\nnever sent or Telnyx is reviewing it; 502 when Telnyx did not answer;\n503 when Telnyx is not set up on the server. Audited. Superusers only.",
+        "description": "After Telnyx or a carrier refused it, and the form was fixed: the brand\nwhen it changed (or was refused); for a refused campaign its sample\ntexts, message flow and help message when they changed (the only parts\nTelnyx takes on a registered campaign; it reviews it again), and the\nappeal when `appealReason` is written (for a fix outside the form); a\nnew campaign when TCR refused the first one or Telnyx refused to create\nit. As for the first send, the AI check must have passed this form\nwithin a day (else it runs again first). Returns the review. 400 when\nnot complete, nothing changed and no appeal is written, or Telnyx\nrefused the first change; 409 when it was never sent, Telnyx is\nreviewing it, or the AI check has not passed this form within a day;\n502 when Telnyx did not answer; 503 when Telnyx is not set up on the\nserver. Audited. Superusers only.",
         "operationId": "resend_company_tendlc",
         "parameters": [
           {
@@ -60644,7 +61747,7 @@
             }
           },
           "409": {
-            "description": "Never sent, Telnyx is reviewing it, or another send runs",
+            "description": "Never sent, Telnyx is reviewing it, another send runs, or the AI check has not passed this form within a day (it runs again)",
             "content": {
               "application/json": {
                 "schema": {
@@ -60903,6 +62006,418 @@
           },
           "503": {
             "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/admin/tendlc/chat": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Ask the texting registration (10DLC) helper",
+        "description": "The AI helper beside the form answers a question about filling it in,\nstreamed as server-sent events (unnamed `message` pieces, then `done`,\nor `failure` with what to tell the user). It reads the form as sent\n(what is on screen, unsaved edits included) and its step, what blocks\nmarking it ready, the company (name, address, website, numbers), where\nthe registration is (the carriers' reasons, the AI check's changes) and\nthe carriers' rules. The conversation is the browser's; nothing is\nsaved. 400 when the last message is not a question. The company's\nManagers only.",
+        "operationId": "ask_tendlc_helper",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenDlcChatInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answer as server-sent events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/tendlc/chat": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Ask the texting registration (10DLC) helper about a company's form",
+        "description": "As `POST /v1/phone/admin/tendlc/chat`, for a superuser reviewing the\ncompany's registration. Superusers only.",
+        "operationId": "ask_company_tendlc_helper",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenDlcChatInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answer as server-sent events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/admin/tendlc/ein-letter": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Upload the company's IRS EIN letter (10DLC)",
+        "description": "The IRS letter that gave the business its EIN (the CP 575, or the 147C\nthat confirms it), as a PDF or a photo in a `data:` URL (at most 4 MB).\nAn AI reads its legal name, EIN and address; only those are kept (on\n`draft.brand.einLetter`), never the file. From then on `problems` asks\nfor the Legal name, Tax id, Street address, City, State and ZIP exactly\nas on the letter (case and spacing aside): TCR leaves a brand whose\ndetails differ from the IRS's unverified. US businesses with an EIN must\nupload one before marking the registration ready. Returns the\nregistration. 400 when nothing is saved yet, the file is not a PDF or\nphoto, is over 4 MB, is not an IRS EIN letter or could not be read\nclearly; 409 once it is with Telnyx; 502 when the AI did not answer; 503\nwithout an AI on the server. Audited. The company's Managers only.",
+        "operationId": "upload_tendlc_ein_letter",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenDlcEinLetterInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The registration with what the letter says",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenDlcRegistration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing saved yet, or not a readable IRS EIN letter (PDF or photo, at most 4 MB)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is with Telnyx: it can't change now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The AI did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No AI on the server to read letters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/tendlc/ein-letter": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Upload a company's IRS EIN letter (10DLC)",
+        "description": "As `POST /v1/phone/admin/tendlc/ein-letter` does for the company's\nManagers: the IRS letter that gave the business its EIN (CP 575 or\n147C, a PDF or a photo in a `data:` URL, at most 4 MB) is read by an AI\nand its legal name, EIN and address are kept on `draft.brand.einLetter`\n(never the file); `problems` then asks for those details exactly as on\nit. Returns the review. 400 when nothing is saved yet or the file is not\na readable IRS EIN letter; 404 when the company does not exist; 409 once\nit is with Telnyx; 502 when the AI did not answer; 503 without an AI on\nthe server. Audited. Superusers only.",
+        "operationId": "upload_company_tendlc_ein_letter",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenDlcEinLetterInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The review with what the letter says",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenDlcReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing saved yet, or not a readable IRS EIN letter (PDF or photo, at most 4 MB)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is with Telnyx: it can't change now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The AI did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No AI on the server to read letters",
             "content": {
               "application/json": {
                 "schema": {
@@ -63044,7 +64559,10 @@
           "has_ringcentral_api",
           "shows_email_signature",
           "has_onboarding_feedback",
-          "feedback_dismissed"
+          "feedback_dismissed",
+          "has_granite_phone",
+          "granite_phone_numbers",
+          "recording_voice"
         ],
         "properties": {
           "user_id": {
@@ -63134,6 +64652,21 @@
           "feedback_dismissed": {
             "type": "boolean",
             "description": "The user dismissed the tours rating."
+          },
+          "has_granite_phone": {
+            "type": "boolean",
+            "description": "The home company calls through Granite Phone (Telnyx calling is on)."
+          },
+          "granite_phone_numbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The Granite Phone numbers the user can call from (E.164); an admin\nassigns them on the Phone page."
+          },
+          "recording_voice": {
+            "type": "boolean",
+            "description": "The user's calls say \"This call is being recorded.\" to both sides when\ntheir recording starts (`PUT /v1/me/recording-voice`)."
           }
         }
       },
@@ -65387,6 +66920,16 @@
               "null"
             ],
             "description": "That portal's start page."
+          },
+          "sections": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The sections of the app the user reaches, when a sectioned position\n(Inventory Manager, Scheduling Manager) limits them: keys such as\n`inventory`, `inventory_admin`, `customers`, `schedule`\n(`GET /v1/company/position-sections` lists them all). The API refuses\nthe rest. Null when they reach the whole app."
           },
           "has_cloudtalk_api": {
             "type": "boolean",
@@ -68348,6 +69891,30 @@
         },
         "additionalProperties": false
       },
+      "ChatRole": {
+        "type": "string",
+        "description": "Who wrote a message of the conversation.",
+        "enum": [
+          "user",
+          "assistant"
+        ]
+      },
+      "ChatTurn": {
+        "type": "object",
+        "description": "One message of the conversation.",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/ChatRole"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
       "Check": {
         "type": "object",
         "description": "A check of a piece of equipment; its usage fields override the equipment's.",
@@ -70959,7 +72526,7 @@
               "string",
               "null"
             ],
-            "description": "What it is: a direct line's own label (null when it has none),\n`RingCentral`, `CloudTalk` or `Mobile` (their own phone)."
+            "description": "What it is: a direct line's own label (null when it has none),\n`Work` (their `RingCentral` number), `Office` (their `CloudTalk`\nnumber) or `Mobile` (their own phone). The app never names the provider."
           }
         }
       },
@@ -71396,6 +72963,232 @@
           "state": {
             "$ref": "#/components/schemas/OnboardingState",
             "description": "The saved state after the credit."
+          }
+        }
+      },
+      "CrewButton": {
+        "type": "string",
+        "description": "What the crew taps.",
+        "enum": [
+          "on_my_way",
+          "completed"
+        ]
+      },
+      "CrewStatus": {
+        "type": "string",
+        "description": "The crew's progress on a job.",
+        "enum": [
+          "on_my_way",
+          "arrived",
+          "completed"
+        ]
+      },
+      "CrewStatusInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/events/{id}/crew-status`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CrewButton",
+            "description": "`on_my_way` (today's jobs) or `completed`."
+          }
+        }
+      },
+      "CrewStatusSaved": {
+        "type": "object",
+        "description": "`POST /v1/events/{id}/crew-status`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CrewStatus",
+            "description": "The job's status now."
+          },
+          "customer_told": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Channel",
+                "description": "On my way: how the customer was told just now (`sms` or `email`);\nnull when nothing went out."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On my way: why the customer was not told, for the crew to read."
+          }
+        }
+      },
+      "CrmInvoice": {
+        "type": "object",
+        "description": "A whole invoice.",
+        "required": [
+          "id",
+          "invoice_number",
+          "status",
+          "invoice_date",
+          "bill_to_name",
+          "lines",
+          "subtotal",
+          "tax",
+          "total"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Invoice id."
+          },
+          "invoice_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Invoice number, unique in the company."
+          },
+          "status": {
+            "$ref": "#/components/schemas/InvoiceStatus",
+            "description": "`draft`, `sent`, `paid` or `void`."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The CRM customer billed; null when the invoice bills someone else."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That customer's current name in the CRM; null without a customer."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The quote it was made from; null for an invoice made by hand."
+          },
+          "quote_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That quote's name; null without a quote."
+          },
+          "invoice_date": {
+            "type": "string",
+            "description": "Invoice date, `YYYY-MM-DD`."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Due date, `YYYY-MM-DD`; null when due on receipt."
+          },
+          "bill_to_name": {
+            "type": "string",
+            "description": "Name under \"Bill to\"."
+          },
+          "bill_to_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email it is sent to; null when none."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job site address; null when none."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceLine"
+            },
+            "description": "The lines, in order."
+          },
+          "subtotal": {
+            "type": "number",
+            "format": "double",
+            "description": "Sum of the line amounts, in dollars."
+          },
+          "tax": {
+            "type": "number",
+            "format": "double",
+            "description": "Sales tax, in dollars."
+          },
+          "total": {
+            "type": "number",
+            "format": "double",
+            "description": "`subtotal` + `tax`, in dollars."
+          },
+          "customer_memo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Message to the customer printed on the invoice; null when none."
+          },
+          "private_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal note, never printed; null when none."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was first sent (ISO 8601, UTC); null while a draft."
+          },
+          "paid_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was marked paid (ISO 8601, UTC); null unless `paid`."
+          },
+          "created_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the user who created it; null when unknown."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was created (ISO 8601, UTC)."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it last changed (ISO 8601, UTC)."
           }
         }
       },
@@ -76979,7 +78772,7 @@
           "template_id": {
             "type": "integer",
             "format": "int32",
-            "description": "A template of the company."
+            "description": "A reminder template of the company."
           },
           "offset_value": {
             "type": "integer",
@@ -79027,6 +80820,99 @@
           }
         }
       },
+      "InvoiceInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/invoices` and `PUT /v1/invoices/{id}`: the whole\ninvoice as the editor shows it. Totals are computed by the API.",
+        "required": [
+          "invoice_date",
+          "bill_to_name",
+          "lines"
+        ],
+        "properties": {
+          "invoice_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Invoice number, unique in the company. Leave it out on create to\ntake the next one (`next_number` of `GET /v1/invoices`); on update,\nleaving it out keeps the current number."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The CRM customer billed (`GET /v1/customers`). Null bills someone\nwho is not a customer record; with a `quote_id` and no customer, the\nquote's customer is used."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The quote the invoice was made from, if any. It must be one of the\ncompany's quotes, and of `customer_id` when both are given."
+          },
+          "invoice_date": {
+            "type": "string",
+            "description": "Invoice date, `YYYY-MM-DD`."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Due date, `YYYY-MM-DD`, on or after `invoice_date`; null or empty for\nnone (due on receipt)."
+          },
+          "bill_to_name": {
+            "type": "string",
+            "description": "Name printed under \"Bill to\"; required."
+          },
+          "bill_to_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email the invoice is sent to; null or empty for none."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job site address printed on the invoice, on one line."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceLine"
+            },
+            "description": "The lines, in order; at least one must have a price. Blank lines\n(no text, no price) are dropped. At most 200."
+          },
+          "tax": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sales tax in dollars, added to the subtotal; 0 when left out."
+          },
+          "customer_memo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Message to the customer printed on the invoice."
+          },
+          "private_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal note; never printed or sent."
+          }
+        }
+      },
       "InvoiceInstructions": {
         "type": "object",
         "description": "`GET`/`PUT /v1/qbo/invoice-instructions`.",
@@ -79048,6 +80934,65 @@
               "type": "string"
             },
             "description": "What could not be made into a rule, and why."
+          }
+        }
+      },
+      "InvoiceLine": {
+        "type": "object",
+        "description": "One line of an invoice, in the order it is printed.\n\nA line with a `unit_price` is priced: `amount` = `qty` × `unit_price`,\nrounded to cents (a negative price makes a discount). A line without a\n`unit_price` is text only (a note under the line above) and has no `qty`\nor `amount`.",
+        "required": [
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "What was sold, or the note's text."
+          },
+          "qty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Quantity; 1 when a priced line leaves it out. Null on a text line."
+          },
+          "unit_price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Price of one unit, in dollars. Null makes the line text only."
+          },
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "`qty` × `unit_price` in dollars, rounded to cents. Computed by the\nAPI: a value sent in a request is ignored. Null on a text line."
+          }
+        }
+      },
+      "InvoiceList": {
+        "type": "object",
+        "description": "`GET /v1/invoices`.",
+        "required": [
+          "invoices",
+          "next_number"
+        ],
+        "properties": {
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceSummary"
+            },
+            "description": "Matching invoices, highest number first; at most 500."
+          },
+          "next_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number the next new invoice gets when none is given."
           }
         }
       },
@@ -79108,6 +81053,29 @@
           "declined",
           "nothing_due"
         ]
+      },
+      "InvoiceStatus": {
+        "type": "string",
+        "description": "Where an invoice stands.\n\n- `draft`: saved, not emailed to the customer yet\n- `sent`: emailed to the customer (or handed over), not paid\n- `paid`: the customer paid it\n- `void`: cancelled; kept so its number is not reused",
+        "enum": [
+          "draft",
+          "sent",
+          "paid",
+          "void"
+        ]
+      },
+      "InvoiceStatusInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/invoices/{id}/status`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/InvoiceStatus",
+            "description": "The new status. `sent` records when it was first sent; `paid` records\nwhen it was paid (cleared again by any other status)."
+          }
+        }
       },
       "InvoiceSummary": {
         "type": "object",
@@ -80211,6 +82179,56 @@
           "recording": {
             "type": "boolean",
             "description": "The call is being recorded now."
+          }
+        }
+      },
+      "LocationInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/me/location`.",
+        "required": [
+          "latitude",
+          "longitude"
+        ],
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "format": "double",
+            "description": "Degrees."
+          },
+          "longitude": {
+            "type": "number",
+            "format": "double",
+            "description": "Degrees."
+          },
+          "accuracy_m": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "How far off the position may be, in meters; worse than 200 is ignored."
+          }
+        }
+      },
+      "LocationResult": {
+        "type": "object",
+        "description": "`POST /v1/me/location`: the jobs whose status changed.",
+        "properties": {
+          "arrived": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The job the crew just arrived at."
+          },
+          "on_my_way": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The job they just set off for."
           }
         }
       },
@@ -82346,7 +84364,8 @@
         "required": [
           "templates",
           "flows",
-          "sms_enabled"
+          "sms_enabled",
+          "on_my_way"
         ],
         "properties": {
           "templates": {
@@ -82366,6 +84385,10 @@
           "sms_enabled": {
             "type": "boolean",
             "description": "The company texts through `CloudTalk` or `RingCentral`."
+          },
+          "on_my_way": {
+            "$ref": "#/components/schemas/OnMyWayMessage",
+            "description": "What the customer gets when the crew taps On my way."
           }
         }
       },
@@ -82375,6 +84398,7 @@
         "required": [
           "id",
           "name",
+          "kind",
           "channel",
           "body"
         ],
@@ -82387,6 +84411,10 @@
           "name": {
             "type": "string",
             "description": "What admins call it, e.g. \"Disconnect the sink\"."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TemplateKind",
+            "description": "`reminder` (flows send it) or `confirmation` (sent by hand)."
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -82417,6 +84445,17 @@
           "name": {
             "type": "string",
             "description": "At most 100 characters."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TemplateKind",
+                "description": "`reminder` or `confirmation`. Left out: `reminder` for a new template,\nunchanged on edit. A template a flow uses stays a reminder."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -82541,6 +84580,26 @@
           "hours",
           "days"
         ]
+      },
+      "OnMyWayMessage": {
+        "type": "object",
+        "description": "The On my way message: a text, or an email (with `subject`) when the\ncompany cannot text. Nothing goes out while `message` is null.",
+        "properties": {
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email subject (at most 255 characters); null uses \"On the way\"."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 1600 characters for a text."
+          }
+        }
       },
       "OnboardingCall": {
         "type": "object",
@@ -87005,6 +89064,30 @@
           }
         }
       },
+      "PositionAccess": {
+        "type": "object",
+        "description": "`GET /v1/company/position-sections`.",
+        "required": [
+          "sections",
+          "positions"
+        ],
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SectionInfo"
+            },
+            "description": "Every section, in the order to show them."
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PositionSections"
+            },
+            "description": "Each sectioned position. My Account and Report a Bug always stay open."
+          }
+        }
+      },
       "PositionRow": {
         "type": "object",
         "description": "A position the user holds in the current company.",
@@ -87018,6 +89101,58 @@
             "description": "`positions.id`, e.g. 1 = sales rep, 9 = super admin."
           }
         }
+      },
+      "PositionSections": {
+        "type": "object",
+        "description": "One sectioned position in the company.",
+        "required": [
+          "position_id",
+          "sections",
+          "default_sections",
+          "customized"
+        ],
+        "properties": {
+          "position_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`positions.id`: 12 Inventory Manager, 13 Scheduling Manager."
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The sections it opens in this company, in [`SectionInfo`] order."
+          },
+          "default_sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The sections it opens in a company that has not changed it."
+          },
+          "customized": {
+            "type": "boolean",
+            "description": "The company changed it (false: it uses the defaults)."
+          }
+        }
+      },
+      "PositionSectionsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/position-sections/{position_id}`.",
+        "required": [
+          "sections"
+        ],
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Section keys the position opens (may be empty: then only My Account)."
+          }
+        },
+        "additionalProperties": false
       },
       "PrepareAttachments": {
         "type": "object",
@@ -90126,6 +92261,19 @@
         },
         "additionalProperties": false
       },
+      "QuoteViewLink": {
+        "type": "object",
+        "description": "The quote's page to look at, for the app.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The customer's page with `?staff=1`: no Accept & Sign, not counted as a view."
+          }
+        }
+      },
       "RateLimited": {
         "type": "object",
         "description": "`429`: wait before trying again.",
@@ -90463,6 +92611,19 @@
           "Inbound",
           "Both"
         ]
+      },
+      "RecordingVoiceSwitch": {
+        "type": "object",
+        "description": "Body of `PUT /v1/me/recording-voice`.",
+        "required": [
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "Say the recording notice on my calls."
+          }
+        }
       },
       "Redirect": {
         "type": "object",
@@ -92502,7 +94663,8 @@
           "start_date",
           "end_date",
           "all_day",
-          "created_user_id"
+          "created_user_id",
+          "customer_told"
         ],
         "properties": {
           "id": {
@@ -92647,6 +94809,38 @@
             ],
             "description": "Email for this event only; null uses the customer's."
           },
+          "crew_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The crew's progress: `on_my_way`, `arrived` or `completed`."
+          },
+          "on_my_way_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the crew set off (UTC, ISO 8601)."
+          },
+          "arrived_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the crew's phone reached the address (UTC, ISO 8601)."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the crew tapped Completed (UTC, ISO 8601)."
+          },
+          "customer_told": {
+            "type": "boolean",
+            "description": "The customer got the On my way message."
+          },
           "qbo_invoice": {
             "oneOf": [
               {
@@ -92763,6 +94957,29 @@
             ],
             "format": "int32",
             "description": "A calendar of the caller's company."
+          }
+        }
+      },
+      "SectionInfo": {
+        "type": "object",
+        "description": "A part of the app a position may open.",
+        "required": [
+          "key",
+          "label",
+          "admin"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable key (`inventory`, `customers`, `schedule`, ...)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its name on the Company page."
+          },
+          "admin": {
+            "type": "boolean",
+            "description": "Opens admin pages (e.g. the admin inventory) without making the user\na company admin."
           }
         }
       },
@@ -97761,6 +99978,14 @@
         },
         "additionalProperties": false
       },
+      "TemplateKind": {
+        "type": "string",
+        "description": "What a template is for.",
+        "enum": [
+          "reminder",
+          "confirmation"
+        ]
+      },
       "TemplateOrder": {
         "type": "object",
         "description": "The caller's sorting of one picker.",
@@ -97875,7 +100100,7 @@
         "properties": {
           "location": {
             "type": "string",
-            "description": "What to change: a form field (`campaign.messageFlow`,\n`campaign.samples.1`, `campaign.other` for a choice on the form) or a\npage (`page:quoteForm`, `page:privacyPolicy`, `page:terms`,\n`page:website`)."
+            "description": "What to change: a form field (`campaign.messageFlow`,\n`campaign.samples.1`, `campaign.privacyPolicyLink`,\n`campaign.termsAndConditionsLink`, `brand.phone`, `brand.email`,\n`campaign.other` for a choice on the form) or a page\n(`page:quoteForm`, `page:privacyPolicy`, `page:terms`,\n`page:website`, and the privacy and terms pages the quote form links\nto: `page:linkedPrivacy`, `page:linkedTerms`)."
           },
           "label": {
             "type": "string",
@@ -98034,6 +100259,18 @@
             "type": "string",
             "description": "`PUBLIC_PROFIT` only: the business contact email Telnyx requires.",
             "default": ""
+          },
+          "einLetter": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TenDlcEinLetter",
+                "description": "The IRS letter that gave the business its EIN, as read when it was\nuploaded (`POST .../tendlc/ein-letter`); null before. TCR matches the\nlegal name, EIN and address to the IRS's records exactly, so they\nmust be as on the letter. Read-only: a save keeps the stored one."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         }
       },
@@ -98161,6 +100398,32 @@
           }
         }
       },
+      "TenDlcChatInput": {
+        "type": "object",
+        "description": "A question to the AI helper beside the form.",
+        "required": [
+          "messages",
+          "draft"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatTurn"
+            },
+            "description": "The conversation so far, oldest first, ending with the question\n(the latest [`chat::MAX_TURNS`] are read)."
+          },
+          "draft": {
+            "$ref": "#/components/schemas/TenDlcDraft",
+            "description": "The form as it is on screen, unsaved edits included."
+          },
+          "step": {
+            "type": "string",
+            "description": "The step on screen: `business`, `texting` or `review`."
+          }
+        },
+        "additionalProperties": false
+      },
       "TenDlcChecksRun": {
         "type": "object",
         "description": "What a run did.",
@@ -98223,6 +100486,7 @@
               "country": "",
               "displayName": "",
               "ein": "",
+              "einLetter": null,
               "email": "",
               "entityType": null,
               "firstName": "",
@@ -98265,6 +100529,75 @@
             }
           }
         }
+      },
+      "TenDlcEinLetter": {
+        "type": "object",
+        "description": "The IRS letter that gave the business its EIN (CP 575, or the 147C that\nconfirms it), as read from the uploaded file. Only what it says is kept,\nnot the file.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "Which letter: `CP575` or `147C`.",
+            "default": ""
+          },
+          "fileName": {
+            "type": "string",
+            "description": "The file's name as uploaded.",
+            "default": ""
+          },
+          "uploadedAt": {
+            "type": "string",
+            "description": "When it was uploaded (RFC 3339, UTC).",
+            "default": ""
+          },
+          "legalName": {
+            "type": "string",
+            "description": "The legal name on the letter (its first name line), as written.",
+            "default": ""
+          },
+          "ein": {
+            "type": "string",
+            "description": "The EIN on the letter (`12-3456789`).",
+            "default": ""
+          },
+          "street": {
+            "type": "string",
+            "description": "The letter's street address line, as written.",
+            "default": ""
+          },
+          "city": {
+            "type": "string",
+            "description": "The letter's city.",
+            "default": ""
+          },
+          "state": {
+            "type": "string",
+            "description": "The letter's state, 2 letters.",
+            "default": ""
+          },
+          "postalCode": {
+            "type": "string",
+            "description": "The letter's ZIP code.",
+            "default": ""
+          }
+        }
+      },
+      "TenDlcEinLetterInput": {
+        "type": "object",
+        "description": "Body of `POST .../tendlc/ein-letter`.",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "The letter as a `data:` URL: a PDF (`data:application/pdf;base64,...`)\nor a photo (`image/png`, `image/jpeg`, `image/webp`); at most 4 MB."
+          },
+          "fileName": {
+            "type": "string",
+            "description": "The file's name, for people (`cp575.pdf`); may be empty."
+          }
+        },
+        "additionalProperties": false
       },
       "TenDlcFeedback": {
         "type": "object",
@@ -101658,6 +103991,10 @@
     {
       "name": "quickbooks",
       "description": "QuickBooks Online invoices and customers"
+    },
+    {
+      "name": "invoices",
+      "description": "Invoices the CRM keeps itself, for companies without QuickBooks"
     },
     {
       "name": "followups",
