@@ -724,6 +724,10 @@ pub async fn mark_quote_sold(
         }
         None => create_won_deal(pool, &quote, user_id, amount).await?,
     };
+    if let Some(id) = deal_id {
+        api_crm::routes::deals::service::won_leaves_first_stage(&mut *pool.acquire().await?, id)
+            .await?;
+    }
     sqlx::query(
         "UPDATE quotes
             SET status = ?, customer_accepted_option_id = ?, deal_id = COALESCE(?, deal_id)
