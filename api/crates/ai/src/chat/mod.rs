@@ -838,6 +838,9 @@ async fn run(
         || follows_manual || crm_manual::looks_like_how_to(&question),
         |picked| picked == crm_manual::Source::Manual,
     );
+    // The manual's sections a how-to was answered from: a dead end doesn't
+    // offer them again.
+    let mut tried: Vec<String> = Vec::new();
     if mode == Mode::Instructions {
         // The app's how-to or the company's own process: ask, don't guess.
         if source.is_none()
@@ -935,6 +938,9 @@ async fn run(
             let manual = crm_manual::content_with(pool, &ids).await;
             messages = with_crm_manual(messages, &manual, &crm_manual::access_block(&access));
             if how_to {
+                tried = ids;
+            }
+            if how_to {
                 // The browser offers the manual's feedback on this answer.
                 out.json("crmManual", &true).await;
                 // Short steps from the manual, not the instructions' checklist.
@@ -1031,6 +1037,24 @@ async fn run(
     }
 
     let mut clean = markers::strip_markers(&answer);
+    // An answer that found nothing ("I can't confirm…") ends with a question
+    // back: which of the manual's closest topics the user means, a click
+    // away. Not once a choice was picked, nor for the company's own process;
+    // after an answer from the instructions only when the question names a
+    // feature of the app.
+    if mode == Mode::Instructions
+        && feature.is_none()
+        && source != Some(crm_manual::Source::Company)
+        && (how_to || crm_manual::matches_topic(&question))
+        && markers::answer_is_dead_end(&clean)
+        && let Some(asked) = crm_manual::closest_topics(&question, &tried)
+    {
+        ask_after(
+            out, pool, user_id, history_id, messages, &clean, &question, &asked,
+        )
+        .await;
+        return Ok(());
+    }
     let in_price_lists = mode == Mode::PriceLists;
     let thickness = if in_price_lists {
         markers::infer_thickness_options_from_answer(&answer)
@@ -1222,6 +1246,34 @@ async fn ask_which_feature(
         .map(|c| (c.label.as_str(), c.sections.as_slice()))
         .collect();
     let asked = markers::with_clarify_choices_marker(&clarification.question, question, &choices);
+    save(pool, user_id, id, messages, &asked).await;
+}
+
+/// Ends `answer`, which found nothing, with a question back: the answer
+/// stays and the question follows it, saved with each choice's sections as
+/// [`ask_which_feature`] saves them.
+#[allow(clippy::too_many_arguments)]
+async fn ask_after(
+    out: &Sender,
+    pool: &MySqlPool,
+    user_id: i32,
+    id: Option<i32>,
+    messages: Vec<Message>,
+    answer: &str,
+    question: &str,
+    clarification: &crm_manual::Clarification,
+) {
+    out.text_answer(&format!("\n\n{}", clarification.question))
+        .await;
+    out.json("clarify", &clarification.choices).await;
+    out.send(Event::Done).await;
+    let choices: Vec<(&str, &[String])> = clarification
+        .choices
+        .iter()
+        .map(|c| (c.label.as_str(), c.sections.as_slice()))
+        .collect();
+    let text = format!("{answer}\n\n{}", clarification.question);
+    let asked = markers::with_clarify_choices_marker(&text, question, &choices);
     save(pool, user_id, id, messages, &asked).await;
 }
 

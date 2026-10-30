@@ -552,6 +552,77 @@ pub fn feature_choice<'a>(reply: &str, choices: &'a [Feature]) -> Option<&'a Fea
     }
 }
 
+// ---------- an answer found nothing: ask which topic ----------
+
+/// The question that follows an answer that found nothing.
+pub const DEAD_END_QUESTION: &str = "Do you mean one of these?";
+
+/// A section as a choice: its title cut to its name, "Texting registration
+/// (10DLC)" of "Texting registration (10DLC): the carriers' form for
+/// business SMS", "Admin Automations" of a long "Admin Automations (…)".
+fn choice_label(id: &str) -> Option<String> {
+    let heading = section(id)?.lines().find(|l| l.starts_with('#'))?;
+    let title = heading.trim_start_matches('#').replace(['*', '`'], "");
+    let title = re!(r"\(/[^)]*\)").replace_all(&title, "");
+    let mut label = title.split(": ").next().unwrap_or_default();
+    if label.chars().count() > 40 {
+        label = label.split(" (").next().unwrap_or_default();
+    }
+    let label = label.replace(['[', ']', '|', '=', ','], " ");
+    let label = trim(&re!(r"\s+").replace_all(&label, " ")).to_string();
+    (!label.is_empty() && label.len() <= 60).then_some(label)
+}
+
+/// The question back for an answer that found nothing: up to three of the
+/// manual's topics closest to `question` (the topic table's with their
+/// related sections, then the manual's own words that stand out), not the
+/// sections it was answered from (`tried`). `None` under two: the browser
+/// shows choices from two.
+pub fn closest_topics(question: &str, tried: &[String]) -> Option<Clarification> {
+    let search = corrected(&normalize(question));
+    let ranked = ranked(&search);
+    let best = ranked.first().map_or(0.0, |(_, score)| *score);
+    let mut ids: Vec<&str> = Vec::new();
+    for topic in matched_topics(&search) {
+        ids.push(&topic.id);
+        ids.extend(topic.related.iter().map(String::as_str));
+    }
+    ids.extend(
+        ranked
+            .iter()
+            .filter(|(_, score)| *score >= 3.0 && *score >= best * 0.5)
+            .map(|(id, _)| *id),
+    );
+    let mut choices: Vec<Feature> = Vec::new();
+    for id in ids {
+        if choices.len() == 3 {
+            break;
+        }
+        if !known_section(id)
+            || id == "document-scope"
+            || MANUAL.fallback.iter().any(|f| f == id)
+            || tried.iter().any(|t| t == id)
+            || choices.iter().any(|c| c.sections.iter().any(|s| s == id))
+        {
+            continue;
+        }
+        let Some(label) = choice_label(id) else {
+            continue;
+        };
+        if choices
+            .iter()
+            .all(|c| normalize(&c.label) != normalize(&label))
+        {
+            choices.push(feature(&label, vec![id.to_string()]));
+        }
+    }
+    (choices.len() >= 2).then(|| Clarification {
+        question: DEAD_END_QUESTION.to_string(),
+        choices,
+        with_company: None,
+    })
+}
+
 // ---------- the model picks the sections ----------
 
 /// The manual's table of contents: each section's id, title and headings.
@@ -1322,6 +1393,34 @@ mod tests {
         );
         let manual = assemble(&ids, &HashMap::new());
         assert!(manual.contains("#### Special order (a color not in the list)"));
+    }
+
+    #[test]
+    fn an_answer_that_found_nothing_offers_the_closest_topics() {
+        let asked = closest_topics("What about the DLC form?", &[]).expect("topics");
+        assert_eq!(asked.question, DEAD_END_QUESTION);
+        let offered: Vec<(&str, &[String])> = asked
+            .choices
+            .iter()
+            .map(|c| (c.label.as_str(), c.sections.as_slice()))
+            .collect();
+        assert_eq!(offered[0].0, "Texting registration (10DLC)");
+        assert_eq!(offered[0].1, ["texting-registration-10dlc"]);
+        assert_eq!(offered[1].0, "Granite Phone (Telnyx)");
+        assert_eq!(offered[1].1, ["admin-phone-telnyx"]);
+        assert!(offered.len() <= 3);
+        // Not the sections the dead end was answered from.
+        let again = closest_topics(
+            "What about the DLC form?",
+            &["texting-registration-10dlc".to_string()],
+        );
+        assert!(again.is_none_or(|a| {
+            a.choices
+                .iter()
+                .all(|c| c.sections != ["texting-registration-10dlc"])
+        }));
+        // Nothing close: no question back.
+        assert!(closest_topics("what is that?", &[]).is_none());
     }
 
     #[test]
