@@ -111,12 +111,15 @@ async fn check_sections(
 /// The CRM routes the Granite Phone app also calls with its device token.
 ///
 /// These prefixes and everything under them. `/v1/me/schedule` is the
-/// schedule-only app of installers and template makers (their web portal).
-pub const DEVICE_ROUTES: [&str; 4] = [
+/// schedule-only app of installers and template makers (their web portal);
+/// `/v1/delayed` is the caller's own scheduled texts and emails (list, edit,
+/// send now, cancel), as the composers' Send later list has them on the web.
+pub const DEVICE_ROUTES: [&str; 5] = [
     "/v1/emails",
     "/v1/schedule",
     "/v1/events",
     "/v1/me/schedule",
+    "/v1/delayed",
 ];
 
 /// CRM routes the app reads with its device token, `GET` only (my texts
@@ -124,12 +127,14 @@ pub const DEVICE_ROUTES: [&str; 4] = [
 /// email and text composers' From Stones, From Images, From Documents and
 /// Use Template lists, the suggestions under an email's To, Cc and Bcc, the
 /// schedule's calendars, and the More screens: Deals, Customers, Stones,
-/// Suppliers, Images (with its folders), Transactions and Quotes; and the CRM
-/// notification a push names).
+/// Suppliers, Images (with its folders), Transactions and Quotes; the CRM
+/// notification a push names; and the customer stones page the typing
+/// suggestion offers to link).
 /// These prefixes and everything under them; writes there still need the CRM
 /// session.
-pub const DEVICE_READ_ROUTES: [&str; 16] = [
+pub const DEVICE_READ_ROUTES: [&str; 17] = [
     "/v1/sms/mine",
+    "/v1/ai/compose/inventory-url",
     "/v1/calendars",
     "/v1/stones",
     "/v1/images",
@@ -471,9 +476,16 @@ mod tests {
             "/v1/schedule/events",
             "/v1/events/7/details",
             "/v1/me/schedule",
+            "/v1/delayed/sms",
+            "/v1/delayed/emails",
+            "/v1/delayed/sms/7/send-now",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
             assert!(device_route(&Method::POST, path), "{path}");
+        }
+        for path in ["/v1/delayed/sms/7", "/v1/delayed/emails/7"] {
+            assert!(device_route(&Method::PUT, path), "{path}");
+            assert!(device_route(&Method::DELETE, path), "{path}");
         }
         for path in [
             "/v1/emailsx",
@@ -481,6 +493,7 @@ mod tests {
             "/v1/me/devices",
             "/v1/me",
             "/v1/me/schedulex",
+            "/v1/delayedx",
             "/v1/me/todos",
             "/emails",
             "",
@@ -509,6 +522,7 @@ mod tests {
             "/v1/transactions/7",
             "/v1/quotes",
             "/v1/notifications/7",
+            "/v1/ai/compose/inventory-url",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
             for method in [Method::POST, Method::PUT, Method::DELETE] {
