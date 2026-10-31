@@ -30,7 +30,7 @@ use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
-    self, SaleDeal, load_company_quote, mark_quote_sold, pricing_for_quote,
+    self, SaleDeal, SaleJobs, load_company_quote, mark_quote_sold, pricing_for_quote,
     quote_for_contract_file, with_current_sink_models,
 };
 use crate::routes::created::CreatedId;
@@ -1875,6 +1875,12 @@ pub struct Sale {
     /// `not_ready`. The installation job is always `not_ready`.
     #[serde(default)]
     pub job_status: Option<String>,
+    /// Notes on the template job it adds to Unscheduled.
+    #[serde(default)]
+    pub template_notes: Option<String>,
+    /// Notes on the installation job it adds to Unscheduled.
+    #[serde(default)]
+    pub install_notes: Option<String>,
 }
 
 /// What selling did.
@@ -1916,7 +1922,7 @@ pub async fn mark_sold(
             "Pick the option that was sold.".into(),
         ));
     }
-    let job_ready = match input.job_status.as_deref() {
+    let template_ready = match input.job_status.as_deref() {
         None | Some("ready") => true,
         Some("not_ready") => false,
         Some(_) => {
@@ -1936,7 +1942,11 @@ pub async fn mark_sold(
             (false, Some(deal)) => SaleDeal::Existing(deal),
             (false, None) => SaleDeal::Auto,
         },
-        job_ready,
+        &SaleJobs {
+            template_ready,
+            template_notes: input.template_notes,
+            install_notes: input.install_notes,
+        },
     )
     .await?
     .ok_or(ApiError::NotFound)?;
