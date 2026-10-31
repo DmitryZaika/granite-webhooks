@@ -43360,7 +43360,7 @@
           "ai"
         ],
         "summary": "Draft the next message",
-        "description": "Drafts the next SMS or email to a customer from the whole conversation\n(SMS and email together), the customer's profile, deals and quotes\n(colors, totals, sent / opened / signed), the company's AI instructions\nand the rep's own recent messages: a fast reply, a follow-up on the open\ntopic, or a custom draft (and revisions of it). The draft greets the\ncustomer by name only in a new conversation or when the last SMS or email\nwith them is from an earlier day; otherwise it has no greeting and no\nname. Takes several seconds (a larger model).",
+        "description": "Drafts the next SMS or email to a customer from the whole conversation\n(SMS and email together), the customer's profile, deals and quotes\n(colors, totals, sent / opened / signed), the company's AI instructions\nand the rep's own recent messages: a fast reply, a follow-up on the open\ntopic, or a custom draft (and revisions of it). The draft greets the\ncustomer by name until we have sent them an SMS or email today (store\ntime); after that it has no greeting and no name. Takes several seconds (a larger model).",
         "operationId": "draft_conversation_reply",
         "requestBody": {
           "content": {

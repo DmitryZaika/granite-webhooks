@@ -603,7 +603,7 @@ pub const FOLLOWUP_JSON_RULES: &str = r##"Rules for the JSON:
 - Each message in a sequence must use a different angle. Do not rephrase an earlier unanswered message.
 - Do not ask for sink, cooktop, square footage, or other job details unless that is the current stage.
 - If the customer agreed to or asked for a next step that never happened, the first message resumes it with a concrete offer. Never claim it already happened.
-- Customer's name and greeting: only as the GREETING line allows (new conversation, or the last SMS or email was on an earlier day). Otherwise no greeting and no name. At most once per message. Never invent a name.
+- Customer's name and greeting: only as the GREETING line allows (new conversation, or we have not sent them an SMS or email yet today). Otherwise no greeting and no name. At most once per message. Never invent a name.
 - No stock AI lines ("I hope this finds you well", "Just following up", "I wanted to reach out"), no em dashes, no generic sign-offs. Write like the rep's own recent messages.
 - Good morning only before noon. Good evening only after 6pm.
 - Customer page links must use the exact URL from the profile (it already has this company's id).

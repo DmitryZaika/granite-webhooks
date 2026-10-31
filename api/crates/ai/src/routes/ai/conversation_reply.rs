@@ -50,8 +50,8 @@ PRIMARY TASK — write the next message this conversation itself calls for:
 4. Move it forward with ONE natural question or one concrete next step.
 
 ## Greeting and the customer's name: obey the GREETING line in the request
-- GREETING: NONE → the conversation is ongoing (an SMS or email with them earlier today). No greeting ("Hi", "Hey", "Hello", "Good morning", "Dear") and no customer name anywhere in the message, on SMS and email alike. Start straight with the content, like the next text in a running thread.
-- GREETING: BY NAME → a brand-new conversation, or the last message was on an earlier day: open with a short greeting and their first name ("Hi Ann,"). Never "Hello <Full Name>" or "Dear".
+- GREETING: NONE → the conversation is ongoing (we already sent them an SMS or email today). No greeting ("Hi", "Hey", "Hello", "Good morning", "Dear") and no customer name anywhere in the message, on SMS and email alike. Start straight with the content, like the next text in a running thread.
+- GREETING: BY NAME → a brand-new conversation, or we have not written to them yet today (even when they wrote to us this morning): open with a short greeting and their first name ("Hi Ann,"). Never "Hello <Full Name>" or "Dear".
 - The customer's name appears at most once in a message.
 - Never add a greeting just because the channel is email.
 
@@ -620,9 +620,8 @@ async fn load_extras(
 /// (colors, totals, sent / opened / signed), the company's AI instructions
 /// and the rep's own recent messages: a fast reply, a follow-up on the open
 /// topic, or a custom draft (and revisions of it). The draft greets the
-/// customer by name only in a new conversation or when the last SMS or email
-/// with them is from an earlier day; otherwise it has no greeting and no
-/// name. Takes several seconds (a larger model).
+/// customer by name until we have sent them an SMS or email today (store
+/// time); after that it has no greeting and no name. Takes several seconds (a larger model).
 #[crate::openapi::path(
     post,
     path = "/v1/ai/conversation-reply",
@@ -925,19 +924,28 @@ mod tests {
     }
 
     #[test]
-    fn a_message_from_today_on_any_channel_skips_the_greeting() {
-        // Earlier today (5:00 AM in Indianapolis): no greeting.
-        for at in ["2026-10-13 09:00"] {
-            let timeline = vec![message(
-                at,
-                Direction::Inbound,
-                "Can you send the price for the island top please?",
-            )];
-            let text = prompt(&timeline, ReplyMode::FastReply, &CustomDraft::default());
-            assert!(text.contains("GREETING: NONE"), "{at}");
-            assert!(text.contains("Do NOT open with a greeting"));
-            assert!(text.contains("do NOT use the customer's name"));
-        }
+    fn our_message_from_today_on_any_channel_skips_the_greeting() {
+        // The customer wrote this morning (5:00 AM in Indianapolis) and we
+        // have not answered today: our reply greets her.
+        let asked = vec![message(
+            "2026-10-13 09:00",
+            Direction::Inbound,
+            "Can you send the price for the island top please?",
+        )];
+        let text = prompt(&asked, ReplyMode::FastReply, &CustomDraft::default());
+        assert!(text.contains("GREETING: BY NAME") && !text.contains("GREETING: NONE"));
+        // Once we answered today, her next question continues the thread.
+        let mut answered = asked.clone();
+        answered.push(message(
+            "2026-10-13 09:30",
+            Direction::Outbound,
+            "Sure, one sec",
+        ));
+        answered.push(message("2026-10-13 09:40", Direction::Inbound, "Thanks!"));
+        let text = prompt(&answered, ReplyMode::FastReply, &CustomDraft::default());
+        assert!(text.contains("GREETING: NONE"));
+        assert!(text.contains("Do NOT open with a greeting"));
+        assert!(text.contains("do NOT use the customer's name"));
         // The rep just texted; an email draft still continues without "Hi".
         let mut texted = lenora();
         texted.push(message(

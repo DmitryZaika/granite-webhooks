@@ -70,7 +70,7 @@ Rules:
 - When the rep is about to share the inventory / stones page, use the exact customer page URL from CUSTOMER / PROJECT INFO.
 - When the rep asks the customer for their measurements or sends them a link to send us their sizes, use the exact Customer quote URL from CUSTOMER / PROJECT INFO.
 - When the message needs the rep's name, the rep's phone number or the company address, use them from SALES REP and COMPANY.
-- If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now. Follow the GREETING line: with GREETING: NONE (an SMS or email with them earlier today) never start with "Hi", "Hey" or "Hello" and never use the customer's name; start with the content.
+- If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now. Follow the GREETING line: with GREETING: NONE (we already sent them an SMS or email today) never start with "Hi", "Hey" or "Hello" and never use the customer's name; start with the content.
 - Never repeat or rephrase something the rep already said in the CONVERSATION. If the rep's last message is still unanswered, don't ask its question again: add something new (a different angle, an offer, a next step) or return an empty string.
 - Use the customer's name at most once in a message. Write plainly like the rep: no "I hope this finds you well", "Just following up", "I wanted to reach out", no em dashes.
 - Stop once the point is made. Never tack on an extra offer, a promise to follow up or send something, or "let me know if you have any questions" unless the rep's own messages end that way: reps delete these more than anything else.
@@ -1083,12 +1083,15 @@ mod tests {
         };
         let context = ComposeContext {
             profile: String::new(),
-            // The customer texted this morning; the rep now starts an email.
-            timeline: vec![message(
-                "2026-10-13 13:30",
-                FollowupChannel::Sms,
-                Direction::Inbound,
-            )],
+            // She texted, the rep answered this morning; now an email.
+            timeline: vec![
+                message("2026-10-13 13:00", FollowupChannel::Sms, Direction::Inbound),
+                message(
+                    "2026-10-13 13:30",
+                    FollowupChannel::Sms,
+                    Direction::Outbound,
+                ),
+            ],
             rep_phone: None,
             company_name: None,
             company_address: None,
