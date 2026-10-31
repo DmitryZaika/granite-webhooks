@@ -201,6 +201,7 @@ dependencies = [
  "chrono",
  "common",
  "futures-util",
+ "hmac",
  "lambda_http",
  "regex",
  "reqwest",

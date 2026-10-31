@@ -187,6 +187,23 @@ and against Stripe's test mode in `tests/admin/billing_stripe_live.rs` when
 `STRIPE_WEBHOOK_SECRET`, `STRIPE_BILLING_PLANS` (`price|Name|cents,...`) or
 `STRIPE_PRICE_ID`.
 
+### Payments page (Stripe)
+
+`routes/payments.rs` serves the payments page (`apps/payments` in the CRM
+repo, `payments.granite-manager.com`; dev: `dev-payments.granite-manager.com`):
+a company opens its signed link (`?c=<company id>.<HMAC>`), subscribes monthly
+through Stripe Checkout at `company.subscription_price_cents` (default $800,
+read when it subscribes) and manages the subscription in Stripe's billing
+portal; superusers see every company's status and last payment
+(`GET /v1/superuser/payments`). The api creates the Stripe customer and saves
+it in `company.stripe_customer_id` before the first checkout, so no webhook is
+needed; everything else is read from Stripe. It never changes CRM access and
+is separate from `company_billing` above. Env: `STRIPE_SECRET_KEY`,
+`PAYMENTS_LINK_SECRET` (changing it invalidates every link) and
+`PAYMENTS_APP_URL` (default `https://payments.granite-manager.com`). Tested
+against a fake Stripe in `tests/admin/payments.rs` and against Stripe's test
+mode in `tests/admin/payments_stripe_live.rs` (`STRIPE_TEST_SECRET_KEY`).
+
 ### Uploads and storage
 
 Images go straight from the browser to the bucket with a presigned PUT

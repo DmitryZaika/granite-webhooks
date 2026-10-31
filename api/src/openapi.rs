@@ -74,6 +74,7 @@ use utoipa::{Modify, OpenApi};
         (name = "invoices", description = "Invoices the CRM keeps itself, for companies without QuickBooks"),
         (name = "followups", description = "AI follow-ups: the company rule they obey, timelines and enrollments"),
         (name = "billing", description = "The company's Granite Manager subscription (Stripe)"),
+        (name = "payments", description = "The payments page (payments.granite-manager.com): a company's monthly Stripe subscription, opened from its signed payment link (no session)"),
         (name = "jobs", description = "Scheduled jobs the time-triggered Lambda runs (job key, no session)"),
         (name = "posthog-autofix", description = "Callbacks of the PostHog auto-fix GitHub workflow (callback secret, no session)"),
         (name = "phone", description = "Granite Phone, business calling through Telnyx: the app's sign-in and devices, calls, contacts and settings, and their admin pages"),
