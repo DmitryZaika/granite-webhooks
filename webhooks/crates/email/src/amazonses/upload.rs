@@ -15,8 +15,13 @@ where
 
     for (index, attachment) in attachments.into_iter().enumerate() {
         let final_client = client.clone(); // важно, если client не Copy
-        let key = attachment_object_key(message_id, index, attachment.filename());
-        set.spawn(async move { attachment.to_uploaded_attachment(&final_client, key).await });
+        let message_id = message_id.to_string();
+        set.spawn(async move {
+            // Compressed first: a HEIC photo's key ends in .jpg.
+            let attachment = attachment.compressed().await;
+            let key = attachment_object_key(&message_id, index, attachment.filename());
+            attachment.to_uploaded_attachment(&final_client, key).await
+        });
     }
 
     let mut uploaded_attachments = Vec::new();

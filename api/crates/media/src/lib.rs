@@ -20,8 +20,8 @@
 // Each crate re-exports the ones below it.
 pub use api_core::*;
 
+pub use common::images;
 pub mod email_signature;
-pub mod images;
 pub mod native_delivery;
 pub mod pdf;
 pub mod pdf_fonts;

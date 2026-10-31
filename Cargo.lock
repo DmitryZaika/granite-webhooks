@@ -380,7 +380,6 @@ dependencies = [
  "common",
  "hayro",
  "image",
- "jpeg-encoder",
  "lopdf",
  "miniz_oxide 0.8.9",
  "pdf-writer",
@@ -396,7 +395,6 @@ dependencies = [
  "utoipa 6.0.0",
  "utoipa-axum",
  "uuid",
- "zune-heic",
 ]
 
 [[package]]
@@ -1057,6 +1055,8 @@ dependencies = [
  "bytes",
  "chrono",
  "chrono-tz",
+ "image",
+ "jpeg-encoder",
  "percent-encoding",
  "rand 0.10.2",
  "regex",
@@ -1072,6 +1072,7 @@ dependencies = [
  "tracing",
  "urlencoding",
  "uuid",
+ "zune-heic",
 ]
 
 [[package]]
