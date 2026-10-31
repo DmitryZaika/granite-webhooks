@@ -19,10 +19,7 @@ pub const ID_VAR: &str = "SECRETS_ID";
 /// Call it first thing in `main`: an error stops the Lambda rather than run
 /// it without its keys. The values are never logged; the names are.
 pub async fn load_into_env() -> Result<(), String> {
-    let Some(id) = std::env::var(ID_VAR)
-        .ok()
-        .filter(|id| !id.trim().is_empty())
-    else {
+    let Some(id) = std::env::var(ID_VAR).ok().filter(|id| !id.trim().is_empty()) else {
         return Ok(());
     };
     let pairs = parse(&fetch(&id).await?)?;
