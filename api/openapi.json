@@ -21515,6 +21515,148 @@
         ]
       }
     },
+    "/v1/sms/mine/threads/{phone}/read": {
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Mark my conversation read",
+        "description": "As `POST /v1/sms/{provider}/threads/{phone}/read` on every provider of\nthe caller's (as `GET /v1/sms/mine/threads`).",
+        "operationId": "mark_my_sms_thread_read",
+        "parameters": [
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked (or not visible to the caller)"
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/mine/threads/{phone}/unread": {
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Mark my conversation unread",
+        "description": "As `POST /v1/sms/{provider}/threads/{phone}/unread` on every provider of\nthe caller's (as `GET /v1/sms/mine/threads`).",
+        "operationId": "mark_my_sms_thread_unread",
+        "parameters": [
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked (or not visible to the caller)"
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/sms/mine/unread-count": {
       "get": {
         "tags": [
@@ -88839,6 +88981,10 @@
               "null"
             ],
             "description": "Notes on the installation job it adds to Unscheduled."
+          },
+          "full_height_backsplash": {
+            "type": "boolean",
+            "description": "Full Height Backsplash (higher than 15\"): also adds a \"FH Backsplash\"\ntemplate and installation job, both `not_ready`."
           }
         },
         "additionalProperties": false

@@ -772,6 +772,14 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
                 "install_notes": "",
             }),
         ),
+        (
+            true,
+            json!({
+                "option": 0,
+                "install_notes": "Tall splash",
+                "full_height_backsplash": true,
+            }),
+        ),
     ] {
         sqlx::query("UPDATE company SET auto_unscheduled_jobs = ? WHERE id = 100")
             .bind(on)
@@ -793,7 +801,8 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
             .await
             .assert_status_ok();
         let statuses: Vec<String> = sqlx::query_scalar(
-            "SELECT CONCAT(CAST(status AS CHAR), '|', COALESCE(notes, '-'))
+            "SELECT CONCAT(IF(title LIKE '% - FH Backsplash', 'FH ', ''),
+                      CAST(status AS CHAR), '|', COALESCE(notes, '-'))
                FROM events WHERE quote_id = ? AND unscheduled <> 0 ORDER BY id",
         )
         .bind(id)
@@ -804,13 +813,20 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
     }
     // Off: nothing added; on: a template, Ready unless the seller picked Not
     // ready, and an installation, always Not ready; each with its notes
-    // (trimmed, blank stays none).
+    // (trimmed, blank stays none). Full Height Backsplash adds a Not ready
+    // FH Backsplash template and installation.
     assert_eq!(
         jobs,
         [
             vec![],
             vec!["ready|-", "not_ready|-"],
             vec!["not_ready|Measure the island", "not_ready|-"],
+            vec![
+                "ready|-",
+                "FH not_ready|-",
+                "not_ready|Tall splash",
+                "FH not_ready|Tall splash",
+            ],
         ]
     );
     let id = create(&server, json!({ "customer_id": 1004 })).await;

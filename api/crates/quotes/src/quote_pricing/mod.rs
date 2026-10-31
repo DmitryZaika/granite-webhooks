@@ -655,6 +655,9 @@ pub struct SaleJobs {
     pub template_notes: Option<String>,
     /// Notes on the installation job.
     pub install_notes: Option<String>,
+    /// Full Height Backsplash (higher than 15"): also a "FH Backsplash"
+    /// template and installation job.
+    pub full_height_backsplash: bool,
 }
 
 /// `markQuoteSold`: the quote is sold with option `option_index` (none: not
@@ -763,7 +766,9 @@ pub async fn mark_quote_sold(
 /// A sold quote's template and installation: one unscheduled event on each
 /// of those calendars for the schedule manager to date: the template "ready"
 /// (or "not ready" when `jobs.template_ready` is false), the installation
-/// "not ready", each with its notes from `jobs`. Once per quote: selling it
+/// "not ready", each with its notes from `jobs`. With
+/// `jobs.full_height_backsplash` each calendar also gets a "FH Backsplash"
+/// job, "not ready", with the same notes. Once per quote: selling it
 /// again adds nothing. Only while the company's switch is on
 /// (`company.auto_unscheduled_jobs`, Admin › Automations).
 async fn add_waiting_jobs(
@@ -823,7 +828,19 @@ async fn add_waiting_jobs(
         .chars()
         .take(255)
         .collect();
-    for (calendar_id, template) in calendars {
+    let fh_title: String = format!("{title} - FH Backsplash")
+        .chars()
+        .take(255)
+        .collect();
+    // Each calendar's job, then (Full Height Backsplash) its FH Backsplash job.
+    let events: Vec<(i32, bool, bool)> = calendars
+        .into_iter()
+        .flat_map(|(calendar_id, template)| {
+            [(calendar_id, template, false), (calendar_id, template, true)]
+        })
+        .filter(|&(_, _, fh)| !fh || jobs.full_height_backsplash)
+        .collect();
+    for (calendar_id, template, fh) in events {
         let assignee = sole_template_maker(pool, calendar_id).await?;
         let notes = if template {
             &jobs.template_notes
@@ -836,10 +853,10 @@ async fn add_waiting_jobs(
                 color, status, created_user_id, assigned_user_id, customer_id, calendar_id, quote_id)
              VALUES (?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&title)
+        .bind(if fh { &fh_title } else { &title })
         .bind(address.as_deref())
         .bind(notes)
-        .bind(if jobs.template_ready && template {
+        .bind(if jobs.template_ready && template && !fh {
             "ready"
         } else {
             "not_ready"

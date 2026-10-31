@@ -1881,6 +1881,10 @@ pub struct Sale {
     /// Notes on the installation job it adds to Unscheduled.
     #[serde(default)]
     pub install_notes: Option<String>,
+    /// Full Height Backsplash (higher than 15"): also adds a "FH Backsplash"
+    /// template and installation job, both `not_ready`.
+    #[serde(default)]
+    pub full_height_backsplash: bool,
 }
 
 /// What selling did.
@@ -1946,6 +1950,7 @@ pub async fn mark_sold(
             template_ready,
             template_notes: input.template_notes,
             install_notes: input.install_notes,
+            full_height_backsplash: input.full_height_backsplash,
         },
     )
     .await?
