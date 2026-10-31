@@ -648,7 +648,7 @@ pub enum SaleDeal {
 
 /// `markQuoteSold`: the quote is sold with option `option_index` (none: not
 /// known yet, the deal is still won) and the deal `sale_deal` names is won
-/// with that total. Its schedule jobs wait as Ready unless `job_ready` is false.
+/// with that total. Its template job waits as Ready unless `job_ready` is false.
 pub async fn mark_quote_sold(
     pool: &MySqlPool,
     quote_id: i32,
@@ -750,7 +750,8 @@ pub async fn mark_quote_sold(
 }
 
 /// A sold quote's template and installation: one unscheduled event on each
-/// of those calendars, "ready" (or "not ready"), for the schedule manager to date. Once
+/// of those calendars for the schedule manager to date: the template "ready"
+/// (or "not ready" when `ready` is false), the installation "not ready". Once
 /// per quote: selling it again adds nothing. Only while the company's switch
 /// is on (`company.auto_unscheduled_jobs`, Admin › Automations).
 async fn add_waiting_jobs(
@@ -779,8 +780,8 @@ async fn add_waiting_jobs(
     if added.is_some() {
         return Ok(());
     }
-    let calendars: Vec<i32> = sqlx::query_scalar(
-        "SELECT id FROM calendars
+    let calendars: Vec<(i32, bool)> = sqlx::query_as(
+        "SELECT id, slug = 'templates' FROM calendars
           WHERE company_id = ? AND slug IN ('templates', 'installations') AND deleted_at IS NULL
           ORDER BY slug = 'installations', id",
     )
@@ -810,7 +811,7 @@ async fn add_waiting_jobs(
         .chars()
         .take(255)
         .collect();
-    for calendar_id in calendars {
+    for (calendar_id, template) in calendars {
         let assignee = sole_template_maker(pool, calendar_id).await?;
         let id = sqlx::query(
             "INSERT INTO events (title, location, start_date, end_date, all_day, unscheduled,
@@ -819,7 +820,7 @@ async fn add_waiting_jobs(
         )
         .bind(&title)
         .bind(address.as_deref())
-        .bind(if ready { "ready" } else { "not_ready" })
+        .bind(if ready && template { "ready" } else { "not_ready" })
         .bind(creator)
         .bind(assignee)
         .bind(quote.customer_id)

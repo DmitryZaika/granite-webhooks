@@ -793,13 +793,13 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
         .unwrap();
         jobs.push(statuses);
     }
-    // Off: nothing added; on: a template and an installation, Ready unless
-    // the seller picked Not ready.
+    // Off: nothing added; on: a template, Ready unless the seller picked Not
+    // ready, and an installation, always Not ready.
     assert_eq!(
         jobs,
         [
             vec![],
-            vec!["ready", "ready"],
+            vec!["ready", "not_ready"],
             vec!["not_ready", "not_ready"],
         ]
     );

@@ -88824,7 +88824,7 @@
               "string",
               "null"
             ],
-            "description": "Status of the jobs it adds to Unscheduled: `ready` (default) or `not_ready`."
+            "description": "Status of the template job it adds to Unscheduled: `ready` (default) or\n`not_ready`. The installation job is always `not_ready`."
           }
         },
         "additionalProperties": false
