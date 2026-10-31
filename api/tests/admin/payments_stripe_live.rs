@@ -71,10 +71,7 @@ async fn a_company_subscribes_manages_and_shows_up_for_superusers(pool: MySqlPoo
         key: key.clone(),
         http: ::common::http::client(),
     };
-    let payments = Payments::new(
-        "live-test-secret",
-        "https://dev-payments.granite-manager.com",
-    );
+    let payments = Payments::new("live-test-secret", "https://dev-payments.granite-manager.com");
     let token = payments.token(100).unwrap();
     let server = TestServer::new(app(AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
         .with_stripe(Stripe::new(Some(&key), BASE))
@@ -85,10 +82,7 @@ async fn a_company_subscribes_manages_and_shows_up_for_superusers(pool: MySqlPoo
         .post(&format!("/v1/public/payments/{token}/checkout"))
         .await;
     checkout.assert_status_ok();
-    let url = checkout.json::<Value>()["url"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let url = checkout.json::<Value>()["url"].as_str().unwrap().to_string();
     assert!(url.starts_with("https://checkout.stripe.com/"), "{url}");
     let customer: String =
         sqlx::query_scalar("SELECT stripe_customer_id FROM company WHERE id = 100")
@@ -98,11 +92,7 @@ async fn a_company_subscribes_manages_and_shows_up_for_superusers(pool: MySqlPoo
     assert!(customer.starts_with("cus_"), "{customer}");
     let session_id = url
         .split('/')
-        .find_map(|part| {
-            part.split('#')
-                .next()
-                .filter(|id| id.starts_with("cs_test_"))
-        })
+        .find_map(|part| part.split('#').next().filter(|id| id.starts_with("cs_test_")))
         .expect("session id in the Checkout link");
     let session = raw
         .get(
@@ -169,10 +159,7 @@ async fn a_company_subscribes_manages_and_shows_up_for_superusers(pool: MySqlPoo
         .await;
     portal.assert_status_ok();
     let portal_url = portal.json::<Value>()["url"].as_str().unwrap().to_string();
-    assert!(
-        portal_url.starts_with("https://billing.stripe.com/"),
-        "{portal_url}"
-    );
+    assert!(portal_url.starts_with("https://billing.stripe.com/"), "{portal_url}");
 
     // Superusers see the payment.
     sqlx::query("UPDATE users SET is_superuser = 1 WHERE id = 102")
@@ -210,11 +197,7 @@ async fn a_company_subscribes_manages_and_shows_up_for_superusers(pool: MySqlPoo
     assert!(page["subscription"]["ends_at"].is_string());
 
     let deleted = raw
-        .call(
-            reqwest::Method::DELETE,
-            &format!("/v1/customers/{customer}"),
-            &[],
-        )
+        .call(reqwest::Method::DELETE, &format!("/v1/customers/{customer}"), &[])
         .await;
     assert_eq!(deleted["deleted"], true);
 }

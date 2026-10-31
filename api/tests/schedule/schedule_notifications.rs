@@ -327,9 +327,7 @@ async fn confirmations_stay_out_of_flows(pool: MySqlPool) {
     // Left out, the kind is kept; a confirmation made a reminder can go in a flow.
     body.as_object_mut().unwrap().remove("kind");
     server
-        .put(&format!(
-            "/v1/schedule/notifications/templates/{confirmation}"
-        ))
+        .put(&format!("/v1/schedule/notifications/templates/{confirmation}"))
         .with_session(sessions::ADMIN)
         .json(&body)
         .await
@@ -346,9 +344,7 @@ async fn confirmations_stay_out_of_flows(pool: MySqlPool) {
     assert_eq!(kind().await, "confirmation");
     body["kind"] = json!("reminder");
     server
-        .put(&format!(
-            "/v1/schedule/notifications/templates/{confirmation}"
-        ))
+        .put(&format!("/v1/schedule/notifications/templates/{confirmation}"))
         .with_session(sessions::ADMIN)
         .json(&body)
         .await

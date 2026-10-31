@@ -131,12 +131,7 @@ async fn an_address_is_found_only_at_its_house_on_a_street(pool: MySqlPool) {
         check("1 Main St, Carmel").await,
         json!({ "status": "found", "formatted_address": "1 Main St, Carmel, IN 46032, USA" })
     );
-    for address in [
-        "7 Main St, Carmel",
-        "1 Nowhere Rd, 46112",
-        "46112",
-        "3 Fake Ln, Carmel",
-    ] {
+    for address in ["7 Main St, Carmel", "1 Nowhere Rd, 46112", "46112", "3 Fake Ln, Carmel"] {
         assert_eq!(check(address).await["status"], "not_found", "{address}");
     }
     assert_eq!(check("2 Error Rd, Carmel").await["status"], "unknown");
