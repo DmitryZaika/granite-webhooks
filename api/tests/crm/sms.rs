@@ -464,9 +464,9 @@ async fn the_admin_inbox_merges_every_provider(pool: MySqlPool) {
     assert_eq!(phones(&page), ["3175550555", "3175550777"]);
     assert_eq!(page["has_more"], true);
 
-    // Rita (user 100) through both of her ids.
+    // Rita (user 100) through both of her ids and her own number: her inbox.
     let rita = get(&pool, "/v1/sms/all/threads?agent_id=100", sessions::ADMIN).await;
-    assert_eq!(phones(&rita), ["3175550100", "3175550888"]);
+    assert_eq!(phones(&rita), ["3175550100", "3175550777", "3175550888"]);
 
     let thread = get(&pool, "/v1/sms/all/threads/3175550100", sessions::ADMIN).await;
     let texts: Vec<(&str, &str)> = thread["messages"]
