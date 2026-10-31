@@ -230,6 +230,8 @@ pub struct ThreadFilter {
     pub key: Option<ThreadKey>,
     /// Only threads whose newest text is older than this one (paging).
     pub before: Option<i64>,
+    /// Only threads with texts I haven't read.
+    pub unread_only: bool,
 }
 
 #[derive(FromRow)]
@@ -246,9 +248,10 @@ async fn thread_rows(
     company_id: i32,
     number_ids: &[i32],
     filter: &ThreadFilter,
+    only: Option<&[(i32, String)]>,
     limit: i64,
 ) -> sqlx::Result<Vec<ThreadRow>> {
-    if number_ids.is_empty() {
+    if number_ids.is_empty() || only.is_some_and(<[_]>::is_empty) {
         return Ok(Vec::new());
     }
     let company_lines = super::texting::company_lines(pool, company_id).await?;
@@ -282,6 +285,18 @@ async fn thread_rows(
             .push_bind(key.number_id)
             .push(" AND s.phone_digits = ")
             .push_bind(key.other10.clone());
+    }
+    if let Some(only) = only {
+        query.push(" AND (FALSE");
+        for (number_id, phone) in only {
+            query
+                .push(" OR (s.number_id = ")
+                .push_bind(*number_id)
+                .push(" AND s.phone_digits = ")
+                .push_bind(phone.clone())
+                .push(")");
+        }
+        query.push(")");
     }
     query.push(" GROUP BY s.number_id, s.phone_digits");
     if let Some(before) = filter.before {
@@ -408,7 +423,27 @@ pub async fn threads(
     limit: i64,
 ) -> sqlx::Result<(Vec<TextThread>, Option<String>)> {
     let number_ids: Vec<i32> = lines.keys().copied().collect();
-    let mut rows = thread_rows(pool, company_id, &number_ids, filter, limit + 1).await?;
+    let unread_keys: Option<Vec<(i32, String)>> = if filter.unread_only {
+        Some(
+            unread_by_thread(pool, company_id, user_id, &number_ids, None)
+                .await?
+                .into_iter()
+                .filter(|(_, unread)| *unread > 0)
+                .map(|(key, _)| key)
+                .collect(),
+        )
+    } else {
+        None
+    };
+    let mut rows = thread_rows(
+        pool,
+        company_id,
+        &number_ids,
+        filter,
+        unread_keys.as_deref(),
+        limit + 1,
+    )
+    .await?;
     let more = i64::try_from(rows.len()).unwrap_or(i64::MAX) > limit;
     rows.truncate(usize::try_from(limit).unwrap_or(0));
     if rows.is_empty() {
