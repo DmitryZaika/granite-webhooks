@@ -763,7 +763,15 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
     for (on, sale) in [
         (false, json!({ "option": 0 })),
         (true, json!({ "option": 0 })),
-        (true, json!({ "option": 0, "job_status": "not_ready" })),
+        (
+            true,
+            json!({
+                "option": 0,
+                "job_status": "not_ready",
+                "template_notes": " Measure the island ",
+                "install_notes": "",
+            }),
+        ),
     ] {
         sqlx::query("UPDATE company SET auto_unscheduled_jobs = ? WHERE id = 100")
             .bind(on)
@@ -785,7 +793,8 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
             .await
             .assert_status_ok();
         let statuses: Vec<String> = sqlx::query_scalar(
-            "SELECT CAST(status AS CHAR) FROM events WHERE quote_id = ? AND unscheduled <> 0 ORDER BY id",
+            "SELECT CONCAT(CAST(status AS CHAR), '|', COALESCE(notes, '-'))
+               FROM events WHERE quote_id = ? AND unscheduled <> 0 ORDER BY id",
         )
         .bind(id)
         .fetch_all(&pool)
@@ -794,13 +803,14 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
         jobs.push(statuses);
     }
     // Off: nothing added; on: a template, Ready unless the seller picked Not
-    // ready, and an installation, always Not ready.
+    // ready, and an installation, always Not ready; each with its notes
+    // (trimmed, blank stays none).
     assert_eq!(
         jobs,
         [
             vec![],
-            vec!["ready", "not_ready"],
-            vec!["not_ready", "not_ready"],
+            vec!["ready|-", "not_ready|-"],
+            vec!["not_ready|Measure the island", "not_ready|-"],
         ]
     );
     let id = create(&server, json!({ "customer_id": 1004 })).await;

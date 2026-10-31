@@ -88825,6 +88825,20 @@
               "null"
             ],
             "description": "Status of the template job it adds to Unscheduled: `ready` (default) or\n`not_ready`. The installation job is always `not_ready`."
+          },
+          "template_notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes on the template job it adds to Unscheduled."
+          },
+          "install_notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes on the installation job it adds to Unscheduled."
           }
         },
         "additionalProperties": false
