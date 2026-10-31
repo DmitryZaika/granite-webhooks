@@ -1871,7 +1871,8 @@ pub struct Sale {
     /// Make a new won deal instead of using an existing one.
     #[serde(default)]
     pub new_deal: bool,
-    /// Status of the jobs it adds to Unscheduled: `ready` (default) or `not_ready`.
+    /// Status of the template job it adds to Unscheduled: `ready` (default) or
+    /// `not_ready`. The installation job is always `not_ready`.
     #[serde(default)]
     pub job_status: Option<String>,
 }
@@ -1920,7 +1921,7 @@ pub async fn mark_sold(
         Some("not_ready") => false,
         Some(_) => {
             return Err(ApiError::BadRequest(
-                "Pick Ready or Not ready for the schedule.".into(),
+                "Pick Ready or Not ready for the template.".into(),
             ));
         }
     };
