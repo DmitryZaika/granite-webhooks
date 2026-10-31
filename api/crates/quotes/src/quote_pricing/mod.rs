@@ -796,16 +796,14 @@ async fn add_waiting_jobs(
     .fetch_optional(pool)
     .await?;
     let (name, address) = customer.unwrap_or_default();
-    // Named after the customer, else the quote.
-    let title: String = name
-        .or_else(|| {
-            quote
-                .quote_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_string)
-        })
+    // Named after the quote, else the customer.
+    let title: String = quote
+        .quote_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .or(name)
         .unwrap_or_else(|| format!("Customer #{}", quote.customer_id))
         .chars()
         .take(255)
