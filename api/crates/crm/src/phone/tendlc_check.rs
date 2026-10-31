@@ -1566,7 +1566,7 @@ async fn check(state: &AppState, company_id: i32) -> sqlx::Result<()> {
     if !matches!(
         row.status,
         TenDlcStatus::Draft | TenDlcStatus::Ready | TenDlcStatus::Rejected
-    ) || !form::problems_with_letter(&draft, state.ai.is_enabled()).is_empty()
+    ) || !form::problems(&draft).is_empty()
     {
         finish(pool, row.id, None, None).await?;
         return Ok(());

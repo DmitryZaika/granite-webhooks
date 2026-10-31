@@ -1667,25 +1667,6 @@ fn ai_answer(summary: &str, changed: &[(&str, Value)]) -> Value {
     json!({ "summary": summary, "checks": checks })
 }
 
-/// What the AI reads off Acme's IRS letter.
-fn irs_letter() -> Value {
-    json!({ "isIrsEinLetter": true, "kind": "CP575", "legalName": "ACME STONE LLC",
-            "ein": "12-3456789", "street": "100 MAIN ST", "city": "INDIANAPOLIS", "state": "IN",
-            "postalCode": "46204", "unreadable": "" })
-}
-
-/// Mark uploads Acme's IRS letter; the AI reads `read` off it.
-async fn upload_letter(server: &TestServer, fake: &CheckFake, read: Value) -> TestResponse {
-    fake.answer_with(read);
-    server
-        .post("/v1/phone/admin/tendlc/ein-letter")
-        .with_session(sessions::MANAGER)
-        .json(
-            &json!({ "file": "data:application/pdf;base64,JVBERi0xLjQK", "fileName": "cp575.pdf" }),
-        )
-        .await
-}
-
 async fn run_checks(server: &TestServer) -> Value {
     let run = server
         .post("/v1/jobs/tendlc-checks")
@@ -1701,101 +1682,6 @@ async fn email_of(pool: &MySqlPool, user: i32) -> String {
         .fetch_one(pool)
         .await
         .unwrap()
-}
-
-#[test_db::test(seed)]
-async fn the_irs_letter_sets_the_legal_details(pool: MySqlPool) {
-    setup(&pool).await;
-    let (server, fake, _) = check_server(&pool).await;
-    // Nothing saved yet: nothing to put it on.
-    server
-        .post("/v1/phone/admin/tendlc/ein-letter")
-        .with_session(sessions::MANAGER)
-        .json(&json!({ "file": "data:application/pdf;base64,JVBERi0xLjQK" }))
-        .await
-        .assert_status(StatusCode::BAD_REQUEST);
-    // With an AI on the server, a business with an EIN must upload it.
-    let saved: Value = save_form(&server, sessions::MANAGER, &form()).await.json();
-    assert_eq!(problem_fields(&saved), ["brand.einLetter"]);
-    server
-        .post("/v1/phone/admin/tendlc/ready")
-        .with_session(sessions::MANAGER)
-        .await
-        .assert_status(StatusCode::BAD_REQUEST);
-
-    // Not an IRS letter, or not a file the AI reads: refused, nothing kept.
-    let mut other = irs_letter();
-    other["isIrsEinLetter"] = json!(false);
-    other["kind"] = json!("other");
-    let refused = upload_letter(&server, &fake, other).await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
-    assert!(
-        refused.json::<Value>()["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("This is not an IRS EIN letter")
-    );
-    server
-        .post("/v1/phone/admin/tendlc/ein-letter")
-        .with_session(sessions::MANAGER)
-        .json(&json!({ "file": "data:image/heic;base64,AAAA" }))
-        .await
-        .assert_status(StatusCode::BAD_REQUEST);
-
-    // A clear CP 575: the form must have its details exactly.
-    let mut read = irs_letter();
-    read["street"] = json!("100 MAIN STREET");
-    let uploaded = upload_letter(&server, &fake, read).await;
-    uploaded.assert_status_ok();
-    let uploaded: Value = uploaded.json();
-    let letter = &uploaded["draft"]["brand"]["einLetter"];
-    assert_eq!(letter["legalName"], "ACME STONE LLC");
-    assert_eq!(letter["ein"], "12-3456789");
-    assert_eq!(letter["fileName"], "cp575.pdf");
-    assert_eq!(
-        uploaded["problems"],
-        json!([{ "field": "brand.street",
-                 "message": "Enter the street address exactly as on your IRS letter: \"100 MAIN STREET\"." }])
-    );
-    // The AI got the file itself.
-    let asked = fake.requests().last().cloned().unwrap();
-    assert_eq!(
-        asked["messages"][1]["content"][1]["file"]["file_data"],
-        "data:application/pdf;base64,JVBERi0xLjQK"
-    );
-
-    // A save keeps the letter as read, whatever the form sends.
-    let mut fixed = form();
-    fixed["brand"]["street"] = json!("100 Main Street");
-    fixed["brand"]["einLetter"] = json!({ "legalName": "SOMEONE ELSE" });
-    let saved: Value = save_form(&server, sessions::MANAGER, &fixed).await.json();
-    assert_eq!(
-        saved["draft"]["brand"]["einLetter"]["legalName"],
-        "ACME STONE LLC"
-    );
-    assert_eq!(saved["problems"], json!([]));
-
-    // Superusers upload one too.
-    fake.answer_with(irs_letter());
-    let review: Value = server
-        .post("/v1/superuser/companies/100/tendlc/ein-letter")
-        .with_session(sessions::SUPER_ADMIN)
-        .json(&json!({ "file": "data:image/png;base64,iVBORw0KGgo=" }))
-        .await
-        .json();
-    assert_eq!(
-        review["registration"]["draft"]["brand"]["einLetter"]["street"],
-        "100 MAIN ST"
-    );
-    assert_eq!(problem_fields(&review["registration"]), ["brand.street"]);
-    assert_eq!(
-        audit_actions(&pool)
-            .await
-            .iter()
-            .filter(|(_, action)| action == "tendlc_ein_letter")
-            .count(),
-        2
-    );
 }
 
 #[test_db::test(seed)]
@@ -1818,9 +1704,6 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     let mark = email_of(&pool, 101).await;
     let sam = email_of(&pool, 103).await;
     save_form(&server, sessions::MANAGER, &form)
-        .await
-        .assert_status_ok();
-    upload_letter(&server, &fake, irs_letter())
         .await
         .assert_status_ok();
 
@@ -1875,10 +1758,8 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     ));
     let run = run_checks(&server).await;
     assert_eq!(run["processed"], 1);
-    // The letter's reading, then the check's two answers.
     let requests = fake.requests();
-    assert_eq!(requests.len(), 3);
-    let requests = &requests[1..];
+    assert_eq!(requests.len(), 2);
     assert_eq!(requests[0]["model"], api::ai::LARGE_MODEL);
     assert_eq!(requests[0]["response_format"]["type"], "json_schema");
     let read = requests[0]["messages"][1]["content"].as_str().unwrap();
@@ -2051,7 +1932,7 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     assert_eq!(changed["status"], "draft");
     assert_eq!(changed["actions"]["markReady"], true);
     assert_eq!(run_checks(&server).await["processed"], 0);
-    assert_eq!(fake.requests().len(), 5);
+    assert_eq!(fake.requests().len(), 4);
 }
 
 #[test_db::test(seed)]
@@ -2090,14 +1971,11 @@ async fn code_finds_what_the_pages_miss_whatever_the_ai_says(pool: MySqlPool) {
     save_form(&server, sessions::MANAGER, &form)
         .await
         .assert_status_ok();
-    upload_letter(&server, &fake, irs_letter())
-        .await
-        .assert_status_ok();
     ready(&server, &form).await;
     // The AI passes everything.
     fake.answer_with(ai_answer("Everything is in order.", &[]));
     assert_eq!(run_checks(&server).await["processed"], 1);
-    let read = fake.requests()[1]["messages"][1]["content"]
+    let read = fake.requests()[0]["messages"][1]["content"]
         .as_str()
         .unwrap()
         .to_string();
@@ -2165,9 +2043,6 @@ async fn claude_double_checks_gpts_answer(pool: MySqlPool) {
          Acme Stone. Privacy policy: {base}/site/privacy"
     ));
     save_form(&server, sessions::MANAGER, &form)
-        .await
-        .assert_status_ok();
-    upload_letter(&server, &fake, irs_letter())
         .await
         .assert_status_ok();
     ready(&server, &form).await;
@@ -2296,9 +2171,6 @@ async fn the_manager_sends_it_anyway_when_the_ai_is_wrong(pool: MySqlPool) {
          Acme Stone. Privacy policy: {base}/site/privacy"
     ));
     save_form(&server, sessions::MANAGER, &form)
-        .await
-        .assert_status_ok();
-    upload_letter(&server, &fake, irs_letter())
         .await
         .assert_status_ok();
     let send_anyway = || {
