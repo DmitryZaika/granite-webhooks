@@ -111,8 +111,7 @@ async fn the_draft_is_continued_from_the_conversation(pool: MySqlPool) {
         assert!(!system.contains(hidden), "{system}");
     }
     assert!(
-        !system.contains("
-PRICE LIST \""),
+        !system.contains("\nPRICE LIST \""),
         "no price list yet: {system}"
     );
     let prompt = request["messages"][1]["content"].as_str().unwrap();
