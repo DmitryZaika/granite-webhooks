@@ -53699,7 +53699,7 @@
           "phone"
         ],
         "summary": "List my text threads",
-        "description": "The conversations of the numbers I may call from, one per line and other\nnumber, newest activity first (page back with `before` = `nextBefore`),\noptionally only those with one other `number`. Each has our line, the\nother number, the customer with it, the newest text and my unread count;\n`unread` totals every thread. 403 `texting_disabled` unless the company\ntexts through Telnyx. Next: `GET /v1/phone/texts/threads/{key}/messages`.",
+        "description": "The conversations of the numbers I may call from, one per line and other\nnumber, newest activity first (page back with `before` = `nextBefore`),\noptionally only those with one other `number`, or only those with texts I\nhaven't read (`unread=true`, paged the same way). Each has our line, the\nother number, the customer with it, the newest text and my unread count;\n`unread` totals every thread. 403 `texting_disabled` unless the company\ntexts through Telnyx. Next: `GET /v1/phone/texts/threads/{key}/messages`.",
         "operationId": "list_phone_text_threads",
         "parameters": [
           {
@@ -53728,6 +53728,15 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "description": "`true`: only the threads with texts I haven't read (the Unread tab).\nDefault `false`, every thread.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
