@@ -1871,6 +1871,9 @@ pub struct Sale {
     /// Make a new won deal instead of using an existing one.
     #[serde(default)]
     pub new_deal: bool,
+    /// Status of the jobs it adds to Unscheduled: `ready` (default) or `not_ready`.
+    #[serde(default)]
+    pub job_status: Option<String>,
 }
 
 /// What selling did.
@@ -1912,6 +1915,15 @@ pub async fn mark_sold(
             "Pick the option that was sold.".into(),
         ));
     }
+    let job_ready = match input.job_status.as_deref() {
+        None | Some("ready") => true,
+        Some("not_ready") => false,
+        Some(_) => {
+            return Err(ApiError::BadRequest(
+                "Pick Ready or Not ready for the schedule.".into(),
+            ));
+        }
+    };
     let sold = mark_quote_sold(
         &state.pool,
         id,
@@ -1923,6 +1935,7 @@ pub async fn mark_sold(
             (false, Some(deal)) => SaleDeal::Existing(deal),
             (false, None) => SaleDeal::Auto,
         },
+        job_ready,
     )
     .await?
     .ok_or(ApiError::NotFound)?;
