@@ -829,6 +829,20 @@ fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         .ok()
 }
 
+/// An inbound file as it is stored: a picture compressed as the CRM
+/// compresses uploads (`compress_for_storage`), with its new type; anything
+/// else, or a picture that already fits, as it came.
+pub async fn stored_file(bytes: Vec<u8>, content_type: String) -> (Vec<u8>, String) {
+    if crate::images::sniff(&bytes).is_none() {
+        return (bytes, content_type);
+    }
+    let source = bytes.clone();
+    match tokio::task::spawn_blocking(move || crate::images::compress_for_storage(&source)).await {
+        Ok(Some(stored)) => (stored.bytes, stored.content_type.to_string()),
+        _ => (bytes, content_type),
+    }
+}
+
 /// Copies an inbound MMS's files from Telnyx (their links expire) into our
 /// bucket (`sms-attachments/<company>/tx-<row>/`), as the row's attachments.
 /// A file already copied (a redelivered webhook) is kept as it is; a file
@@ -874,6 +888,7 @@ pub async fn copy_inbound_media(
             .filter(|kind| !kind.is_empty())
             .or(served_type)
             .unwrap_or_else(|| "application/octet-stream".into());
+        let (bytes, content_type) = stored_file(bytes, content_type).await;
         let is_image = content_type.starts_with("image/");
         let (width, height) = if is_image {
             dimensions(&bytes).map_or((None, None), |(w, h)| (Some(w), Some(h)))

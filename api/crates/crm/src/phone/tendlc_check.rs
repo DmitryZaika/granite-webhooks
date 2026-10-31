@@ -1235,10 +1235,7 @@ async fn ask(
         max_tokens: CLAUDE_MAX_TOKENS,
         timeout: left.min(CLAUDE_TIMEOUT),
     };
-    Ok(state
-        .claude
-        .message(&state.pool, caller, &request)
-        .await?)
+    Ok(state.claude.message(&state.pool, caller, &request).await?)
 }
 
 /// The AI's report on the form and the pages: an answer, checked; one that
@@ -1711,7 +1708,8 @@ pub async fn send_anyway(state: &AppState, row: &Row, by_id: i32, by: &str) -> s
     .execute(pool)
     .await?
     .rows_affected();
-    if overridden != 1 || !move_status(pool, row.id, row.status, TenDlcStatus::Ready, Some(by_id)).await?
+    if overridden != 1
+        || !move_status(pool, row.id, row.status, TenDlcStatus::Ready, Some(by_id)).await?
     {
         return Ok(false);
     }
