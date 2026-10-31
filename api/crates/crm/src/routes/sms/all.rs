@@ -11,9 +11,11 @@ use super::schemas::{
     DesktopAlert, DesktopAlerts, Direction, SalesRep, ThreadDetail, ThreadList, ThreadQuery,
     ThreadSummary, ThreadsQuery, UnreadCount,
 };
-use super::scope::{SmsScope, thread_access};
+use super::scope::{SmsScope, has_own, thread_access};
 use super::send::seat;
-use super::thread::{active_flow, checked_phone, customer_by_phone, messages, thread_unread};
+use super::thread::{
+    active_flow, checked_phone, customer_by_phone, messages, set_marker, thread_unread,
+};
 use super::threads::{
     RollupRow, customers_by_phone, last_rows, provider_alerts, rollup, suppliers_by_phone,
     unread_threads, upkeep,
@@ -27,6 +29,7 @@ use crate::routes::company::queries::company_features;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::MySqlPool;
@@ -146,22 +149,15 @@ pub async fn list_my_threads(
     merged_threads(&state, &user, &query, &sources, SmsScope::Mine, true).await
 }
 
-/// The providers the caller reads their own texts through: an agent id or
-/// own number (`CloudTalk`, `RingCentral`), or a Telnyx line.
+/// The providers holding texts of the caller's: by an id or number they have
+/// or had there, or a text they sent ([`has_own`]).
 async fn own_providers(
     pool: &MySqlPool,
     user: &SessionUser,
 ) -> Result<Vec<SmsProvider>, sqlx::Error> {
     let mut out = Vec::new();
     for provider in SmsProvider::ALL {
-        let reads = if provider == SmsProvider::Telnyx {
-            !crate::phone::texting::inbox_lines(pool, user.company_id, user.id)
-                .await?
-                .is_empty()
-        } else {
-            provider.can_send(user) || provider.phone_of(user).is_some()
-        };
-        if reads {
+        if has_own(pool, provider, user).await? {
             out.push(provider);
         }
     }
@@ -443,6 +439,73 @@ pub async fn get_my_thread(
     // The caller's own inbox marks the thread read on open.
     thread.unread_count = 0;
     Ok(Json(thread))
+}
+
+/// Mark my conversation read
+///
+/// As `POST /v1/sms/{provider}/threads/{phone}/read` on every provider of
+/// the caller's (as `GET /v1/sms/mine/threads`).
+#[crate::openapi::path(
+    post,
+    path = "/v1/sms/mine/threads/{phone}/read",
+    operation_id = "mark_my_sms_thread_read",
+    tag = "sms",
+    params(("phone" = String, Path, description = "The other party's phone digits")),
+    responses(
+        (status = 204, description = "Marked (or not visible to the caller)"),
+        (status = 400, description = "Not a phone number", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn mark_my_thread_read(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(phone): Path<String>,
+) -> ApiResult<StatusCode> {
+    mark_mine(&state, &user, &phone, false).await
+}
+
+/// Mark my conversation unread
+///
+/// As `POST /v1/sms/{provider}/threads/{phone}/unread` on every provider of
+/// the caller's (as `GET /v1/sms/mine/threads`).
+#[crate::openapi::path(
+    post,
+    path = "/v1/sms/mine/threads/{phone}/unread",
+    operation_id = "mark_my_sms_thread_unread",
+    tag = "sms",
+    params(("phone" = String, Path, description = "The other party's phone digits")),
+    responses(
+        (status = 204, description = "Marked (or not visible to the caller)"),
+        (status = 400, description = "Not a phone number", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn mark_my_thread_unread(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(phone): Path<String>,
+) -> ApiResult<StatusCode> {
+    mark_mine(&state, &user, &phone, true).await
+}
+
+async fn mark_mine(
+    state: &AppState,
+    user: &SessionUser,
+    phone: &str,
+    unread: bool,
+) -> ApiResult<StatusCode> {
+    checked_phone(phone)?;
+    for provider in own_providers(&state.pool, user).await? {
+        set_marker(state, user, provider, phone, unread).await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// One phone's messages through `sources`, merged oldest first; never

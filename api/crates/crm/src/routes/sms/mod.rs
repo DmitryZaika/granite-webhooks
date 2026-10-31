@@ -48,6 +48,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(all::sales_reps))
         .routes(routes!(all::list_my_threads))
         .routes(routes!(all::get_my_thread))
+        .routes(routes!(all::mark_my_thread_read))
+        .routes(routes!(all::mark_my_thread_unread))
         .routes(routes!(all::my_unread_count))
         .routes(routes!(all::my_desktop_alerts))
         .routes(routes!(threads::list_threads))

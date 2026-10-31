@@ -464,9 +464,9 @@ async fn the_admin_inbox_merges_every_provider(pool: MySqlPool) {
     assert_eq!(phones(&page), ["3175550555", "3175550777"]);
     assert_eq!(page["has_more"], true);
 
-    // Rita (user 100) through both of her ids.
+    // Rita (user 100) through both of her ids and her own number: her inbox.
     let rita = get(&pool, "/v1/sms/all/threads?agent_id=100", sessions::ADMIN).await;
-    assert_eq!(phones(&rita), ["3175550100", "3175550888"]);
+    assert_eq!(phones(&rita), ["3175550100", "3175550777", "3175550888"]);
 
     let thread = get(&pool, "/v1/sms/all/threads/3175550100", sessions::ADMIN).await;
     let texts: Vec<(&str, &str)> = thread["messages"]
@@ -626,4 +626,51 @@ async fn a_ringcentral_text_tagged_with_its_extension_stays_unread(pool: MySqlPo
     let list = get(&pool, "/v1/sms/ringcentral/threads", sessions::REP).await;
     assert_eq!(list["threads"][0]["phone_digits"], "3175550100");
     assert_eq!(list["threads"][0]["unread_count"], 1);
+}
+
+#[test_db::test(seed)]
+async fn a_reps_texts_are_theirs_by_user_or_by_number(pool: MySqlPool) {
+    seed(&pool).await;
+    // Rita once had RingCentral extension 602 and number 317-555-0901; she has
+    // neither now. Still hers: a text from the RingCentral app on the old
+    // extension, one to the old number tagged with another extension, and one
+    // she sent from the CRM untagged. Mark's text is not.
+    sqlx::raw_sql(
+        "INSERT INTO user_sms_identities (company_id, user_id, provider, kind, value) VALUES
+           (100, 100, 'ringcentral', 'agent', '602'),
+           (100, 100, 'ringcentral', 'line', '3175550901');
+         INSERT INTO ringcentral_sms (id, ringcentral_id, sender, recipient, text, direction, status, agent,
+                                      sender_user_id, company_id, created_date, sender10, recipient10,
+                                      phone_digits, is_echo) VALUES
+           (9100, 600, 3175550901, 3175550301, 'From the app', 'outbound', 'sent', '602', NULL, 100,
+            '2025-06-07 10:00:00', '3175550901', '3175550301', '3175550301', 0),
+           (9101, 601, 3175550302, 3175550901, 'To her old number', 'inbound', 'received', '699', NULL, 100,
+            '2025-06-07 11:00:00', '3175550302', '3175550901', '3175550302', 0),
+           (9102, 602, NULL, 3175550303, 'From the CRM', 'outbound', 'sent', NULL, 100, 100,
+            '2025-06-07 12:00:00', NULL, '3175550303', '3175550303', 0),
+           (9103, 603, 3175550998, 3175550304, 'Mark''s', 'outbound', 'sent', '699', 101, 100,
+            '2025-06-07 13:00:00', '3175550998', '3175550304', '3175550304', 0);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mine = get(&pool, "/v1/sms/mine/threads", sessions::REP).await;
+    let listed = phones(&mine);
+    for phone in ["3175550301", "3175550302", "3175550303", "3175550100"] {
+        assert!(listed.contains(&phone), "{phone} missing from {listed:?}");
+    }
+    assert!(!listed.contains(&"3175550304"));
+    let thread = get(&pool, "/v1/sms/mine/threads/3175550302", sessions::REP).await;
+    assert_eq!(thread["messages"][0]["text"], "To her old number");
+    let hidden = get(&pool, "/v1/sms/mine/threads/3175550304", sessions::REP).await;
+    assert_eq!(hidden["messages"], serde_json::json!([]));
+
+    // Read and unread over every provider: two on CloudTalk, one here.
+    let count = "/v1/sms/mine/unread-count";
+    assert_eq!(get(&pool, count, sessions::REP).await["count"], 3);
+    post(&pool, "/v1/sms/mine/threads/3175550302/read").await;
+    assert_eq!(get(&pool, count, sessions::REP).await["count"], 2);
+    post(&pool, "/v1/sms/mine/threads/3175550302/unread").await;
+    assert_eq!(get(&pool, count, sessions::REP).await["count"], 3);
 }
