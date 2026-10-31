@@ -479,6 +479,23 @@ async fn reading_a_thread_clears_my_unread_here_and_in_the_crm(pool: MySqlPool) 
     // Rita's own marker is hers.
     let rita = setup.json(1, "/v1/phone/texts/threads").await;
     assert_eq!(rita["unread"], 2);
+    // The Unread tab: only my unread threads, paged like the rest.
+    let unread = setup.json(1, "/v1/phone/texts/threads?unread=true").await;
+    assert_eq!(keys(&unread), ["9702-3175550102", "9701-3175550100"]);
+    setup
+        .server
+        .post("/v1/phone/texts/threads/9702-3175550102/read")
+        .add_header(HEADER, token(1))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let unread = setup
+        .json(1, "/v1/phone/texts/threads?unread=true&limit=1")
+        .await;
+    assert_eq!(keys(&unread), ["9701-3175550100"]);
+    assert_eq!(unread["nextBefore"], Value::Null);
+    assert_eq!(unread["unread"], 1);
+    let mark = setup.json(2, "/v1/phone/texts/threads?unread=true").await;
+    assert_eq!(keys(&mark), Vec::<&str>::new());
     // Not my line.
     setup
         .server
