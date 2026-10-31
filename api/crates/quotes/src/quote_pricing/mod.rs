@@ -648,7 +648,7 @@ pub enum SaleDeal {
 
 /// `markQuoteSold`: the quote is sold with option `option_index` (none: not
 /// known yet, the deal is still won) and the deal `sale_deal` names is won
-/// with that total.
+/// with that total. Its schedule jobs wait as Ready unless `job_ready` is false.
 pub async fn mark_quote_sold(
     pool: &MySqlPool,
     quote_id: i32,
@@ -656,6 +656,7 @@ pub async fn mark_quote_sold(
     option_index: Option<i32>,
     user_id: Option<i32>,
     sale_deal: SaleDeal,
+    job_ready: bool,
 ) -> ApiResult<Option<QuoteSale>> {
     let Some(quote) = load_company_quote(pool, quote_id, company_id).await? else {
         return Ok(None);
@@ -744,18 +745,19 @@ pub async fn mark_quote_sold(
     .bind(quote.company_id)
     .execute(pool)
     .await?;
-    add_waiting_jobs(pool, &quote, user_id).await?;
+    add_waiting_jobs(pool, &quote, user_id, job_ready).await?;
     Ok(Some(QuoteSale { deal_id, amount }))
 }
 
 /// A sold quote's template and installation: one unscheduled event on each
-/// of those calendars, "not ready", for the schedule manager to date. Once
+/// of those calendars, "ready" (or "not ready"), for the schedule manager to date. Once
 /// per quote: selling it again adds nothing. Only while the company's switch
 /// is on (`company.auto_unscheduled_jobs`, Admin › Automations).
 async fn add_waiting_jobs(
     pool: &MySqlPool,
     quote: &Quote,
     user_id: Option<i32>,
+    ready: bool,
 ) -> Result<(), sqlx::Error> {
     let on: Option<bool> =
         sqlx::query_scalar("SELECT auto_unscheduled_jobs <> 0 FROM company WHERE id = ?")
@@ -813,10 +815,11 @@ async fn add_waiting_jobs(
         let id = sqlx::query(
             "INSERT INTO events (title, location, start_date, end_date, all_day, unscheduled,
                 color, status, created_user_id, assigned_user_id, customer_id, calendar_id, quote_id)
-             VALUES (?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', 'not_ready', ?, ?, ?, ?, ?)",
+             VALUES (?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', ?, ?, ?, ?, ?, ?)",
         )
         .bind(&title)
         .bind(address.as_deref())
+        .bind(if ready { "ready" } else { "not_ready" })
         .bind(creator)
         .bind(assignee)
         .bind(quote.customer_id)
@@ -922,6 +925,7 @@ pub async fn sell_quote_for_signed_contract(
         option_index,
         None,
         SaleDeal::Auto,
+        true,
     )
     .await?;
     Ok(())

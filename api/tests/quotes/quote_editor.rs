@@ -759,8 +759,12 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
     .execute(&pool)
     .await
     .unwrap();
-    let mut counts = Vec::new();
-    for on in [false, true] {
+    let mut jobs = Vec::new();
+    for (on, sale) in [
+        (false, json!({ "option": 0 })),
+        (true, json!({ "option": 0 })),
+        (true, json!({ "option": 0, "job_status": "not_ready" })),
+    ] {
         sqlx::query("UPDATE company SET auto_unscheduled_jobs = ? WHERE id = 100")
             .bind(on)
             .execute(&pool)
@@ -777,18 +781,33 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
         server
             .post(&format!("{path}/sale"))
             .with_session(sessions::REP)
-            .json(&json!({ "option": 0 }))
+            .json(&sale)
             .await
             .assert_status_ok();
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM events WHERE quote_id = ? AND unscheduled <> 0",
+        let statuses: Vec<String> = sqlx::query_scalar(
+            "SELECT CAST(status AS CHAR) FROM events WHERE quote_id = ? AND unscheduled <> 0 ORDER BY id",
         )
         .bind(id)
-        .fetch_one(&pool)
+        .fetch_all(&pool)
         .await
         .unwrap();
-        counts.push(count);
+        jobs.push(statuses);
     }
-    // Off: nothing added; on: a template and an installation.
-    assert_eq!(counts, [0, 2]);
+    // Off: nothing added; on: a template and an installation, Ready unless
+    // the seller picked Not ready.
+    assert_eq!(
+        jobs,
+        [
+            vec![],
+            vec!["ready", "ready"],
+            vec!["not_ready", "not_ready"],
+        ]
+    );
+    let id = create(&server, json!({ "customer_id": 1004 })).await;
+    server
+        .post(&format!("/v1/quotes/{id}/sale"))
+        .with_session(sessions::REP)
+        .json(&json!({ "option": 0, "job_status": "maybe" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
 }
