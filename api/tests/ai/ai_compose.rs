@@ -92,7 +92,24 @@ async fn the_draft_is_continued_from_the_conversation(pool: MySqlPool) {
     assert_eq!(request["model"], "gpt-6-luna");
     assert_eq!(request["reasoning_effort"], "none");
     assert_eq!(request["max_completion_tokens"], 60);
-    assert_eq!(request["prompt_cache_key"], "compose-autocomplete:100:1000");
+    assert_eq!(request["prompt_cache_key"], "compose-autocomplete:100");
+    let system = request["messages"][0]["content"].as_str().unwrap();
+    for line in [
+        "\n- Absolute Black (granite): $75/sq ft, 3 slabs available, on sale\n",
+        "\n- Calacatta Gold (quartz): priced by the slab, 1 remnant\n",
+        "\n- Sold Out Marble (marble): $90/sq ft, sold out\n",
+        "\n- Regular Stock Quartzite (quartzite): $110/sq ft, regular stock (always orderable)",
+    ] {
+        assert!(system.contains(line), "{system}");
+    }
+    for hidden in [
+        "Hidden Granite",
+        "Deleted Granite",
+        "Taj Mahal",
+        "Other Co Granite",
+    ] {
+        assert!(!system.contains(hidden), "{system}");
+    }
     let prompt = request["messages"][1]["content"].as_str().unwrap();
     assert!(
         prompt.starts_with(
