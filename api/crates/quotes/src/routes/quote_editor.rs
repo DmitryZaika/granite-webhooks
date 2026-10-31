@@ -1947,7 +1947,8 @@ pub async fn mark_sold(
 
 /// Undo a sale
 ///
-/// The quote is active again (no option, no signature) and its deal reopens.
+/// The quote is active again (no option, no signature), its deal reopens and
+/// the template and installation jobs the sale added are deleted.
 #[crate::openapi::path(
     delete,
     path = "/v1/quotes/{id}/sale",
@@ -1978,6 +1979,7 @@ pub async fn undo_sale(
     .bind(user.company_id)
     .execute(&state.pool)
     .await?;
+    quote_pricing::remove_waiting_jobs(&state.pool, id, user.company_id).await?;
     if let Some(deal) = row.deal_id {
         sqlx::query(
             "UPDATE deals SET is_won = NULL, lost_reason = NULL, updated_at = CURRENT_TIMESTAMP

@@ -810,4 +810,38 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
         .json(&json!({ "option": 0, "job_status": "maybe" }))
         .await
         .assert_status(StatusCode::BAD_REQUEST);
+    // Undo sale deletes both jobs; selling again adds them anew.
+    let path = format!("/v1/quotes/{id}");
+    server
+        .put(&format!("{path}/drawing"))
+        .with_session(sessions::REP)
+        .json(&json!({ "doc": doc("Ubatuba") }))
+        .await
+        .assert_status_ok();
+    let mut counts = Vec::new();
+    for undo in [false, true, false] {
+        if undo {
+            server
+                .delete(&format!("{path}/sale"))
+                .with_session(sessions::REP)
+                .await
+                .assert_status(StatusCode::NO_CONTENT);
+        } else {
+            server
+                .post(&format!("{path}/sale"))
+                .with_session(sessions::REP)
+                .json(&json!({ "option": 0 }))
+                .await
+                .assert_status_ok();
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM events WHERE quote_id = ? AND deleted_date IS NULL",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        counts.push(count);
+    }
+    assert_eq!(counts, [2, 0, 2]);
 }

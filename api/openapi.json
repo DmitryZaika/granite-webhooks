@@ -29259,7 +29259,7 @@
           "quotes"
         ],
         "summary": "Undo a sale",
-        "description": "The quote is active again (no option, no signature) and its deal reopens.",
+        "description": "The quote is active again (no option, no signature), its deal reopens and\nthe template and installation jobs the sale added are deleted.",
         "operationId": "undo_quote_sale",
         "parameters": [
           {
