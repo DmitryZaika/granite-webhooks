@@ -16,6 +16,8 @@ mod delayed;
 mod integrations;
 mod maintenance;
 mod marketing;
+mod payments;
+mod payments_stripe_live;
 mod posthog_autofix_callback;
 mod posthog_autofix_intake;
 mod questionnaires;

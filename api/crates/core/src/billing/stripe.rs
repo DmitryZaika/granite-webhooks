@@ -338,6 +338,159 @@ impl Stripe {
     }
 }
 
+/// What the payments page (`payments.granite-manager.com`) needs: one monthly
+/// subscription per company at the company's own price.
+impl Stripe {
+    /// Makes sure the product with this fixed `id` exists with `tax_code`,
+    /// creating it the first time. Prices are set per checkout, so one
+    /// product is enough. Checkout refuses a product without a tax code on
+    /// accounts with Managed Payments (Stripe as merchant of record).
+    pub async fn ensure_product(
+        &self,
+        id: &str,
+        name: &str,
+        tax_code: &str,
+    ) -> Result<(), StripeError> {
+        let path = format!("/v1/products/{}", path_part(id));
+        let product = match self.get(&path, &[]).await {
+            Ok(product) => product,
+            Err(_) => {
+                let created = self
+                    .post(
+                        "/v1/products",
+                        &[
+                            ("id", id.into()),
+                            ("name", name.into()),
+                            ("tax_code", tax_code.into()),
+                        ],
+                    )
+                    .await;
+                match created {
+                    Ok(_) => return Ok(()),
+                    // Another request created it in the meantime.
+                    Err(error) => self.get(&path, &[]).await.map_err(|_| error)?,
+                }
+            }
+        };
+        if stripe_id(&product["tax_code"]).is_none() {
+            self.post(&path, &[("tax_code", tax_code.into())]).await?;
+        }
+        Ok(())
+    }
+
+    /// A Checkout page that starts a monthly subscription to `product` at
+    /// `unit_amount_cents` (USD), for the company's existing customer.
+    pub async fn create_monthly_checkout_session(
+        &self,
+        customer: &str,
+        company_id: i32,
+        product: &str,
+        unit_amount_cents: i64,
+        success_url: &str,
+        cancel_url: &str,
+    ) -> Result<Value, StripeError> {
+        self.post(
+            "/v1/checkout/sessions",
+            &[
+                ("mode", "subscription".into()),
+                ("customer", customer.into()),
+                ("client_reference_id", company_id.to_string()),
+                ("line_items[0][quantity]", "1".into()),
+                ("line_items[0][price_data][currency]", "usd".into()),
+                ("line_items[0][price_data][product]", product.into()),
+                (
+                    "line_items[0][price_data][unit_amount]",
+                    unit_amount_cents.to_string(),
+                ),
+                (
+                    "line_items[0][price_data][recurring][interval]",
+                    "month".into(),
+                ),
+                ("success_url", success_url.into()),
+                ("cancel_url", cancel_url.into()),
+                ("metadata[company_id]", company_id.to_string()),
+                (
+                    "subscription_data[metadata][company_id]",
+                    company_id.to_string(),
+                ),
+            ],
+        )
+        .await
+    }
+
+    /// A billing portal page (cancel, payment method, invoices) with the
+    /// given portal configuration, or the account's default without one.
+    pub async fn create_portal_session_with(
+        &self,
+        customer: &str,
+        return_url: &str,
+        configuration: Option<&str>,
+    ) -> Result<Value, StripeError> {
+        let mut form = vec![
+            ("customer", customer.to_string()),
+            ("return_url", return_url.to_string()),
+        ];
+        if let Some(configuration) = configuration {
+            form.push(("configuration", configuration.to_string()));
+        }
+        self.post("/v1/billing_portal/sessions", &form).await
+    }
+
+    /// The portal configuration to open the payments page's customers with:
+    /// `None` when the account has a default one (saved in the Dashboard),
+    /// else the one tagged `metadata[granite]=payments`, created the first
+    /// time. So a new Stripe account needs no Dashboard setup.
+    pub async fn payments_portal_configuration(&self) -> Result<Option<String>, StripeError> {
+        let defaults = self
+            .get(
+                "/v1/billing_portal/configurations",
+                &[("is_default", "true".into()), ("limit", "1".into())],
+            )
+            .await?;
+        if !data(defaults).is_empty() {
+            return Ok(None);
+        }
+        let active = self
+            .get(
+                "/v1/billing_portal/configurations",
+                &[("active", "true".into()), ("limit", "100".into())],
+            )
+            .await?;
+        if let Some(id) = data(active)
+            .iter()
+            .find(|config| config["metadata"]["granite"] == "payments")
+            .and_then(|config| config["id"].as_str())
+        {
+            return Ok(Some(id.to_string()));
+        }
+        let created = self
+            .post(
+                "/v1/billing_portal/configurations",
+                &[
+                    ("metadata[granite]", "payments".into()),
+                    ("features[invoice_history][enabled]", "true".into()),
+                    ("features[payment_method_update][enabled]", "true".into()),
+                    ("features[customer_update][enabled]", "true".into()),
+                    (
+                        "features[customer_update][allowed_updates][0]",
+                        "email".into(),
+                    ),
+                    (
+                        "features[customer_update][allowed_updates][1]",
+                        "address".into(),
+                    ),
+                    ("features[subscription_cancel][enabled]", "true".into()),
+                    (
+                        "features[subscription_cancel][mode]",
+                        "at_period_end".into(),
+                    ),
+                ],
+            )
+            .await?;
+        Ok(created["id"].as_str().map(str::to_string))
+    }
+}
+
 fn data(list: Value) -> Vec<Value> {
     match list {
         Value::Object(mut map) => match map.remove("data") {
