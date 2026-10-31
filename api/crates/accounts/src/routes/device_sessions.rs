@@ -156,6 +156,8 @@ pub struct PhoneUser {
     /// schedule (`GET /v1/me/schedule`) and does not set the phone up for
     /// calls.
     pub portal: Option<String>,
+    /// The user's picture (`PUT /v1/me/photo`); null without one.
+    pub photo_url: Option<String>,
 }
 
 /// The [`PhoneUser`] of a signed-in user.
@@ -165,7 +167,13 @@ pub async fn phone_user(pool: &MySqlPool, user: &SessionUser) -> sqlx::Result<Ph
         .fetch_optional(pool)
         .await?;
     let positions = user_positions(pool, user.id).await?;
+    let photo_url: Option<Option<String>> =
+        sqlx::query_scalar("SELECT photo_url FROM users WHERE id = ?")
+            .bind(user.id)
+            .fetch_optional(pool)
+            .await?;
     Ok(PhoneUser {
+        photo_url: photo_url.flatten(),
         portal: crate::routes::app_shell::user_portal(user, &positions),
         id: user.id,
         name: user.name.clone().unwrap_or_default(),

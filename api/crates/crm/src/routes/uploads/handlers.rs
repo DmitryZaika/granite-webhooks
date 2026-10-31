@@ -21,7 +21,8 @@ use serde::Deserialize;
 /// record's route, e.g. `PUT /v1/stones/{id}` (`image_url`),
 /// `POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route
 /// also makes the thumbnail. Inventory folders are for admins; `deals` for
-/// (and `events`) any employee and also take documents; `quotes` and
+/// (and `events`) any employee and also take documents; `user-photos` any
+/// employee, images only (their own picture, `PUT /v1/me/photo`); `quotes` and
 /// `template-images` any employee, images only; `emails` for any employee, any
 /// file, and the response has the `token` `POST /v1/emails` asks for. Types a
 /// browser runs script in (HTML, SVG, XML, JavaScript) are refused everywhere.
@@ -54,7 +55,9 @@ pub async fn create(
         UploadFolder::Quotes | UploadFolder::TemplateImages
     );
     let is_sms = request.folder == UploadFolder::SmsUploads;
+    let is_own_photo = request.folder == UploadFolder::UserPhotos;
     if !(is_deal
+        || is_own_photo
         || is_email
         || is_quote
         || is_bug_report

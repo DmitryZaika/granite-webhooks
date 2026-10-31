@@ -46,6 +46,8 @@ pub struct LeaderboardEntry {
     pub user_id: i32,
     /// Display name: the user's name, else their email, else "Colleague".
     pub name: String,
+    /// Their picture (`PUT /v1/me/photo`); null without one.
+    pub photo_url: Option<String>,
     /// Total points.
     pub points: i64,
     /// Rank among the reps (ties share a rank, 1 is the top); null for the
@@ -93,6 +95,7 @@ pub struct LeaderboardActivity {
 pub struct LeaderboardRow {
     pub user_id: i32,
     pub name: String,
+    pub photo_url: Option<String>,
     pub points: i64,
     pub tour_points: i64,
     pub deal_points: i64,
@@ -114,6 +117,7 @@ impl From<LeaderboardRow> for LeaderboardEntry {
         Self {
             user_id: row.user_id,
             name: row.name,
+            photo_url: row.photo_url,
             points: row.points,
             rank: row.rank_position,
             breakdown: PointsBreakdown {

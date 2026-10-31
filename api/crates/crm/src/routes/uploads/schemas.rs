@@ -50,6 +50,9 @@ pub enum UploadFolder {
     /// Logos and pictures on printed quote forms (admins; images).
     #[serde(rename = "quote-forms")]
     QuoteForms,
+    /// A user's own picture (any employee; images).
+    #[serde(rename = "user-photos")]
+    UserPhotos,
 }
 
 impl UploadFolder {
@@ -73,6 +76,7 @@ impl UploadFolder {
             Self::SupplierFiles => "supplier-files",
             Self::CompanyLogos => "company-logos",
             Self::QuoteForms => "quote-forms",
+            Self::UserPhotos => "user-photos",
         }
     }
 }

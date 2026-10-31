@@ -60,6 +60,7 @@ async fn all_time_board_scores_every_source(pool: MySqlPool) {
             "entries": [{
                 "user_id": 100,
                 "name": "Rita Rep",
+                "photo_url": null,
                 "points": 104,
                 "rank": 1,
                 "breakdown": { "tours": 0, "deals": 75, "progress": 6, "calls": 17, "sms": 3, "emails": 3 },
@@ -79,6 +80,7 @@ async fn month_board_starts_at_the_first(pool: MySqlPool) {
         json!({
             "user_id": 100,
             "name": "Rita Rep",
+            "photo_url": null,
             "points": 70,
             "rank": 1,
             "breakdown": { "tours": 0, "deals": 50, "progress": 3, "calls": 12, "sms": 3, "emails": 2 },
@@ -99,6 +101,7 @@ async fn a_viewer_who_is_not_a_rep_gets_an_unranked_row(pool: MySqlPool) {
         json!({
             "user_id": 101,
             "name": "Mark Manager",
+            "photo_url": null,
             "points": 25,
             "rank": null,
             "breakdown": { "tours": 0, "deals": 25, "progress": 0, "calls": 0, "sms": 0, "emails": 0 },

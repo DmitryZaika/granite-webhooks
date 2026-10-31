@@ -41,6 +41,8 @@ pub struct Account {
     pub email: Option<String>,
     /// Phone.
     pub phone_number: Option<String>,
+    /// The user's picture (`PUT /v1/me/photo`); null without one.
+    pub photo_url: Option<String>,
     /// The name recipients see in the From field.
     pub email_name: Option<String>,
     /// The email signature (sanitized HTML).
@@ -127,6 +129,7 @@ pub(super) struct Stored {
     name: Option<String>,
     email: Option<String>,
     phone_number: Option<String>,
+    photo_url: Option<String>,
     email_name: Option<String>,
     email_signature: Option<String>,
     cloudtalk_agent_id: Option<String>,
@@ -149,7 +152,7 @@ impl Stored {
 
 pub(super) async fn stored(pool: &MySqlPool, actor: store::Actor) -> ApiResult<Stored> {
     sqlx::query_as(
-        "SELECT name, email, phone_number, email_name, email_signature,
+        "SELECT name, email, phone_number, photo_url, email_name, email_signature,
                 cloudtalk_agent_id, cloudtalk_phone_number,
                 ringcentral_extension_id, ringcentral_phone_number
            FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0",
@@ -229,6 +232,7 @@ pub async fn account(
         name: row.name,
         email: row.email,
         phone_number: row.phone_number,
+        photo_url: row.photo_url,
         email_name: row.email_name,
         email_signature: row.email_signature,
         cloudtalk_agent_id: row.cloudtalk_agent_id,

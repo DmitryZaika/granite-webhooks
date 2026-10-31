@@ -167,6 +167,7 @@ pub async fn leaderboard_rows(
         " SELECT u.id AS user_id,
                  COALESCE(NULLIF(TRIM(u.name), ''), NULLIF(TRIM(u.email), ''), 'Colleague')
                    AS name,
+                 u.photo_url,
                  CAST({tour_points} AS SIGNED) AS tour_points,
                  CAST(COALESCE(w.points, 0) AS SIGNED) AS deal_points,
                  CAST(COALESCE(s.points, 0) AS SIGNED) AS stage_points,

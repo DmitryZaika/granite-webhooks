@@ -16,6 +16,7 @@
 
 pub mod account;
 pub mod handlers;
+pub mod photo;
 pub mod queries;
 pub mod ringcentral;
 pub mod schemas;
@@ -29,6 +30,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::me))
         .routes(routes!(account::account, account::update_account))
         .routes(routes!(account::set_recording_voice))
+        .routes(routes!(photo::set_photo, photo::delete_photo))
         .routes(routes!(ringcentral::start))
         .routes(routes!(ringcentral::finish, ringcentral::disconnect))
         .routes(routes!(handlers::positions))

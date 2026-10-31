@@ -13,6 +13,7 @@ mod leaderboard;
 mod manage_users;
 mod me;
 mod me_account;
+mod me_photo;
 mod onboarding;
 mod position_sections;
 mod teach_mode;

@@ -255,6 +255,138 @@
         ]
       }
     },
+    "/v1/me/photo": {
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Set my picture",
+        "description": "Takes a picture uploaded to `user-photos`; the one it replaces is deleted.",
+        "operationId": "set_my_photo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhotoInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Photo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a picture uploaded to user-photos",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Remove my picture",
+        "description": "The avatar shows the initials again.",
+        "operationId": "delete_my_photo",
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Photo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/ringcentral/start": {
       "post": {
         "tags": [
@@ -10906,7 +11038,7 @@
           "uploads"
         ],
         "summary": "Start an upload",
-        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\n(and `events`) any employee and also take documents; `quotes` and\n`template-images` any employee, images only; `emails` for any employee, any\nfile, and the response has the `token` `POST /v1/emails` asks for. Types a\nbrowser runs script in (HTML, SVG, XML, JavaScript) are refused everywhere.",
+        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\n(and `events`) any employee and also take documents; `user-photos` any\nemployee, images only (their own picture, `PUT /v1/me/photo`); `quotes` and\n`template-images` any employee, images only; `emails` for any employee, any\nfile, and the response has the `token` `POST /v1/emails` asks for. Types a\nbrowser runs script in (HTML, SVG, XML, JavaScript) are refused everywhere.",
         "operationId": "create_upload",
         "requestBody": {
           "content": {
@@ -61883,6 +62015,13 @@
             ],
             "description": "Phone."
           },
+          "photo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's picture (`PUT /v1/me/photo`); null without one."
+          },
           "email_name": {
             "type": [
               "string",
@@ -77717,6 +77856,13 @@
             "type": "string",
             "description": "Display name: the user's name, else their email, else \"Colleague\"."
           },
+          "photo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their picture (`PUT /v1/me/photo`); null without one."
+          },
           "points": {
             "type": "integer",
             "format": "int64",
@@ -82384,8 +82530,42 @@
               "null"
             ],
             "description": "The portal a position locks the user into on the web, if any.\n\nThe same rule as `GET /v1/app/shell` `portal` (`installer`,\n`check-in`, `marketing`, `shop_worker`, `template`); null for everyone\nelse. For `installer` and `template` the app shows only the user's own\nschedule (`GET /v1/me/schedule`) and does not set the phone up for\ncalls."
+          },
+          "photoUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's picture (`PUT /v1/me/photo`); null without one."
           }
         }
+      },
+      "Photo": {
+        "type": "object",
+        "description": "The user's picture now.",
+        "properties": {
+          "photo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public URL; null without one."
+          }
+        }
+      },
+      "PhotoInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/me/photo`.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The picture uploaded to the `user-photos` folder."
+          }
+        },
+        "additionalProperties": false
       },
       "PhotosInput": {
         "type": "object",
@@ -97163,7 +97343,8 @@
           "sms-uploads",
           "supplier-files",
           "company-logos",
-          "quote-forms"
+          "quote-forms",
+          "user-photos"
         ]
       },
       "UploadRequest": {
