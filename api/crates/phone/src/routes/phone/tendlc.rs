@@ -272,7 +272,7 @@ async fn save(
         .as_ref()
         .is_some_and(|before| before.draft() != draft);
     if row.status == TenDlcStatus::Ready
-        && (!problems.is_empty() || (by_manager && changed && state.ai.is_enabled()))
+        && (!problems.is_empty() || (by_manager && changed && state.claude.is_enabled()))
     {
         move_status(pool, row.id, TenDlcStatus::Ready, TenDlcStatus::Draft, None).await?;
     }
@@ -407,7 +407,7 @@ pub async fn mark_tendlc_registration_ready(
             ));
         }
         registry::complete(&row.draft()).map_err(api_error)?;
-        if state.ai.is_enabled() {
+        if state.claude.is_enabled() {
             // The job checks it (`tendlc_check`) and moves it on.
             if ai_check::request(pool, row.id, user.id).await? {
                 audit(

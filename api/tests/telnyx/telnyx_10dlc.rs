@@ -1468,16 +1468,14 @@ async fn the_bell_lists_texting_registration_notices(pool: MySqlPool) {
 
 // ----------------------------------------------------------- the AI check
 
-/// The AI check's stand-ins: Acme's website (`/site/...`), OpenAI
-/// (`/openai/chat`, answering from a queue), Claude (`/anthropic/messages`,
-/// the same) and the email service (`/hooks/email/send`).
+/// The AI check's stand-ins: Acme's website (`/site/...`), Claude
+/// (`/anthropic/messages`, answering from a queue) and the email service
+/// (`/hooks/email/send`).
 #[derive(Clone, Default)]
 struct CheckFake {
     pages: Arc<Mutex<HashMap<String, String>>>,
     answers: Arc<Mutex<Vec<Value>>>,
     requests: Arc<Mutex<Vec<Value>>>,
-    claude_answers: Arc<Mutex<Vec<Value>>>,
-    claude_requests: Arc<Mutex<Vec<Value>>>,
     emails: Arc<Mutex<Vec<Value>>>,
 }
 
@@ -1496,15 +1494,6 @@ impl CheckFake {
 
     fn requests(&self) -> Vec<Value> {
         self.requests.lock().unwrap().clone()
-    }
-
-    /// Claude's next answer.
-    fn claude_answer_with(&self, answer: Value) {
-        self.claude_answers.lock().unwrap().push(answer);
-    }
-
-    fn claude_requests(&self) -> Vec<Value> {
-        self.claude_requests.lock().unwrap().clone()
     }
 
     /// The emails sent: (to, subject, body).
@@ -1538,26 +1527,10 @@ impl CheckFake {
             };
         }
         let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        if path == "/openai/chat" {
+        if path == "/anthropic/messages" {
             self.requests.lock().unwrap().push(json);
             let answer = {
                 let mut answers = self.answers.lock().unwrap();
-                if answers.is_empty() {
-                    return StatusCode::SERVICE_UNAVAILABLE.into_response();
-                }
-                answers.remove(0)
-            };
-            return Json(json!({
-                "model": "stand-in",
-                "choices": [{ "message": { "content": answer.to_string() }, "finish_reason": "stop" }],
-                "usage": { "prompt_tokens": 1000, "completion_tokens": 100 },
-            }))
-            .into_response();
-        }
-        if path == "/anthropic/messages" {
-            self.claude_requests.lock().unwrap().push(json);
-            let answer = {
-                let mut answers = self.claude_answers.lock().unwrap();
                 if answers.is_empty() {
                     return StatusCode::SERVICE_UNAVAILABLE.into_response();
                 }
@@ -1585,11 +1558,6 @@ impl CheckFake {
 /// The API with an AI, email and Acme's website on the stand-ins (the AI
 /// check may read their loopback address); the stand-ins' base URL.
 async fn check_server(pool: &MySqlPool) -> (TestServer, CheckFake, String) {
-    check_server_with(pool, false).await
-}
-
-/// [`check_server`], with Claude double-checking when `claude`.
-async fn check_server_with(pool: &MySqlPool, claude: bool) -> (TestServer, CheckFake, String) {
     let fake = CheckFake::default();
     let handler = fake.clone();
     let router = Router::new().fallback(move |request: Request| {
@@ -1600,11 +1568,9 @@ async fn check_server_with(pool: &MySqlPool, claude: bool) -> (TestServer, Check
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let base = format!("http://{address}");
-    let claude_key = claude.then_some("claude-key");
     let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
-        .with_ai(Ai::new(Some("ai-key"), &format!("{base}/openai/chat")))
         .with_claude(Claude::new(
-            claude_key,
+            Some("claude-key"),
             &format!("{base}/anthropic/messages"),
         ))
         .with_webhooks(WebhooksClient::new(
@@ -1760,9 +1726,20 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     assert_eq!(run["processed"], 1);
     let requests = fake.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0]["model"], api::ai::LARGE_MODEL);
-    assert_eq!(requests[0]["response_format"]["type"], "json_schema");
-    let read = requests[0]["messages"][1]["content"].as_str().unwrap();
+    // Claude Opus 5.5 checks it, thinking hard.
+    assert_eq!(requests[0]["model"], "claude-opus-5-5");
+    assert_eq!(requests[0]["output_config"]["effort"], "high");
+    assert_eq!(
+        requests[0]["output_config"]["format"]["type"],
+        "json_schema"
+    );
+    assert!(
+        requests[0]["system"]
+            .as_str()
+            .unwrap()
+            .contains("10DLC texting registration")
+    );
+    let read = requests[0]["messages"][0]["content"].as_str().unwrap();
     // The pages as read: the form's fields and words, no scripts; nothing
     // code found on them.
     assert!(
@@ -1773,13 +1750,29 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     assert!(read.contains("We may share your information"), "{read}");
     assert!(!read.contains("track("), "{read}");
     assert!(read.contains("\"facts\": []"), "{read}");
+    // The answer is sent back as it came, its thinking too.
     let sent_back = requests[1]["messages"].as_array().unwrap();
-    assert_eq!(sent_back.len(), 4);
+    assert_eq!(sent_back.len(), 3);
+    assert_eq!(sent_back[1]["content"][0]["signature"], "sig-1");
     assert!(
-        sent_back[3]["content"]
+        sent_back[2]["content"]
             .as_str()
             .unwrap()
             .contains("`website`")
+    );
+    // Each call is logged.
+    let logged: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT model, success FROM ai_usage_log WHERE feature = 'tendlc_check' ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        logged,
+        [
+            ("claude-opus-5-5".to_string(), true),
+            ("claude-opus-5-5".to_string(), true),
+        ]
     );
 
     let after: Value = server
@@ -1975,7 +1968,7 @@ async fn code_finds_what_the_pages_miss_whatever_the_ai_says(pool: MySqlPool) {
     // The AI passes everything.
     fake.answer_with(ai_answer("Everything is in order.", &[]));
     assert_eq!(run_checks(&server).await["processed"], 1);
-    let read = fake.requests()[0]["messages"][1]["content"]
+    let read = fake.requests()[0]["messages"][0]["content"]
         .as_str()
         .unwrap()
         .to_string();
@@ -2022,134 +2015,6 @@ async fn code_finds_what_the_pages_miss_whatever_the_ai_says(pool: MySqlPool) {
         fixes[3].1,
         "Phone: (317) 555-0100\nEmail: office@acmestone.test\nAddress: 100 Main St, \
          Indianapolis, IN 46204"
-    );
-}
-
-#[test_db::test(seed)]
-async fn claude_double_checks_gpts_answer(pool: MySqlPool) {
-    setup(&pool).await;
-    let (server, fake, base) = check_server_with(&pool, true).await;
-    fake.page("/quote", QUOTE_PAGE);
-    fake.page("/privacy", PRIVACY_PAGE);
-    fake.page("/terms", TERMS_PAGE);
-    fake.page("/", HOME_PAGE);
-    let mut form = form();
-    form["brand"]["website"] = json!(format!("{base}/site/"));
-    form["campaign"]["optinFormLink"] = json!(format!("{base}/site/quote"));
-    form["campaign"]["privacyPolicyLink"] = json!(format!("{base}/site/privacy"));
-    form["campaign"]["termsAndConditionsLink"] = json!(format!("{base}/site/terms"));
-    form["campaign"]["messageFlow"] = json!(format!(
-        "Customers ask for a quote on our quote form at {base}/site/quote and agree to texts from \
-         Acme Stone. Privacy policy: {base}/site/privacy"
-    ));
-    save_form(&server, sessions::MANAGER, &form)
-        .await
-        .assert_status_ok();
-    ready(&server, &form).await;
-
-    // GPT passes everything. Claude's first answer quotes what is on no
-    // page and is sent back; its second fails the privacy policy GPT
-    // passed.
-    let sharing = "No mobile information will be shared with third parties or affiliates for \
-                   marketing or promotional purposes.";
-    fake.answer_with(ai_answer("All good.", &[]));
-    fake.claude_answer_with(ai_answer(
-        "Almost there.",
-        &[(
-            "website",
-            json!({ "status": "pass", "evidence": "Family owned since 1962", "note": "", "fixes": [] }),
-        )],
-    ));
-    fake.claude_answer_with(ai_answer(
-        "One change is needed.",
-        &[(
-            "privacy_no_sharing",
-            json!({ "status": "fail", "evidence": "We may share your information with marketing partners.",
-                    "note": "Double-check: the policy shares information with marketing partners.",
-                    "fixes": [{
-                        "location": "page:privacyPolicy",
-                        "problem": "Carriers require the policy to say phone numbers are never shared for marketing.",
-                        "current": "We may share your information with marketing partners.",
-                        "replacement": sharing,
-                    }] }),
-        )],
-    ));
-    assert_eq!(run_checks(&server).await["processed"], 1);
-    let asked = fake.claude_requests();
-    assert_eq!(asked.len(), 2);
-    assert_eq!(asked[0]["model"], "claude-opus-5-5");
-    assert_eq!(asked[0]["output_config"]["effort"], "high");
-    assert_eq!(asked[0]["output_config"]["format"]["type"], "json_schema");
-    assert!(
-        asked[0]["system"]
-            .as_str()
-            .unwrap()
-            .contains("You are the double-check.")
-    );
-    let read = asked[0]["messages"][0]["content"].as_str().unwrap();
-    assert!(read.contains("We may share your information"), "{read}");
-    assert!(read.contains("The first reviewer's answer:"), "{read}");
-    assert!(read.contains("All good."), "{read}");
-    // The answer sent back as it came, its thinking too.
-    let sent_back = asked[1]["messages"].as_array().unwrap();
-    assert_eq!(sent_back.len(), 3);
-    assert_eq!(sent_back[1]["content"][0]["signature"], "sig-1");
-    assert!(
-        sent_back[2]["content"]
-            .as_str()
-            .unwrap()
-            .contains("`website`")
-    );
-    let after: Value = server
-        .get("/v1/phone/admin/tendlc")
-        .with_session(sessions::MANAGER)
-        .await
-        .json();
-    let check = &after["aiCheck"];
-    assert_eq!(check["status"], "changes");
-    assert_eq!(check["summary"], "One change is needed.");
-    assert_eq!(check["fixes"][0]["location"], "page:privacyPolicy");
-    assert_eq!(check["fixes"][0]["replacement"], sharing);
-
-    // Fixed; Claude can't answer this time: GPT's pass stands, and the
-    // superusers are told it was not double-checked.
-    fake.page("/privacy", FIXED_PRIVACY_PAGE);
-    ready(&server, &form).await;
-    fake.answer_with(ai_answer("All good.", &[]));
-    assert_eq!(run_checks(&server).await["processed"], 1);
-    assert_eq!(fake.claude_requests().len(), 3);
-    let passed: Value = server
-        .get("/v1/phone/admin/tendlc")
-        .with_session(sessions::MANAGER)
-        .await
-        .json();
-    assert_eq!(passed["status"], "ready");
-    assert_eq!(passed["aiCheck"]["status"], "passed");
-    let unclear = passed["aiCheck"]["unclear"].as_array().unwrap();
-    assert_eq!(unclear.len(), 1);
-    assert_eq!(unclear[0]["label"], "Second AI check");
-    assert!(
-        unclear[0]["note"]
-            .as_str()
-            .unwrap()
-            .starts_with("Claude could not double-check this")
-    );
-
-    // Each Claude call is logged, the failed one too.
-    let logged: Vec<(String, bool)> = sqlx::query_as(
-        "SELECT model, success FROM ai_usage_log
-          WHERE feature = 'tendlc_check' AND model LIKE 'claude%' ORDER BY id",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        logged,
-        [
-            ("claude-opus-5-5".to_string(), true),
-            ("claude-opus-5-5".to_string(), true),
-            ("claude-opus-5-5".to_string(), false),
-        ]
     );
 }
 

@@ -15,10 +15,7 @@
 //! within the form's rules, a link it suggests one of the pages read; an
 //! answer that fails is sent back once with what was wrong.
 //!
-//! The first answer is GPT's. With a Claude key, Claude double-checks it:
-//! it reads the same form and pages with GPT's answer, and its own answer,
-//! checked the same way, is the result. When Claude can't answer (or the
-//! run has no time left for it), GPT's stands and the superusers are told.
+//! The AI is Claude Opus 5.5, thinking hard.
 //!
 //! A pass is good for sending for [`FRESH_HOURS`]: a superuser's send of an
 //! older one (or of one never checked) asks for the check again first
@@ -33,7 +30,7 @@
 //!   read for them to look at by hand.
 //!
 //! When the AI cannot run (3 tries), the registration goes to the
-//! superusers unchecked, and they are told so. Without an AI key (local
+//! superusers unchecked, and they are told so. Without a Claude key (local
 //! runs, tests) marking it ready skips the check.
 
 use super::tendlc::{
@@ -43,7 +40,7 @@ use super::tendlc_pages::{Fetched, Page, PageKind, comparable, read_pages};
 use super::tendlc_registry as registry;
 use super::tendlc_site::{self as site, Fact};
 use super::wire_enum;
-use crate::ai::{AiError, Caller, LARGE_FALLBACK_MODEL, LARGE_MODEL};
+use crate::ai::Caller;
 use crate::app_origin::{app_origin, company_subdomain};
 use crate::claude::{self, ClaudeError, OPUS_MODEL};
 use crate::html::escape;
@@ -65,11 +62,7 @@ const ACTOR: &str = "AI check";
 const MAX_ATTEMPTS: i64 = 3;
 /// A run in progress this old died: the job takes it again.
 const STALE_MINUTES: i64 = 15;
-/// One AI answer (the model reasons at length over the pages).
-const AI_TIMEOUT: Duration = Duration::from_secs(210);
-const REASONING_EFFORT: &str = "high";
-const MAX_COMPLETION_TOKENS: u32 = 40_000;
-/// Claude's double-check of the first answer: it thinks hard.
+/// One AI answer: Claude reasons at length over the pages.
 const CLAUDE_EFFORT: &str = "high";
 const CLAUDE_MAX_TOKENS: u32 = 64_000;
 const CLAUDE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -254,7 +247,7 @@ pub async fn blocks_sending(
     row: &Row,
     actor: i32,
 ) -> sqlx::Result<Option<String>> {
-    if !state.ai.is_enabled() {
+    if !state.claude.is_enabled() {
         return Ok(None);
     }
     let fresh = row.ai_checked_at.is_some_and(|at| {
@@ -1213,8 +1206,6 @@ pub fn review(
 #[derive(Debug, thiserror::Error)]
 enum RunError {
     #[error(transparent)]
-    Ai(#[from] AiError),
-    #[error(transparent)]
     Claude(#[from] ClaudeError),
     #[error("the AI's answer was not usable: {0}")]
     Answer(String),
@@ -1222,54 +1213,8 @@ enum RunError {
     NoTime,
 }
 
-/// Who answers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Reviewer {
-    Gpt,
-    /// Double-checks GPT's answer.
-    Claude,
-}
-
-/// What Claude is told on top of the rules.
-const DOUBLE_CHECK: &str = "Another AI reviewer already answered: its answer, as code checked \
-it, follows the pages. You are the double-check. Go through every check yourself against the \
-form and the pages, not against its answer. Keep what it got right. Where it is wrong, correct \
-it: fail a check it passed when the rule is not fully met, pass a check it failed when the rule \
-is met (nothing outside the rules is a reason to fail), and correct its fixes when they are \
-wrong, incomplete or would not satisfy the carriers. Answer every check in full in the same \
-JSON. Where your status differs from the first reviewer's, start `note` with \"Double-check:\" \
-and say why.";
-
-/// One model's answer: its text.
-async fn ask(
-    state: &AppState,
-    caller: Caller<'_>,
-    model: &str,
-    messages: &[Value],
-) -> Result<String, AiError> {
-    let body = json!({
-        "model": model,
-        "messages": messages,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": { "name": "tendlc_check", "strict": true, "schema": schema() },
-        },
-        "reasoning_effort": REASONING_EFFORT,
-        "max_completion_tokens": MAX_COMPLETION_TOKENS,
-    });
-    let message = state
-        .ai
-        .complete(&state.pool, caller, model, &body, AI_TIMEOUT)
-        .await?;
-    message["content"]
-        .as_str()
-        .map(str::to_string)
-        .filter(|text| !text.trim().is_empty())
-        .ok_or(AiError::Empty)
-}
-
 /// Claude's answer, in time for the run to end by `deadline`.
-async fn ask_claude(
+async fn ask(
     state: &AppState,
     caller: Caller<'_>,
     system: &str,
@@ -1296,8 +1241,8 @@ async fn ask_claude(
         .await?)
 }
 
-/// The AI's report on the form and the pages: GPT's answer, then (with a
-/// Claude key) Claude's double-check of it.
+/// The AI's report on the form and the pages: an answer, checked; one that
+/// fails is sent back once with what was wrong.
 async fn report(
     state: &AppState,
     row: &Row,
@@ -1306,96 +1251,20 @@ async fn report(
     facts: &[Fact],
     deadline: Instant,
 ) -> Result<Report, RunError> {
-    let system = system_prompt(draft);
-    let user = user_prompt(draft, pages, facts);
-    let (mut first, text) = answer(
-        state,
-        row,
-        Reviewer::Gpt,
-        &system,
-        user.clone(),
-        (draft, pages, facts),
-        deadline,
-    )
-    .await?;
-    if !state.claude.is_enabled() {
-        return Ok(first);
-    }
-    let system = format!("{system}\n\n{DOUBLE_CHECK}");
-    let user = format!("{user}\n\nThe first reviewer's answer:\n{text}");
-    match answer(
-        state,
-        row,
-        Reviewer::Claude,
-        &system,
-        user,
-        (draft, pages, facts),
-        deadline,
-    )
-    .await
-    {
-        Ok((mut second, _)) => {
-            second.model = format!("{} + {}", first.model, second.model);
-            Ok(second)
-        }
-        Err(err) => {
-            tracing::warn!(registration_id = row.id, error = %err, "10DLC double-check failed");
-            first.unclear.push(TenDlcAiUnclear {
-                label: "Second AI check".into(),
-                note: format!(
-                    "Claude could not double-check this ({err}): the result is GPT's alone."
-                ),
-            });
-            Ok(first)
-        }
-    }
-}
-
-/// One reviewer's report, and the answer it is made of: an answer, checked;
-/// one that fails is sent back once with what was wrong.
-async fn answer(
-    state: &AppState,
-    row: &Row,
-    reviewer: Reviewer,
-    system: &str,
-    user: String,
-    (draft, pages, facts): (&TenDlcDraft, &[Page], &[Fact]),
-    deadline: Instant,
-) -> Result<(Report, String), RunError> {
     let caller = Caller {
         feature: "tendlc_check",
         user_id: row.ai_check_requested_by_user_id,
         company_id: Some(row.company_id),
     };
-    let mut messages = vec![json!({ "role": "user", "content": user })];
-    let mut model = match reviewer {
-        Reviewer::Gpt => LARGE_MODEL,
-        Reviewer::Claude => OPUS_MODEL,
-    };
+    let system = system_prompt(draft);
+    let mut messages = vec![json!({ "role": "user", "content": user_prompt(draft, pages, facts) })];
     for strict in [true, false] {
-        let (text, turn) = match reviewer {
-            Reviewer::Gpt => {
-                let mut all = vec![json!({ "role": "system", "content": system })];
-                all.extend(messages.iter().cloned());
-                let text = match ask(state, caller, model, &all).await {
-                    Err(err) if err.is_model_permission() && model != LARGE_FALLBACK_MODEL => {
-                        model = LARGE_FALLBACK_MODEL;
-                        ask(state, caller, model, &all).await?
-                    }
-                    result => result?,
-                };
-                (text.clone(), json!(text))
-            }
-            Reviewer::Claude => {
-                let answer = ask_claude(state, caller, system, &messages, deadline).await?;
-                (answer.text, answer.content)
-            }
-        };
-        let errors = match serde_json::from_str::<Answer>(&text) {
-            Ok(answer) => match review(&answer, draft, pages, facts, strict) {
+        let answer = ask(state, caller, &system, &messages, deadline).await?;
+        let errors = match serde_json::from_str::<Answer>(&answer.text) {
+            Ok(parsed) => match review(&parsed, draft, pages, facts, strict) {
                 Ok(mut report) => {
-                    report.model = model.to_string();
-                    return Ok((report, text));
+                    report.model = OPUS_MODEL.to_string();
+                    return Ok(report);
                 }
                 Err(errors) => errors,
             },
@@ -1406,11 +1275,10 @@ async fn answer(
         }
         tracing::info!(
             registration_id = row.id,
-            ?reviewer,
             errors = errors.len(),
             "10DLC AI check answer sent back"
         );
-        messages.push(json!({ "role": "assistant", "content": turn }));
+        messages.push(json!({ "role": "assistant", "content": answer.content }));
         messages.push(json!({
             "role": "user",
             "content": format!(
@@ -1598,7 +1466,7 @@ async fn check(state: &AppState, company_id: i32) -> sqlx::Result<()> {
         Ok(report) if report.fixes.is_empty() => passed(state, &now, &report).await,
         Ok(report) => changes(state, &now, &report).await,
         Err(err) => {
-            let last = matches!(err, RunError::Ai(AiError::NotConfigured))
+            let last = matches!(err, RunError::Claude(ClaudeError::NotConfigured))
                 || now.ai_check_attempts >= MAX_ATTEMPTS;
             tracing::warn!(
                 registration_id = now.id,
