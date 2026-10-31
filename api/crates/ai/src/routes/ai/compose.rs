@@ -23,11 +23,10 @@ use crate::followups::js::{js_len, js_slice, trim};
 use crate::followups::prompt::FollowupTimelineMessage;
 use crate::followups::send_window::FollowupChannel;
 use crate::openapi::ToSchema;
+use crate::routes::ai::compose_catalog::load_catalog;
 use crate::routes::ai::conversation_reply::REPLY_FALLBACK_MODEL;
 use crate::routes::ai::reply_context;
 use crate::routes::sms::provider::valid_thread_phone;
-use crate::routes::stones::queries::list_stones;
-use crate::routes::stones::schemas::{ListStonesQuery, Stone};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -69,7 +68,7 @@ Rules:
 - If the draft ends mid-word, finish THAT word first, keeping the letters already typed (no leading space). If it ends after a full word, start with a space.
 - Stay consistent with the conversation and the rep's tone. Never invent prices, dates, or facts not in the context.
 - Name a stone color or a price only when it is in this customer's QUOTES, CUSTOMER / PROJECT INFO, CONVERSATION or DRAFT, or in STONES for a stone named there or one the customer asked for. Never take one from the rep's messages to other customers or from general knowledge, never suggest other stones from STONES unasked, and never list price levels or tiers: stop and let the rep type them.
-- STONES has each displayed stone's price per sq ft and what is in stock now: use them exactly. A price in this customer's QUOTES wins over STONES. For a stone priced by the slab let the rep type the price; never say we have a sold out stone.
+- STONES has each displayed stone's material, colors, price per sq ft (and the price quotes charge when it differs), slab size in inches and what is in stock now. PRICE LIST has what a new quote charges for edges, cutouts, fabrication and installation. Use them exactly; a price in this customer's QUOTES wins over both. For a stone priced by the slab with no quote price let the rep type the price; never say we have a sold out stone.
 - When the rep is about to share the inventory / stones page, use the exact customer page URL from CUSTOMER / PROJECT INFO.
 - When the rep asks the customer for their measurements or sends them a link to send us their sizes, use the exact Customer quote URL from CUSTOMER / PROJECT INFO.
 - When the message needs the rep's name, the rep's phone number or the company address, use them from SALES REP and COMPANY.
@@ -79,7 +78,7 @@ Rules:
 - Stop once the point is made. Never tack on an extra offer, a promise to follow up or send something, or "let me know if you have any questions" unless the rep's own messages end that way: reps delete these more than anything else.
 - Sound like the rep's notes (HOW … WRITES) and RECENT MESSAGES BY THE REP: their length, wording, greeting, and the name they introduce themselves with (it can differ from SALES REP).
 - If the DRAFT is empty and the customer has not written to us yet, suggest the whole message (1–3 short sentences) built from CUSTOMER / PROJECT INFO: who the rep is and the company (unless already said on this channel), what the customer asked for, and one question that moves the project forward.
-- When the customer asked something, answer it with the facts in CUSTOMER / PROJECT INFO, QUOTES and STONES (the sink, color, edge, price, availability, what is included). Only when a fact is not there may the rep say they'll check.
+- When the customer asked something, answer it with the facts in CUSTOMER / PROJECT INFO, QUOTES, STONES and PRICE LIST (the sink, color, edge, price, availability, slab size, what is included). Only when a fact is not there may the rep say they'll check.
 - If nothing useful fits, return an empty string.
 Examples (DRAFT → your output):
 "I'll be soo" → "n, see you Friday at 5:00."
@@ -108,8 +107,8 @@ pub struct ComposeContext {
     rep_voice: Vec<String>,
     /// The customer's quotes, formatted (empty: none).
     quotes: String,
-    /// The company's displayed stones, formatted (empty: none).
-    stones: String,
+    /// The company's stones and price list, formatted (empty: none).
+    catalog: String,
 }
 
 /// Recently gathered threads (`warm` fills it).
@@ -216,65 +215,13 @@ pub fn format_rep_notes_block(
     )
 }
 
-fn plural(count: i64, one: &str) -> String {
-    if count == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{count} {one}s")
-    }
-}
-
-/// One line per stone: its price per sq ft (0: by the slab) and what is in
-/// stock (whole slabs, remnants, else regular stock or sold out).
-pub fn format_stones(stones: &[Stone]) -> String {
-    stones
-        .iter()
-        .filter_map(|stone| {
-            let name = stone.name.as_deref().map(trim).filter(|n| !n.is_empty())?;
-            let kind = stone
-                .kind
-                .as_deref()
-                .map(trim)
-                .filter(|k| !k.is_empty())
-                .map(|k| format!(" ({k})"))
-                .unwrap_or_default();
-            let price = match stone.retail_price {
-                Some(price) if price > 0 => format!("${price}/sq ft"),
-                _ => "priced by the slab".to_string(),
-            };
-            let remnants = stone.slabs.available - stone.slabs.whole_available;
-            let stock = [
-                (stone.slabs.whole_available > 0)
-                    .then(|| format!("{} available", plural(stone.slabs.whole_available, "slab"))),
-                (remnants > 0).then(|| plural(remnants, "remnant")),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-            let stock = if !stock.is_empty() {
-                stock.join(", ")
-            } else if stone.regular_stock {
-                "regular stock (always orderable)".to_string()
-            } else {
-                "sold out".to_string()
-            };
-            let sale = if stone.on_sale { ", on sale" } else { "" };
-            Some(format!("- {name}{kind}: {price}, {stock}{sale}"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// The system message: the rules, then the company's stones. Both are the
-/// same for every thread of the company, so the model caches them.
-pub fn build_system_prompt(stones: &str) -> String {
-    if trim(stones).is_empty() {
+/// The system message: the rules, then the company's stones and price list.
+/// Both are the same for every thread of the company, so the model caches them.
+pub fn build_system_prompt(catalog: &str) -> String {
+    if trim(catalog).is_empty() {
         return COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT.to_string();
     }
-    format!(
-        "{COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT}\n\nSTONES (the company's displayed stones: price, what is in stock now):\n{}",
-        trim(stones)
-    )
+    format!("{COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT}\n\n{}", trim(catalog))
 }
 
 /// What the model is asked (`buildComposeAutocompleteUserPrompt`).
@@ -531,22 +478,6 @@ fn checked(target: &ComposeTarget) -> ApiResult<Thread> {
     })
 }
 
-/// The company's displayed stones, sold out ones too, formatted. Best
-/// effort: without them the AI only can't answer price or stock questions.
-async fn load_stones(state: &AppState, company_id: i32) -> String {
-    let filter = ListStonesQuery {
-        include_sold_out: true,
-        ..ListStonesQuery::default()
-    };
-    match list_stones(&state.pool, company_id, &filter).await {
-        Ok(stones) => format_stones(&stones),
-        Err(err) => {
-            tracing::warn!(error = %err, "compose: stones unavailable");
-            String::new()
-        }
-    }
-}
-
 async fn load_context(
     state: &AppState,
     user: &SessionUser,
@@ -619,7 +550,7 @@ async fn load_context(
         }
         None => String::new(),
     };
-    let stones = load_stones(state, user.company_id).await;
+    let catalog = load_catalog(&state.pool, user.company_id).await;
     let context = ComposeContext {
         profile: format!("{}\n{quote_page}", gathered.profile),
         timeline: trim_timeline(&gathered.timeline, TIMELINE_MAX_CHARS),
@@ -632,7 +563,7 @@ async fn load_context(
             .unwrap_or_default(),
         rep_voice: gathered.rep_voice.examples,
         quotes,
-        stones,
+        catalog,
     };
     let contexts = state.extensions.get_or_default::<ComposeContexts>();
     let mut cache = contexts
@@ -759,7 +690,7 @@ pub async fn autocomplete(
     } else {
         MAX_OUTPUT_TOKENS
     };
-    let system = build_system_prompt(&context.stones);
+    let system = build_system_prompt(&context.catalog);
     let chat = |model| {
         let mut chat = Chat::new(model)
             .message("system", &system)
@@ -1095,7 +1026,7 @@ mod tests {
             rep_notes: vec!["Opens with 'Hey'".into()],
             rep_voice: Vec::new(),
             quotes: String::new(),
-            stones: String::new(),
+            catalog: String::new(),
         };
         let prompt = build_user_prompt(
             FollowupChannel::Sms,
@@ -1115,7 +1046,7 @@ mod tests {
                 rep_notes: Vec::new(),
                 rep_voice: Vec::new(),
                 quotes: String::new(),
-                stones: String::new(),
+                catalog: String::new(),
                 ..context
             },
             "",
@@ -1138,7 +1069,7 @@ mod tests {
             rep_notes: Vec::new(),
             rep_voice: Vec::new(),
             quotes: String::new(),
-            stones: String::new(),
+            catalog: String::new(),
         };
         let prompt = build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "x");
         assert!(prompt.contains("SALES REP: Dema\n"));
@@ -1175,7 +1106,7 @@ mod tests {
             rep_notes: Vec::new(),
             rep_voice: Vec::new(),
             quotes: String::new(),
-            stones: String::new(),
+            catalog: String::new(),
         };
         let prompt = build_user_prompt(
             FollowupChannel::Email,
@@ -1242,7 +1173,7 @@ mod tests {
             company_name: None,
             company_address: None,
             quotes: String::new(),
-            stones: String::new(),
+            catalog: String::new(),
             rep_notes: Vec::new(),
             rep_voice: vec!["Hey Simon, this is Dima with Granite Depot.".into()],
         };
@@ -1274,74 +1205,14 @@ mod tests {
         assert!(!is_edit_of("", "Hi"));
     }
 
-    fn stone(name: &str, price: i32, whole: i64, remnants: i64) -> Stone {
-        Stone {
-            id: 1,
-            name: Some(name.into()),
-            kind: Some("quartz".into()),
-            url: None,
-            supplier_id: None,
-            is_display: true,
-            on_sale: false,
-            regular_stock: false,
-            length: None,
-            width: None,
-            retail_price: Some(price),
-            cost_per_sqft: Some(30),
-            level: Some(3),
-            finishing: None,
-            samples_amount: None,
-            samples_importance: None,
-            bundle_number: None,
-            bundle_location: None,
-            delivery_date: None,
-            created_date: None,
-            slabs: crate::routes::stones::schemas::SlabCounts {
-                total: whole + remnants,
-                available: whole + remnants,
-                whole_total: whole,
-                whole_available: whole,
-            },
-        }
-    }
-
     #[test]
-    fn stones_show_price_and_what_is_in_stock() {
-        let regular = Stone {
-            regular_stock: true,
-            on_sale: true,
-            ..stone("Calacatta Laza", 0, 0, 0)
-        };
-        let unnamed = Stone {
-            name: Some("  ".into()),
-            ..stone("x", 50, 1, 0)
-        };
-        let stones = format_stones(&[
-            stone("Viraldi", 65, 3, 1),
-            stone("Frost White", 45, 1, 0),
-            stone("Taj Mahal", 90, 0, 2),
-            stone("Black Pearl", 40, 0, 0),
-            regular,
-            unnamed,
-        ]);
-        assert_eq!(
-            stones,
-            "- Viraldi (quartz): $65/sq ft, 3 slabs available, 1 remnant\n\
-             - Frost White (quartz): $45/sq ft, 1 slab available\n\
-             - Taj Mahal (quartz): $90/sq ft, 2 remnants\n\
-             - Black Pearl (quartz): $40/sq ft, sold out\n\
-             - Calacatta Laza (quartz): priced by the slab, regular stock (always orderable), on sale"
-        );
-        assert!(!stones.contains("30"), "cost and level stay out");
-    }
-
-    #[test]
-    fn the_stones_follow_the_rules_in_the_system_message() {
+    fn the_catalog_follows_the_rules_in_the_system_message() {
         assert_eq!(build_system_prompt(" "), COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT);
-        let system = build_system_prompt("- Viraldi (quartz): $65/sq ft, sold out");
-        assert!(system.starts_with(COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT));
-        assert!(system.ends_with(
-            "\n\nSTONES (the company's displayed stones: price, what is in stock now):\n- Viraldi (quartz): $65/sq ft, sold out"
-        ));
+        assert_eq!(
+            build_system_prompt("STONES (…):\n- Viraldi (quartz): $65/sq ft, sold out\n"),
+            format!(
+                "{COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT}\n\nSTONES (…):\n- Viraldi (quartz): $65/sq ft, sold out"
+            )
+        );
     }
 }

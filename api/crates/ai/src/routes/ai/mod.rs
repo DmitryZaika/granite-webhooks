@@ -28,6 +28,7 @@ pub mod call_activity_rules;
 pub mod call_note;
 pub mod chat;
 pub mod compose;
+pub mod compose_catalog;
 pub mod conversation_reply;
 pub mod design;
 pub mod design_render;

@@ -95,10 +95,10 @@ async fn the_draft_is_continued_from_the_conversation(pool: MySqlPool) {
     assert_eq!(request["prompt_cache_key"], "compose-autocomplete:100");
     let system = request["messages"][0]["content"].as_str().unwrap();
     for line in [
-        "\n- Absolute Black (granite): $75/sq ft, 3 slabs available, on sale\n",
-        "\n- Calacatta Gold (quartz): priced by the slab, 1 remnant\n",
+        "\n- Absolute Black (granite; Black): $75/sq ft, slabs 126.5x63 in, 3 slabs available, on sale\n",
+        "\n- Calacatta Gold (quartz; White): priced by the slab, slabs 120x55 in, 1 remnant\n",
         "\n- Sold Out Marble (marble): $90/sq ft, sold out\n",
-        "\n- Regular Stock Quartzite (quartzite): $110/sq ft, regular stock (always orderable)",
+        "\n- Regular Stock Quartzite (quartzite): $110/sq ft, slabs 130x65 in, regular stock (always orderable)\n",
     ] {
         assert!(system.contains(line), "{system}");
     }
@@ -110,6 +110,10 @@ async fn the_draft_is_continued_from_the_conversation(pool: MySqlPool) {
     ] {
         assert!(!system.contains(hidden), "{system}");
     }
+    assert!(
+        !system.contains("PRICE LIST"),
+        "no price list yet: {system}"
+    );
     let prompt = request["messages"][1]["content"].as_str().unwrap();
     assert!(
         prompt.starts_with(
@@ -133,6 +137,44 @@ async fn the_draft_is_continued_from_the_conversation(pool: MySqlPool) {
             .await
             .unwrap();
     assert_eq!(logged, "quick_reply");
+}
+
+#[test_db::test(seed)]
+async fn the_default_price_list_is_in_the_system_message(pool: MySqlPool) {
+    let (server, model) = setup(&pool).await;
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO price_lists (id, company_id, name, status, sequence) VALUES
+          (900, 100, 'Retail', 'active', 1), (901, 100, 'Builder', 'active', 2);
+        INSERT INTO price_list_revisions (id, price_list_id, revision_number, info_json) VALUES
+          (910, 900, 1, '{"units": "in", "currency": "$", "expirationDays": 30, "lineItemPriceRounding": 2, "arrOtherItems": [], "arrEdgeProfileSets": [{"arrEdgeProfiles": [{"name": "Ogee", "price": 25}]}],
+                         "arrProducts": [{"name": "Granite", "arrVariants": [{"name": "Absolute Black", "price": 80}]}]}'),
+          (911, 901, 1, '{"units": "in", "currency": "$", "expirationDays": 30, "lineItemPriceRounding": 2, "arrOtherItems": [], "arrProducts": [], "arrEdgeProfileSets": [{"arrEdgeProfiles": [{"name": "Ogee", "price": 20}]}]}');
+        UPDATE price_lists SET current_revision_id = 910 WHERE id = 900;
+        UPDATE price_lists SET current_revision_id = 911 WHERE id = 901;
+        INSERT INTO quote_settings (company_id, default_price_list_id) VALUES (100, 901);
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    model.reply("");
+    server
+        .post("/v1/ai/compose/autocomplete")
+        .with_session(sessions::REP)
+        .json(&json!({ "channel": "sms", "customer_id": 1000, "phone_digits": "3175550100", "draft": "Ogee is" }))
+        .await
+        .assert_status_ok();
+    let system = model.requests()[0]["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The starred list, not the first one.
+    assert!(
+        system.ends_with("\n\nPRICE LIST \"Builder\" (what a new quote charges besides the stone):\n- Edges: Ogee $20/lin ft"),
+        "{system}"
+    );
+    assert!(!system.contains("on quotes"), "{system}");
 }
 
 #[test_db::test(seed)]
