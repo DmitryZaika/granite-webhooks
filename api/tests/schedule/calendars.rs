@@ -38,8 +38,16 @@ async fn built_in_calendars_are_created_and_listed_first(pool: MySqlPool) {
     assert_eq!(list[2]["is_system"], true);
     assert_eq!(
         list[3],
-        json!({ "id": 8701, "name": "Alpha", "color": "teal", "slug": null, "is_system": false, "is_hidden": false })
+        json!({ "id": 8701, "name": "Alpha", "color": "teal", "slug": null, "is_system": false, "is_hidden": false, "shows_day_map": false })
     );
+    // The day map is on for Templates and Installations by default.
+    let maps: Vec<bool> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["shows_day_map"].as_bool().unwrap())
+        .collect();
+    assert_eq!(maps, vec![true, true, false, false, false]);
     // Calling again creates nothing more.
     server(pool.clone())
         .get("/v1/calendars")
@@ -190,4 +198,58 @@ async fn admins_manage_calendars(pool: MySqlPool) {
         .await
         .assert_status(status(204).unwrap());
     assert!(row(id).await.3);
+}
+
+#[test_db::test(seed)]
+async fn an_admin_turns_a_calendars_day_map_on_and_off(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO calendars (id, company_id, name, color) VALUES (8711, 100, 'Service', 'teal')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let day_map = |id: i64| {
+        let pool = pool.clone();
+        async move {
+            let list: Value = server(pool)
+                .get("/v1/calendars")
+                .with_session(sessions::ADMIN)
+                .await
+                .json();
+            list.as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["id"] == id)
+                .map(|c| c["shows_day_map"].as_bool().unwrap())
+                .unwrap()
+        }
+    };
+    assert!(!day_map(8711).await);
+    server(pool.clone())
+        .put("/v1/calendars/8711/day-map")
+        .with_session(sessions::REP)
+        .json(&json!({ "shows_day_map": true }))
+        .await
+        .assert_status(axum::http::StatusCode::FORBIDDEN);
+    server(pool.clone())
+        .put("/v1/calendars/8711/day-map")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "shows_day_map": true }))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    assert!(day_map(8711).await);
+    // A built-in one can be turned off.
+    let installations: i64 = sqlx::query_scalar(
+        "SELECT id FROM calendars WHERE company_id = 100 AND slug = 'installations'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    server(pool.clone())
+        .put(&format!("/v1/calendars/{installations}/day-map"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "shows_day_map": false }))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    assert!(!day_map(installations).await);
 }

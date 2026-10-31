@@ -16657,6 +16657,88 @@
         ]
       }
     },
+    "/v1/calendars/{id}/day-map": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Turn a calendar's day map on or off",
+        "description": "Whether the day's route map and route buttons on the schedule use its\nevents. On by default for Installations and Templates.",
+        "operationId": "set_calendar_day_map",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Calendar id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarDayMap"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such calendar in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/calendars/hidden-users": {
       "get": {
         "tags": [
@@ -65163,7 +65245,8 @@
           "name",
           "color",
           "is_system",
-          "is_hidden"
+          "is_hidden",
+          "shows_day_map"
         ],
         "properties": {
           "id": {
@@ -65193,6 +65276,23 @@
           "is_hidden": {
             "type": "boolean",
             "description": "Hidden from everyone's schedule (only `all=true` lists these)."
+          },
+          "shows_day_map": {
+            "type": "boolean",
+            "description": "The day's route map and route buttons use its events (on by default\nfor Installations and Templates)."
+          }
+        }
+      },
+      "CalendarDayMap": {
+        "type": "object",
+        "description": "Body of `PUT /v1/calendars/{id}/day-map`.",
+        "required": [
+          "shows_day_map"
+        ],
+        "properties": {
+          "shows_day_map": {
+            "type": "boolean",
+            "description": "The day's route map and route buttons use this calendar's events."
           }
         }
       },

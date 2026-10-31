@@ -68,7 +68,9 @@ pub async fn visible_calendars(
     sqlx::query_as(
         "SELECT c.id, c.name, c.color, c.slug,
                 COALESCE(c.slug IN ('templates', 'installations', 'estimates'), 0) AS is_system,
-                FALSE AS is_hidden
+                FALSE AS is_hidden,
+                COALESCE(c.shows_day_map, c.slug IN ('templates', 'installations'), 0) <> 0
+                  AS shows_day_map
          FROM calendars c
          WHERE c.company_id = ? AND c.deleted_at IS NULL AND c.is_hidden = 0
            AND NOT EXISTS (SELECT 1 FROM calendar_hidden_users h
@@ -90,7 +92,9 @@ pub async fn all_calendars(
     sqlx::query_as(
         "SELECT c.id, c.name, c.color, c.slug,
                 COALESCE(c.slug IN ('templates', 'installations', 'estimates'), 0) AS is_system,
-                COALESCE(c.is_hidden, 0) <> 0 AS is_hidden
+                COALESCE(c.is_hidden, 0) <> 0 AS is_hidden,
+                COALESCE(c.shows_day_map, c.slug IN ('templates', 'installations'), 0) <> 0
+                  AS shows_day_map
          FROM calendars c
          WHERE c.company_id = ? AND c.deleted_at IS NULL
          ORDER BY CASE c.slug WHEN 'templates' THEN 1 WHEN 'installations' THEN 2

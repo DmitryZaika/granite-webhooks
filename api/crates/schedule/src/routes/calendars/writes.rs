@@ -213,6 +213,50 @@ pub async fn set_hidden(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Body of `PUT /v1/calendars/{id}/day-map`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CalendarDayMap {
+    /// The day's route map and route buttons use this calendar's events.
+    pub shows_day_map: bool,
+}
+
+/// Turn a calendar's day map on or off
+///
+/// Whether the day's route map and route buttons on the schedule use its
+/// events. On by default for Installations and Templates.
+#[crate::openapi::path(
+    put,
+    path = "/v1/calendars/{id}/day-map",
+    operation_id = "set_calendar_day_map",
+    tag = "schedule",
+    params(("id" = i32, Path, description = "Calendar id")),
+    request_body = CalendarDayMap,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such calendar in the caller's company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn set_day_map(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<CalendarDayMap>,
+) -> ApiResult<StatusCode> {
+    find(&state.pool, user.company_id, id).await?;
+    sqlx::query(
+        "UPDATE calendars SET shows_day_map = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
+    .bind(input.shows_day_map)
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Delete a calendar
 ///
 /// Removes a calendar the company added; built-in ones stay.
