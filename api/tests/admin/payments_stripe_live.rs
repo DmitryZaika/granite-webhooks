@@ -71,7 +71,7 @@ async fn a_company_subscribes_manages_and_shows_up_for_superusers(pool: MySqlPoo
         key: key.clone(),
         http: ::common::http::client(),
     };
-    let payments = Payments::new("live-test-secret", "https://dev.payments.granite-manager.com");
+    let payments = Payments::new("live-test-secret", "https://dev-payments.granite-manager.com");
     let token = payments.token(100).unwrap();
     let server = TestServer::new(app(AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
         .with_stripe(Stripe::new(Some(&key), BASE))
@@ -109,7 +109,7 @@ async fn a_company_subscribes_manages_and_shows_up_for_superusers(pool: MySqlPoo
     assert_eq!(line["price"]["recurring"]["interval"], "month");
     assert_eq!(
         session["success_url"],
-        format!("https://dev.payments.granite-manager.com/?c={token}&checkout=success")
+        format!("https://dev-payments.granite-manager.com/?c={token}&checkout=success")
     );
 
     // The payer pays: a subscription like the one Checkout makes.

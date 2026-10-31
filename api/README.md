@@ -190,7 +190,7 @@ and against Stripe's test mode in `tests/admin/billing_stripe_live.rs` when
 ### Payments page (Stripe)
 
 `routes/payments.rs` serves the payments page (`apps/payments` in the CRM
-repo, `payments.granite-manager.com`; dev: `dev.payments.granite-manager.com`):
+repo, `payments.granite-manager.com`; dev: `dev-payments.granite-manager.com`):
 a company opens its signed link (`?c=<company id>.<HMAC>`), subscribes monthly
 through Stripe Checkout at `company.subscription_price_cents` (default $800,
 read when it subscribes) and manages the subscription in Stripe's billing

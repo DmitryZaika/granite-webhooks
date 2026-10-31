@@ -581,7 +581,7 @@ async fn the_payments_page_origin_may_post(pool: MySqlPool) {
         server_with(&pool, "https://granite-manager.com,https://*.granite-manager.com").await;
     for origin in [
         "https://payments.granite-manager.com",
-        "https://dev.payments.granite-manager.com",
+        "https://dev-payments.granite-manager.com",
     ] {
         server
             .post(&format!("/v1/public/payments/{}/checkout", token(100)))
