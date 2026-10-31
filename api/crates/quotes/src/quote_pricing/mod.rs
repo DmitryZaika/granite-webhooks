@@ -838,6 +838,31 @@ async fn add_waiting_jobs(
     Ok(())
 }
 
+/// Undo sale: deletes the template and installation the sale added (see
+/// `add_waiting_jobs`), so selling the quote again adds them anew.
+pub async fn remove_waiting_jobs(
+    pool: &MySqlPool,
+    quote_id: i32,
+    company_id: i32,
+) -> Result<(), sqlx::Error> {
+    let ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT e.id FROM events e JOIN calendars c ON c.id = e.calendar_id
+          WHERE e.quote_id = ? AND c.company_id = ? AND e.deleted_date IS NULL",
+    )
+    .bind(quote_id)
+    .bind(company_id)
+    .fetch_all(pool)
+    .await?;
+    for id in ids {
+        sqlx::query("UPDATE events SET deleted_date = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        crate::routes::events::reminders::cancel(pool, id).await?;
+    }
+    Ok(())
+}
+
 /// Same cleaning as the file name the quote page gives a contract PDF.
 fn clean_file_name(name: &str) -> String {
     name.chars()
