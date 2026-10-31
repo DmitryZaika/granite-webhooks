@@ -89692,6 +89692,13 @@
             ],
             "description": "Name of the user who made it (the schedule shows it on the event).\nNull when that user has no name."
           },
+          "created_user_photo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That user's picture (`PUT /v1/me/photo`); null without one."
+          },
           "assigned_user_id": {
             "type": [
               "integer",
@@ -89699,6 +89706,20 @@
             ],
             "format": "int32",
             "description": "The installer or template maker on it."
+          },
+          "assigned_user_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their name; null without one (or nobody assigned)."
+          },
+          "assigned_user_photo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their picture; null without one."
           },
           "sale_id": {
             "type": [
