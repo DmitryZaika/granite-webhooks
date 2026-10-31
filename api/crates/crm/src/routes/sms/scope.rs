@@ -1,16 +1,18 @@
 //! Which threads, and which rows in them, a user may see.
 //!
-//! "Mine" is the threads carrying a row tagged with the user's agent id (the
-//! user sees their own rows plus untagged ones) and the threads of untagged
-//! inbound rows sent to the user's own number (every row). "All" — admins
-//! only — is the whole company, or one rep's "mine" when filtered by agent.
+//! A text is the rep's by its user or by its number, either one: "mine" is
+//! the threads carrying a row sent by the user or tagged with an agent id
+//! they have or ever had there (the user sees their own rows plus untagged
+//! ones), and the threads texted to or from a number of theirs, now or ever,
+//! on any provider (every row; `user_sms_identities`). "All" — admins only —
+//! is the whole company, or one rep's "mine" when filtered by agent.
 //! Company lines and the onboarding sample are never thread keys.
 //!
 //! Telnyx: "mine" is every thread of the numbers the user may call from
 //! (whole threads, so a shared line is a shared inbox); the rep filter takes
 //! the rep's user id.
 
-use super::provider::{Param, SAMPLE_PHONES, SmsProvider, marks};
+use super::provider::{Param, SAMPLE_PHONES, SmsProvider, marks, phone10};
 use crate::auth::session::SessionUser;
 use crate::openapi::ToSchema;
 use serde::Deserialize;
@@ -84,12 +86,175 @@ pub struct Narrowing {
     pub phones: Option<Vec<String>>,
     /// Threads whose every row is visible (the "my number" branch).
     pub whole_threads: Vec<String>,
-    /// Agent whose own rows (plus untagged ones) are visible.
-    pub agent_id: Option<String>,
+    /// The rep whose own rows (plus untagged ones) are visible.
+    pub own: Option<OwnRows>,
     /// Company lines, never thread keys.
     pub company_lines: Vec<String>,
     /// One rep's inbox (unread first), not the company's.
     pub one_rep: bool,
+}
+
+/// A rep's own rows: tagged with an agent id of theirs, or sent by them.
+#[derive(Debug, Clone)]
+pub struct OwnRows {
+    agents: Vec<String>,
+    sender_user_id: Option<i32>,
+}
+
+impl OwnRows {
+    fn new(ids: &RepIds) -> Option<Self> {
+        (!ids.agents.is_empty() || ids.user_id.is_some()).then(|| Self {
+            agents: ids.agents.clone(),
+            sender_user_id: ids.user_id,
+        })
+    }
+
+    /// The predicates over `s` for the rep's own rows, ORed.
+    fn own(&self) -> (Vec<String>, Vec<Param>) {
+        let mut parts = Vec::new();
+        let mut params: Vec<Param> = Vec::new();
+        if !self.agents.is_empty() {
+            parts.push(format!("s.agent IN ({})", marks(self.agents.len())));
+            params.extend(self.agents.iter().map(Param::from));
+        }
+        if let Some(user_id) = self.sender_user_id {
+            parts.push("s.sender_user_id = ?".to_string());
+            params.push(user_id.into());
+        }
+        (parts, params)
+    }
+
+    /// The rep's own rows plus untagged ones, ORed.
+    fn visible(&self) -> (Vec<String>, Vec<Param>) {
+        let (mut parts, params) = self.own();
+        parts.push("s.agent IS NULL".to_string());
+        (parts, params)
+    }
+}
+
+/// A rep's ids on `CloudTalk` or `RingCentral`: every agent id they have or
+/// had there, and every number of theirs they have or had on any provider (a
+/// number moved between providers stays theirs). Company lines are shared,
+/// never one rep's.
+struct RepIds {
+    user_id: Option<i32>,
+    agents: Vec<String>,
+    lines: Vec<String>,
+}
+
+/// The caller's ids, or with `scope=all` those of the rep whose agent id is
+/// `filter_agent`.
+async fn rep_ids(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    user: &SessionUser,
+    scope: SmsScope,
+    filter_agent: Option<&str>,
+    company_lines: &[String],
+) -> Result<RepIds, sqlx::Error> {
+    let (user_id, agent, line) = if scope == SmsScope::All {
+        let (Some(agent), Some(agent_column), Some(phone_column)) = (
+            filter_agent,
+            provider.agent_column(),
+            provider.phone_column(),
+        ) else {
+            return Ok(RepIds {
+                user_id: None,
+                agents: Vec::new(),
+                lines: Vec::new(),
+            });
+        };
+        let rep: Option<(i32, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT id, {phone_column} FROM users
+              WHERE company_id = ? AND is_deleted = 0 AND TRIM(IFNULL({agent_column}, '')) = ?
+              ORDER BY id LIMIT 1"
+        )))
+        .bind(user.company_id)
+        .bind(agent)
+        .fetch_optional(pool)
+        .await?;
+        let line = rep
+            .as_ref()
+            .and_then(|(_, phone)| phone.as_deref())
+            .map(phone10);
+        (rep.map(|(id, _)| id), Some(agent.to_string()), line)
+    } else {
+        (
+            Some(user.id),
+            provider.agent_of(user),
+            provider.phone_of(user),
+        )
+    };
+    let mut agents: BTreeSet<String> = agent.into_iter().collect();
+    let mut lines: BTreeSet<String> = line.into_iter().collect();
+    if let Some(user_id) = user_id {
+        let remembered: Vec<(String, String)> = sqlx::query_as(
+            "SELECT CAST(kind AS CHAR), value FROM user_sms_identities
+              WHERE company_id = ? AND user_id = ? AND (kind = 'line' OR provider = ?)",
+        )
+        .bind(user.company_id)
+        .bind(user_id)
+        .bind(provider.as_str())
+        .fetch_all(pool)
+        .await?;
+        for (kind, value) in remembered {
+            if kind == "agent" {
+                agents.insert(value);
+            } else {
+                lines.insert(value);
+            }
+        }
+    }
+    lines.retain(|line| line.len() == 10 && !company_lines.contains(line));
+    Ok(RepIds {
+        user_id,
+        agents: agents.into_iter().collect(),
+        lines: lines.into_iter().collect(),
+    })
+}
+
+/// Whether `user` has anything of theirs on `provider`: an agent id or
+/// number they have or had (on Telnyx, a line they may call from now), or a
+/// text they sent (on Telnyx, also one tagged with their user id).
+pub async fn has_own(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    user: &SessionUser,
+) -> Result<bool, sqlx::Error> {
+    if provider == SmsProvider::Telnyx {
+        if !crate::phone::texting::inbox_lines(pool, user.company_id, user.id)
+            .await?
+            .is_empty()
+        {
+            return Ok(true);
+        }
+        // idx_sms_agent_threads (company_id, agent, ...).
+        let tagged = exists(
+            pool,
+            "SELECT 1 FROM telnyx_sms s WHERE s.company_id = ? AND s.agent = ? LIMIT 1".to_string(),
+            &[user.company_id.into(), user.id.to_string().into()],
+        )
+        .await?;
+        if tagged {
+            return Ok(true);
+        }
+    } else {
+        let company_lines = company_lines(pool, provider, user.company_id).await?;
+        let ids = rep_ids(pool, provider, user, SmsScope::Mine, None, &company_lines).await?;
+        if !ids.agents.is_empty() || !ids.lines.is_empty() {
+            return Ok(true);
+        }
+    }
+    // idx_{provider}_sms_sender_user (sender_user_id).
+    exists(
+        pool,
+        format!(
+            "SELECT 1 FROM {} s WHERE s.sender_user_id = ? AND s.company_id = ? LIMIT 1",
+            provider.sms_table()
+        ),
+        &[user.id.into(), user.company_id.into()],
+    )
+    .await
 }
 
 pub async fn company_lines(
@@ -110,41 +275,87 @@ pub async fn company_lines(
     .await
 }
 
-async fn agent_threads(
+/// Threads carrying a row sent by the rep or tagged with an agent id of theirs.
+async fn own_threads(
     pool: &MySqlPool,
     provider: SmsProvider,
     company_id: i32,
-    agent_id: &str,
+    own: &OwnRows,
 ) -> Result<Vec<String>, sqlx::Error> {
-    // idx_sms_agent_threads (company_id, agent, phone_digits): index only.
-    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT DISTINCT s.phone_digits FROM {} s
-          WHERE s.company_id = ? AND s.agent = ? AND s.phone_digits IS NOT NULL",
-        provider.sms_table()
-    )))
-    .bind(company_id)
-    .bind(agent_id)
-    .fetch_all(pool)
-    .await
+    let table = provider.sms_table();
+    let mut threads = Vec::new();
+    if !own.agents.is_empty() {
+        // idx_sms_agent_threads (company_id, agent, phone_digits): index only.
+        let mut params: Vec<Param> = vec![company_id.into()];
+        params.extend(own.agents.iter().map(Param::from));
+        let rows: Vec<(String,)> = super::provider::fetch_all(
+            pool,
+            format!(
+                "SELECT DISTINCT s.phone_digits FROM {table} s
+                  WHERE s.company_id = ? AND s.agent IN ({}) AND s.phone_digits IS NOT NULL",
+                marks(own.agents.len())
+            ),
+            &params,
+        )
+        .await?;
+        threads.extend(rows.into_iter().map(|(phone,)| phone));
+    }
+    if let Some(user_id) = own.sender_user_id {
+        // idx_{provider}_sms_sender_user (sender_user_id).
+        let rows: Vec<(String,)> = super::provider::fetch_all(
+            pool,
+            format!(
+                "SELECT DISTINCT s.phone_digits FROM {table} s
+                  WHERE s.sender_user_id = ? AND s.company_id = ? AND s.phone_digits IS NOT NULL"
+            ),
+            &[user_id.into(), company_id.into()],
+        )
+        .await?;
+        threads.extend(rows.into_iter().map(|(phone,)| phone));
+    }
+    Ok(threads)
+}
+
+/// `(texted to one of `lines`, or from one)` over `s`, and its binds.
+fn on_lines(lines: &[String]) -> (String, Vec<Param>) {
+    let marks = marks(lines.len());
+    let mut params: Vec<Param> = lines.iter().map(Param::from).collect();
+    params.extend(lines.iter().map(Param::from));
+    (
+        format!(
+            "((s.direction = 'inbound' AND s.recipient10 IN ({marks}))
+              OR (s.direction = 'outbound' AND s.sender10 IN ({marks})))"
+        ),
+        params,
+    )
 }
 
 async fn my_number_threads(
     pool: &MySqlPool,
     provider: SmsProvider,
     company_id: i32,
-    phone10: &str,
+    lines: &[String],
 ) -> Result<Vec<String>, sqlx::Error> {
-    // idx_sms_inbound_recipient (company_id, direction, recipient10, agent, phone_digits).
-    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT DISTINCT s.phone_digits FROM {} s
-          WHERE s.company_id = ? AND s.direction = 'inbound' AND s.agent IS NULL
-            AND s.recipient10 = ? AND s.is_echo = 0 AND s.phone_digits IS NOT NULL",
-        provider.sms_table()
-    )))
-    .bind(company_id)
-    .bind(phone10)
-    .fetch_all(pool)
-    .await
+    if lines.is_empty() {
+        return Ok(Vec::new());
+    }
+    // idx_sms_inbound_recipient (company_id, direction, recipient10, ...) and
+    // idx_sms_sender10 (company_id, sender10).
+    let (on_lines, line_params) = on_lines(lines);
+    let mut params: Vec<Param> = vec![company_id.into()];
+    params.extend(line_params);
+    let rows: Vec<(String,)> = super::provider::fetch_all(
+        pool,
+        format!(
+            "SELECT DISTINCT s.phone_digits FROM {} s
+              WHERE s.company_id = ? AND {on_lines}
+                AND s.is_echo = 0 AND s.phone_digits IS NOT NULL",
+            provider.sms_table()
+        ),
+        &params,
+    )
+    .await?;
+    Ok(rows.into_iter().map(|(phone,)| phone).collect())
 }
 
 pub async fn narrowing(
@@ -159,7 +370,7 @@ pub async fn narrowing(
         return Ok(Narrowing {
             phones: None,
             whole_threads: Vec::new(),
-            agent_id: None,
+            own: None,
             company_lines,
             one_rep: false,
         });
@@ -179,24 +390,18 @@ pub async fn narrowing(
         return Ok(Narrowing {
             phones: Some(threads.clone()),
             whole_threads: threads,
-            agent_id: None,
+            own: None,
             company_lines,
             one_rep: true,
         });
     }
-    let (agent_id, phone10) = if scope == SmsScope::All {
-        (filter_agent.map(str::to_string), None)
-    } else {
-        (provider.agent_of(user), provider.phone_of(user))
-    };
-    let agent_phones = match &agent_id {
-        Some(agent) => agent_threads(pool, provider, user.company_id, agent).await?,
+    let ids = rep_ids(pool, provider, user, scope, filter_agent, &company_lines).await?;
+    let own = OwnRows::new(&ids);
+    let own_phones = match &own {
+        Some(own) => own_threads(pool, provider, user.company_id, own).await?,
         None => Vec::new(),
     };
-    let mine = match &phone10 {
-        Some(phone) => my_number_threads(pool, provider, user.company_id, phone).await?,
-        None => Vec::new(),
-    };
+    let mine = my_number_threads(pool, provider, user.company_id, &ids.lines).await?;
     let excluded =
         |phone: &String| company_lines.contains(phone) || SAMPLE_PHONES.contains(&phone.as_str());
     let whole_threads: Vec<String> = mine
@@ -206,7 +411,7 @@ pub async fn narrowing(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let phones: Vec<String> = agent_phones
+    let phones: Vec<String> = own_phones
         .into_iter()
         .chain(mine)
         .filter(|phone| !excluded(phone))
@@ -216,8 +421,8 @@ pub async fn narrowing(
     Ok(Narrowing {
         phones: Some(phones),
         whole_threads,
-        one_rep: agent_id.is_some(),
-        agent_id,
+        one_rep: own.is_some(),
+        own,
         company_lines,
     })
 }
@@ -270,18 +475,19 @@ impl Narrowing {
         };
         parts.push(format!("s.phone_digits IN ({})", marks(phones.len())));
         params.extend(phones.iter().map(Param::from));
-        // The agent branch is row-level (own rows + untagged); the "my number"
-        // branch is thread-level.
-        if let Some(agent) = &self.agent_id {
-            let mut visible = "s.agent = ? OR s.agent IS NULL".to_string();
-            params.push(agent.into());
+        // The own-rows branch is row-level (own rows + untagged); the "my
+        // number" branch is thread-level.
+        if let Some(own) = &self.own {
+            let (mut visible, own_params) = own.visible();
+            params.extend(own_params);
             if !self.whole_threads.is_empty() {
-                visible.push_str(" OR s.phone_digits IN (");
-                visible.push_str(&marks(self.whole_threads.len()));
-                visible.push(')');
+                visible.push(format!(
+                    "s.phone_digits IN ({})",
+                    marks(self.whole_threads.len())
+                ));
                 params.extend(self.whole_threads.iter().map(Param::from));
             }
-            parts.push(format!("({visible})"));
+            parts.push(format!("({})", visible.join(" OR ")));
         }
         (parts.join(" AND "), params)
     }
@@ -289,8 +495,9 @@ impl Narrowing {
 
 /// Access to one thread, and the extra row filter inside it.
 pub struct ThreadAccess {
-    /// Extra predicate over `s`, e.g. `(s.agent = ? OR s.agent IS NULL)`.
-    pub clause: Option<(String, Param)>,
+    /// Extra predicate over `s` and its binds, e.g.
+    /// `(s.agent IN (?) OR s.sender_user_id = ? OR s.agent IS NULL)`.
+    pub clause: Option<(String, Vec<Param>)>,
 }
 
 async fn exists(pool: &MySqlPool, sql: String, params: &[Param]) -> Result<bool, sqlx::Error> {
@@ -328,40 +535,46 @@ pub async fn thread_access(
                 .await?;
         return Ok(seen.then_some(ThreadAccess { clause: None }));
     }
-    let (agent_id, phone10) = if scope == SmsScope::All {
-        (filter_agent.map(str::to_string), None)
-    } else {
-        (provider.agent_of(user), provider.phone_of(user))
-    };
-    if let Some(mine) = &phone10 {
-        let to_my_number = exists(
+    let company_lines = company_lines(pool, provider, user.company_id).await?;
+    let ids = rep_ids(pool, provider, user, scope, filter_agent, &company_lines).await?;
+    if !ids.lines.is_empty() {
+        let (on_lines, line_params) = on_lines(&ids.lines);
+        let mut params = vec![company.clone(), phone.into()];
+        params.extend(line_params);
+        let on_my_number = exists(
             pool,
             format!(
                 "SELECT 1 FROM {table} s
-                  WHERE s.company_id = ? AND s.direction = 'inbound' AND s.agent IS NULL
-                    AND s.recipient10 = ? AND s.is_echo = 0 AND s.phone_digits = ?
+                  WHERE s.company_id = ? AND s.phone_digits = ? AND s.is_echo = 0
+                    AND {on_lines}
                   LIMIT 1"
             ),
-            &[company.clone(), mine.into(), phone.into()],
+            &params,
         )
         .await?;
-        if to_my_number {
+        if on_my_number {
             return Ok(Some(ThreadAccess { clause: None }));
         }
     }
-    if let Some(agent) = agent_id {
+    if let Some(own) = OwnRows::new(&ids) {
+        let (mine, mine_params) = own.own();
+        let mut params = vec![company, phone.into()];
+        params.extend(mine_params);
         let tagged = exists(
             pool,
             format!(
                 "SELECT 1 FROM {table} s
-                  WHERE s.company_id = ? AND s.agent = ? AND s.phone_digits = ? LIMIT 1"
+                  WHERE s.company_id = ? AND s.phone_digits = ? AND ({})
+                  LIMIT 1",
+                mine.join(" OR ")
             ),
-            &[company, (&agent).into(), phone.into()],
+            &params,
         )
         .await?;
         if tagged {
+            let (visible, params) = own.visible();
             return Ok(Some(ThreadAccess {
-                clause: Some(("(s.agent = ? OR s.agent IS NULL)".to_string(), agent.into())),
+                clause: Some((format!("({})", visible.join(" OR ")), params)),
             }));
         }
     }

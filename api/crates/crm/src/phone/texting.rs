@@ -134,17 +134,14 @@ pub async fn inbox_lines(
         .collect())
 }
 
-/// SQL over `telnyx_sms s`: a text copied for `rep` when they moved to
-/// Telnyx (`crate::routes::sms::moves`); binds the rep's user id.
-fn rep_copy() -> String {
-    format!(
-        "s.agent = ? AND COALESCE(s.idempotency_key, '') REGEXP '{}'",
-        crate::sms_provider::COPY_KEY
-    )
-}
+/// SQL over `telnyx_sms s`: a text of `rep`'s, on any line: tagged with
+/// their user id (theirs, or copied for them when they moved to Telnyx,
+/// `crate::routes::sms::moves`) or sent by them. Binds the rep's user id as
+/// text, then as a number.
+const REP_ROWS: &str = "(s.agent = ? OR s.sender_user_id = ?)";
 
 /// The customer phones (thread keys) that texted or were texted from
-/// `lines`, and those of `rep`'s texts copied from their earlier provider.
+/// `lines`, and those of `rep`'s own texts ([`REP_ROWS`]).
 pub async fn line_threads(
     pool: &MySqlPool,
     company_id: i32,
@@ -166,11 +163,15 @@ pub async fn line_threads(
         ));
     }
     if rep.is_some() {
-        parts.push(format!(
+        // idx_sms_agent_threads and idx_telnyx_sms_sender_user.
+        parts.push(
             "SELECT s.phone_digits FROM telnyx_sms s
-              WHERE s.company_id = ? AND {} AND s.phone_digits IS NOT NULL",
-            rep_copy()
-        ));
+              WHERE s.company_id = ? AND s.agent = ? AND s.phone_digits IS NOT NULL
+             UNION
+             SELECT s.phone_digits FROM telnyx_sms s
+              WHERE s.sender_user_id = ? AND s.company_id = ? AND s.phone_digits IS NOT NULL"
+                .to_string(),
+        );
     }
     if parts.is_empty() {
         return Ok(Vec::new());
@@ -185,13 +186,17 @@ pub async fn line_threads(
         }
     }
     if let Some(rep) = rep {
-        query = query.bind(company_id).bind(rep.to_string());
+        query = query
+            .bind(company_id)
+            .bind(rep.to_string())
+            .bind(rep)
+            .bind(company_id);
     }
     query.fetch_all(pool).await
 }
 
-/// The thread `phone` has a row on one of `lines`, or one of `rep`'s
-/// copied texts.
+/// The thread `phone` has a row on one of `lines`, or one of `rep`'s own
+/// texts ([`REP_ROWS`]).
 pub async fn thread_on_lines(
     pool: &MySqlPool,
     company_id: i32,
@@ -208,7 +213,7 @@ pub async fn thread_on_lines(
         ));
     }
     if rep.is_some() {
-        parts.push(format!("({})", rep_copy()));
+        parts.push(REP_ROWS.to_string());
     }
     if parts.is_empty() {
         return Ok(false);
@@ -228,7 +233,7 @@ pub async fn thread_on_lines(
         }
     }
     if let Some(rep) = rep {
-        query = query.bind(rep.to_string());
+        query = query.bind(rep.to_string()).bind(rep);
     }
     Ok(query.fetch_optional(pool).await?.is_some())
 }
