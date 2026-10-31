@@ -744,7 +744,11 @@ async fn save(
         .qbo
         .post(access, "invoice", &payload)
         .await
-        .map_err(qbo_error)
+        .map_err(|err| match &err {
+            // A stale version stays `Upstream` so the caller retries it.
+            QboError::Status { body, .. } if body.contains("\"code\":\"5010\"") => qbo_error(err),
+            _ => qbo_refusal(err),
+        })
 }
 
 /// Save a customer's QuickBooks invoice
