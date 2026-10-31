@@ -569,8 +569,8 @@ Environment (set by hand on `granite-api(-dev)` and `granite-api-stream(-dev)`):
   that set none.
 - Tests only: `TELNYX_API_BASE` and `FCM_BASE_URL` point at stand-ins.
 - Used too: `ASSEMBLYAI_API_KEY` and `OPEN_AI_SECRET_KEY` (AI notes),
-  `ANTHROPIC_API_KEY` (Claude double-checks the 10DLC AI check; without it
-  GPT checks alone),
+  `ANTHROPIC_API_KEY` (Claude runs the 10DLC AI check; without it marking
+  a registration ready skips the check),
   `LAMBDA_KEY` (the job), `STORAGE_*` (the bucket's credentials).
 
 Telnyx portal, per company. First save the company's Telnyx setup on the
