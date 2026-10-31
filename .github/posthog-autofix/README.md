@@ -87,21 +87,22 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
 7. **Report.** The pull request is opened by the `granite-autofix` GitHub App.
    The api records the result and emails `POSTHOG_AUTOFIX_RECIPIENTS` only
    when the run opened a pull request (and when a fixed issue reopens): a short
-   email with the issue and route, the fix, the PR link and the bug id. Runs
+   bug report (Given / When / Then, Actual / Expected / Impact with the event
+   and user counts, Fix / Test), the PR link and the bug id. Runs
    that end without a PR, a storm of new bugs, a timeout or a run that could not
    start send no email; they show in the ledger and in GitHub Actions. With
    write-back configured, the next poll assigns the PostHog issue to the
    fix's reviewer.
 
-The PR description is short (issue, fix, bug id, one verification line); the
-rest sits under a collapsed Details block.
+The PR description is the same short bug report plus the bug id and one
+verification line; the rest sits under a collapsed Details block.
 
 Before the agent starts, `python3 -m autofix issue-context` queries PostHog's
 HogQL API (same read-only key as the MCP) and puts the issue's summary and
 latest stack in the agent's first message, fenced as untrusted. It is best
 effort: on any failure the agent fetches the issue through the MCP tools.
 `python3 -m autofix open-prs` likewise lists the open `ai-fix` pull requests
-(number, title, bug id, issue line, changed files) through the read-only App
+(number, title, bug id, Actual line, changed files) through the read-only App
 token, and writes nothing on any failure.
 
 Browser errors resolve to real files and functions once the SPA uploads its

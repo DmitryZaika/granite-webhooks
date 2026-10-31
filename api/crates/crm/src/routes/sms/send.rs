@@ -109,7 +109,7 @@ pub struct SmsSendError {
     pub unsent_s3_keys: Option<Vec<String>>,
 }
 
-fn refuse(status: StatusCode, error: &str) -> Response {
+pub(super) fn refuse(status: StatusCode, error: &str) -> Response {
     (
         status,
         Json(SmsSendError {
@@ -256,7 +256,7 @@ pub async fn send_text(
 }
 
 /// Ten sends a minute per user (per Lambda instance).
-fn take_send_slot(state: &AppState, user_id: i32) -> bool {
+pub(super) fn take_send_slot(state: &AppState, user_id: i32) -> bool {
     send_slot_wait(state, user_id).is_none()
 }
 
@@ -385,7 +385,7 @@ async fn record_template_usage(
     }
 }
 
-fn failure_response(failure: SmsFailure) -> Response {
+pub(super) fn failure_response(failure: SmsFailure) -> Response {
     let status = if failure.status == 400 {
         StatusCode::BAD_REQUEST
     } else {

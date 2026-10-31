@@ -97,7 +97,11 @@ fn completed() -> Value {
         "conclusion": "completed",
         "agent": {
             "outcome": "fixed_with_test", "target_repo": "granite-webhooks",
-            "summary": "Crash", "root_cause": "A null", "fix_summary": "Guard it",
+            "summary": "Crash", "given": "a deal without a customer",
+            "when": "a user opens /employee/deals/7", "then": "GET /v1/deals/7 answers 500",
+            "actual": "the page shows an error", "expected": "the deal opens",
+            "impact": "The deal cannot be opened.", "check": "Repeat Given/When: it opens.",
+            "root_cause": "A null", "fix_summary": "Guard it",
             "risk": "Low",
             "test": { "status": "written", "files": ["api/tests/x.rs"],
                       "command": "cargo test -p api --test x" },
@@ -219,8 +223,12 @@ async fn a_completed_result_succeeds_and_emails_once(pool: MySqlPool) {
         assert_eq!(emails.len(), 1);
         assert_eq!(emails[0].to, ["dev@example.com"]);
         assert_eq!(emails[0].subject, "[AI fix] Crash");
-        assert!(emails[0].body.contains("<strong>Issue:</strong> Crash"));
-        assert!(emails[0].body.contains("<strong>Fix:</strong> Guard it"));
+        let body = &emails[0].body;
+        assert!(body.contains("<strong>Given</strong> a deal without a customer<br>"));
+        assert!(body.contains("<strong>Then</strong> GET /v1/deals/7 answers 500</p>"));
+        assert!(body.contains("<strong>Expected:</strong> the deal opens<br>"));
+        assert!(body.contains("<strong>Fix:</strong> Guard it<br>"));
+        assert!(body.contains("<strong>Test:</strong> Repeat Given/When: it opens.</p>"));
         assert!(emails[0].body.contains(PR_URL));
         assert!(!emails[0].body.contains("<b>foo</b>"));
     }

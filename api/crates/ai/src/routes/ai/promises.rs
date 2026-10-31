@@ -1,9 +1,9 @@
 //! The rep's AI promises (`crate::promises`), for the CRM:
 //!
-//! - `GET   /v1/ai/promises` → the caller's open promises and the quote
-//!   changes their customers asked for, each appointment checked against the
-//!   schedule, and the customers whose text waits for their reply; with a
-//!   customer, phone or email, only that customer's promises
+//! - `GET   /v1/ai/promises` → the caller's open promises, quote tasks and
+//!   approvals, each appointment checked against the schedule, and the
+//!   customers whose text waits for their reply; with a customer, phone or
+//!   email, only that customer's
 //! - `PATCH /v1/ai/promises/{id}` → kept (`done`), not wanted (`dismissed`)
 //!   or open again
 //!
@@ -46,16 +46,22 @@ pub struct PromiseEvent {
     pub start: DateTime<Utc>,
 }
 
-/// A promise the rep made a customer, or a change a customer asked for in
-/// their quote.
+/// A promise the rep made a customer, the quote work a customer gave them,
+/// or something they sent a customer to approve.
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 pub struct AiPromise {
     /// Promise id.
     pub id: u64,
-    /// `promise`: the rep's; `quote`: a change the customer asked for in
-    /// their quote; `approval`: something the rep sent for the customer's
-    /// approval (due a day later).
+    /// `promise`: the rep's; `quote`: the customer's quote to make or update
+    /// (one task per customer, what they asked for in `details`); `approval`:
+    /// something the rep sent for the customer's approval (due a day later).
     pub kind: String,
+    /// What the rep does in the CRM that closes the promise by itself:
+    /// `contract` (a document sent to sign), `schedule` (an event for the
+    /// customer on the schedule) or `call` (a call with them); null when only
+    /// a message that keeps it, or Done, closes it. A quote task closes once
+    /// one of the customer's quotes is saved or emailed.
+    pub crm_action: Option<String>,
     /// Where it was said: `call`, `sms` or `email`.
     pub source: String,
     /// When it was said.
@@ -71,12 +77,14 @@ pub struct AiPromise {
     /// The name the customer goes by in the call or message (for a caller
     /// whose number is on no customer).
     pub customer_label: Option<String>,
-    /// A quote change's quote: the customer's newest.
+    /// A quote task's quote: the customer's newest.
     pub quote_id: Option<i32>,
     /// What to do, e.g. "Send the inventory link".
     pub title: String,
-    /// The words that made it (the customer's, for a quote change).
+    /// The words that made it (for a quote task, its latest ask's).
     pub said: String,
+    /// A quote task's asks, one per line: what the quote must have or change.
+    pub details: Option<String>,
     /// When it was promised for.
     pub due_at: Option<DateTime<Utc>>,
     /// An appointment at a set time (a visit, measuring, a showroom meeting).
@@ -359,11 +367,13 @@ async fn require_enabled(state: &AppState, user: &SessionUser) -> ApiResult<()> 
 /// List the caller's open promises
 ///
 /// What the caller promised customers on calls, texts and emails and has not
-/// done yet, and the changes customers asked for in their quotes, newest
-/// first: each promise with the message that keeps it when a text or email
-/// can, each appointment with its event on the schedule and what it clashes
-/// with. With a customer, phone or email: only that customer's; without,
-/// also the customers whose text waits for the caller's reply.
+/// done yet, the quotes customers asked them to make or update (one task per
+/// customer, with what they asked for), and what waits for a customer's
+/// approval, newest first: each promise with the message that keeps it when
+/// a text or email can, each appointment with its event on the schedule and
+/// what it clashes with. With a customer, phone or email: only that
+/// customer's; without, also the customers whose text waits for the
+/// caller's reply.
 #[crate::openapi::path(
     get,
     path = "/v1/ai/promises",
@@ -398,10 +408,18 @@ pub async fn list(
         .filter(|email| email.contains('@'));
     let customer_id = query.customer_id.filter(|id| *id > 0);
     let filtered = customer_id.is_some() || digits.is_some() || email.is_some();
+    // A quote task opens the customer's newest quote (one made since counts).
     let mut promises: Vec<AiPromise> = sqlx::query_as(
-        "SELECT p.id, CAST(p.kind AS CHAR) AS kind, CAST(p.source AS CHAR) AS source,
-                p.promised_at, p.customer_id, c.name AS customer_name, p.customer_digits,
-                p.customer_email, p.customer_label, p.quote_id, p.title, p.said, p.due_at, p.is_appointment,
+        "SELECT p.id, CAST(p.kind AS CHAR) AS kind, CAST(p.crm_action AS CHAR) AS crm_action,
+                CAST(p.source AS CHAR) AS source, p.promised_at, p.customer_id,
+                c.name AS customer_name, p.customer_digits, p.customer_email, p.customer_label,
+                COALESCE((SELECT q.id FROM quotes q
+                           WHERE p.kind = 'quote' AND q.company_id = p.company_id
+                             AND q.customer_id = p.customer_id AND q.deleted_at IS NULL
+                           ORDER BY COALESCE(q.updated_at, q.created_date) DESC, q.id DESC
+                           LIMIT 1),
+                         p.quote_id) AS quote_id,
+                p.title, p.said, p.details, p.due_at, p.is_appointment,
                 CAST(p.channel AS CHAR) AS channel, p.draft
            FROM ai_promises p
            LEFT JOIN customers c ON c.id = p.customer_id AND c.deleted_at IS NULL

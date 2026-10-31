@@ -123,11 +123,22 @@ pub async fn deliver(
         let Some((bucket_name, key)) = s3_location(&attachment.url) else {
             return Err(SendError::Attachment(attachment.filename.clone()));
         };
-        let bytes = bucket.read_bytes(&bucket_name, &key).await.map_err(|err| {
-            tracing::warn!(error = %err, url = %attachment.url, "email attachment unreadable");
-            SendError::Attachment(attachment.filename.clone())
-        })?;
-        files.push(bytes.to_vec());
+        let bytes = match bucket.read_bytes(&bucket_name, &key).await {
+            Ok(bytes) => bytes.to_vec(),
+            // A private bucket this Lambda cannot read (the signed copies):
+            // the presigned URL carries the sender's access.
+            Err(err) if presigned(&attachment.url) => {
+                fetch_presigned(&attachment.url).await.map_err(|fetch_err| {
+                    tracing::warn!(error = %err, fetch_error = %fetch_err, bucket = %bucket_name, key = %key, "email attachment unreadable");
+                    SendError::Attachment(attachment.filename.clone())
+                })?
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, url = %attachment.url, "email attachment unreadable");
+                return Err(SendError::Attachment(attachment.filename.clone()));
+            }
+        };
+        files.push(bytes);
     }
     let raw = build_message(&email, files);
     let destinations: Vec<String> = email
@@ -222,6 +233,34 @@ pub fn build_message(email: &OutgoingEmail, files: Vec<Vec<u8>>) -> Vec<u8> {
     message
         .write_to_vec()
         .expect("writing to a Vec cannot fail")
+}
+
+/// An S3 `https` URL signed for a GET (`X-Amz-Signature` in its query).
+fn presigned(url: &str) -> bool {
+    url.starts_with("https://")
+        && url
+            .split_once('?')
+            .is_some_and(|(_, query)| query.split('&').any(|p| p.starts_with("X-Amz-Signature=")))
+}
+
+/// Downloads a presigned S3 URL.
+async fn fetch_presigned(url: &str) -> Result<Vec<u8>, String> {
+    let response = common::http::send_retrying(
+        common::http::client()
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+    .map_err(|err| common::http::error_text(&err))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {status}"));
+    }
+    response
+        .bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|err| common::http::error_text(&err))
 }
 
 /// Bucket and key of `s3://bucket/key` or an S3 `https` URL
@@ -420,6 +459,18 @@ mod tests {
             deliver(&Files, &down, email()).await.unwrap_err(),
             SendError::Transport(_)
         ));
+    }
+
+    #[test]
+    fn presigned_urls() {
+        assert!(presigned(
+            "https://b.s3.us-east-2.amazonaws.com/k.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=ab12"
+        ));
+        assert!(!presigned("https://b.s3.us-east-2.amazonaws.com/k.pdf"));
+        assert!(!presigned(
+            "https://b.s3.us-east-2.amazonaws.com/k.pdf?x=X-Amz-Signature=1"
+        ));
+        assert!(!presigned("s3://b/k.pdf?X-Amz-Signature=1"));
     }
 
     #[test]

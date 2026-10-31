@@ -114,6 +114,85 @@ async fn a_user_signs_in_and_out(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn sessions_never_end_by_time(pool: MySqlPool) {
+    let (server, _) = setup(pool.clone(), Some(".granite-manager.com")).await;
+    // A new sign-in has no end date.
+    let login = server
+        .post("/v1/auth/login")
+        .json(&json!({ "email": "rep@acme.test", "password": PASSWORD }))
+        .await;
+    login.assert_status_ok();
+    let dated: i64 = sqlx::query_scalar(
+        "SELECT CAST(COUNT(*) AS SIGNED) FROM sessions
+          WHERE user_id = 100 AND created_date > NOW() - INTERVAL 1 MINUTE
+            AND expiration_date IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(dated, 0);
+    // Signed in three months ago, before sessions stopped ending; its date
+    // runs out in an hour.
+    sqlx::query(
+        "UPDATE sessions SET created_date = NOW() - INTERVAL 3 MONTH,
+                expiration_date = NOW() + INTERVAL 1 HOUR
+          WHERE id = ?",
+    )
+    .bind(sessions::REP)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = server
+        .get("/v1/auth/session")
+        .with_session(sessions::REP)
+        .await;
+    response.assert_status_ok();
+    // The cookie is set again for its full 400 days...
+    assert!(response.headers().get_all("set-cookie").iter().any(|v| {
+        let v = v.to_str().unwrap();
+        v.starts_with("__session=")
+            && !v.starts_with("__session=;")
+            && v.contains("Max-Age=34560000")
+            && v.contains("Domain=.granite-manager.com")
+    }));
+    let cookie = session_cookie(&response);
+    // ...and the session stops ending: an hour later it still signs in.
+    let dated: Option<chrono::NaiveDateTime> =
+        sqlx::query_scalar("SELECT expiration_date FROM sessions WHERE id = ?")
+            .bind(sessions::REP)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(dated, None);
+    sqlx::query("UPDATE sessions SET created_date = NOW() - INTERVAL 3 YEAR WHERE id = ?")
+        .bind(sessions::REP)
+        .execute(&pool)
+        .await
+        .unwrap();
+    server
+        .get("/v1/me")
+        .add_header("cookie", cookie)
+        .await
+        .assert_status_ok();
+
+    // A Remix session (an expiration years away) still ends two months
+    // after sign-in, and asking does not bring it back.
+    server
+        .get("/v1/auth/session")
+        .with_session(sessions::TOO_OLD)
+        .await
+        .assert_status_unauthorized();
+    let year: i64 = sqlx::query_scalar(
+        "SELECT CAST(YEAR(expiration_date) AS SIGNED) FROM sessions WHERE id = ?",
+    )
+    .bind(sessions::TOO_OLD)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(year, 2037);
+}
+
+#[test_db::test(seed)]
 async fn wrong_passwords_are_counted_and_limited(pool: MySqlPool) {
     let (server, _) = setup(pool.clone(), None).await;
     for email in ["rep@acme.test", "nobody@acme.test"] {

@@ -164,6 +164,18 @@ impl SmsProvider {
     }
 }
 
+/// The `idempotency_key` of a text copied to the provider a rep texts
+/// through now (`crate::routes::sms::moves`): it names the original row,
+/// `cloudtalk:<id>`, `ringcentral:<id>` or `telnyx:<id>`.
+pub const COPY_KEY: &str = "^(cloudtalk|ringcentral|telnyx):[0-9]+$";
+
+/// SQL: the row is not such a copy. Views over more than one provider skip
+/// copies; the original stays in its own table. `alias` may be empty.
+pub fn not_a_copy(alias: &str) -> String {
+    let dot = if alias.is_empty() { "" } else { "." };
+    format!("COALESCE({alias}{dot}idempotency_key, '') NOT REGEXP '{COPY_KEY}'")
+}
+
 /// The digits of `phone`, keeping the last ten (`canonicalPhone10`).
 pub fn phone10(phone: &str) -> String {
     let digits: String = phone.chars().filter(char::is_ascii_digit).collect();

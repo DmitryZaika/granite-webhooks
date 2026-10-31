@@ -33,6 +33,42 @@ pub async fn enter_stage(
     Ok(())
 }
 
+/// A won deal still on the first stage of its pipeline (Not Contacted Yet)
+/// moves to the next one (Contacted): the customer was obviously contacted.
+/// Like a customer reply in the webhooks; no drips start, the deal is won.
+pub async fn won_leaves_first_stage(
+    conn: &mut MySqlConnection,
+    deal_id: i64,
+) -> Result<(), sqlx::Error> {
+    let next: Option<(i32, String)> = sqlx::query_as(
+        "SELECT nxt.id, nxt.name
+           FROM deals d
+           JOIN deals_list cur ON cur.id = d.list_id AND cur.deleted_at IS NULL
+           JOIN deals_list nxt ON nxt.group_id = cur.group_id AND nxt.deleted_at IS NULL
+                AND (nxt.position > cur.position OR (nxt.position = cur.position AND nxt.id > cur.id))
+          WHERE d.id = ? AND d.deleted_at IS NULL AND d.is_won = 1
+            AND NOT EXISTS (
+                SELECT 1 FROM deals_list f
+                 WHERE f.group_id = cur.group_id AND f.deleted_at IS NULL
+                   AND (f.position < cur.position OR (f.position = cur.position AND f.id < cur.id)))
+          ORDER BY nxt.position, nxt.id
+          LIMIT 1",
+    )
+    .bind(deal_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((list_id, name)) = next else {
+        return Ok(());
+    };
+    sqlx::query("UPDATE deals SET list_id = ?, status = ?, position = 0 WHERE id = ?")
+        .bind(list_id)
+        .bind(name)
+        .bind(deal_id)
+        .execute(&mut *conn)
+        .await?;
+    enter_stage(conn, deal_id, list_id).await
+}
+
 pub async fn close_stage(conn: &mut MySqlConnection, deal_id: i64) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE deal_stage_history SET exited_at = NOW() WHERE deal_id = ? AND exited_at IS NULL",

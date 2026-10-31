@@ -322,6 +322,9 @@ pub async fn create(
         service::enter_stage(&mut tx, deal_id, input.list_id).await?;
         (deal_id, true, false)
     };
+    if is_won == Some(1) {
+        service::won_leaves_first_stage(&mut tx, deal_id).await?;
+    }
     tx.commit().await?;
 
     if created || moved {
@@ -616,6 +619,7 @@ pub async fn set_outcome(
             .bind(id)
             .execute(&state.pool)
             .await?;
+            service::won_leaves_first_stage(&mut *state.pool.acquire().await?, id).await?;
         }
         DealStatus::Lost => {
             let reason = body

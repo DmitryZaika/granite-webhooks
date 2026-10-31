@@ -8,7 +8,7 @@
 //!
 //! Tokens are 32 random bytes, base64url without padding (43 characters),
 //! stored only as their SHA-256 (hex). A device session signs in while it is
-//! not revoked, younger than 12 months, used in the last 30 days, its
+//! not revoked (however old or long unused), its
 //! company is not deleted, and its user is live and still an employee,
 //! admin or superuser of the session's company. All of it is checked on
 //! every request, so a revoked phone, a deleted company or a deleted,
@@ -34,10 +34,9 @@ use sqlx::FromRow;
 pub const DEVICE_HEADER: &str = "x-granite-device";
 /// Length of a device token (32 bytes, base64url without padding).
 pub const TOKEN_LEN: usize = 43;
-/// A device session ends this many months after sign-in.
+/// The `expires_at` a device session is given: shown, never enforced. A device
+/// session ends only when it is signed out or revoked, never by time.
 pub const SESSION_MONTHS: u32 = 12;
-/// ... or after this many days unused.
-pub const IDLE_DAYS: i64 = 30;
 /// `last_seen_at` is written at most this often.
 const SEEN_EVERY_SECONDS: i64 = 300;
 
@@ -135,13 +134,10 @@ pub(super) async fn authenticate_device(
            JOIN company co ON co.id = ds.company_id AND co.deleted_at IS NULL
            LEFT JOIN phone_devices pd ON pd.device_session_id = ds.id AND pd.revoked_at IS NULL
           WHERE ds.token_hash = ?
-            AND ds.revoked_at IS NULL
-            AND ds.expires_at > UTC_TIMESTAMP()
-            AND COALESCE(ds.last_seen_at, ds.created_at) > UTC_TIMESTAMP() - INTERVAL ? DAY",
+            AND ds.revoked_at IS NULL",
     )
     .bind(SEEN_EVERY_SECONDS)
     .bind(token_hash(token))
-    .bind(IDLE_DAYS)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(ApiError::Unauthorized)?;

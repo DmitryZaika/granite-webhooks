@@ -86,8 +86,15 @@ class RenderTest(unittest.TestCase):
     def test_the_visible_part_is_short_and_the_rest_is_collapsed(self) -> None:
         body = self.render(sample_result(), "verified", bug_id="0123456789ab")
         visible, details = body.split("<details><summary>Details</summary>", 1)
-        self.assertIn("**Issue:** Adding two numbers subtracts them", visible)
+        self.assertIn("**Given** a toy library with two numbers", visible)
+        self.assertIn("**When** a caller adds 2 and 3 with add()", visible)
+        self.assertIn("**Then** add() returns -1", visible)
+        self.assertIn("**Actual:** Adding two numbers subtracts them.", visible)
+        self.assertIn("**Expected:** add() returns their sum.", visible)
+        self.assertIn("**Impact:** Callers get wrong totals.", visible)
         self.assertIn("**Fix:** Use `+`.", visible)
+        self.assertIn("**Test:** Repeat Given/When → add() returns 5.", visible)
+        self.assertNotIn("**Issue:**", visible)
         self.assertIn("**Bug ID:** `0123456789ab` · [PostHog issue](", visible)
         self.assertNotIn("Root cause", visible)
         for text in ("Opened by the PostHog auto-fix workflow", "## Root cause", "## Test"):
@@ -101,6 +108,10 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("Bug ID", visible)
         self.assertIn("[PostHog issue](", visible)
 
+    def test_an_empty_check_renders_a_placeholder(self) -> None:
+        visible = self.render(sample_result(check=""), "verified").split("<details>", 1)[0]
+        self.assertIn("**Test:** _None given._", visible)
+
     def test_the_verdict_line(self) -> None:
         cases = {
             "verified": "Verified: the test failed before the fix and passes after it.",
@@ -113,7 +124,9 @@ class RenderTest(unittest.TestCase):
                 self.assertIn(line, visible)
 
     def test_agent_text_stays_escaped_in_the_visible_part(self) -> None:
-        result = sample_result(summary="<b>hi</b> @dima", fix_summary="[x](https://e.example)")
+        result = sample_result(
+            when="<b>hi</b> @dima", then="cc @dima", fix_summary="[x](https://e.example)"
+        )
         visible = self.render(result, "verified").split("<details>", 1)[0]
         self.assertIn("&lt;b&gt;hi", visible)
         self.assertNotIn("@dima", visible)

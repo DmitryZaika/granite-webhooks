@@ -195,6 +195,248 @@
         ]
       }
     },
+    "/v1/me/recording-voice": {
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Turn the recording voice of my calls on or off",
+        "description": "My Account > Phone lines > Granite Manager. Off: the user's outgoing\nGranite Phone calls, Call via my cell calls and the Record button record\nwithout saying \"This call is being recorded.\" (some states require\ntelling the other side). Incoming calls keep their notice. 403 when the\nhome company does not call through Granite Phone.",
+        "operationId": "set_my_recording_voice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordingVoiceSwitch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop, or the company has no Granite Phone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/ringcentral/start": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Start connecting my RingCentral",
+        "description": "`RingCentral`'s sign-in page for the caller. `RingCentral` returns to\n`/redirects/ringcentral/user-auth` with `code` and `state` (or `error`);\npost them to `POST /v1/me/ringcentral` within 15 minutes.",
+        "operationId": "start_my_ringcentral",
+        "responses": {
+          "200": {
+            "description": "RingCentral's sign-in page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RingcentralSignIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The company has no RingCentral connection, or connect is not set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/ringcentral": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Finish connecting my RingCentral",
+        "description": "Trades the code for the caller's own tokens, after checking they signed\nin to the company's `RingCentral` account. Their line becomes the\nextension that signed in and its texting number, their earlier texts\nfollow them, and `RingCentral` pushes their new texts to the CRM (a\nfailed subscription does not undo the connect).",
+        "operationId": "finish_my_ringcentral",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RingcentralReturn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RingcentralConnected"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cancelled, expired or foreign state, another RingCentral account, or RingCentral refused the code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Disconnect my RingCentral",
+        "description": "Forgets the caller's own `RingCentral` sign-in; their line stays, but\ntexts from the CRM can't go out as them until they connect again.",
+        "operationId": "disconnect_my_ringcentral",
+        "responses": {
+          "204": {
+            "description": "Disconnected (or was not connected)"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/positions": {
       "get": {
         "tags": [
@@ -15927,7 +16169,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin (`all`: not an admin)",
+            "description": "Caller is not an employee, admin or shop manager or worker (`all`: not an admin)",
             "content": {
               "application/json": {
                 "schema": {
@@ -22143,6 +22385,114 @@
         ]
       }
     },
+    "/v1/sms/{provider}/messages/{id}/retry": {
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Retry a failed text",
+        "description": "Sends one of the caller's failed texts again, with its files, and\nreplaces it with the new attempt: the sent text, or the new failure.\nErrors come back as a token in `error`, as when sending.",
+        "operationId": "retry_sms",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The failed message",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SentSms"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The stored text cannot be sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller has no agent id for the provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a failed text of the caller's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over ten texts a minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/sms/attachments": {
       "post": {
         "tags": [
@@ -24433,7 +24783,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Invoice"
+                  "$ref": "#/components/schemas/CrmInvoice"
                 }
               }
             }
@@ -24522,7 +24872,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Invoice"
+                  "$ref": "#/components/schemas/CrmInvoice"
                 }
               }
             }
@@ -24609,7 +24959,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Invoice"
+                  "$ref": "#/components/schemas/CrmInvoice"
                 }
               }
             }
@@ -24718,7 +25068,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Invoice"
+                  "$ref": "#/components/schemas/CrmInvoice"
                 }
               }
             }
@@ -35345,7 +35695,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35427,7 +35777,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35497,7 +35847,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35596,7 +35946,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35627,6 +35977,182 @@
           },
           "502": {
             "description": "The text or email failed to send",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/crew-status": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Tap On my way or Completed",
+        "description": "On my way (today's jobs, before arriving) marks the job and tells the\ncustomer once with the company's On my way message: a text, or an email\nwhen the company cannot text. The status is saved even when the message\ncannot go; `message_error` says why. Completed marks the job done. For the\njob's installer or template maker, or an admin.",
+        "operationId": "set_crew_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrewStatusInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrewStatusSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unscheduled, repeating, not today, already arrived, or not started yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the job's crew or an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/location": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Report the crew's position",
+        "description": "The crew's phone says where it is. Reaching one of today's jobs (its\naddress within 0.1 mi) marks it Arrived; getting 0.5 mi away from the\nshop or the job they were at marks the first of today's jobs with no\nstatus yet On my way. Nothing is sent to customers, and no job is marked\nCompleted. Positions less accurate than 200 m are ignored. Only\ninstallers and template makers report.",
+        "operationId": "report_crew_location",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a position on Earth",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an installer or template maker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
             "content": {
               "application/json": {
                 "schema": {
@@ -35693,7 +36219,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35784,7 +36310,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35853,7 +36379,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -35945,7 +36471,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36047,7 +36573,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36127,7 +36653,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36219,7 +36745,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36301,7 +36827,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36393,7 +36919,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36475,7 +37001,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36557,7 +37083,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36647,7 +37173,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36726,7 +37252,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36808,7 +37334,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36889,7 +37415,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -36966,7 +37492,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37065,7 +37591,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37125,7 +37651,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37284,7 +37810,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -37363,7 +37889,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -38002,6 +38528,76 @@
         ]
       }
     },
+    "/v1/schedule/notifications/on-my-way": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Save the On my way message",
+        "description": "What the customer gets when the crew taps On my way: a text, or an email\nwhen the company cannot text. An empty message turns it off.",
+        "operationId": "set_on_my_way_message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnMyWayMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/schedule/notifications/templates": {
       "post": {
         "tags": [
@@ -38532,7 +39128,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or shop manager or worker",
             "content": {
               "application/json": {
                 "schema": {
@@ -38662,6 +39258,54 @@
           },
           "502": {
             "description": "Google refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/places/check": {
+      "get": {
+        "tags": [
+          "places"
+        ],
+        "summary": "Check a street address",
+        "description": "Whether Google Maps finds the address as a house number on a street, so a\nquote is not printed or sent as a contract to an address that does not exist.",
+        "operationId": "check_address",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "e.g. `123 Main St, Indianapolis` (state and ZIP optional).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressCheck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
             "content": {
               "application/json": {
                 "schema": {
@@ -40362,7 +41006,7 @@
           "auth"
         ],
         "summary": "Sign in",
-        "description": "Checks the email and password; on success creates a session (60 days),\nsets it as the `__session` cookie (HttpOnly, SameSite=Lax, Secure in\nproduction) and says where the user starts. Too many failed attempts\nfor the email answer 429 until the 15-minute window passes. A wrong\nemail and a wrong password answer the same 401.",
+        "description": "Checks the email and password; on success creates a session (it lasts\nuntil sign-out: never by time),\nsets it as the `__session` cookie (HttpOnly, SameSite=Lax, Secure in\nproduction) and says where the user starts. Too many failed attempts\nfor the email answer 429 until the 15-minute window passes. A wrong\nemail and a wrong password answer the same 401.",
         "operationId": "sign_in",
         "requestBody": {
           "content": {
@@ -40459,7 +41103,7 @@
           "auth"
         ],
         "summary": "The current session",
-        "description": "The signed-in user (for a super admin, in the company they act in), the\npath they start at, the acting company's subdomain and the companies a\nsuper admin can switch to. 401 when signed out.",
+        "description": "The signed-in user (for a super admin, in the company they act in), the\npath they start at, the acting company's subdomain and the companies a\nsuper admin can switch to. 401 when signed out.\n\nThe CRM asks this as every page opens, so it also sets the cookie again\nfor its full 400 days (sessions never end by time; one from before that\nstops ending here). The CRM's own hosts answer this path too (their\nCloudFront passes it here): Safari keeps a cookie set by a server on\nanother IP range than the page (this API) for 7 days only, but not one\nset by the page's own host.",
         "operationId": "get_auth_session",
         "responses": {
           "200": {
@@ -42753,7 +43397,7 @@
           "ai"
         ],
         "summary": "List the caller's open promises",
-        "description": "What the caller promised customers on calls, texts and emails and has not\ndone yet, and the changes customers asked for in their quotes, newest\nfirst: each promise with the message that keeps it when a text or email\ncan, each appointment with its event on the schedule and what it clashes\nwith. With a customer, phone or email: only that customer's; without,\nalso the customers whose text waits for the caller's reply.",
+        "description": "What the caller promised customers on calls, texts and emails and has not\ndone yet, the quotes customers asked them to make or update (one task per\ncustomer, with what they asked for), and what waits for a customer's\napproval, newest first: each promise with the message that keeps it when\na text or email can, each appointment with its event on the schedule and\nwhat it clashes with. With a customer, phone or email: only that\ncustomer's; without, also the customers whose text waits for the\ncaller's reply.",
         "operationId": "list_ai_promises",
         "parameters": [
           {
@@ -44590,7 +45234,7 @@
           "jobs"
         ],
         "summary": "Save call history",
-        "description": "Saves the `CloudTalk` and `RingCentral` calls of every connected company,\nso they stay in its history after it changes provider.",
+        "description": "Saves the `CloudTalk` and `RingCentral` calls of every connected company,\nso they stay in its history after it changes provider. Also renews reps'\nown `RingCentral` sign-ins before they lapse unused.",
         "operationId": "run_call_history",
         "responses": {
           "200": {
@@ -44825,7 +45469,7 @@
           "jobs"
         ],
         "summary": "Run Granite Phone's upkeep",
-        "description": "Signs out the phones of users who may no longer use Granite Phone (or\nwhose company was deleted) and expired or idle sign-ins, deletes\nleftover Telnyx credentials of signed-out phones (backing off on\nfailures), deletes Telnyx callbacks older than 30 days, closes calls\nTelnyx never reported the end of (after 6 hours), keeps the customer\nphone index that matches calls to customers in step (customers changed\nor added since the last run; each company's first fill, at most 5,000\ncustomers a run), writes up to 3 AI notes (transcript, note tidied like\nthe CRM's, on the call and its deal, the deal's people notified), gives\nanswered outbound calls their call points (provider `telnyx`), deletes\nTelnyx's copies of copied recordings whose delete failed, retries failed\nrecording copies (5 attempts), brings port-in orders up to date from\nTelnyx (adding ported numbers to the company), and last reads sent 10DLC\ntexting registrations and pending number assignments again. Bounded work per run, and\nno new work after 20 seconds; the next run takes the rest. Returns what\nwas done.",
+        "description": "Signs out the phones of users who may no longer use Granite Phone (or\nwhose company was deleted) and browser phones whose CRM sign-in ended, deletes\nleftover Telnyx credentials of signed-out phones (backing off on\nfailures), deletes Telnyx callbacks older than 30 days, closes calls\nTelnyx never reported the end of (after 6 hours), keeps the customer\nphone index that matches calls to customers in step (customers changed\nor added since the last run; each company's first fill, at most 5,000\ncustomers a run), writes up to 3 AI notes (transcript, note tidied like\nthe CRM's, on the call and its deal, the deal's people notified), gives\nanswered outbound calls their call points (provider `telnyx`), deletes\nTelnyx's copies of copied recordings whose delete failed, retries failed\nrecording copies (5 attempts), brings port-in orders up to date from\nTelnyx (adding ported numbers to the company), and last reads sent 10DLC\ntexting registrations and pending number assignments again. Bounded work per run, and\nno new work after 20 seconds; the next run takes the rest. Returns what\nwas done.",
         "operationId": "run_phone_job",
         "responses": {
           "200": {
@@ -44966,7 +45610,7 @@
           "jobs"
         ],
         "summary": "Read reps' calls and messages for promises",
-        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, sends their morning list (once a day from 8 AM their time), queues\ntheir calls, texts and emails of the last 3 days not read yet, then reads\nup to 4 (a call is transcribed first): saves what the rep promised the\ncustomer and by when, closes the open promises it keeps, saves the quote\nchanges the customer asked for, and writes the text or email that keeps\neach promise a message can keep, in the rep's own style.",
+        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, closes the tasks they finished in the CRM (a quote saved or emailed,\na document sent to sign, an event on the schedule, a call), sends their\nmorning list (once a day from 8 AM their time), queues their calls, texts\nand emails of the last 3 days not read yet, then reads up to 4 (a call is\ntranscribed first): saves what the rep promised the customer and by when,\ncloses the open promises it keeps, adds the quote work the customer gave\nthem to that customer's one quote task, and writes the text or email that\nkeeps each promise a message can keep, in the rep's own style.",
         "operationId": "run_promises",
         "responses": {
           "200": {
@@ -50718,7 +51362,7 @@
           "phone"
         ],
         "summary": "Sign a phone in",
-        "description": "Signs the Granite Phone app in with the CRM email and password and\nreturns its device token (send it as the `X-Granite-Device` header) and\nits call key (signs the calls it places), both shown only here. Only\nemployees, admins and superusers of a company that is not deleted may:\nothers get 403 `no_phone_access`.\nFailed attempts count together with `POST /v1/auth/login`'s (10 per\nemail and address, 50 per email in 15 minutes, then 429\n`rate_limited`), and a wrong email and a wrong password both answer 401\n`invalid_credentials`. The sign-in lasts 12 months, or until the phone\nis unused for 30 days, signs out or is revoked. Next:\n`POST /v1/phone/devices` registers the phone for calling.",
+        "description": "Signs the Granite Phone app in with the CRM email and password and\nreturns its device token (send it as the `X-Granite-Device` header) and\nits call key (signs the calls it places), both shown only here. Only\nemployees, admins and superusers of a company that is not deleted may:\nothers get 403 `no_phone_access`.\nFailed attempts count together with `POST /v1/auth/login`'s (10 per\nemail and address, 50 per email in 15 minutes, then 429\n`rate_limited`), and a wrong email and a wrong password both answer 401\n`invalid_credentials`. The sign-in lasts until the phone signs out or is\nrevoked, never ending by time. Next:\n`POST /v1/phone/devices` registers the phone for calling.",
         "operationId": "create_device_session",
         "requestBody": {
           "content": {
@@ -58017,6 +58661,83 @@
         ]
       }
     },
+    "/v1/phone/admin/tendlc/send-anyway": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Send the texting registration (10DLC) on despite the AI check",
+        "description": "When the AI check asked for changes (`aiCheck.status` `changes`) and the\nManager is sure the AI is wrong: the registration becomes ready as it\nis, the AI check's status `overridden`, and the superusers are told\n(bell and email) with the changes the AI asked for; one of them decides\nand sends it to Telnyx. 400 when nothing is saved, it is not complete,\nor the AI check did not ask for changes; 409 once it is with Telnyx.\nAudited. The company's Managers only.",
+        "operationId": "send_tendlc_registration_anyway",
+        "responses": {
+          "200": {
+            "description": "The registration, ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenDlcRegistration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing saved, not complete, or no changes asked for",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is with Telnyx already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/superuser/tendlc": {
       "get": {
         "tags": [
@@ -58399,7 +59120,7 @@
           "phone"
         ],
         "summary": "Send a company's texting registration to Telnyx",
-        "description": "The first send (Telnyx charges for the brand, and for the campaign\nthree months up front): registers the business as a brand, then, once\nTCR registered it, the campaign (Telnyx's notifications, a refresh or\nthe phone job create it when the brand takes longer). Never a second\nbrand: a send whose answer never came looks the brand up on Telnyx\nfirst. The form must be complete (the company's Managers usually mark it\nready first) and the company needs its Telnyx setup (Telnyx reports to\nits webhooks). Returns the review: `sent` while the brand registers,\n`campaign_pending`, or `rejected` with Telnyx's reasons. 400 when not\ncomplete, without a Telnyx setup, or when Telnyx refused the brand\n(nothing was made); 409 when sent already (use `.../resend`) or another\nsend runs; 502 when Telnyx did not answer about the brand; 503 when\nTelnyx is not set up on the server. Audited. Superusers only.",
+        "description": "The first send (Telnyx charges for the brand, and for the campaign\nthree months up front): registers the business as a brand, then, once\nTCR registered it, the campaign (Telnyx's notifications, a refresh or\nthe phone job create it when the brand takes longer). Never a second\nbrand: a send whose answer never came looks the brand up on Telnyx\nfirst. The form must be complete (the company's Managers usually mark it\nready first) and the company needs its Telnyx setup (Telnyx reports to\nits webhooks). With an AI on the server, its check must have passed this\nform within the last 24 hours (pages change): an older check, or none,\nis asked for again and the send answers 409 until it passes (the\nsuperusers are told, in minutes). Returns the review: `sent` while the\nbrand registers, `campaign_pending`, or `rejected` with Telnyx's reasons.\n400 when not complete, without a Telnyx setup, or when Telnyx refused\nthe brand (nothing was made); 409 when sent already (use `.../resend`),\nanother send runs, or the AI check has not passed this form within a\nday; 502 when Telnyx did not answer about the brand; 503 when Telnyx is\nnot set up on the server. Audited. Superusers only.",
         "operationId": "send_company_tendlc",
         "parameters": [
           {
@@ -58465,7 +59186,7 @@
             }
           },
           "409": {
-            "description": "Sent already, or another send runs",
+            "description": "Sent already, another send runs, or the AI check has not passed this form within a day (it runs again)",
             "content": {
               "application/json": {
                 "schema": {
@@ -58518,7 +59239,7 @@
           "phone"
         ],
         "summary": "Send a company's texting registration again after a rejection",
-        "description": "After Telnyx or a carrier refused it, and the form was fixed: the brand\nwhen it changed (or was refused); for a refused campaign its sample\ntexts, message flow and help message when they changed (the only parts\nTelnyx takes on a registered campaign; it reviews it again), and the\nappeal when `appealReason` is written (for a fix outside the form); a\nnew campaign when TCR refused the first one or Telnyx refused to create\nit. Returns the review. 400 when not complete, nothing changed and no\nappeal is written, or Telnyx refused the first change; 409 when it was\nnever sent or Telnyx is reviewing it; 502 when Telnyx did not answer;\n503 when Telnyx is not set up on the server. Audited. Superusers only.",
+        "description": "After Telnyx or a carrier refused it, and the form was fixed: the brand\nwhen it changed (or was refused); for a refused campaign its sample\ntexts, message flow and help message when they changed (the only parts\nTelnyx takes on a registered campaign; it reviews it again), and the\nappeal when `appealReason` is written (for a fix outside the form); a\nnew campaign when TCR refused the first one or Telnyx refused to create\nit. As for the first send, the AI check must have passed this form\nwithin a day (else it runs again first). Returns the review. 400 when\nnot complete, nothing changed and no appeal is written, or Telnyx\nrefused the first change; 409 when it was never sent, Telnyx is\nreviewing it, or the AI check has not passed this form within a day;\n502 when Telnyx did not answer; 503 when Telnyx is not set up on the\nserver. Audited. Superusers only.",
         "operationId": "resend_company_tendlc",
         "parameters": [
           {
@@ -58594,7 +59315,7 @@
             }
           },
           "409": {
-            "description": "Never sent, Telnyx is reviewing it, or another send runs",
+            "description": "Never sent, Telnyx is reviewing it, another send runs, or the AI check has not passed this form within a day (it runs again)",
             "content": {
               "application/json": {
                 "schema": {
@@ -58853,6 +59574,182 @@
           },
           "503": {
             "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/admin/tendlc/chat": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Ask the texting registration (10DLC) helper",
+        "description": "The AI helper beside the form answers a question about filling it in,\nstreamed as server-sent events (unnamed `message` pieces, then `done`,\nor `failure` with what to tell the user). It reads the form as sent\n(what is on screen, unsaved edits included) and its step, what blocks\nmarking it ready, the company (name, address, website, numbers), where\nthe registration is (the carriers' reasons, the AI check's changes) and\nthe carriers' rules. The conversation is the browser's; nothing is\nsaved. 400 when the last message is not a question. The company's\nManagers only.",
+        "operationId": "ask_tendlc_helper",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenDlcChatInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answer as server-sent events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/tendlc/chat": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Ask the texting registration (10DLC) helper about a company's form",
+        "description": "As `POST /v1/phone/admin/tendlc/chat`, for a superuser reviewing the\ncompany's registration. Superusers only.",
+        "operationId": "ask_company_tendlc_helper",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenDlcChatInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answer as server-sent events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
             "content": {
               "application/json": {
                 "schema": {
@@ -60949,11 +61846,15 @@
         "description": "`GET /v1/me/account`.",
         "required": [
           "user_id",
+          "ringcentral_signed_in",
           "has_cloudtalk_api",
           "has_ringcentral_api",
           "shows_email_signature",
           "has_onboarding_feedback",
-          "feedback_dismissed"
+          "feedback_dismissed",
+          "has_granite_phone",
+          "granite_phone_numbers",
+          "recording_voice"
         ],
         "properties": {
           "user_id": {
@@ -61024,6 +61925,10 @@
             ],
             "description": "`RingCentral` line (10 digits)."
           },
+          "ringcentral_signed_in": {
+            "type": "boolean",
+            "description": "Texts from the CRM go out as the user through `RingCentral`: they\nconnected their own `RingCentral` (`/v1/me/ringcentral`), or theirs is\nthe login the company connected with."
+          },
           "has_cloudtalk_api": {
             "type": "boolean",
             "description": "The home company has `CloudTalk`."
@@ -61043,6 +61948,21 @@
           "feedback_dismissed": {
             "type": "boolean",
             "description": "The user dismissed the tours rating."
+          },
+          "has_granite_phone": {
+            "type": "boolean",
+            "description": "The home company calls through Granite Phone (Telnyx calling is on)."
+          },
+          "granite_phone_numbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The Granite Phone numbers the user can call from (E.164); an admin\nassigns them on the Phone page."
+          },
+          "recording_voice": {
+            "type": "boolean",
+            "description": "The user's calls say \"This call is being recorded.\" to both sides when\ntheir recording starts (`PUT /v1/me/recording-voice`)."
           }
         }
       },
@@ -61981,6 +62901,26 @@
           }
         }
       },
+      "AddressCheck": {
+        "type": "object",
+        "description": "`GET /v1/places/check`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`found`, `not_found`, or `unknown` (Google could not be asked)."
+          },
+          "formatted_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Google's full address when found."
+          }
+        }
+      },
       "AdminDevice": {
         "type": "object",
         "description": "A phone signed in to the company.",
@@ -62252,7 +63192,35 @@
           },
           "summary": {
             "type": "string",
-            "description": "One line: what went wrong."
+            "description": "One short sentence: what goes wrong and on which route (the title when\nthere is no `pr_title`, and the Issue line of an older report)."
+          },
+          "given": {
+            "type": "string",
+            "description": "The bug report's Given: the state the bug needs, e.g. `a company with\ncalling turned off`. Empty from a workflow older than these fields."
+          },
+          "when": {
+            "type": "string",
+            "description": "When: the user's action, with the page and the API route."
+          },
+          "then": {
+            "type": "string",
+            "description": "Then: what the system does at that point, e.g. `the API answers 403\ncalling_disabled`."
+          },
+          "actual": {
+            "type": "string",
+            "description": "What goes wrong now."
+          },
+          "expected": {
+            "type": "string",
+            "description": "What should happen instead."
+          },
+          "impact": {
+            "type": "string",
+            "description": "What users notice, in one sentence; the email adds the counts."
+          },
+          "check": {
+            "type": "string",
+            "description": "How a developer sees the fix by hand, in one line; empty without a fix."
           },
           "root_cause": {
             "type": "string",
@@ -62260,7 +63228,7 @@
           },
           "fix_summary": {
             "type": "string",
-            "description": "What changed and why that fixes it; empty without a fix."
+            "description": "One or two short sentences: what the fix changes, naming the function\nand file (the Fix line); empty without a fix."
           },
           "risk": {
             "type": "string",
@@ -62404,7 +63372,7 @@
       },
       "AiPromise": {
         "type": "object",
-        "description": "A promise the rep made a customer, or a change a customer asked for in\ntheir quote.",
+        "description": "A promise the rep made a customer, the quote work a customer gave them,\nor something they sent a customer to approve.",
         "required": [
           "id",
           "kind",
@@ -62423,7 +63391,14 @@
           },
           "kind": {
             "type": "string",
-            "description": "`promise`: the rep's; `quote`: a change the customer asked for in\ntheir quote; `approval`: something the rep sent for the customer's\napproval (due a day later)."
+            "description": "`promise`: the rep's; `quote`: the customer's quote to make or update\n(one task per customer, what they asked for in `details`); `approval`:\nsomething the rep sent for the customer's approval (due a day later)."
+          },
+          "crm_action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the rep does in the CRM that closes the promise by itself:\n`contract` (a document sent to sign), `schedule` (an event for the\ncustomer on the schedule) or `call` (a call with them); null when only\na message that keeps it, or Done, closes it. A quote task closes once\none of the customer's quotes is saved or emailed."
           },
           "source": {
             "type": "string",
@@ -62476,7 +63451,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "A quote change's quote: the customer's newest."
+            "description": "A quote task's quote: the customer's newest."
           },
           "title": {
             "type": "string",
@@ -62484,7 +63459,14 @@
           },
           "said": {
             "type": "string",
-            "description": "The words that made it (the customer's, for a quote change)."
+            "description": "The words that made it (for a quote task, its latest ask's)."
+          },
+          "details": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A quote task's asks, one per line: what the quote must have or change."
           },
           "due_at": {
             "type": [
@@ -65384,6 +66366,30 @@
         },
         "additionalProperties": false
       },
+      "ChatRole": {
+        "type": "string",
+        "description": "Who wrote a message of the conversation.",
+        "enum": [
+          "user",
+          "assistant"
+        ]
+      },
+      "ChatTurn": {
+        "type": "object",
+        "description": "One message of the conversation.",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/ChatRole"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
       "Check": {
         "type": "object",
         "description": "A check of a piece of equipment; its usage fields override the equipment's.",
@@ -68211,6 +69217,67 @@
           }
         }
       },
+      "CrewButton": {
+        "type": "string",
+        "description": "What the crew taps.",
+        "enum": [
+          "on_my_way",
+          "completed"
+        ]
+      },
+      "CrewStatus": {
+        "type": "string",
+        "description": "The crew's progress on a job.",
+        "enum": [
+          "on_my_way",
+          "arrived",
+          "completed"
+        ]
+      },
+      "CrewStatusInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/events/{id}/crew-status`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CrewButton",
+            "description": "`on_my_way` (today's jobs) or `completed`."
+          }
+        }
+      },
+      "CrewStatusSaved": {
+        "type": "object",
+        "description": "`POST /v1/events/{id}/crew-status`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CrewStatus",
+            "description": "The job's status now."
+          },
+          "customer_told": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Channel",
+                "description": "On my way: how the customer was told just now (`sms` or `email`);\nnull when nothing went out."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On my way: why the customer was not told, for the crew to read."
+          }
+        }
+      },
       "CrmInvoice": {
         "type": "object",
         "description": "A whole invoice.",
@@ -70771,7 +71838,7 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time",
-            "description": "When the sign-in ends at the latest: 12 months from now (sooner when\nthe phone is unused for 30 days, signs out or is revoked)."
+            "description": "12 months from now, for display only: the sign-in never ends by time,\nonly when the phone signs out or is revoked."
           },
           "user": {
             "$ref": "#/components/schemas/PhoneUser",
@@ -77000,6 +78067,56 @@
           }
         }
       },
+      "LocationInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/me/location`.",
+        "required": [
+          "latitude",
+          "longitude"
+        ],
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "format": "double",
+            "description": "Degrees."
+          },
+          "longitude": {
+            "type": "number",
+            "format": "double",
+            "description": "Degrees."
+          },
+          "accuracy_m": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "How far off the position may be, in meters; worse than 200 is ignored."
+          }
+        }
+      },
+      "LocationResult": {
+        "type": "object",
+        "description": "`POST /v1/me/location`: the jobs whose status changed.",
+        "properties": {
+          "arrived": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The job the crew just arrived at."
+          },
+          "on_my_way": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The job they just set off for."
+          }
+        }
+      },
       "LoginEmail": {
         "type": "object",
         "description": "An address to sign in with.",
@@ -78983,7 +80100,8 @@
         "required": [
           "templates",
           "flows",
-          "sms_enabled"
+          "sms_enabled",
+          "on_my_way"
         ],
         "properties": {
           "templates": {
@@ -79003,6 +80121,10 @@
           "sms_enabled": {
             "type": "boolean",
             "description": "The company texts through `CloudTalk` or `RingCentral`."
+          },
+          "on_my_way": {
+            "$ref": "#/components/schemas/OnMyWayMessage",
+            "description": "What the customer gets when the crew taps On my way."
           }
         }
       },
@@ -79194,6 +80316,26 @@
           "hours",
           "days"
         ]
+      },
+      "OnMyWayMessage": {
+        "type": "object",
+        "description": "The On my way message: a text, or an email (with `subject`) when the\ncompany cannot text. Nothing goes out while `message` is null.",
+        "properties": {
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email subject (at most 255 characters); null uses \"On the way\"."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 1600 characters for a text."
+          }
+        }
       },
       "OnboardingFeedback": {
         "type": "object",
@@ -80969,7 +82111,7 @@
           },
           "sessions_expired": {
             "type": "integer",
-            "description": "Phones signed out because their sign-in expired (12 months) or went\nunused for 30 days.",
+            "description": "Browser phones signed out because their CRM sign-in ended.",
             "minimum": 0
           },
           "credentials_deleted": {
@@ -83910,7 +85052,7 @@
           },
           "promises": {
             "type": "integer",
-            "description": "Promises and quote changes saved.",
+            "description": "Promises, quote tasks and approvals saved.",
             "minimum": 0
           },
           "reminded": {
@@ -86294,6 +87436,19 @@
           "Both"
         ]
       },
+      "RecordingVoiceSwitch": {
+        "type": "object",
+        "description": "Body of `PUT /v1/me/recording-voice`.",
+        "required": [
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "Say the recording notice on my calls."
+          }
+        }
+      },
       "Redirect": {
         "type": "object",
         "description": "A link to open in the browser.",
@@ -86781,6 +87936,53 @@
           }
         }
       },
+      "RingcentralConnected": {
+        "type": "object",
+        "description": "`POST /v1/me/ringcentral`.",
+        "properties": {
+          "company_subdomain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company's subdomain, to go back to My Account there; null when it\nhas none."
+          },
+          "ringcentral_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The number the user texts from now (10 digits); null when their\n`RingCentral` user has no number that can text."
+          }
+        }
+      },
+      "RingcentralReturn": {
+        "type": "object",
+        "description": "Body of `POST /v1/me/ringcentral`.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "description": "`state` as `RingCentral` returned it."
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`code` as `RingCentral` returned it; absent when the user cancelled."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`error` as `RingCentral` returned it (the user cancelled)."
+          }
+        }
+      },
       "RingcentralSettings": {
         "type": "object",
         "description": "`RingCentral` as company settings show it.",
@@ -86802,6 +88004,19 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "RingcentralSignIn": {
+        "type": "object",
+        "description": "`POST /v1/me/ringcentral/start`.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "`RingCentral`'s sign-in page."
           }
         }
       },
@@ -88196,7 +89411,8 @@
           "start_date",
           "end_date",
           "all_day",
-          "created_user_id"
+          "created_user_id",
+          "customer_told"
         ],
         "properties": {
           "id": {
@@ -88340,6 +89556,38 @@
               "null"
             ],
             "description": "Email for this event only; null uses the customer's."
+          },
+          "crew_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The crew's progress: `on_my_way`, `arrived` or `completed`."
+          },
+          "on_my_way_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the crew set off (UTC, ISO 8601)."
+          },
+          "arrived_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the crew's phone reached the address (UTC, ISO 8601)."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the crew tapped Completed (UTC, ISO 8601)."
+          },
+          "customer_told": {
+            "type": "boolean",
+            "description": "The customer got the On my way message."
           },
           "qbo_invoice": {
             "oneOf": [
@@ -93224,7 +94472,8 @@
         "description": "What the company's Managers may do with the registration now.",
         "required": [
           "edit",
-          "markReady"
+          "markReady",
+          "sendAnyway"
         ],
         "properties": {
           "edit": {
@@ -93234,6 +94483,10 @@
           "markReady": {
             "type": "boolean",
             "description": "Mark it ready for a superuser (`POST .../ready`): a saved draft, or\none Telnyx refused once it is fixed (`problems` must be empty); not\nwhile its AI check waits or runs."
+          },
+          "sendAnyway": {
+            "type": "boolean",
+            "description": "Send it to the superusers although the AI check asked for changes\n(`POST .../send-anyway`; the AI can be wrong): a complete form whose\ncheck's result is `changes`."
           }
         }
       },
@@ -93296,7 +94549,8 @@
           "Running",
           "Passed",
           "Changes",
-          "Failed"
+          "Failed",
+          "Overridden"
         ]
       },
       "TenDlcAiFix": {
@@ -93312,7 +94566,7 @@
         "properties": {
           "location": {
             "type": "string",
-            "description": "What to change: a form field (`campaign.messageFlow`,\n`campaign.samples.1`, `campaign.other` for a choice on the form) or a\npage (`page:quoteForm`, `page:privacyPolicy`, `page:terms`,\n`page:website`)."
+            "description": "What to change: a form field (`campaign.messageFlow`,\n`campaign.samples.1`, `campaign.privacyPolicyLink`,\n`campaign.termsAndConditionsLink`, `brand.phone`, `brand.email`,\n`campaign.other` for a choice on the form) or a page\n(`page:quoteForm`, `page:privacyPolicy`, `page:terms`,\n`page:website`, and the privacy and terms pages the quote form links\nto: `page:linkedPrivacy`, `page:linkedTerms`)."
           },
           "label": {
             "type": "string",
@@ -93597,6 +94851,32 @@
             "default": false
           }
         }
+      },
+      "TenDlcChatInput": {
+        "type": "object",
+        "description": "A question to the AI helper beside the form.",
+        "required": [
+          "messages",
+          "draft"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatTurn"
+            },
+            "description": "The conversation so far, oldest first, ending with the question\n(the latest [`chat::MAX_TURNS`] are read)."
+          },
+          "draft": {
+            "$ref": "#/components/schemas/TenDlcDraft",
+            "description": "The form as it is on screen, unsaved edits included."
+          },
+          "step": {
+            "type": "string",
+            "description": "The step on screen: `business`, `texting` or `review`."
+          }
+        },
+        "additionalProperties": false
       },
       "TenDlcChecksRun": {
         "type": "object",

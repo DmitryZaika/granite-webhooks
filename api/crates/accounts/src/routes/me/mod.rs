@@ -2,6 +2,7 @@
 //!
 //! - `GET /v1/me`           → effective session user (no extra query beyond auth)
 //! - `GET`/`PUT /v1/me/account` → My Account (see [`account`])
+//! - `/v1/me/ringcentral` → my own RingCentral sign-in (see [`ringcentral`])
 //! - `GET /v1/me/positions` → position ids in the company the request acts in
 //! - `GET /v1/me/sales-goal` → monthly sales goal; `PUT` sets it
 //! - `POST /v1/me/telegram/leads|notifications` → link a bot (Telegram login widget)
@@ -16,6 +17,7 @@
 pub mod account;
 pub mod handlers;
 pub mod queries;
+pub mod ringcentral;
 pub mod schemas;
 mod todos;
 
@@ -27,6 +29,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::me))
         .routes(routes!(account::account, account::update_account))
         .routes(routes!(account::set_recording_voice))
+        .routes(routes!(ringcentral::start))
+        .routes(routes!(ringcentral::finish, ringcentral::disconnect))
         .routes(routes!(handlers::positions))
         .routes(routes!(handlers::sales_goal, handlers::set_sales_goal))
         .routes(routes!(handlers::telegram))

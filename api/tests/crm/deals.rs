@@ -732,10 +732,19 @@ async fn outcome_won_lost_and_reopen(pool: MySqlPool) {
     assert_eq!(
         rows(
             &pool,
-            "SELECT CAST(is_won AS CHAR), due_date FROM deals WHERE id = 8600"
+            "SELECT CAST(is_won AS CHAR), due_date, CAST(list_id AS CHAR), status FROM deals WHERE id = 8600"
         )
         .await,
-        vec![vec!["1", "NULL"]]
+        vec![vec!["1", "NULL", "101", "Quoted"]],
+        "won on the first stage moves to the next one"
+    );
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT list_id FROM deal_stage_history WHERE deal_id = 8600 AND exited_at IS NULL"
+        )
+        .await,
+        101
     );
     set(
         8601,

@@ -1,5 +1,13 @@
-**Issue:** $summary
+**Given** $given
+**When** $when
+**Then** $then
+
+**Actual:** $actual
+**Expected:** $expected
+**Impact:** $impact
+
 **Fix:** $fix_summary
+**Test:** $check
 $links
 $verdict
 

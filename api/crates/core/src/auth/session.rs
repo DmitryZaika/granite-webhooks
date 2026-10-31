@@ -5,9 +5,19 @@ use crate::openapi::ToSchema;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
 
-/// Sessions older than this are rejected even if `expiration_date` is later
-/// (Remix `SESSION_MAX_AGE_MONTHS`).
-pub const SESSION_MAX_AGE_MONTHS: i32 = 2;
+/// SQL condition (sessions aliased `ws`): the session still signs in.
+///
+/// A session ends only when it is signed out (`is_deleted`: sign-out, a
+/// password reset or change), never by time: its `expiration_date` is NULL.
+/// Sessions from before that keep the old rule until [`keep_session`] clears
+/// their date: they ended at `expiration_date`, and Remix ones (a date years
+/// away) 2 months after sign-in. `LIVE_DEVICE` (crm `phone::devices`) and
+/// the `expired_sessions` sweep repeat it.
+const LIVE_SESSION: &str = "ws.is_deleted = 0
+     AND (ws.expiration_date IS NULL
+          OR (ws.expiration_date > CURRENT_TIMESTAMP
+              AND (ws.expiration_date <= CURRENT_TIMESTAMP + INTERVAL 60 DAY
+                   OR ws.created_date > CURRENT_TIMESTAMP - INTERVAL 2 MONTH)))";
 
 /// `Positions.SuperAdmin` in the Remix app.
 pub const SUPER_ADMIN_POSITION: i32 = 9;
@@ -69,28 +79,34 @@ pub async fn find_session_user(
     if !valid_session_id(session_id) {
         return Ok(None);
     }
-    sqlx::query_as::<_, SessionUser>(
-        r"
-        SELECT users.id, users.email, users.name, users.phone_number,
-               COALESCE(users.is_employee, 0) AS is_employee,
-               COALESCE(users.is_admin, 0) AS is_admin,
-               COALESCE(users.is_superuser, 0) AS is_superuser,
-               users.company_id, users.pined_bar, users.cloudtalk_agent_id,
-               users.cloudtalk_phone_number, users.ringcentral_extension_id,
-               users.ringcentral_phone_number, users.is_signature_available
-        FROM users
-        JOIN sessions ON sessions.user_id = users.id
-        WHERE sessions.id = ?
-          AND sessions.expiration_date > CURRENT_TIMESTAMP
-          AND sessions.created_date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? MONTH)
-          AND sessions.is_deleted = 0
-          AND users.is_deleted = 0
-        ",
-    )
+    sqlx::query_as::<_, SessionUser>(sqlx::AssertSqlSafe(format!(
+        "SELECT users.id, users.email, users.name, users.phone_number,
+                COALESCE(users.is_employee, 0) AS is_employee,
+                COALESCE(users.is_admin, 0) AS is_admin,
+                COALESCE(users.is_superuser, 0) AS is_superuser,
+                users.company_id, users.pined_bar, users.cloudtalk_agent_id,
+                users.cloudtalk_phone_number, users.ringcentral_extension_id,
+                users.ringcentral_phone_number, users.is_signature_available
+           FROM users
+           JOIN sessions ws ON ws.user_id = users.id
+          WHERE ws.id = ? AND {LIVE_SESSION} AND users.is_deleted = 0"
+    )))
     .bind(session_id)
-    .bind(SESSION_MAX_AGE_MONTHS)
     .fetch_optional(pool)
     .await
+}
+
+/// A session from before sessions stopped ending by time stops ending too
+/// once it is used: its `expiration_date` is cleared, if it still signs in.
+pub async fn keep_session(pool: &MySqlPool, session_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE sessions ws SET ws.expiration_date = NULL
+          WHERE ws.id = ? AND ws.expiration_date IS NOT NULL AND {LIVE_SESSION}"
+    )))
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// All of a user's position rows, across every company.

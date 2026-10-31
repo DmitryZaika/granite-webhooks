@@ -29,9 +29,16 @@ TEST_STATUSES = ("written", "not_possible", "not_applicable")
 # Field -> (nullable, max length), from result.schema.json.
 _TEXT_FIELDS: dict[str, tuple[bool, int]] = {
     "summary": (False, 300),
+    "given": (False, 500),
+    "when": (False, 500),
+    "then": (False, 500),
+    "actual": (False, 500),
+    "expected": (False, 500),
+    "impact": (False, 500),
     "root_cause": (False, 3000),
     "fix_summary": (False, 1000),
     "risk": (False, 1500),
+    "check": (False, 500),
     "recommendation": (True, 1500),
     "duplicate_of": (True, 300),
     "pr_title": (True, 100),

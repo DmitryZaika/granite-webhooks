@@ -254,7 +254,8 @@ pub async fn sync(state: &AppState) -> Result<usize, sqlx::Error> {
 /// Save call history
 ///
 /// Saves the `CloudTalk` and `RingCentral` calls of every connected company,
-/// so they stay in its history after it changes provider.
+/// so they stay in its history after it changes provider. Also renews reps'
+/// own `RingCentral` sign-ins before they lapse unused.
 #[crate::openapi::path(
     post,
     path = "/v1/jobs/call-history",
@@ -272,5 +273,13 @@ pub async fn run(
     _job: JobCaller,
 ) -> ApiResult<Json<CallHistoryRun>> {
     let processed = sync(&state).await?;
+    if let Err(error) = common::telephony::ringcentral_auth::renew_lapsing_logins(
+        &state.pool,
+        &state.telephony_http,
+    )
+    .await
+    {
+        tracing::warn!(%error, "renewing reps' RingCentral sign-ins failed");
+    }
     Ok(Json(CallHistoryRun { processed }))
 }

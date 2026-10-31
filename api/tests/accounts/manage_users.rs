@@ -217,6 +217,84 @@ async fn managers_edit_users_and_keep_position_rows(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn moving_a_rep_to_ringcentral_keeps_their_texts(pool: MySqlPool) {
+    make_manager(&pool).await;
+    sqlx::query(
+        "UPDATE users SET cloudtalk_agent_id = '42', ringcentral_extension_id = '777'
+          WHERE id = 100",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Her text, a reply to her line (no CloudTalk number saved: the one she
+    // now has on RingCentral), and another rep's text.
+    sqlx::query(
+        "INSERT INTO cloudtalk_sms
+           (recipient, text, direction, agent, sender_user_id, company_id,
+            sender10, recipient10, phone_digits)
+         VALUES (13175550199, 'Your slab is ready', 'outbound', '42', 100, 100,
+                 '3175550111', '3175550199', '3175550199'),
+                (13175550111, 'Thanks', 'inbound', NULL, NULL, 100,
+                 '3175550199', '3175550111', '3175550199'),
+                (13175550188, 'Not hers', 'outbound', '99', NULL, 100,
+                 '3175550122', '3175550188', '3175550188')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    let save = || {
+        server
+            .put("/v1/admin/users/100")
+            .with_session(ADA)
+            .json(&json!({
+                "name": "Rita Rep",
+                "email": "rep@acme.test",
+                "company_id": 100,
+                "positions": [1],
+                "ringcentral_phone_number": "3175550111",
+            }))
+    };
+    save().await.assert_status(StatusCode::NO_CONTENT);
+    save().await.assert_status(StatusCode::NO_CONTENT);
+    // Hers, by agent id and by number, tagged with her extension; not the
+    // other rep's.
+    let copied: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT text, agent FROM ringcentral_sms
+          WHERE company_id = 100 AND text IN ('Your slab is ready', 'Thanks', 'Not hers')
+          ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        copied,
+        [
+            ("Your slab is ready".to_string(), Some("777".to_string())),
+            ("Thanks".to_string(), Some("777".to_string())),
+        ]
+    );
+    // And the five the seed has her sending; the second save copied nothing.
+    let copies: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ringcentral_sms
+          WHERE company_id = 100 AND idempotency_key LIKE 'cloudtalk:%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(copies, 7);
+    // Her agent id is remembered after the save cleared it.
+    let agents: Vec<String> = sqlx::query_scalar(
+        "SELECT value FROM user_sms_identities
+          WHERE user_id = 100 AND provider = 'cloudtalk' AND kind = 'agent'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(agents, ["42"]);
+}
+
+#[test_db::test(seed)]
 async fn managers_delete_users_of_their_company(pool: MySqlPool) {
     make_manager(&pool).await;
     let server = server(pool.clone());

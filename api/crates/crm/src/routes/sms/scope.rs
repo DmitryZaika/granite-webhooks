@@ -165,9 +165,9 @@ pub async fn narrowing(
         });
     }
     if provider == SmsProvider::Telnyx {
-        let lines = telnyx_lines(pool, user, scope, filter_agent).await?;
+        let (rep, lines) = telnyx_lines(pool, user, scope, filter_agent).await?;
         let threads: Vec<String> =
-            crate::phone::texting::line_threads(pool, user.company_id, &lines)
+            crate::phone::texting::line_threads(pool, user.company_id, &lines, rep)
                 .await?
                 .into_iter()
                 .filter(|phone| {
@@ -222,23 +222,25 @@ pub async fn narrowing(
     })
 }
 
-/// The Telnyx lines (last ten digits) whose threads are visible: the
-/// caller's, or with `scope=all` the filtered rep's (`filter` = user id).
+/// The rep whose Telnyx threads are visible, the caller or with
+/// `scope=all` the filtered rep (`filter` = user id), and their lines
+/// (last ten digits).
 async fn telnyx_lines(
     pool: &MySqlPool,
     user: &SessionUser,
     scope: SmsScope,
     filter: Option<&str>,
-) -> Result<Vec<String>, sqlx::Error> {
+) -> Result<(Option<i32>, Vec<String>), sqlx::Error> {
     let rep = if scope == SmsScope::All {
         filter.and_then(|id| id.parse::<i32>().ok())
     } else {
         Some(user.id)
     };
-    match rep {
-        Some(rep) => crate::phone::texting::inbox_lines(pool, user.company_id, rep).await,
-        None => Ok(Vec::new()),
-    }
+    let lines = match rep {
+        Some(rep) => crate::phone::texting::inbox_lines(pool, user.company_id, rep).await?,
+        None => Vec::new(),
+    };
+    Ok((rep, lines))
 }
 
 impl Narrowing {
@@ -320,9 +322,10 @@ pub async fn thread_access(
         return Ok(found.then_some(ThreadAccess { clause: None }));
     }
     if provider == SmsProvider::Telnyx {
-        let lines = telnyx_lines(pool, user, scope, filter_agent).await?;
+        let (rep, lines) = telnyx_lines(pool, user, scope, filter_agent).await?;
         let seen =
-            crate::phone::texting::thread_on_lines(pool, user.company_id, &lines, phone).await?;
+            crate::phone::texting::thread_on_lines(pool, user.company_id, &lines, rep, phone)
+                .await?;
         return Ok(seen.then_some(ThreadAccess { clause: None }));
     }
     let (agent_id, phone10) = if scope == SmsScope::All {

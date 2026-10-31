@@ -77,11 +77,17 @@ class BodyInputs:
 def render(inputs: BodyInputs) -> str:
     result = inputs.result
     values = {
-        "summary": escape(result["summary"], 300),
+        "given": escape(result["given"], 500),
+        "when": escape(result["when"], 500),
+        "then": escape(result["then"], 500),
+        "actual": escape(result["actual"], 500),
+        "expected": escape(result["expected"], 500),
+        "impact": escape(result["impact"], 500),
         "links": _links(inputs.issue_id, inputs.bug_id),
         "verdict": _verdict(inputs.verification),
         "root_cause": escape(result["root_cause"]),
         "fix_summary": escape(result["fix_summary"], 1000),
+        "check": escape(result["check"], 500),
         "test_section": _test_section(result["test"]),
         "verification_section": _verification_section(inputs.verification, inputs.notes),
         "risk": escape(result["risk"]),

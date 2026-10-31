@@ -294,15 +294,15 @@ async fn find_or_make(
         return Ok((device_id, session_id, false, others));
     }
     // The token is never handed out: a browser phone signs in with the
-    // cookie only. It ends with the web session (at most 2 months).
+    // cookie only. It ends with the web session (its `expires_at` is only
+    // shown, as for app phones).
     let token = new_token().map_err(|err| ApiError::Internal(err.to_string()))?;
     let session_id = sqlx::query(
         "INSERT INTO device_sessions
            (user_id, company_id, token_hash, device_name, platform, app_version, expires_at,
             last_seen_at, web_session_id)
          SELECT ?, ?, ?, ?, 'web', NULL,
-                LEAST(COALESCE(s.expiration_date, UTC_TIMESTAMP() + INTERVAL 2 MONTH),
-                      COALESCE(s.created_date, UTC_TIMESTAMP()) + INTERVAL 2 MONTH),
+                UTC_TIMESTAMP() + INTERVAL 12 MONTH,
                 UTC_TIMESTAMP(), s.id
            FROM sessions s WHERE s.id = ?",
     )
