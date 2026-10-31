@@ -292,13 +292,31 @@ pub fn editable(value: &Value) -> Option<EditableInvoice> {
     })
 }
 
-fn sales_amount(edited: &Line) -> (f64, f64, f64) {
-    let qty = edited.qty.unwrap_or(1.0);
-    let unit_price = edited.unit_price.unwrap_or(0.0);
-    let amount = edited
-        .amount
-        .unwrap_or_else(|| (qty * unit_price * 100.0).round() / 100.0);
-    (qty, unit_price, amount)
+/// Qty, unit price and amount of a sales line. `QuickBooks` refuses an amount
+/// that is not qty × unit price, so a line with only an amount (as
+/// `QuickBooks` itself allows) keeps the amount alone, and a missing qty or
+/// price is worked out from the amount.
+fn sales_amount(edited: &Line) -> (Option<f64>, Option<f64>, f64) {
+    match (edited.qty, edited.unit_price, edited.amount) {
+        (Some(qty), None, Some(amount)) if qty != 0.0 => (Some(qty), Some(amount / qty), amount),
+        (None, Some(price), Some(amount)) if price != 0.0 => {
+            (Some(amount / price), Some(price), amount)
+        }
+        (_, None, Some(amount)) | (None, _, Some(amount)) => (None, None, amount),
+        (qty, unit_price, amount) => {
+            let qty = qty.unwrap_or(1.0);
+            let unit_price = unit_price.unwrap_or(0.0);
+            let amount = amount.unwrap_or_else(|| (qty * unit_price * 100.0).round() / 100.0);
+            (Some(qty), Some(unit_price), amount)
+        }
+    }
+}
+
+fn set_or_remove(detail: &mut Map<String, Value>, key: &str, value: Option<f64>) {
+    match value {
+        Some(value) => detail.insert(key.into(), json!(value)),
+        None => detail.remove(key),
+    };
 }
 
 fn item_ref(edited: &Line, value: &str) -> Value {
@@ -327,10 +345,11 @@ fn new_sales_line(edited: &Line, item: &str) -> Map<String, Value> {
     if let Some(description) = &edited.description {
         line.insert("Description".into(), json!(description));
     }
-    line.insert(
-        "SalesItemLineDetail".into(),
-        json!({ "ItemRef": item_ref(edited, item), "Qty": qty, "UnitPrice": unit_price }),
-    );
+    let mut detail = Map::new();
+    detail.insert("ItemRef".into(), item_ref(edited, item));
+    set_or_remove(&mut detail, "Qty", qty);
+    set_or_remove(&mut detail, "UnitPrice", unit_price);
+    line.insert("SalesItemLineDetail".into(), Value::Object(detail));
     line
 }
 
@@ -375,8 +394,8 @@ fn updated_line(original: &Value, edited: &Line) -> Result<Value, String> {
                 .as_object()
                 .cloned()
                 .unwrap_or_default();
-            detail.insert("Qty".into(), json!(qty));
-            detail.insert("UnitPrice".into(), json!(unit_price));
+            set_or_remove(&mut detail, "Qty", qty);
+            set_or_remove(&mut detail, "UnitPrice", unit_price);
             detail.insert("ItemRef".into(), item_ref(edited, item));
             match &edited.description {
                 Some(description) => line.insert("Description".into(), json!(description)),
@@ -609,6 +628,34 @@ mod tests {
         assert_eq!(payload["SyncToken"], "3");
         assert_eq!(payload["PrivateNote"], "call first");
         assert!(payload.get("BillAddr").is_none());
+    }
+
+    #[test]
+    fn an_amount_only_line_sends_no_qty_or_price() {
+        let mut current = current();
+        let detail = current["Line"][0]["SalesItemLineDetail"]
+            .as_object_mut()
+            .unwrap();
+        detail.remove("Qty");
+        detail.remove("UnitPrice");
+        current["Line"][0]["Amount"] = json!(4076);
+        let mut invoice = editable(&current).unwrap();
+        invoice.lines[1].id = Some("new:1".into());
+        invoice.lines[1].detail_type = "SalesItemLineDetail".into();
+        invoice.lines[1].item_ref_value = Some("9".into());
+        invoice.lines[1].qty = Some(2.0);
+        invoice.lines[1].amount = Some(300.0);
+        let payload = update_payload(&current, &invoice).unwrap();
+        let lines = payload["Line"].as_array().unwrap();
+        assert_eq!(lines[0]["Amount"], 4076.0);
+        assert!(lines[0]["SalesItemLineDetail"].get("Qty").is_none());
+        assert!(lines[0]["SalesItemLineDetail"].get("UnitPrice").is_none());
+        let added = lines
+            .iter()
+            .find(|line| line.get("Id").is_none() && line["DetailType"] == "SalesItemLineDetail")
+            .unwrap();
+        assert_eq!(added["SalesItemLineDetail"]["Qty"], 2.0);
+        assert_eq!(added["SalesItemLineDetail"]["UnitPrice"], 150.0);
     }
 
     #[test]
