@@ -124,7 +124,8 @@ impl Payments {
     /// this secret.
     pub fn company_of(&self, token: &str) -> Option<i32> {
         let (id, signature) = token.trim().split_once('.')?;
-        let company_id = id.parse::<i32>().ok().filter(|id| *id > 0)?;
+        // Company ids start at 0 (the platform's own company).
+        let company_id = id.parse::<i32>().ok().filter(|id| *id >= 0)?;
         if id != company_id.to_string() {
             return None;
         }
@@ -697,6 +698,17 @@ mod tests {
         ] {
             assert_eq!(payments.company_of(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn company_zero_has_a_link_too() {
+        let payments = Payments::new("secret", "");
+        let token = payments.token(0).unwrap();
+        assert!(token.starts_with("0."));
+        assert_eq!(payments.company_of(&token), Some(0));
+        let signature = token.split_once('.').unwrap().1;
+        assert_eq!(payments.company_of(&format!("00.{signature}")), None);
+        assert_eq!(payments.company_of(&format!("-0.{signature}")), None);
     }
 
     #[test]
