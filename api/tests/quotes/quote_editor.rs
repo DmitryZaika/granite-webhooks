@@ -771,6 +771,11 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
             .await
             .unwrap();
         let id = create(&server, json!({ "customer_id": 1004 })).await;
+        sqlx::query("UPDATE quotes SET quote_name = 'Kitchen island' WHERE id = ?")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
         let path = format!("/v1/quotes/{id}");
         server
             .put(&format!("{path}/drawing"))
@@ -784,8 +789,8 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
             .json(&sale)
             .await
             .assert_status_ok();
-        let statuses: Vec<String> = sqlx::query_scalar(
-            "SELECT CAST(status AS CHAR) FROM events WHERE quote_id = ? AND unscheduled <> 0 ORDER BY id",
+        let statuses: Vec<(String, String)> = sqlx::query_as(
+            "SELECT CAST(status AS CHAR), title FROM events WHERE quote_id = ? AND unscheduled <> 0 ORDER BY id",
         )
         .bind(id)
         .fetch_all(&pool)
@@ -793,14 +798,15 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
         .unwrap();
         jobs.push(statuses);
     }
-    // Off: nothing added; on: a template and an installation, Ready unless
-    // the seller picked Not ready.
+    // Off: nothing added; on: a template and an installation named after the
+    // quote, Ready unless the seller picked Not ready.
+    let job = |status: &str| (status.to_string(), "Kitchen island".to_string());
     assert_eq!(
         jobs,
         [
             vec![],
-            vec!["ready", "ready"],
-            vec!["not_ready", "not_ready"],
+            vec![job("ready"), job("ready")],
+            vec![job("not_ready"), job("not_ready")],
         ]
     );
     let id = create(&server, json!({ "customer_id": 1004 })).await;
