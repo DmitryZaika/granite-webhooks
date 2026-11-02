@@ -566,6 +566,7 @@ async fn search_finds_titles_customers_and_places(pool: MySqlPool) {
     assert_eq!(alice[0]["customer_id"], 1000);
     assert_eq!(alice[0]["customer_name"], "Alice Lead");
     assert_eq!(alice[0]["start_date"], "2026-11-02T15:00:00Z");
+    assert_eq!(alice[0]["unscheduled"], false);
     assert_eq!(search("Kitchen").await[0]["id"], 8950);
     assert_eq!(search("Elm").await[0]["id"], 8950);
     assert_eq!(search("Their").await, json!([]));

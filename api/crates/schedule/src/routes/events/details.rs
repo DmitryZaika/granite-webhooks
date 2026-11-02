@@ -711,6 +711,7 @@ struct FoundRow {
     start_date: NaiveDateTime,
     end_date: NaiveDateTime,
     all_day: bool,
+    unscheduled: bool,
     color: Option<String>,
     status: Option<String>,
     calendar_id: Option<i32>,
@@ -744,6 +745,8 @@ pub struct FoundEvent {
     pub end_date: DateTime<Utc>,
     /// All-day event.
     pub all_day: bool,
+    /// Not on the calendar yet; its dates are only when it was made.
+    pub unscheduled: bool,
     /// Label color.
     pub color: Option<String>,
     /// e.g. `scheduled`.
@@ -801,7 +804,8 @@ pub async fn search(
     let like = format!("%{}%", escape_like(q));
     let rows: Vec<FoundRow> = sqlx::query_as(
         "SELECT e.id, e.title, e.description, e.location, e.notes, e.start_date, e.end_date,
-                COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.calendar_id, e.rrule,
+                COALESCE(e.all_day, 0) <> 0 AS all_day, e.unscheduled <> 0 AS unscheduled,
+                e.color, e.status, e.calendar_id, e.rrule,
                 e.recurrence_until, e.created_user_id, e.assigned_user_id, e.sale_id,
                 e.customer_id, c.name AS customer_name, e.contact_phone, e.contact_email
            FROM events e
@@ -833,6 +837,7 @@ pub async fn search(
                 start_date: row.start_date.and_utc(),
                 end_date: row.end_date.and_utc(),
                 all_day: row.all_day,
+                unscheduled: row.unscheduled,
                 color: row.color,
                 status: row.status,
                 calendar_id: row.calendar_id,
