@@ -37194,9 +37194,9 @@
         "tags": [
           "schedule"
         ],
-        "summary": "Download an attachment",
-        "description": "Redirects (302) to a short-lived link that makes the browser save the\nfile under the attachment's name (`name`, with the stored extension\nadded when missing) instead of the stored file's random name. Open it\nas a page link, not with `fetch`. Files stored outside the company\nbucket (older records) redirect to their stored URL as is.",
-        "operationId": "download_event_attachment",
+        "summary": "Get a download link for an attachment",
+        "description": "Returns a short-lived link that makes the browser save the file under\nthe attachment's name instead of the stored file's random name. Open\n`url` as a page link (not with `fetch`).",
+        "operationId": "get_event_attachment_download",
         "parameters": [
           {
             "name": "id",
@@ -37220,8 +37220,15 @@
           }
         ],
         "responses": {
-          "302": {
-            "description": "Redirect to the file, saved under the attachment's name"
+          "200": {
+            "description": "The download link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentDownload"
+                }
+              }
+            }
           },
           "401": {
             "description": "No valid session",
@@ -64655,6 +64662,29 @@
               "null"
             ],
             "description": "Status of an e-signature request made from it: `draft`, `sent`,\n`viewed`, `signed`, `declined`, `expired`; null without one."
+          }
+        }
+      },
+      "AttachmentDownload": {
+        "type": "object",
+        "description": "A link that downloads an attachment.",
+        "required": [
+          "url",
+          "file_name",
+          "saves_as_file"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Short-lived link (an hour). When `saves_as_file` is true, opening it\nmakes the browser save the file as `file_name` without leaving the\npage; otherwise it is the stored URL, to open in a new tab."
+          },
+          "file_name": {
+            "type": "string",
+            "description": "The name the file is saved under: the attachment's name, with the\nstored file's extension added when missing."
+          },
+          "saves_as_file": {
+            "type": "boolean",
+            "description": "False for files stored outside the company bucket (older records),\nwhose link cannot set the saved name."
           }
         }
       },

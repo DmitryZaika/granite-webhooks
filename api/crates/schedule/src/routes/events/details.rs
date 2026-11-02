@@ -15,8 +15,7 @@ use crate::sql::escape_like;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
@@ -711,24 +710,37 @@ fn download_name(name: &str, url: &str) -> String {
     }
 }
 
-/// Download an attachment
+/// A link that downloads an attachment.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AttachmentDownload {
+    /// Short-lived link (an hour). When `saves_as_file` is true, opening it
+    /// makes the browser save the file as `file_name` without leaving the
+    /// page; otherwise it is the stored URL, to open in a new tab.
+    pub url: String,
+    /// The name the file is saved under: the attachment's name, with the
+    /// stored file's extension added when missing.
+    pub file_name: String,
+    /// False for files stored outside the company bucket (older records),
+    /// whose link cannot set the saved name.
+    pub saves_as_file: bool,
+}
+
+/// Get a download link for an attachment
 ///
-/// Redirects (302) to a short-lived link that makes the browser save the
-/// file under the attachment's name (`name`, with the stored extension
-/// added when missing) instead of the stored file's random name. Open it
-/// as a page link, not with `fetch`. Files stored outside the company
-/// bucket (older records) redirect to their stored URL as is.
+/// Returns a short-lived link that makes the browser save the file under
+/// the attachment's name instead of the stored file's random name. Open
+/// `url` as a page link (not with `fetch`).
 #[crate::openapi::path(
     get,
     path = "/v1/events/{id}/attachments/{attachment_id}/download",
-    operation_id = "download_event_attachment",
+    operation_id = "get_event_attachment_download",
     tag = "schedule",
     params(
         ("id" = i32, Path, description = "Event id"),
         ("attachment_id" = i32, Path, description = "Attachment id"),
     ),
     responses(
-        (status = 302, description = "Redirect to the file, saved under the attachment's name"),
+        (status = 200, description = "The download link", body = AttachmentDownload),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such attachment on this event", body = ErrorBody),
@@ -740,7 +752,7 @@ pub async fn download_attachment(
     State(state): State<AppState>,
     ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, attachment_id)): Path<(i32, i32)>,
-) -> ApiResult<Response> {
+) -> ApiResult<Json<AttachmentDownload>> {
     people(&state.pool, user.company_id, id).await?;
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT url, name FROM event_attachments
@@ -752,23 +764,19 @@ pub async fn download_attachment(
     .fetch_optional(&state.pool)
     .await?;
     let (url, name) = row.ok_or(ApiError::NotFound)?;
-    let location = match state.storage.key_for_url(&url) {
-        Some(key) => {
-            state
-                .storage
-                .presign_download(&key, &download_name(&name, &url))
-                .await?
-        }
-        None => url,
-    };
-    Ok((
-        StatusCode::FOUND,
-        [
-            (header::LOCATION, location),
-            (header::CACHE_CONTROL, "private, no-store".to_string()),
-        ],
-    )
-        .into_response())
+    let file_name = download_name(&name, &url);
+    Ok(Json(match state.storage.key_for_url(&url) {
+        Some(key) => AttachmentDownload {
+            url: state.storage.presign_download(&key, &file_name).await?,
+            file_name,
+            saves_as_file: true,
+        },
+        None => AttachmentDownload {
+            url,
+            file_name,
+            saves_as_file: false,
+        },
+    }))
 }
 
 /// Query of `GET /v1/events/search`.
