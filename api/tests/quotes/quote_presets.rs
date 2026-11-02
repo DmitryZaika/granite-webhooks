@@ -155,7 +155,7 @@ async fn company_quote_email_templates_stay_numbered(pool: MySqlPool) {
     assert_eq!(list[0]["name"], "First");
     assert_eq!(list[0]["sequence"], 1);
     assert_eq!(list[1]["sequence"], 2);
-    assert_eq!(list[0]["body"], "Hi\n\n[PDFLink]");
+    assert_eq!(list[0]["body"], "Hi\n\n[QuoteLink]");
     let second = list[1]["id"].as_i64().unwrap();
     server
         .put(&format!("/v1/quote-email-templates/{second}"))

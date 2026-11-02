@@ -2325,7 +2325,7 @@ pub struct QuoteEmail {
     /// (that option's materials and colors), `{{quote.link}}` (the customer's
     /// link) and `{{quote.expiration}}` (e.g. `November 5, 2026`). A
     /// `{{quote.*}}` or `{{deal.*}}` with no value yet is refused (400);
-    /// other unknown variables are left as typed. `[QuoteLink]`/`[PDFLink]` become a "View
+    /// other unknown variables are left as typed. `[QuoteLink]` becomes a "View
     /// your quote" link; one is added at the end when the link is missing.
     pub body: String,
     /// A company form the link shows the quote in.
@@ -2752,21 +2752,22 @@ pub struct MyTemplateInput {
     pub name: String,
     /// Subject (required, up to 255 characters).
     pub subject: String,
-    /// Body; `[PDFLink]` is added when it has no link.
+    /// Body; `[QuoteLink]` is added when it has no link.
     #[serde(default)]
     pub body: String,
 }
 
-/// `withPdfLink`.
+/// Every template links to the quote: `[QuoteLink]` is added when the body has
+/// none (the older `[PDFLink]` links too).
 fn with_pdf_link(body: &str) -> String {
     if body.contains("[QuoteLink]") || body.contains("[PDFLink]") {
         return body.to_string();
     }
     let text = body.trim_end();
     if text.is_empty() {
-        "[PDFLink]".into()
+        "[QuoteLink]".into()
     } else {
-        format!("{text}\n\n[PDFLink]")
+        format!("{text}\n\n[QuoteLink]")
     }
 }
 

@@ -79564,7 +79564,7 @@
           },
           "body": {
             "type": "string",
-            "description": "Body; `[PDFLink]` is added when it has no link."
+            "description": "Body; `[QuoteLink]` is added when it has no link."
           }
         },
         "additionalProperties": false
@@ -86807,7 +86807,7 @@
           },
           "body": {
             "type": "string",
-            "description": "Plain text. `{{variables}}` are filled in: the `POST /v1/templates/fill`\nones (`user.*`, `customer.*`, `company.*`, `deal.*` when the quote has a\ndeal, `current_date`) plus `{{quote.name}}`, `{{quote.total}}`\n(accepted option, else the first, e.g. `$12,345.00`), `{{quote.color}}`\n(that option's materials and colors), `{{quote.link}}` (the customer's\nlink) and `{{quote.expiration}}` (e.g. `November 5, 2026`). A\n`{{quote.*}}` or `{{deal.*}}` with no value yet is refused (400);\nother unknown variables are left as typed. `[QuoteLink]`/`[PDFLink]` become a \"View\nyour quote\" link; one is added at the end when the link is missing."
+            "description": "Plain text. `{{variables}}` are filled in: the `POST /v1/templates/fill`\nones (`user.*`, `customer.*`, `company.*`, `deal.*` when the quote has a\ndeal, `current_date`) plus `{{quote.name}}`, `{{quote.total}}`\n(accepted option, else the first, e.g. `$12,345.00`), `{{quote.color}}`\n(that option's materials and colors), `{{quote.link}}` (the customer's\nlink) and `{{quote.expiration}}` (e.g. `November 5, 2026`). A\n`{{quote.*}}` or `{{deal.*}}` with no value yet is refused (400);\nother unknown variables are left as typed. `[QuoteLink]` becomes a \"View\nyour quote\" link; one is added at the end when the link is missing."
           },
           "form_id": {
             "type": [
@@ -86951,7 +86951,7 @@
           },
           "body": {
             "type": "string",
-            "description": "Email body; links to the quote with `[QuoteLink]` or `[PDFLink]`."
+            "description": "Email body; links to the quote with `[QuoteLink]`."
           },
           "sequence": {
             "type": "integer",
@@ -86979,7 +86979,7 @@
           },
           "body": {
             "type": "string",
-            "description": "Body; `[PDFLink]` is added when it has no quote link."
+            "description": "Body; `[QuoteLink]` is added when it has no quote link."
           },
           "sequence": {
             "type": [

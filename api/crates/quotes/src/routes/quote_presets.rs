@@ -795,7 +795,7 @@ pub struct QuoteEmailTemplate {
     pub name: String,
     /// Email subject.
     pub subject: String,
-    /// Email body; links to the quote with `[QuoteLink]` or `[PDFLink]`.
+    /// Email body; links to the quote with `[QuoteLink]`.
     pub body: String,
     /// Order among the company's templates.
     pub sequence: i32,
@@ -809,23 +809,24 @@ pub struct QuoteEmailTemplateInput {
     pub name: String,
     /// Subject; required, at most 255 characters (longer is cut).
     pub subject: String,
-    /// Body; `[PDFLink]` is added when it has no quote link.
+    /// Body; `[QuoteLink]` is added when it has no quote link.
     pub body: String,
     /// Position among the company's templates (1 = first).
     #[serde(default)]
     pub sequence: Option<i32>,
 }
 
-/// Every template links to the quote: `[PDFLink]` is added when the body has none.
+/// Every template links to the quote: `[QuoteLink]` is added when the body has
+/// none (the older `[PDFLink]` links too).
 fn with_pdf_link(body: &str) -> String {
     if body.contains("[QuoteLink]") || body.contains("[PDFLink]") {
         return body.to_string();
     }
     let text = body.trim_end();
     if text.is_empty() {
-        "[PDFLink]".into()
+        "[QuoteLink]".into()
     } else {
-        format!("{text}\n\n[PDFLink]")
+        format!("{text}\n\n[QuoteLink]")
     }
 }
 

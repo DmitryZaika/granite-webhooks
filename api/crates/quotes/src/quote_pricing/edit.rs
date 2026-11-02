@@ -23,7 +23,7 @@ pub const RULES: [(&str, &str); 26] = [
     ("arrWaterfallMiteredEdgeCutCharges", "Miter cuts"),
     ("arrWaterfallInstallationCharges", "Waterfall install"),
     ("arrEdgeProfileSets", "Edge profiles"),
-    ("arrApplianceEdges", "Appliance edge"),
+    ("arrApplianceEdges", "Appliance side"),
     ("arrRadiusEdges", "Curved edge"),
     ("arrOutsideRadiusCorners", "Rounded corner"),
     ("arrInsideRadiusCorners", "Rounded inside corner"),

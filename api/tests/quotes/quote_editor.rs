@@ -725,7 +725,7 @@ async fn reps_keep_email_templates_of_their_own(pool: MySqlPool) {
         .json::<Value>();
     assert_eq!(list["ordering_mode"], "automatic");
     assert_eq!(list["templates"][1]["personal"], true);
-    assert_eq!(list["templates"][1]["body"], "Hi\n\n[PDFLink]");
+    assert_eq!(list["templates"][1]["body"], "Hi\n\n[QuoteLink]");
     assert_eq!(list["default_id"], list["templates"][0]["id"]);
     // Someone else's view never has it.
     let other = server
