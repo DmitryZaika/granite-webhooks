@@ -571,4 +571,18 @@ async fn search_finds_titles_customers_and_places(pool: MySqlPool) {
     assert_eq!(search("Elm").await[0]["id"], 8950);
     assert_eq!(search("Their").await, json!([]));
     assert_eq!(search(" ").await, json!([]));
+
+    // Only the calendars being looked at
+    let in_calendars = |ids: &str| {
+        let request = server
+            .get("/v1/events/search")
+            .add_query_param("q", "Kitchen")
+            .add_query_param("calendar_ids", ids)
+            .with_session(sessions::REP);
+        async move { request.await.json::<Value>() }
+    };
+    assert_eq!(in_calendars("8803").await[0]["id"], 8950);
+    assert_eq!(in_calendars("1,8803").await[0]["id"], 8950);
+    assert_eq!(in_calendars("1").await, json!([]));
+    assert_eq!(in_calendars("").await, json!([]));
 }

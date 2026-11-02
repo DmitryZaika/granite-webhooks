@@ -699,6 +699,10 @@ pub struct EventSearchQuery {
     /// At most this many, 1 to 50 (default 25).
     #[serde(default)]
     pub limit: Option<i64>,
+    /// Only these calendars, comma-separated ids; empty means events with no
+    /// calendar. Left out: every calendar.
+    #[serde(default)]
+    pub calendar_ids: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -776,7 +780,8 @@ pub struct FoundEvent {
 /// Search events
 ///
 /// The company's events whose title, customer's name, location, description
-/// or notes contain `q`, newest first.
+/// or notes contain `q`, newest first; with `calendar_ids`, only those
+/// calendars' events.
 #[crate::openapi::path(
     get,
     path = "/v1/events/search",
@@ -802,6 +807,14 @@ pub async fn search(
     }
     let limit = query.limit.unwrap_or(25).clamp(1, 50);
     let like = format!("%{}%", escape_like(q));
+    // The calendars as a clean id list for FIND_IN_SET
+    let calendars: Option<String> = query.calendar_ids.as_deref().map(|ids| {
+        ids.split(',')
+            .filter_map(|id| id.trim().parse::<i32>().ok())
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    });
     let rows: Vec<FoundRow> = sqlx::query_as(
         "SELECT e.id, e.title, e.description, e.location, e.notes, e.start_date, e.end_date,
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.unscheduled <> 0 AS unscheduled,
@@ -814,6 +827,7 @@ pub async fn search(
                 AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL
             AND (e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)
+            AND (? IS NULL OR IF(? = '', e.calendar_id IS NULL, FIND_IN_SET(e.calendar_id, ?) > 0))
           ORDER BY e.start_date DESC
           LIMIT ?",
     )
@@ -823,6 +837,9 @@ pub async fn search(
     .bind(&like)
     .bind(&like)
     .bind(&like)
+    .bind(&calendars)
+    .bind(&calendars)
+    .bind(&calendars)
     .bind(limit)
     .fetch_all(&state.pool)
     .await?;
