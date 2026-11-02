@@ -30,6 +30,7 @@ pub fn notification_type_title(notification_type: &str) -> &'static str {
         "comment_deleted" => "Deleted a Comment",
         "ai_promise_due" => "Promise Reminder",
         "ai_promise_digest" => "Morning List",
+        "ai_promise_approval" => "Approval Reminder",
         _ => "CRM Notification",
     }
 }
