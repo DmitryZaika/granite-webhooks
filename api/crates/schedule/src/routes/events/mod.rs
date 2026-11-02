@@ -47,6 +47,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(details::delete_photo))
         .routes(routes!(details::add_attachments))
         .routes(routes!(details::delete_attachment))
+        .routes(routes!(details::download_attachment))
         .routes(routes!(project_notes::list, project_notes::add))
         .routes(routes!(project_notes::sale))
         .routes(routes!(project_notes::delete))

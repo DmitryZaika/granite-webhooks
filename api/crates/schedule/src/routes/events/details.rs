@@ -15,7 +15,8 @@ use crate::sql::escape_like;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
@@ -689,6 +690,87 @@ pub async fn delete_attachment(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The name a downloaded attachment is saved as: its shown name, with the
+/// stored file's extension when the name lacks it (`Plan` -> `Plan.pdf`).
+fn download_name(name: &str, url: &str) -> String {
+    let name = name.trim();
+    let stored = last_segment(url);
+    let extension = stored.rsplit_once('.').map(|(_, ext)| ext);
+    if name.is_empty() {
+        return stored.to_string();
+    }
+    match extension {
+        Some(ext)
+            if !name
+                .rsplit_once('.')
+                .is_some_and(|(_, own)| own.eq_ignore_ascii_case(ext)) =>
+        {
+            format!("{name}.{ext}")
+        }
+        _ => name.to_string(),
+    }
+}
+
+/// Download an attachment
+///
+/// Redirects (302) to a short-lived link that makes the browser save the
+/// file under the attachment's name (`name`, with the stored extension
+/// added when missing) instead of the stored file's random name. Open it
+/// as a page link, not with `fetch`. Files stored outside the company
+/// bucket (older records) redirect to their stored URL as is.
+#[crate::openapi::path(
+    get,
+    path = "/v1/events/{id}/attachments/{attachment_id}/download",
+    operation_id = "download_event_attachment",
+    tag = "schedule",
+    params(
+        ("id" = i32, Path, description = "Event id"),
+        ("attachment_id" = i32, Path, description = "Attachment id"),
+    ),
+    responses(
+        (status = 302, description = "Redirect to the file, saved under the attachment's name"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
+        (status = 404, description = "No such attachment on this event", body = ErrorBody),
+        (status = 500, description = "Database or storage error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn download_attachment(
+    State(state): State<AppState>,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
+    Path((id, attachment_id)): Path<(i32, i32)>,
+) -> ApiResult<Response> {
+    people(&state.pool, user.company_id, id).await?;
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT url, name FROM event_attachments
+          WHERE id = ? AND event_id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(attachment_id)
+    .bind(id)
+    .bind(user.company_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (url, name) = row.ok_or(ApiError::NotFound)?;
+    let location = match state.storage.key_for_url(&url) {
+        Some(key) => {
+            state
+                .storage
+                .presign_download(&key, &download_name(&name, &url))
+                .await?
+        }
+        None => url,
+    };
+    Ok((
+        StatusCode::FOUND,
+        [
+            (header::LOCATION, location),
+            (header::CACHE_CONTROL, "private, no-store".to_string()),
+        ],
+    )
+        .into_response())
+}
+
 /// Query of `GET /v1/events/search`.
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -870,4 +952,19 @@ pub async fn search(
             })
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::download_name;
+
+    #[test]
+    fn downloads_keep_the_shown_name_and_the_stored_extension() {
+        let url = "https://bucket.s3.amazonaws.com/events/1/3f9a2c.pdf";
+        assert_eq!(download_name("Kitchen plan.pdf", url), "Kitchen plan.pdf");
+        assert_eq!(download_name("Kitchen plan.PDF", url), "Kitchen plan.PDF");
+        assert_eq!(download_name("Kitchen plan", url), "Kitchen plan.pdf");
+        assert_eq!(download_name("v1.2 plan", url), "v1.2 plan.pdf");
+        assert_eq!(download_name("  ", url), "3f9a2c.pdf");
+    }
 }

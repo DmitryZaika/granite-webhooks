@@ -530,6 +530,20 @@ async fn files_are_attached_from_the_events_folder(pool: MySqlPool) {
     let photo = details["photos"][0]["id"].as_i64().unwrap();
     let attachment = details["attachments"][0]["id"].as_i64().unwrap();
 
+    // Download redirects to the file (signed to save as its name on S3).
+    let document = details["attachments"][1]["id"].as_i64().unwrap();
+    let res = server
+        .get(&format!("/v1/events/8950/attachments/{document}/download"))
+        .with_session(sessions::REP)
+        .await;
+    res.assert_status(StatusCode::FOUND);
+    assert_eq!(res.header("location"), urls[1].0.as_str());
+    server
+        .get("/v1/events/8950/attachments/999999/download")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
     // The image is still used by the photo, so removing the attachment keeps the file.
     server
         .delete(&format!("/v1/events/8950/attachments/{attachment}"))

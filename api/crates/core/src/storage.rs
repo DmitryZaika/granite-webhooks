@@ -387,25 +387,7 @@ impl Storage {
         filename: Option<&str>,
         ttl: Duration,
     ) -> Result<String, StorageError> {
-        let disposition = filename.map_or_else(
-            || "inline".to_string(),
-            |name| {
-                let ascii: String = name
-                    .chars()
-                    .map(|c| {
-                        if c.is_ascii_graphic() || c == ' ' {
-                            c
-                        } else {
-                            '_'
-                        }
-                    })
-                    .filter(|c| *c != '"' && *c != '\\')
-                    .collect();
-                let encoded =
-                    percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
-                format!("inline; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
-            },
-        );
+        let disposition = content_disposition("inline", filename);
         match self {
             Self::S3(s3) => s3
                 .presign_get(
@@ -415,6 +397,23 @@ impl Storage {
                     Some(content_type),
                     ttl,
                 )
+                .map_err(StorageError::Backend),
+            Self::Memory(_) => Ok(format!("{MEMORY_PUBLIC_BASE}/{key}")),
+            Self::Disabled => Err(StorageError::Disabled),
+        }
+    }
+
+    /// A presigned `GET` (an hour) of a key of this bucket that the browser
+    /// saves as `filename` (`attachment; filename="..."`) instead of
+    /// showing it; the type stays the stored one. The public URL in the
+    /// in-memory bucket.
+    // Signing is local, but presigning stays async for its callers.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    pub async fn presign_download(&self, key: &str, filename: &str) -> Result<String, StorageError> {
+        let disposition = content_disposition("attachment", Some(filename));
+        match self {
+            Self::S3(s3) => s3
+                .presign_get(&s3.bucket, key, &disposition, None, DOWNLOAD_URL_TTL)
                 .map_err(StorageError::Backend),
             Self::Memory(_) => Ok(format!("{MEMORY_PUBLIC_BASE}/{key}")),
             Self::Disabled => Err(StorageError::Disabled),
@@ -767,6 +766,27 @@ impl S3Storage {
     }
 }
 
+/// `inline` or `attachment`, with a file name when there is one: an ASCII
+/// `filename` for old browsers and the exact UTF-8 `filename*`.
+fn content_disposition(kind: &str, filename: Option<&str>) -> String {
+    let Some(name) = filename else {
+        return kind.to_string();
+    };
+    let ascii: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .filter(|c| *c != '"' && *c != '\\')
+        .collect();
+    let encoded = percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
+    format!("{kind}; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
+}
+
 /// `stones/abc.jpg` -> `stones/abc-icon.jpg` (Remix `withIconSuffix`).
 pub fn icon_key(key: &str) -> String {
     match key.rfind('.') {
@@ -778,6 +798,15 @@ pub fn icon_key(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dispositions_name_the_file_in_ascii_and_utf8() {
+        assert_eq!(content_disposition("inline", None), "inline");
+        assert_eq!(
+            content_disposition("attachment", Some("Café \"plan\".pdf")),
+            "attachment; filename=\"Caf_ plan.pdf\"; filename*=UTF-8''Caf%C3%A9%20%22plan%22%2Epdf"
+        );
+    }
 
     #[test]
     fn icon_keys_keep_the_extension() {

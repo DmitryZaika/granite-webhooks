@@ -36404,7 +36404,7 @@
           "schedule"
         ],
         "summary": "Search events",
-        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`, newest first.",
+        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`, newest first; with `calendar_ids`, only those\ncalendars' events.",
         "operationId": "search_events",
         "parameters": [
           {
@@ -36424,6 +36424,15 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "calendar_ids",
+            "in": "query",
+            "description": "Only these calendars, comma-separated ids; empty means events with no\ncalendar. Left out: every calendar.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -37164,6 +37173,88 @@
           },
           "500": {
             "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/attachments/{attachment_id}/download": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Download an attachment",
+        "description": "Redirects (302) to a short-lived link that makes the browser save the\nfile under the attachment's name (`name`, with the stored extension\nadded when missing) instead of the stored file's random name. Open it\nas a page link, not with `fetch`. Files stored outside the company\nbucket (older records) redirect to their stored URL as is.",
+        "operationId": "download_event_attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "description": "Attachment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the file, saved under the attachment's name"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, admin or shop manager or worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attachment on this event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
             "content": {
               "application/json": {
                 "schema": {
@@ -75780,6 +75871,7 @@
           "start_date",
           "end_date",
           "all_day",
+          "unscheduled",
           "created_user_id"
         ],
         "properties": {
@@ -75826,6 +75918,10 @@
           "all_day": {
             "type": "boolean",
             "description": "All-day event."
+          },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Not on the calendar yet; its dates are only when it was made."
           },
           "color": {
             "type": [
