@@ -509,8 +509,9 @@ fn apply_extras_catalog(info: &mut Value, catalog: &[(i64, Value)]) {
     info["arrOtherItems"] = Value::Array(items);
 }
 
-/// A list that prices exactly as it is stored (`exactPrices`, e.g. a copy of
-/// a Moraware price list): no inventory colors, prices or extras merged in.
+/// A list that prices exactly as it is stored (`exactPrices`, set on imported
+/// lists so imported quotes keep their prices): no inventory colors, prices
+/// or extras merged in.
 fn exact_prices(info: &Value) -> bool {
     truthy(info.get("exactPrices"))
 }

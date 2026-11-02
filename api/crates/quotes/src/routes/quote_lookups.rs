@@ -3,7 +3,7 @@
 //! - `GET /v1/quotes/suggestions` → area names and miscellaneous / text items
 //!   the company typed on its recent quotes, to offer them again
 //! - `GET /v1/quotes/stone-image?color=&product=` → the catalog photo of one
-//!   color, to paint the pieces with it in the Color & Edge preview
+//!   color, to paint the pieces with it
 //!
 //! Nothing is stored for the suggestions: they are read from the drawings of
 //! the company's most recently changed quotes.
@@ -90,7 +90,7 @@ struct DrawingRow {
 /// List remembered area names and items
 ///
 /// Area names and miscellaneous / text items (description, last price,
-/// quantity and Hide On Quote / Allow Discount / Taxable flags) typed on the
+/// quantity and `hide_on_quote` / `allow_discount` / `taxable` flags) typed on the
 /// company's 500 most recently changed, not deleted quotes, to offer them
 /// again while a quote is drawn. Each comes once (names compared ignoring
 /// case and spaces around them), with how many quotes used it and the values
@@ -283,7 +283,7 @@ pub struct StoneImageLookup {
 /// slab not sold, cut or deleted; a stone of the given product type first,
 /// one with free slabs first). Returns `{"image": null}` when no stone of
 /// that name is in stock or `color` is empty. The editor uses
-/// it to paint the area's pieces in the Color & Edge preview.
+/// it to paint the area's pieces with the stone.
 #[crate::openapi::path(
     get,
     path = "/v1/quotes/stone-image",

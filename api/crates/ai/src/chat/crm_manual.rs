@@ -1765,7 +1765,7 @@ mod tests {
     #[test]
     fn verified_answers_match_their_wordings() {
         let seam = verified_answer("How to move a SEAM?").expect("seam");
-        assert!(seam.contains("Define Seams"));
+        assert!(seam.contains("**Seams…**"));
         assert_eq!(verified_answer("how to move a seam in the kitchen"), None);
         // A quick answer too: no model call.
         assert!(quick_answer("how to move a seam", None).is_some());

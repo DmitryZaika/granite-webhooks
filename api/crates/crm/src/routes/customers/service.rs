@@ -24,8 +24,8 @@ pub const BUILTIN_SOURCES: &[&str] = &[
 ];
 /// `positions.id` of a sales rep.
 pub const SALES_REP_POSITION: i32 = 1;
-/// Name and `created_by` of the Moraware quote import's shared customer: the
-/// imported quotes without any contact all sit on it.
+/// Name and `created_by` of the quote import's shared customer, as stored:
+/// the imported quotes without any contact all sit on it.
 pub const IMPORT_PLACEHOLDER: &str = "Moraware import";
 
 /// Refuses any change to the import's shared customer (`Conflict`): editing it
@@ -40,7 +40,7 @@ pub async fn refuse_import_placeholder(pool: &MySqlPool, id: i32) -> Result<(), 
             .await?;
     if shared.is_some() {
         return Err(ApiError::Conflict(
-            "This is the shared Moraware import customer and can't be changed. Create a new customer for the quote instead.".into(),
+            "This is the shared customer for imported quotes and can't be changed. Create a new customer for the quote instead.".into(),
         ));
     }
     Ok(())

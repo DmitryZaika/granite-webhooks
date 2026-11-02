@@ -30270,7 +30270,7 @@
           "quotes"
         ],
         "summary": "List remembered area names and items",
-        "description": "Area names and miscellaneous / text items (description, last price,\nquantity and Hide On Quote / Allow Discount / Taxable flags) typed on the\ncompany's 500 most recently changed, not deleted quotes, to offer them\nagain while a quote is drawn. Each comes once (names compared ignoring\ncase and spaces around them), with how many quotes used it and the values\nof the latest one; most used first, then most recent. Default area names\n(`Area #1`, `Area #2`, ...) are left out. At most 60 names and 150 items.",
+        "description": "Area names and miscellaneous / text items (description, last price,\nquantity and `hide_on_quote` / `allow_discount` / `taxable` flags) typed on the\ncompany's 500 most recently changed, not deleted quotes, to offer them\nagain while a quote is drawn. Each comes once (names compared ignoring\ncase and spaces around them), with how many quotes used it and the values\nof the latest one; most used first, then most recent. Default area names\n(`Area #1`, `Area #2`, ...) are left out. At most 60 names and 150 items.",
         "operationId": "list_quote_suggestions",
         "responses": {
           "200": {
@@ -30327,7 +30327,7 @@
           "quotes"
         ],
         "summary": "Get a color's stone photo",
-        "description": "The catalog photo of one color as the quote shows it on the customer's\npreview: the company's in-stock stone with this name (regular stock, or a\nslab not sold, cut or deleted; a stone of the given product type first,\none with free slabs first). Returns `{\"image\": null}` when no stone of\nthat name is in stock or `color` is empty. The editor uses\nit to paint the area's pieces in the Color & Edge preview.",
+        "description": "The catalog photo of one color as the quote shows it on the customer's\npreview: the company's in-stock stone with this name (regular stock, or a\nslab not sold, cut or deleted; a stone of the given product type first,\none with free slabs first). Returns `{\"image\": null}` when no stone of\nthat name is in stock or `color` is empty. The editor uses\nit to paint the area's pieces with the stone.",
         "operationId": "get_quote_stone_image",
         "parameters": [
           {

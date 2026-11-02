@@ -121,9 +121,10 @@ pub fn base_shape(counter: &Counter) -> Vec<Pt> {
         let run = &runs[i];
         let side_left = measured_side_left(counter, i);
         let nn = left_normal(d);
-        // Like Moraware, a run reaches from the outer corner of the joint
-        // before it to the outer corner of the joint after it; between turns
-        // of opposite directions (an S) those corners are on opposite sides.
+        // A run's length is measured on the outside of its turns: from the
+        // outer corner of the joint before it to the outer corner of the joint
+        // after it. Between turns of opposite directions (an S) those corners
+        // are on opposite sides.
         let prev_left = if i == 0 {
             side_left
         } else {
@@ -622,10 +623,11 @@ fn dedupe(pts: Vec<Pt>) -> Vec<Pt> {
     out
 }
 
-/// Square inches billed for material: the uncut blank (see the CRM).
+/// Square inches billed for material: the uncut blank (see the CRM), since
+/// the stone cut away still has to be bought.
 ///
-/// A counter with an angled (not 90°) joint is billed like Moraware: every
-/// run's full length × depth, less the overlap only at its 90° joints.
+/// A counter with an angled (not 90°) joint bills every run's full length ×
+/// depth, less the overlap only at its 90° joints.
 pub fn material_area_sq_in(counter: &Counter) -> f64 {
     let points = base_shape(counter);
     let m = points.len();

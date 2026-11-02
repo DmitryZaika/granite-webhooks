@@ -611,8 +611,7 @@ async fn picking_the_company_s_process_answers_it_from_the_instructions(pool: My
 #[test_db::test(seed)]
 async fn a_special_order_in_a_quote_goes_to_the_manual_without_asking(pool: MySqlPool) {
     sqlx::raw_sql(SPECIAL_ORDERS).execute(&pool).await.unwrap();
-    let reply =
-        "Open the quote, click **Edit drawing**, go to **Color & Edge**. [[INSTRUCTION:none]]";
+    let reply = "Open the quote, click **Edit drawing**, go to **Materials**. [[INSTRUCTION:none]]";
     let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
 
     let events = ask(
@@ -638,8 +637,7 @@ async fn a_special_order_in_a_quote_goes_to_the_manual_without_asking(pool: MySq
 /// only those (and the core ones) reach the answer, whatever the typos.
 #[test_db::test(seed)]
 async fn the_model_picks_the_manual_s_sections_for_the_answer(pool: MySqlPool) {
-    let reply =
-        "Open **Edit drawing**, step **5 Color & Edge**, **Slabs & Layout**, **Auto layout**.";
+    let reply = "Open **Edit drawing**, step **Materials**, **Slab plan**, **Auto layout**.";
     let (server, ai) = setup(
         &pool,
         vec![
@@ -664,7 +662,7 @@ async fn the_model_picks_the_manual_s_sections_for_the_answer(pool: MySqlPool) {
     assert!(pick[0].contains("[admin-phone-telnyx] "));
     assert_eq!(requests[0]["reasoning_effort"], "none");
     let manual = contents(&requests[1]).join("\n");
-    assert!(manual.contains("### Slabs & Layout"));
+    assert!(manual.contains("### Slab plan"));
     assert!(manual.contains("## How the application is organized"));
     // Not the portals' overviews the manual falls back to.
     assert!(!manual.contains("## Shop portal (`/shop`)"));
@@ -869,7 +867,7 @@ async fn a_feature_the_topic_table_names_is_not_asked_back(pool: MySqlPool) {
             { "label": "AI Design picture", "sections": ["ai-chat-ai-design"] }
         ]
     } });
-    let reply = "Open **Slabs & Layout** and click **Auto layout**.";
+    let reply = "Open **Slab plan** and click **Auto layout**.";
     let (server, ai) = setup(
         &pool,
         vec![Reply::Text(asked.to_string()), Reply::Text(reply.into())],
@@ -886,7 +884,7 @@ async fn a_feature_the_topic_table_names_is_not_asked_back(pool: MySqlPool) {
     assert!(
         contents(&requests[1])
             .iter()
-            .any(|c| c.contains("### Slabs & Layout"))
+            .any(|c| c.contains("### Slab plan"))
     );
 }
 

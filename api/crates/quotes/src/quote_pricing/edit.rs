@@ -15,33 +15,33 @@ use std::collections::{HashMap, HashSet};
 pub const RULES: [(&str, &str); 26] = [
     ("arrFabricationCharges", "Fabrication"),
     ("arrInstallationCharges", "Installation"),
-    ("arrSplashes", "Splashes"),
+    ("arrSplashes", "Splash"),
     (
         "arrWaterfallMiteredEdgeMaterialCharges",
-        "Waterfall / mitered material",
+        "Waterfall and miter stone",
     ),
-    ("arrWaterfallMiteredEdgeCutCharges", "Mitered cuts"),
-    ("arrWaterfallInstallationCharges", "Waterfall installation"),
+    ("arrWaterfallMiteredEdgeCutCharges", "Miter cuts"),
+    ("arrWaterfallInstallationCharges", "Waterfall install"),
     ("arrEdgeProfileSets", "Edge profiles"),
     ("arrApplianceEdges", "Appliance edge"),
-    ("arrRadiusEdges", "Full radius edge"),
-    ("arrOutsideRadiusCorners", "Outside radius corners"),
-    ("arrInsideRadiusCorners", "Inside radius corners"),
-    ("arrClippedCorners", "Clipped corners"),
-    ("arrBumpedOutCorners", "Bumped out corners"),
-    ("arrNotchedCorners", "Notched corners"),
-    ("arrInsideDiagonalCorners", "Inside diagonal corners"),
-    ("arrRecessedDiagonalCorners", "Recessed diagonal corners"),
-    ("arrBumpOutArcs", "Bump-out arcs"),
-    ("arrBumpInArcs", "Bump-in arcs"),
-    ("arrBumpOutPolygons", "Bump-outs"),
-    ("arrBumpInPolygons", "Bump-ins"),
-    ("arrSinkUndermounts", "Undermount sink cutouts"),
-    ("arrSinkDropIns", "Drop-in sink cutouts"),
-    ("arrSinkFarmers", "Farmer sink cutouts"),
+    ("arrRadiusEdges", "Curved edge"),
+    ("arrOutsideRadiusCorners", "Rounded corner"),
+    ("arrInsideRadiusCorners", "Rounded inside corner"),
+    ("arrClippedCorners", "Clipped corner"),
+    ("arrBumpedOutCorners", "Corner bump-out"),
+    ("arrNotchedCorners", "Notched corner"),
+    ("arrInsideDiagonalCorners", "Angled inside corner"),
+    ("arrRecessedDiagonalCorners", "Set-back angled corner"),
+    ("arrBumpOutArcs", "Arc out"),
+    ("arrBumpInArcs", "Arc in"),
+    ("arrBumpOutPolygons", "Bump out"),
+    ("arrBumpInPolygons", "Bump in"),
+    ("arrSinkUndermounts", "Undermount sink cutout"),
+    ("arrSinkDropIns", "Top-mount sink cutout"),
+    ("arrSinkFarmers", "Farmhouse sink cutout"),
     ("arrFaucetHoles", "Faucet holes"),
     ("arrOutletCutouts", "Outlet cutouts"),
-    ("arrCooktops", "Cooktop cutouts"),
+    ("arrCooktops", "Cooktop cutout"),
 ];
 
 /// Rules whose size ranges are sorted by this key.
@@ -270,16 +270,16 @@ pub fn validate(info: &Value) -> Vec<String> {
     for set in arr(Some(info), "arrEdgeProfileSets") {
         let scope = get(set.get("materialFilter"), "product")
             .and_then(Value::as_str)
-            .unwrap_or("Default")
+            .unwrap_or("Any material")
             .to_string();
         report(
             &mut errors,
-            &format!("{scope} finished edge"),
+            &format!("{scope} edge profile"),
             names(arr(Some(set), "arrEdgeProfiles")),
         );
         report(
             &mut errors,
-            &format!("{scope} edge price group"),
+            &format!("{scope} edge group"),
             names(arr(Some(set), "arrPriceGroups")),
         );
     }
