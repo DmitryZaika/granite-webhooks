@@ -689,11 +689,15 @@ pub async fn delete_attachment(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Words of a search used at most; the rest are left out.
+const MAX_SEARCH_WORDS: usize = 8;
+
 /// Query of `GET /v1/events/search`.
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct EventSearchQuery {
-    /// Part of the title, customer name, location, description or notes.
+    /// Words, each in the title, customer name, location, description or
+    /// notes (any of them, in any order).
     #[serde(default)]
     pub q: String,
     /// At most this many, 1 to 50 (default 25).
@@ -779,8 +783,9 @@ pub struct FoundEvent {
 
 /// Search events
 ///
-/// The company's events whose title, customer's name, location, description
-/// or notes contain `q`, newest first; with `calendar_ids`, only those
+/// The company's events where every word of `q` is in the title, customer's
+/// name, location, description or notes, newest first; with `calendar_ids`,
+/// only those
 /// calendars' events.
 #[crate::openapi::path(
     get,
@@ -806,7 +811,15 @@ pub async fn search(
         return Ok(Json(Vec::new()));
     }
     let limit = query.limit.unwrap_or(25).clamp(1, 50);
-    let like = format!("%{}%", escape_like(q));
+    // Each word anywhere in any of the fields, so "acadia court 9" finds
+    // "Acadia Court Apts / Brandon Ct - 9/1/26"
+    let likes: Vec<String> = q
+        .split_whitespace()
+        .take(MAX_SEARCH_WORDS)
+        .map(|word| format!("%{}%", escape_like(word)))
+        .collect();
+    let word_match = "(e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)";
+    let words_match = vec![word_match; likes.len()].join(" AND ");
     // The calendars as a clean id list for FIND_IN_SET
     let calendars: Option<String> = query.calendar_ids.as_deref().map(|ids| {
         ids.split(',')
@@ -815,7 +828,7 @@ pub async fn search(
             .collect::<Vec<_>>()
             .join(",")
     });
-    let rows: Vec<FoundRow> = sqlx::query_as(
+    let sql = format!(
         "SELECT e.id, e.title, e.description, e.location, e.notes, e.start_date, e.end_date,
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.unscheduled <> 0 AS unscheduled,
                 e.color, e.status, e.calendar_id, e.rrule,
@@ -826,23 +839,24 @@ pub async fn search(
            LEFT JOIN customers c ON c.id = e.customer_id
                 AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL
-            AND (e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)
+            AND {words_match}
             AND (? IS NULL OR IF(? = '', e.calendar_id IS NULL, FIND_IN_SET(e.calendar_id, ?) > 0))
           ORDER BY e.start_date DESC
-          LIMIT ?",
-    )
-    .bind(user.company_id)
-    .bind(&like)
-    .bind(&like)
-    .bind(&like)
-    .bind(&like)
-    .bind(&like)
-    .bind(&calendars)
-    .bind(&calendars)
-    .bind(&calendars)
-    .bind(limit)
-    .fetch_all(&state.pool)
-    .await?;
+          LIMIT ?"
+    );
+    let mut found = sqlx::query_as::<_, FoundRow>(&sql).bind(user.company_id);
+    for like in &likes {
+        for _ in 0..5 {
+            found = found.bind(like);
+        }
+    }
+    let rows: Vec<FoundRow> = found
+        .bind(&calendars)
+        .bind(&calendars)
+        .bind(&calendars)
+        .bind(limit)
+        .fetch_all(&state.pool)
+        .await?;
     Ok(Json(
         rows.into_iter()
             .map(|row| FoundEvent {
