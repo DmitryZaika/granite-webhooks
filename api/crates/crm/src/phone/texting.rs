@@ -1177,6 +1177,51 @@ pub async fn record_status(
     Ok(true)
 }
 
+/// Texts asked about in one run of [`recheck_statuses`].
+const RECHECK_BATCH: i64 = 20;
+
+/// Asks Telnyx again about the texts we sent that have no final status yet
+/// (their report may never have come), so a text that did not go out shows
+/// as failed. A text is asked about 5 minutes after it was sent, then every
+/// 15 minutes, for 3 days; none after `deadline`. How many Telnyx answered.
+pub async fn recheck_statuses(
+    state: &AppState,
+    deadline: std::time::Instant,
+) -> sqlx::Result<usize> {
+    if !state.telnyx.is_enabled() {
+        return Ok(0);
+    }
+    let due: Vec<(i32, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT company_id, telnyx_id FROM telnyx_sms
+          WHERE direction = 'outbound' AND telnyx_id IS NOT NULL AND company_id IS NOT NULL
+            AND status <> 'failed'
+            AND (delivery_status IS NULL OR delivery_status IN ('queued', 'sending', 'sent'))
+            AND created_date > CURRENT_TIMESTAMP - INTERVAL 3 DAY
+            AND TIMESTAMPDIFF(MINUTE, created_date, CURRENT_TIMESTAMP) >= 5
+            AND MOD(TIMESTAMPDIFF(MINUTE, created_date, CURRENT_TIMESTAMP), 15) = 5
+          ORDER BY id LIMIT {RECHECK_BATCH}"
+    )))
+    .fetch_all(&state.pool)
+    .await?;
+    let mut answered = 0;
+    for (company_id, telnyx_id) in due {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        let mut payload = match state.telnyx.get_message(&telnyx_id).await {
+            Ok(payload) => payload,
+            Err(err) => {
+                tracing::warn!(company_id, error = %err, "Telnyx text status not read");
+                continue;
+            }
+        };
+        payload.id = Some(telnyx_id);
+        record_status(&state.pool, company_id, "message.sent", &payload, None).await?;
+        answered += 1;
+    }
+    Ok(answered)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
