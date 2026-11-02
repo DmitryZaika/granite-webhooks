@@ -26,9 +26,10 @@
 //! 5. reminds the rep of each promise once it is due ([`remind_due`]): a bell
 //!    notification pushed to their phones, else sent to their Telegram;
 //! 6. from 8 AM their time, once a day, sends the rep's morning list
-//!    ([`send_digests`]): due today, overdue, without a time, quotes to make
-//!    or update, what waits for the customer's approval, and the customers
-//!    whose text waits for their reply;
+//!    ([`send_digests`]), the bell saying what to do, one task a line: due
+//!    today, overdue, without a time, quotes to make or update, what waits
+//!    for the customer's approval, and the customers whose text waits for
+//!    their reply;
 //! 7. a day after the rep sent something for the customer's approval (kind
 //!    `approval`), closes it when the customer has replied since, else
 //!    reminds the rep once to check with them ([`check_approvals`]);
@@ -1197,8 +1198,9 @@ fn who(name: Option<&str>, digits: Option<&str>) -> String {
     }
 }
 
-/// The morning list: its one-line summary (the bell) and the whole list (for
-/// Telegram); `None` when there is nothing on it. `now` is UTC.
+/// The morning list: what to do, one task a line (the bell and the push, see
+/// [`to_do`]), and the whole list (for Telegram); `None` when there is
+/// nothing on it. `now` is UTC.
 pub fn morning_list(
     promises: &[ListedPromise],
     waiting: &[Waiting],
@@ -1273,19 +1275,7 @@ pub fn morning_list(
     if sections.iter().all(|(_, lines)| lines.is_empty()) {
         return None;
     }
-    let counts: Vec<String> = [
-        (overdue.len(), "overdue"),
-        (due_today.len(), "due today"),
-        (undated.len(), "without a time"),
-        (quotes.len(), "quotes to update"),
-        (approvals.len(), "waiting for approval"),
-        (waiting_lines.len(), "waiting for your reply"),
-    ]
-    .iter()
-    .filter(|(count, _)| *count > 0)
-    .map(|(count, what)| format!("{count} {what}"))
-    .collect();
-    let summary = clip(&format!("Morning list: {}", counts.join(", ")), 255);
+    let summary = to_do(&overdue, &due_today, waiting, &undated, &quotes, &approvals);
     let mut text = format!(
         "☀️ Good morning! Your list for {}:",
         local(now).format("%a, %b %-d")
@@ -1303,6 +1293,73 @@ pub fn morning_list(
         }
     }
     Some((summary, text))
+}
+
+/// The bell's and the push's text: what to do this morning, one task a line,
+/// most urgent first ("Reply to Ann Lee, Bob" for texts waiting for a
+/// reply), cut to the bell's 255 characters with "+N more".
+fn to_do(
+    overdue: &[String],
+    due_today: &[String],
+    waiting: &[Waiting],
+    undated: &[String],
+    quotes: &[String],
+    approvals: &[String],
+) -> String {
+    const MAX: usize = 255;
+    let mut tasks: Vec<String> = overdue
+        .iter()
+        .map(|line| format!("Overdue: {line}"))
+        .chain(due_today.iter().cloned())
+        .collect();
+    if !waiting.is_empty() {
+        let names: Vec<String> = waiting
+            .iter()
+            .map(|customer| {
+                who(
+                    customer.customer_name.as_deref(),
+                    Some(&customer.phone_digits),
+                )
+            })
+            .collect();
+        let shown = names.len().min(3);
+        let mut reply = format!("Reply to {}", names[..shown].join(", "));
+        if names.len() > shown {
+            reply.push_str(&format!(" +{} more", names.len() - shown));
+        }
+        tasks.push(reply);
+    }
+    tasks.extend(undated.iter().cloned());
+    tasks.extend(quotes.iter().cloned());
+    tasks.extend(
+        approvals
+            .iter()
+            .map(|line| format!("Follow up on approval: {line}")),
+    );
+    let mut text = String::new();
+    for (i, task) in tasks.iter().enumerate() {
+        let left = tasks.len() - i - 1;
+        let more = if left > 0 {
+            format!("\n+{left} more")
+        } else {
+            String::new()
+        };
+        let next = if text.is_empty() {
+            task.clone()
+        } else {
+            format!("{text}\n{task}")
+        };
+        if next.chars().count() + more.chars().count() > MAX {
+            let rest = tasks.len() - i;
+            if text.is_empty() {
+                return clip(task, MAX);
+            }
+            text.push_str(&format!("\n+{rest} more"));
+            return text;
+        }
+        text = next;
+    }
+    text
 }
 
 /// A short text that ends a conversation ("Thank you!", "Ok", "Sounds good",
@@ -2433,7 +2490,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             summary,
-            "Morning list: 1 overdue, 1 due today, 1 without a time, 1 quotes to update, 1 waiting for approval, 1 waiting for your reply"
+            "Overdue: Send the price — Ann Lee (due Oct 27, 5:00 PM)\n\
+             2:00 PM Call back — Ann Lee\n\
+             Reply to (317) 555-0100\n\
+             Send photos — Ann Lee\n\
+             Update the quote — Ann Lee\n\
+             Follow up on approval: Sign the contract — Ann Lee"
         );
         assert!(
             text.contains(
@@ -2450,6 +2512,32 @@ mod tests {
         ));
         assert!(!text.contains("Visit next week"));
         assert_eq!(morning_list(&[], &[], now, tz), None);
+    }
+
+    #[test]
+    fn the_morning_list_bell_fits_and_says_how_many_more() {
+        let waiting = |name: &str| Waiting {
+            phone_digits: "3175550100".into(),
+            customer_id: Some(1),
+            customer_name: Some(name.into()),
+            text: "Hi".into(),
+            at: at("2026-10-28 09:30"),
+        };
+        let undated: Vec<String> = (1..=20)
+            .map(|i| format!("Send the photos of the slab number {i} — Ann Lee"))
+            .collect();
+        let text = to_do(
+            &[],
+            &[],
+            &[waiting("A"), waiting("B"), waiting("C"), waiting("D")],
+            &undated,
+            &[],
+            &[],
+        );
+        assert!(text.starts_with("Reply to A, B, C +1 more\nSend the photos"));
+        assert!(text.chars().count() <= 255);
+        let shown = text.lines().count() - 2;
+        assert!(text.ends_with(&format!("\n+{} more", 20 - shown)));
     }
 
     #[test]
