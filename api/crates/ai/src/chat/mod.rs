@@ -1041,11 +1041,13 @@ async fn run(
     // back: which of the manual's closest topics the user means, a click
     // away. Not once a choice was picked, nor for the company's own process;
     // after an answer from the instructions only when the question names a
-    // feature of the app.
+    // feature of the app and the answer cites no instruction (an answer from
+    // the company's instructions is not a dead end, whatever it hedges).
     if mode == Mode::Instructions
         && feature.is_none()
         && source != Some(crm_manual::Source::Company)
         && (how_to || crm_manual::matches_topic(&question))
+        && !matches!(markers::parse_instruction_indices(&answer), Some(Some(_)))
         && markers::answer_is_dead_end(&clean)
         && let Some(asked) = crm_manual::closest_topics(&question, &tried)
     {
