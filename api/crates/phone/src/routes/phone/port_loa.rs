@@ -458,7 +458,7 @@ pub async fn invite_port_loa_signer(
     tx.commit().await?;
     let subdomain = company_subdomain(&state.pool, row.company_id).await?;
     let link = format!(
-        "{}/port-loa/{token}",
+        "{}/sign/port-loa/{token}",
         app_origin(&state.app_url, subdomain.as_deref())
     );
     let company = company_name(&state, row.company_id).await?;
