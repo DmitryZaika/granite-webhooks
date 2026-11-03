@@ -5,6 +5,7 @@
 //! - `POST /v1/ai/call-activities` → follow-up activities from a call transcript
 //! - `POST /v1/ai/email-template` → an email template from a description
 //! - `POST /v1/ai/port-details-check` → what looks wrong in a port's business details
+//! - `POST /v1/ai/port-ask` → the answer to a question about a port's step
 //! - `POST /v1/ai/port-bill-read` → a port's business details read off the carrier's bill
 //! - `POST /v1/ai/invoice-edit` → a QuickBooks invoice edit from an instruction
 //! - `POST /v1/ai/signature-fields` → what each blank of a contract PDF is for
@@ -39,6 +40,7 @@ pub mod first_contact;
 pub mod improve;
 pub mod invoice_edit;
 pub mod manual_feedback;
+pub mod port_ask;
 pub mod port_bill;
 pub mod port_check;
 pub mod promises;
@@ -56,6 +58,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(call_activity::call_activities))
         .routes(routes!(email_template::email_template))
         .routes(routes!(port_check::port_details_check))
+        .routes(routes!(port_ask::port_ask))
         .merge(
             // A 4 MB bill in base64 is more than axum's default 2 MB.
             OpenApiRouter::new()
