@@ -44047,7 +44047,7 @@
           "notifications"
         ],
         "summary": "Get one activity notification",
-        "description": "The caller's own due activity notification `notif-<id>`, as\n`GET /v1/notifications` lists it, with the deal it opens (`deal_id`).\nThe phone app reads it for a `notification` push, which names only the\nid. 404 for another user's, a dismissed one, or one `GET\n/v1/notifications` would not list.",
+        "description": "The caller's own due activity notification `notif-<id>`, as\n`GET /v1/notifications` lists it, with the deal it opens (`deal_id`),\nelse its customer (`customer_id`).\nThe phone app reads it for a `notification` push, which names only the\nid. 404 for another user's, a dismissed one, or one `GET\n/v1/notifications` would not list.",
         "operationId": "get_notification",
         "parameters": [
           {
@@ -80922,6 +80922,14 @@
             ],
             "format": "int64",
             "description": "The deal an activity notification is about (the phone app opens it)."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer an activity notification is about (the phone app opens\ntheir card when there is no deal)."
           }
         }
       },

@@ -81,6 +81,24 @@ async fn a_crm_notification_is_pushed_and_read_back(pool: MySqlPool) {
     assert_eq!(item["actor_name"], "Mark Manager");
     assert_eq!(item["message"], "Call back Friday");
     assert_eq!(item["deal_id"], 8000);
+    assert_eq!(item["customer_id"], 1000);
+
+    // A finished installation of a customer without a deal opens the customer.
+    sql(
+        &pool,
+        "INSERT INTO notifications (id, user_id, customer_id, message, notification_type, due_at)
+         VALUES (97002, 100, 1000, 'Alice Lead is installed', 'installation_completed',
+                 NOW() - INTERVAL 1 MINUTE)",
+    )
+    .await;
+    let res = server
+        .get("/v1/notifications/97002")
+        .add_header(HEADER, token(1))
+        .await;
+    res.assert_status_ok();
+    let item: Value = res.json();
+    assert_eq!(item["customer_id"], 1000);
+    assert!(item.get("deal_id").is_none());
 
     // Only its user reads it; an unknown one pushes nothing.
     server
@@ -163,4 +181,10 @@ async fn the_app_can_send_itself_test_pushes(pool: MySqlPool) {
     assert_eq!(res.json::<Value>()["type_title"], "Added a Note");
     assert_eq!(pushes(&stubs, "lead")[0].1["kind"], "quote");
     assert_eq!(pushes(&stubs, "maintenance")[0].1["count"], "3");
+    // A maintenance tap lists the checks: the app reads them with its token.
+    server
+        .get("/v1/shop/maintenance")
+        .add_header(HEADER, token(1))
+        .await
+        .assert_status_ok();
 }

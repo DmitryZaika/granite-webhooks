@@ -21,7 +21,7 @@
 //! with `GET` (what the phone's composers, schedule, Text tab and More
 //! screens read: calendars, deals and their stages, customers, stones,
 //! suppliers, sales, quotes, images, documents, email and text templates, my texts
-//! over every provider, a pushed CRM notification), on
+//! over every provider, a pushed CRM notification, the shop's maintenance), on
 //! `/v1/sms/{provider}/messages` with `POST`
 //! (sending those texts), on [`DEVICE_ACTIONS`] with `POST` (an
 //! attachment upload, Improve message, AI reply, the typing suggestion and
@@ -128,11 +128,12 @@ pub const DEVICE_ROUTES: [&str; 5] = [
 /// Use Template lists, the suggestions under an email's To, Cc and Bcc, the
 /// schedule's calendars, and the More screens: Deals, Customers, Stones,
 /// Suppliers, Images (with its folders), Transactions and Quotes; the CRM
-/// notification a push names; and the customer stones page the typing
+/// notification a push names; the shop's maintenance checks a push says are
+/// due; and the customer stones page the typing
 /// suggestion offers to link).
 /// These prefixes and everything under them; writes there still need the CRM
 /// session.
-pub const DEVICE_READ_ROUTES: [&str; 17] = [
+pub const DEVICE_READ_ROUTES: [&str; 18] = [
     "/v1/sms/mine",
     "/v1/ai/compose/inventory-url",
     "/v1/calendars",
@@ -150,6 +151,7 @@ pub const DEVICE_READ_ROUTES: [&str; 17] = [
     "/v1/transactions",
     "/v1/quotes",
     "/v1/notifications",
+    "/v1/shop/maintenance",
 ];
 
 /// CRM actions the app's composer calls with its device token: exactly these
@@ -522,6 +524,8 @@ mod tests {
             "/v1/transactions/7",
             "/v1/quotes",
             "/v1/notifications/7",
+            "/v1/shop/maintenance",
+            "/v1/shop/maintenance/checks",
             "/v1/ai/compose/inventory-url",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
@@ -540,6 +544,8 @@ mod tests {
             "/v1/dealsx",
             "/v1/transactionsx/1",
             "/v1/quotesx",
+            "/v1/shop/maintenancex",
+            "/v1/shop",
         ] {
             assert!(!device_route(&Method::GET, path), "{path}");
         }

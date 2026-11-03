@@ -334,6 +334,10 @@ pub struct NotificationItem {
     /// The deal an activity notification is about (the phone app opens it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deal_id: Option<i64>,
+    /// The customer an activity notification is about (the phone app opens
+    /// their card when there is no deal).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer_id: Option<i32>,
 }
 
 /// `GET /v1/notifications`.
@@ -515,6 +519,7 @@ async fn unread_email(
                 type_title: None,
                 action_label: None,
                 deal_id: None,
+                customer_id: None,
             }
         })
         .collect())
@@ -613,6 +618,7 @@ async fn activity(
                 customer_name: (!alert && !texting && !port).then_some(customer),
                 action_label: None,
                 deal_id: row.deal_id.filter(|_| !(alert || texting || port)),
+                customer_id: row.customer_id.filter(|_| !(alert || texting || port)),
             }
         })
         .collect())
@@ -691,6 +697,7 @@ async fn telnyx_calls(
                 }),
                 action_label: None,
                 deal_id: None,
+                customer_id: None,
             }
         })
         .collect())
@@ -721,6 +728,7 @@ async fn billing(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>
             type_title: None,
             action_label: Some(row.action_label),
             deal_id: None,
+            customer_id: None,
         })
         .collect())
 }
@@ -828,6 +836,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
         }),
         action_label: None,
         deal_id: None,
+        customer_id: None,
     }
 }
 
@@ -901,7 +910,8 @@ pub async fn list(
 /// Get one activity notification
 ///
 /// The caller's own due activity notification `notif-<id>`, as
-/// `GET /v1/notifications` lists it, with the deal it opens (`deal_id`).
+/// `GET /v1/notifications` lists it, with the deal it opens (`deal_id`),
+/// else its customer (`customer_id`).
 /// The phone app reads it for a `notification` push, which names only the
 /// id. 404 for another user's, a dismissed one, or one `GET
 /// /v1/notifications` would not list.
