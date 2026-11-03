@@ -23,6 +23,7 @@ pub fn notification_type_title(notification_type: &str) -> &'static str {
         "estimate_appointment_reminder" => "In-Home Estimate Reminder",
         "installation_appointment_reminder" => "Installation Reminder",
         "template_appointment_reminder" => "Template Appointment Reminder",
+        "installation_completed" => "Installation Completed",
         "note_added" => "Added a Note",
         "note_edited" => "Edited a Note",
         "note_deleted" => "Deleted a Note",
