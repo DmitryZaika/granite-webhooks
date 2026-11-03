@@ -22590,7 +22590,7 @@
           "sms"
         ],
         "summary": "Retry a failed text",
-        "description": "Sends one of the caller's failed texts again, with its files, and\nreplaces it with the new attempt: the sent text, or the new failure.\nErrors come back as a token in `error`, as when sending.",
+        "description": "Sends one of the caller's failed texts again, with its files, through\nthe provider the caller texts through now (`provider` names where the\nfailed text is stored), and replaces it with the new attempt: the sent\ntext, or the new failure.\nErrors come back as a token in `error`, as when sending.",
         "operationId": "retry_sms",
         "parameters": [
           {
