@@ -79496,7 +79496,7 @@
         "properties": {
           "type": {
             "$ref": "#/components/schemas/LoaBoxKind",
-            "description": "`signature` or `date`."
+            "description": "`signature`, `name` (the signer's printed name) or `date`."
           },
           "page": {
             "type": "integer",
@@ -79530,6 +79530,7 @@
         "description": "What a box holds.",
         "enum": [
           "signature",
+          "name",
           "date"
         ]
       },
