@@ -207,6 +207,7 @@ pub async fn list(
           WHERE s.company_id = "
     ));
     sql.push_bind(user.company_id);
+    let mut searching = false;
     if view != TransactionsView::Admin {
         if let Some(rep) = query
             .sales_rep
@@ -240,9 +241,17 @@ pub async fn list(
                 .push(" OR st.name LIKE ")
                 .push_bind(pattern)
                 .push(")");
+            searching = true;
         }
     }
-    sql.push(" GROUP BY s.id, s.sale_date, c.name, u.name ORDER BY s.sale_date DESC, s.id DESC");
+    sql.push(" GROUP BY s.id, s.sale_date, c.name, u.name ORDER BY ");
+    // A search puts the caller's own sales first
+    if searching {
+        sql.push("s.seller_id = ")
+            .push_bind(user.id)
+            .push(" DESC, ");
+    }
+    sql.push("s.sale_date DESC, s.id DESC");
     let mut rows: Vec<TransactionRow> = sql.build_query_as().fetch_all(&state.pool).await?;
     let separator = if view == TransactionsView::Admin {
         ","
