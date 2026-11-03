@@ -670,3 +670,40 @@ async fn the_customer_adds_the_extras_the_company_offers(pool: MySqlPool) {
         [("priceList", "Haul away"), ("misc", "Stone tear out")]
     );
 }
+
+#[test_db::test(seed)]
+async fn the_customers_notes_go_on_the_quote_and_to_the_team(pool: MySqlPool) {
+    let (server, _sent, chats) = server(&pool).await;
+    price_list(&server, &pool).await;
+    let path = "/v1/public/companies/100/online-quotes";
+
+    let mut long = quote_body("jane@new.example", "3175550199");
+    long["notes"] = json!("x".repeat(2001));
+    server
+        .post(path)
+        .json(&long)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    let mut body = quote_body("jane@new.example", "3175550199");
+    body["notes"] = json!("  Please call after 5.\nGate code 1234.  ");
+    server
+        .post(path)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::CREATED);
+    let notes: Option<String> = sqlx::query_scalar("SELECT notes FROM quotes")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        notes.as_deref(),
+        Some("Please call after 5.\nGate code 1234.")
+    );
+    let chats = chats.lock().unwrap().clone();
+    let text = chats[0]["body"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("\nNotes: Please call after 5. Gate code 1234.\n"),
+        "{text}"
+    );
+}
