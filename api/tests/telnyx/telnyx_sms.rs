@@ -580,15 +580,16 @@ async fn a_failed_delivery_marks_the_text_failed(pool: MySqlPool) {
         )
         .await
         .assert_status_ok();
-    setup
-        .hook(&status(
-            "message.finalized",
-            "msg-1",
-            "delivery_failed",
-            json!([{ "code": "40002", "title": "Blocked as spam" }]),
-        ))
-        .await
-        .assert_status_ok();
+    // Reported under another messaging profile than the company's stored
+    // one: still our text (its Telnyx id), so taken.
+    let mut failed = status(
+        "message.finalized",
+        "msg-1",
+        "delivery_failed",
+        json!([{ "code": "40002", "title": "Blocked as spam" }]),
+    );
+    failed["data"]["payload"]["messaging_profile_id"] = json!("profile-other");
+    setup.hook(&failed).await.assert_status_ok();
     let row = rows(&pool).await.remove(0);
     assert_eq!(
         (

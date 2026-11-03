@@ -36404,7 +36404,7 @@
           "schedule"
         ],
         "summary": "Search events",
-        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`, newest first.",
+        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`, newest first; with `calendar_ids`, only those\ncalendars' events.",
         "operationId": "search_events",
         "parameters": [
           {
@@ -36424,6 +36424,15 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "calendar_ids",
+            "in": "query",
+            "description": "Only these calendars, comma-separated ids; empty means events with no\ncalendar. Left out: every calendar.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -45611,7 +45620,7 @@
           "jobs"
         ],
         "summary": "Run Granite Phone's upkeep",
-        "description": "Signs out the phones of users who may no longer use Granite Phone (or\nwhose company was deleted) and browser phones whose CRM sign-in ended, deletes\nleftover Telnyx credentials of signed-out phones (backing off on\nfailures), deletes Telnyx callbacks older than 30 days, closes calls\nTelnyx never reported the end of (after 6 hours), keeps the customer\nphone index that matches calls to customers in step (customers changed\nor added since the last run; each company's first fill, at most 5,000\ncustomers a run), writes up to 3 AI notes (transcript, note tidied like\nthe CRM's, on the call and its deal, the deal's people notified), gives\nanswered outbound calls their call points (provider `telnyx`), deletes\nTelnyx's copies of copied recordings whose delete failed, retries failed\nrecording copies (5 attempts), brings port-in orders up to date from\nTelnyx (adding ported numbers to the company), and last reads sent 10DLC\ntexting registrations and pending number assignments again. Bounded work per run, and\nno new work after 20 seconds; the next run takes the rest. Returns what\nwas done.",
+        "description": "Signs out the phones of users who may no longer use Granite Phone (or\nwhose company was deleted) and browser phones whose CRM sign-in ended, deletes\nleftover Telnyx credentials of signed-out phones (backing off on\nfailures), deletes Telnyx callbacks older than 30 days, closes calls\nTelnyx never reported the end of (after 6 hours), keeps the customer\nphone index that matches calls to customers in step (customers changed\nor added since the last run; each company's first fill, at most 5,000\ncustomers a run), writes up to 3 AI notes (transcript, note tidied like\nthe CRM's, on the call and its deal, the deal's people notified), gives\nanswered outbound calls their call points (provider `telnyx`), deletes\nTelnyx's copies of copied recordings whose delete failed, retries failed\nrecording copies (5 attempts), brings port-in orders up to date from\nTelnyx (adding ported numbers to the company), asks Telnyx again about\nsent texts with no final status yet (so one that did not go out shows as\nfailed), and last reads sent 10DLC\ntexting registrations and pending number assignments again. Bounded work per run, and\nno new work after 20 seconds; the next run takes the rest. Returns what\nwas done.",
         "operationId": "run_phone_job",
         "responses": {
           "200": {
@@ -62161,7 +62170,7 @@
             }
           },
           "403": {
-            "description": "The messaging profile is not the company's",
+            "description": "An inbound text through a messaging profile that is not the company's",
             "content": {
               "application/json": {
                 "schema": {
@@ -75780,6 +75789,7 @@
           "start_date",
           "end_date",
           "all_day",
+          "unscheduled",
           "created_user_id"
         ],
         "properties": {
@@ -75826,6 +75836,10 @@
           "all_day": {
             "type": "boolean",
             "description": "All-day event."
+          },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Not on the calendar yet; its dates are only when it was made."
           },
           "color": {
             "type": [
@@ -82798,6 +82812,11 @@
           "port_orders_completed": {
             "type": "integer",
             "description": "Ported orders whose numbers were added to the company and set up\non Telnyx; left out when none.",
+            "minimum": 0
+          },
+          "text_statuses_checked": {
+            "type": "integer",
+            "description": "Texts sent through Telnyx whose status was read again from Telnyx;\nleft out when none.",
             "minimum": 0
           },
           "tendlc_refreshed": {
