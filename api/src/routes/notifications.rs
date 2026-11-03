@@ -361,6 +361,7 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "estimate_appointment_reminder" => "In-Home Estimate Reminder",
         "installation_appointment_reminder" => "Installation Reminder",
         "template_appointment_reminder" => "Template Appointment Reminder",
+        "installation_completed" => "Installation Completed",
         "note_added" => "Added a Note",
         "note_edited" => "Edited a Note",
         "note_deleted" => "Deleted a Note",
@@ -538,8 +539,11 @@ async fn activity(
            LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, n.customer_id)
           WHERE n.user_id = ? AND n.is_done = 0 AND (? IS NULL OR n.id = ?)
             -- On a live deal, except 911 alerts, the texting registration's,
-            -- number ports' and AI promises' (they name no deal).
+            -- number ports' and AI promises' (they name no deal), and a
+            -- finished installation of a customer without a deal.
             AND ((d.id IS NOT NULL AND c.id IS NOT NULL)
+                 OR (n.notification_type = 'installation_completed' AND c.id IS NOT NULL
+                     AND c.deleted_at IS NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
                                             'phone_port', 'ai_promise_due', 'ai_promise_digest',
                                             'ai_promise_approval'))
