@@ -28938,8 +28938,8 @@
         "tags": [
           "quotes"
         ],
-        "summary": "List the events a sold quote adds to the schedule",
-        "description": "Returns the company's event templates (Admin > Quotes > Automation), in\nthe order they were added. A template whose calendar was deleted is left\nout, and selling a quote skips it. Change them with\n`POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.",
+        "summary": "List the extra events a quote's sale can add to the schedule",
+        "description": "Returns the company's event templates (Admin > Quotes > Automation), in\nthe order they were added: the checkboxes under Mark as Sold › Extra\nevents. Pass the ticked ones as `extra_events` to\n`POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left\nout. Any employee may read them; admins change them with\n`POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.",
         "operationId": "list_quote_sale_events",
         "responses": {
           "200": {
@@ -28966,7 +28966,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an employee or admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -28996,8 +28996,8 @@
         "tags": [
           "quotes"
         ],
-        "summary": "Add an event a sold quote adds to the schedule",
-        "description": "From then on, marking a quote Sold adds one unscheduled, Not ready event\nto `calendar_id`, titled with the variable and the text (e.g. \"Ostrom\nKitchen - Plumbing\"), at the customer's address, for the schedule manager\nto give a day. Quotes sold before are not changed.",
+        "summary": "Add an extra event a quote's sale can add to the schedule",
+        "description": "From then on, Mark as Sold › Extra events offers it as a checkbox; ticked,\nthe sale adds one unscheduled, Not ready event to `calendar_id`, titled\nwith the variable and the text (e.g. \"Ostrom Kitchen - Plumbing\"), at the\ncustomer's address, for the schedule manager to give a day. Quotes sold\nbefore are not changed.",
         "operationId": "create_quote_sale_event",
         "requestBody": {
           "content": {
@@ -29073,7 +29073,7 @@
         "tags": [
           "quotes"
         ],
-        "summary": "Edit an event a sold quote adds to the schedule",
+        "summary": "Edit an extra event a quote's sale can add to the schedule",
         "description": "Quotes sold from then on get the new calendar and title; events already\nadded stay as they are.",
         "operationId": "update_quote_sale_event",
         "parameters": [
@@ -29163,8 +29163,8 @@
         "tags": [
           "quotes"
         ],
-        "summary": "Delete an event a sold quote adds to the schedule",
-        "description": "Quotes sold from then on no longer get it; events already added stay.",
+        "summary": "Delete an extra event a quote's sale can add to the schedule",
+        "description": "Mark as Sold no longer offers it; events already added stay.",
         "operationId": "delete_quote_sale_event",
         "parameters": [
           {
@@ -29658,7 +29658,7 @@
           "quotes"
         ],
         "summary": "Mark a quote sold",
-        "description": "The quote keeps the option sold and its deal is won with that option's\ntotal (a won deal is made when the customer has none).",
+        "description": "The quote keeps the option sold and its deal is won with that option's\ntotal (a won deal is made when the customer has none). With the company's\nJobs to Unscheduled switch on, it adds the template and installation jobs\nto the schedule's Unscheduled list; each of `extra_events` adds one more\nevent there. Selling a quote again adds no events.",
         "operationId": "mark_quote_sold",
         "parameters": [
           {
@@ -29755,7 +29755,7 @@
           "quotes"
         ],
         "summary": "Undo a sale",
-        "description": "The quote is active again (no option, no signature), its deal reopens and\nthe template and installation jobs the sale added are deleted.",
+        "description": "The quote is active again (no option, no signature), its deal reopens and\nthe template and installation jobs and extra events the sale added are\ndeleted.",
         "operationId": "undo_quote_sale",
         "parameters": [
           {
@@ -69082,7 +69082,7 @@
           },
           "sale_event_templates": {
             "type": "boolean",
-            "description": "The company has event templates: marking a quote sold also adds their\nevents to the schedule's Unscheduled list, whatever\n`auto_unscheduled_jobs` says (`GET /v1/quote-sale-events`, admins)."
+            "description": "The company has event templates: Mark as Sold offers them as Extra\nevents, and each one ticked adds an event to the schedule's Unscheduled\nlist, whatever `auto_unscheduled_jobs` says (`GET /v1/quote-sale-events`)."
           }
         }
       },
@@ -89321,7 +89321,7 @@
       },
       "QuoteSaleEvent": {
         "type": "object",
-        "description": "An event a sold quote adds to the schedule.",
+        "description": "An extra event a quote's sale can add to the schedule.",
         "required": [
           "id",
           "calendar_id",
@@ -90772,6 +90772,13 @@
           "full_height_backsplash": {
             "type": "boolean",
             "description": "Full Height Backsplash (higher than 15\"): also adds a \"FH Backsplash\"\ntemplate and installation job, both `not_ready`."
+          },
+          "extra_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaleExtraEvent"
+            },
+            "description": "Extra events to add (Mark as Sold › Extra events): the event templates\nticked (`GET /v1/quote-sale-events`), each with optional notes. Each\nadds one unscheduled, `not_ready` event on its template's calendar,\nwhether or not the company adds template and installation jobs. Left\nout or empty: none. Unknown template ids are skipped."
           }
         },
         "additionalProperties": false
@@ -90854,6 +90861,28 @@
             "description": "Rooms in the order their first slab was added."
           }
         }
+      },
+      "SaleExtraEvent": {
+        "type": "object",
+        "description": "An extra event ticked in Mark as Sold.",
+        "required": [
+          "template_id"
+        ],
+        "properties": {
+          "template_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The event template (`GET /v1/quote-sale-events`)."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes on the event (trimmed; blank: none)."
+          }
+        },
+        "additionalProperties": false
       },
       "SaleFixture": {
         "type": "object",

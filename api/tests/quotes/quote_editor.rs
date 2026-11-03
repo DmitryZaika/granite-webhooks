@@ -927,7 +927,7 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
         calendar("Electricians").await,
         calendar("Elsewhere").await,
     );
-    // Only admins manage them, and only on their company's calendars.
+    // Only admins change them, and only on their company's calendars.
     server
         .post("/v1/quote-sale-events")
         .with_session(sessions::REP)
@@ -1013,7 +1013,15 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
-    // Selling a quote adds one unscheduled, Not ready event per template,
+    // Salespeople read them: they are Mark as Sold's Extra events.
+    let offered = server
+        .get("/v1/quote-sale-events")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    assert_eq!(offered, list);
+
+    // A sale adds only the extra events ticked, each Not ready with its notes,
     // even with the Jobs to Unscheduled switch off.
     sqlx::query("UPDATE company SET auto_unscheduled_jobs = 0 WHERE id = 100")
         .execute(&pool)
@@ -1034,8 +1042,8 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
     let events = || {
         let pool = pool.clone();
         async move {
-            sqlx::query_as::<_, (String, i32, String, Option<String>)>(
-                "SELECT title, calendar_id, CAST(status AS CHAR), location FROM events
+            sqlx::query_as::<_, (String, i32, String, Option<String>, Option<String>)>(
+                "SELECT title, calendar_id, CAST(status AS CHAR), location, notes FROM events
                   WHERE quote_id = ? AND unscheduled <> 0 AND deleted_date IS NULL ORDER BY id",
             )
             .bind(id)
@@ -1044,15 +1052,37 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
             .unwrap()
         }
     };
+    // Nothing ticked: nothing added.
+    server
+        .post(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .json(&json!({ "option": 0 }))
+        .await
+        .assert_status_ok();
+    assert!(events().await.is_empty());
+    server
+        .delete(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let ticked = json!({
+        "option": 0,
+        "extra_events": [
+            { "template_id": electric },
+            { "template_id": plumbing, "notes": " Shut-off under the sink " },
+            { "template_id": 999_999 },
+        ],
+    });
     for _ in 0..2 {
         server
             .post(&format!("{path}/sale"))
             .with_session(sessions::REP)
-            .json(&json!({ "option": 0 }))
+            .json(&ticked)
             .await
             .assert_status_ok();
     }
-    // Once per quote, however often it is sold.
+    // Once per quote, however often it is sold; in the templates' order; an
+    // unknown template is skipped.
     let address = Some("5 Oak Ave".to_string());
     assert_eq!(
         events().await,
@@ -1062,12 +1092,14 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
                 plumbers,
                 "not_ready".to_string(),
                 address.clone(),
+                Some("Shut-off under the sink".to_string()),
             ),
             (
                 "Erin Builder - Electrical".to_string(),
                 electricians,
                 "not_ready".to_string(),
                 address.clone(),
+                None,
             ),
         ]
     );
@@ -1087,7 +1119,7 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
     server
         .post(&format!("{path}/sale"))
         .with_session(sessions::REP)
-        .json(&json!({ "option": 0 }))
+        .json(&ticked)
         .await
         .assert_status_ok();
     let titles: Vec<String> = events().await.into_iter().map(|e| e.0).collect();

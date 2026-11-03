@@ -1,14 +1,18 @@
-//! Admin > Quotes > Automation > Event templates: extra events a sold quote
-//! adds to the schedule. Each template names a calendar and a title made of a
-//! variable (the quote's or the customer's name) and the text after it, so
-//! selling "Ostrom Kitchen" with a "Quote name" + "Plumbing" template adds an
-//! unscheduled "Ostrom Kitchen - Plumbing" event to that calendar
-//! (`quote_pricing::add_waiting_jobs`). Undo sale deletes them with the
-//! sale's other jobs.
+//! Admin > Quotes > Automation > Event templates: extra events a quote's sale
+//! can add to the schedule.
 //!
-//! - `GET|POST /v1/quote-sale-events`, `PUT|DELETE /v1/quote-sale-events/{id}`
+//! Each template names a calendar and a title made of a variable (the quote's
+//! or the customer's name) and the text after it. Selling "Ostrom Kitchen"
+//! with a "Quote name" + "Plumbing" template ticked in Mark as Sold › Extra
+//! events (`extra_events` of `POST /v1/quotes/{id}/sale`) adds an unscheduled
+//! "Ostrom Kitchen - Plumbing" event to that calendar
+//! (`quote_pricing::add_waiting_jobs`). Undo sale deletes it with the sale's
+//! other jobs.
+//!
+//! - `GET /v1/quote-sale-events` (employees: the Mark as Sold checkboxes)
+//! - `POST /v1/quote-sale-events`, `PUT|DELETE /v1/quote-sale-events/{id}` (admins)
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
@@ -57,7 +61,7 @@ impl TitleVariable {
     }
 }
 
-/// An event a sold quote adds to the schedule.
+/// An extra event a quote's sale can add to the schedule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct QuoteSaleEvent {
     /// Template id.
@@ -198,11 +202,13 @@ async fn find(pool: &MySqlPool, company_id: i32, id: i32) -> ApiResult<()> {
     found.map(|_| ()).ok_or(ApiError::NotFound)
 }
 
-/// List the events a sold quote adds to the schedule
+/// List the extra events a quote's sale can add to the schedule
 ///
 /// Returns the company's event templates (Admin > Quotes > Automation), in
-/// the order they were added. A template whose calendar was deleted is left
-/// out, and selling a quote skips it. Change them with
+/// the order they were added: the checkboxes under Mark as Sold › Extra
+/// events. Pass the ticked ones as `extra_events` to
+/// `POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left
+/// out. Any employee may read them; admins change them with
 /// `POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.
 #[crate::openapi::path(
     get,
@@ -212,24 +218,25 @@ async fn find(pool: &MySqlPool, company_id: i32, id: i32) -> ApiResult<()> {
     responses(
         (status = 200, description = "The company's event templates", body = Vec<QuoteSaleEvent>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn list_sale_events(
     State(state): State<AppState>,
-    AdminUser(user): AdminUser,
+    EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<Vec<QuoteSaleEvent>>> {
     Ok(Json(sale_events(&state.pool, user.company_id).await?))
 }
 
-/// Add an event a sold quote adds to the schedule
+/// Add an extra event a quote's sale can add to the schedule
 ///
-/// From then on, marking a quote Sold adds one unscheduled, Not ready event
-/// to `calendar_id`, titled with the variable and the text (e.g. "Ostrom
-/// Kitchen - Plumbing"), at the customer's address, for the schedule manager
-/// to give a day. Quotes sold before are not changed.
+/// From then on, Mark as Sold › Extra events offers it as a checkbox; ticked,
+/// the sale adds one unscheduled, Not ready event to `calendar_id`, titled
+/// with the variable and the text (e.g. "Ostrom Kitchen - Plumbing"), at the
+/// customer's address, for the schedule manager to give a day. Quotes sold
+/// before are not changed.
 #[crate::openapi::path(
     post,
     path = "/v1/quote-sale-events",
@@ -267,7 +274,7 @@ pub async fn create_sale_event(
     Ok((StatusCode::CREATED, Json(CreatedSaleEvent { id })))
 }
 
-/// Edit an event a sold quote adds to the schedule
+/// Edit an extra event a quote's sale can add to the schedule
 ///
 /// Quotes sold from then on get the new calendar and title; events already
 /// added stay as they are.
@@ -311,9 +318,9 @@ pub async fn update_sale_event(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Delete an event a sold quote adds to the schedule
+/// Delete an extra event a quote's sale can add to the schedule
 ///
-/// Quotes sold from then on no longer get it; events already added stay.
+/// Mark as Sold no longer offers it; events already added stay.
 #[crate::openapi::path(
     delete,
     path = "/v1/quote-sale-events/{id}",
