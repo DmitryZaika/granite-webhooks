@@ -38212,7 +38212,7 @@
           "schedule"
         ],
         "summary": "Get the schedule settings",
-        "description": "The day the caller's schedule starts its weeks on (their own choice, else\nthe company's: Sunday unless an admin picked Monday), whether they show\n24-hour times, and the calendar estimates are booked on.",
+        "description": "The day the caller's schedule starts its weeks on (their own choice, else\nthe company's: Sunday unless an admin picked Monday), whether they show\n24-hour times, the calendar estimates are booked on, and the label color\nthey use most.",
         "operationId": "get_schedule_settings",
         "responses": {
           "200": {
@@ -90519,6 +90519,13 @@
             ],
             "format": "int32",
             "description": "The calendar the deal page's Schedule estimate button books on: the\none an admin picked, else the built-in Estimates calendar (null when\nthere is neither)."
+          },
+          "favorite_color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The label color the caller gave most of the events they added in the\nlast 90 days (null when none): a new event starts with it."
           }
         }
       },

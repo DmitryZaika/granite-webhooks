@@ -2,7 +2,8 @@
 //! own (the schedule's settings button).
 //!
 //! - `GET /v1/schedule/settings` → the day the caller's weeks start on, their
-//!   12- or 24-hour times and the calendar the Schedule estimate button books on
+//!   12- or 24-hour times, the calendar the Schedule estimate button books on
+//!   and the label color they use most
 //! - `PUT /v1/schedule/settings` → an admin changes the company's
 //! - `PUT /v1/schedule/settings/me` → a user changes their own
 
@@ -39,6 +40,9 @@ pub struct ScheduleSettings {
     /// one an admin picked, else the built-in Estimates calendar (null when
     /// there is neither).
     pub estimates_calendar_id: Option<i32>,
+    /// The label color the caller gave most of the events they added in the
+    /// last 90 days (null when none): a new event starts with it.
+    pub favorite_color: Option<String>,
 }
 
 /// `PUT /v1/schedule/settings`: only the fields sent change.
@@ -70,11 +74,26 @@ pub async fn estimates_calendar_id(
     .await
 }
 
+/// The color the user gave most of the events they added in the last 90
+/// days; the latest wins a tie.
+async fn favorite_color(pool: &MySqlPool, user_id: i32) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT color FROM events
+          WHERE created_user_id = ? AND created_date >= NOW() - INTERVAL 90 DAY
+            AND COALESCE(TRIM(color), '') <> ''
+          GROUP BY color ORDER BY COUNT(*) DESC, MAX(id) DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Get the schedule settings
 ///
 /// The day the caller's schedule starts its weeks on (their own choice, else
 /// the company's: Sunday unless an admin picked Monday), whether they show
-/// 24-hour times, and the calendar estimates are booked on.
+/// 24-hour times, the calendar estimates are booked on, and the label color
+/// they use most.
 #[crate::openapi::path(
     get,
     path = "/v1/schedule/settings",
@@ -116,6 +135,7 @@ pub async fn settings(
         company_week_starts_on: week_start(company_monday),
         time_24h,
         estimates_calendar_id: estimates_calendar_id(&state.pool, user.company_id).await?,
+        favorite_color: favorite_color(&state.pool, user.id).await?,
     }))
 }
 
