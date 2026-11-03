@@ -13,6 +13,7 @@
 //! - `POST   /v1/phone/admin/ports/{id}/cancel`      → ask Telnyx to cancel
 //! - `GET    /v1/phone/admin/ports/{id}/requirements`, `/foc-windows`, `/loa-template`
 //! - `POST   /v1/phone/admin/ports/{id}/documents`   → the signed LOA, the bill
+//! - `/v1/phone/admin/ports/{id}/loa/*`, `/v1/public/port-loa/*` → e-signing the LOA (`port_loa.rs`)
 //! - `GET    /v1/phone/admin/ports/{id}/timeline`, `GET|POST .../comments`
 //!
 //! Telnyx's refusals come back as 400 with its reason, phone numbers
@@ -378,7 +379,7 @@ fn detail(
 
 /// A Telnyx porting failure for the admin: 400 with Telnyx's reason when it
 /// refused, 503 when Telnyx is not set up here, 502 when it did not answer.
-fn telnyx_refused(err: &PortingError, what: &'static str) -> ApiError {
+pub(super) fn telnyx_refused(err: &PortingError, what: &'static str) -> ApiError {
     tracing::warn!(error = %err, code = ?err.code(), what, "Telnyx porting request failed");
     match err {
         PortingError::NotConfigured => {
@@ -415,7 +416,7 @@ async fn port_setup(state: &AppState, company_id: i32) -> ApiResult<CompanyConfi
     Ok(config)
 }
 
-async fn company_port(state: &AppState, company_id: i32, id: i64) -> ApiResult<PortRow> {
+pub(super) async fn company_port(state: &AppState, company_id: i32, id: i64) -> ApiResult<PortRow> {
     port::load(&state.pool, company_id, id)
         .await?
         .ok_or(ApiError::NotFound)
@@ -1751,7 +1752,6 @@ pub async fn upload_port_document(
     Path(id): Path<i64>,
     JsonBody(input): JsonBody<PortDocumentInput>,
 ) -> ApiResult<Json<PortOrderDetail>> {
-    let pool = &state.pool;
     let row = company_port(&state, user.company_id, id).await?;
     if !row.status.editable() {
         return Err(ApiError::Conflict(
@@ -1783,15 +1783,41 @@ pub async fn upload_port_document(
         ),
         _ => None,
     };
-    let config = port_setup(&state, user.company_id).await?;
     let filename = document_name(&input.filename, extension);
-    let reference = format!("granite-c{}-port-{id}", user.company_id);
+    attach_document(
+        &state,
+        &row,
+        input.kind,
+        requirement,
+        &filename,
+        &bytes,
+        user.id,
+    )
+    .await
+    .map(Json)
+}
+
+/// Uploads a checked file to Telnyx and attaches it to the order as `kind`
+/// (a requirement's with `requirement`); written to the timeline and the
+/// audit log as `actor`'s. The order as Telnyx has it now.
+pub(super) async fn attach_document(
+    state: &AppState,
+    row: &PortRow,
+    kind: PortDocumentKind,
+    requirement: Option<String>,
+    filename: &str,
+    bytes: &[u8],
+    actor: i32,
+) -> ApiResult<PortOrderDetail> {
+    let pool = &state.pool;
+    let config = port_setup(state, row.company_id).await?;
+    let reference = format!("granite-c{}-port-{}", row.company_id, row.id);
     let document = state
         .telnyx
-        .upload_document(&filename, &bytes, &reference)
+        .upload_document(filename, bytes, &reference)
         .await
         .map_err(|err| telnyx_refused(&err, "upload porting document"))?;
-    let changes = match (input.kind, requirement) {
+    let changes = match (kind, requirement) {
         (PortDocumentKind::Loa, _) => json!({ "documents": { "loa": document } }),
         (PortDocumentKind::Invoice, _) => json!({ "documents": { "invoice": document } }),
         (PortDocumentKind::Requirement, Some(requirement)) => json!({
@@ -1800,34 +1826,34 @@ pub async fn upload_port_document(
         (PortDocumentKind::Requirement, None) => json!({}),
     };
     let (row, order) = send_changes(
-        &state,
-        &row,
+        state,
+        row,
         &config,
         changes,
-        user.id,
+        actor,
         "attach porting document",
     )
     .await?;
     record(
         pool,
-        user.company_id,
-        Some(id),
+        row.company_id,
+        Some(row.id),
         "document",
         None,
-        Some(input.kind.as_str()),
-        Some(user.id),
+        Some(kind.as_str()),
+        Some(actor),
     )
     .await?;
     audit(
         pool,
-        user.company_id,
-        Some(user.id),
+        row.company_id,
+        Some(actor),
         "port_document_uploaded",
-        id,
-        &json!({ "kind": input.kind }),
+        row.id,
+        &json!({ "kind": kind }),
     )
     .await?;
-    Ok(Json(detail(&row, Some(&order), None)))
+    Ok(detail(&row, Some(&order), None))
 }
 
 /// One entry of a port's timeline.
