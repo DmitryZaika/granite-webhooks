@@ -42505,6 +42505,83 @@
         ]
       }
     },
+    "/v1/ai/port-ask": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Ask AI about a port's steps",
+        "description": "Answers a question such as what goes in a field or what to upload, from\nthe step the user is on and the details as typed. Nothing is saved.",
+        "operationId": "ask_port",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortAskInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortAskResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No question, or a question too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed or answered nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/ai/port-bill-read": {
       "post": {
         "tags": [
@@ -82500,6 +82577,13 @@
                 "type": "null"
               }
             ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Anything the customer wants to tell the team, up to 2000 characters;\nsaved as the quote's notes and put in the team's notice. Optional."
           }
         },
         "additionalProperties": false
@@ -84488,6 +84572,47 @@
           "comment": {
             "type": "boolean",
             "description": "Write to Telnyx's porting team (`POST .../comments`)."
+          }
+        }
+      },
+      "PortAskInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/port-ask`.",
+        "required": [
+          "question",
+          "details"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "What the user asks."
+          },
+          "step": {
+            "type": "string",
+            "description": "The step they are on: `business`, `documents`, `date` or `review`."
+          },
+          "loaAttached": {
+            "type": "boolean",
+            "description": "Whether the signed LOA and the recent bill are attached."
+          },
+          "billAttached": {
+            "type": "boolean"
+          },
+          "details": {
+            "$ref": "#/components/schemas/PortCheckInput",
+            "description": "The Business details as typed (the PIN itself is not sent)."
+          }
+        }
+      },
+      "PortAskResult": {
+        "type": "object",
+        "description": "The AI's answer.",
+        "required": [
+          "answer"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
           }
         }
       },

@@ -104,7 +104,7 @@ pub struct PortCheckResult {
     pub issues: Vec<PortCheckIssue>,
 }
 
-fn user_message(input: &PortCheckInput) -> String {
+pub(crate) fn user_message(input: &PortCheckInput) -> String {
     json!({
         "numbers_being_ported": input.phone_numbers,
         "losing_carrier": input.old_carrier,
@@ -194,9 +194,8 @@ pub async fn port_details_check(
         .chat(&state.pool, caller, &chat)
         .await
         .map_err(|err| ApiError::Upstream(err.to_string()))?;
-    let issues = parse_issues(&reply).ok_or_else(|| {
-        ApiError::Upstream("Could not read the AI's answer. Try again.".into())
-    })?;
+    let issues = parse_issues(&reply)
+        .ok_or_else(|| ApiError::Upstream("Could not read the AI's answer. Try again.".into()))?;
     Ok(Json(PortCheckResult { issues }))
 }
 
