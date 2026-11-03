@@ -69028,7 +69028,8 @@
           "telnyx",
           "telnyx_sms",
           "auto_sale",
-          "auto_unscheduled_jobs"
+          "auto_unscheduled_jobs",
+          "sale_event_templates"
         ],
         "properties": {
           "quickbooks_enabled": {
@@ -69077,7 +69078,11 @@
           },
           "auto_unscheduled_jobs": {
             "type": "boolean",
-            "description": "Marking a quote sold adds its template and installation to the\nschedule's Unscheduled list (Admin › Automations,\n`PUT /v1/company/auto-unscheduled-jobs`)."
+            "description": "Marking a quote sold adds its template and installation to the\nschedule's Unscheduled list (Admin › Quotes › Automation,\n`PUT /v1/company/auto-unscheduled-jobs`)."
+          },
+          "sale_event_templates": {
+            "type": "boolean",
+            "description": "The company has event templates: marking a quote sold also adds their\nevents to the schedule's Unscheduled list, whatever\n`auto_unscheduled_jobs` says (`GET /v1/quote-sale-events`, admins)."
           }
         }
       },

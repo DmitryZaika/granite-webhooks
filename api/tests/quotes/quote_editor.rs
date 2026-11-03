@@ -998,6 +998,14 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
             },
         ])
     );
+    // Everyone's company features say there are templates (the quote
+    // page's Undo sale warns their events will go).
+    let features = server
+        .get("/v1/company/features")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    assert_eq!(features["sale_event_templates"], true);
     // Another company's admin can't touch them.
     server
         .delete(&format!("/v1/quote-sale-events/{plumbing}"))
