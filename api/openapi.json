@@ -28933,6 +28933,303 @@
         ]
       }
     },
+    "/v1/quote-sale-events": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List the events a sold quote adds to the schedule",
+        "description": "Returns the company's event templates (Admin > Quotes > Automation), in\nthe order they were added. A template whose calendar was deleted is left\nout, and selling a quote skips it. Change them with\n`POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.",
+        "operationId": "list_quote_sale_events",
+        "responses": {
+          "200": {
+            "description": "The company's event templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QuoteSaleEvent"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Add an event a sold quote adds to the schedule",
+        "description": "From then on, marking a quote Sold adds one unscheduled, Not ready event\nto `calendar_id`, titled with the variable and the text (e.g. \"Ostrom\nKitchen - Plumbing\"), at the customer's address, for the schedule manager\nto give a day. Quotes sold before are not changed.",
+        "operationId": "create_quote_sale_event",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteSaleEventInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedSaleEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Text too long, or no such calendar in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-sale-events/{id}": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Edit an event a sold quote adds to the schedule",
+        "description": "Quotes sold from then on get the new calendar and title; events already\nadded stay as they are.",
+        "operationId": "update_quote_sale_event",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteSaleEventInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Text too long, or no such calendar in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such template in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete an event a sold quote adds to the schedule",
+        "description": "Quotes sold from then on no longer get it; events already added stay.",
+        "operationId": "delete_quote_sale_event",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such template in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quotes/{id}/drawing": {
       "put": {
         "tags": [
@@ -38844,6 +39141,66 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/notifications/templates/order": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Put customer notification templates in order",
+        "description": "The admin's drag order in Admin > Schedule; the event form lists\nconfirmations the same way.",
+        "operationId": "order_schedule_notification_templates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateOrderInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
           },
           "401": {
             "description": "No valid session",
@@ -70447,6 +70804,21 @@
           }
         }
       },
+      "CreatedSaleEvent": {
+        "type": "object",
+        "description": "`POST /v1/quote-sale-events`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The new template.",
+            "minimum": 0
+          }
+        }
+      },
       "CreatedSlab": {
         "type": "object",
         "description": "A slab just added.",
@@ -81812,7 +82184,8 @@
           "name",
           "kind",
           "channel",
-          "body"
+          "body",
+          "position"
         ],
         "properties": {
           "id": {
@@ -81842,6 +82215,11 @@
           "body": {
             "type": "string",
             "description": "The text, plain; may hold `{{variables}}`."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Place in the admin's order: lower first."
           }
         }
       },
@@ -88935,6 +89313,64 @@
             "description": "What changed."
           }
         }
+      },
+      "QuoteSaleEvent": {
+        "type": "object",
+        "description": "An event a sold quote adds to the schedule.",
+        "required": [
+          "id",
+          "calendar_id",
+          "calendar_name",
+          "title_variable",
+          "title_text"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Template id."
+          },
+          "calendar_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The calendar the event goes on."
+          },
+          "calendar_name": {
+            "type": "string",
+            "description": "That calendar's name."
+          },
+          "title_variable": {
+            "$ref": "#/components/schemas/TitleVariable",
+            "description": "What the event's title starts with."
+          },
+          "title_text": {
+            "type": "string",
+            "description": "What follows the variable, e.g. \"Plumbing\"; empty: the variable alone."
+          }
+        }
+      },
+      "QuoteSaleEventInput": {
+        "type": "object",
+        "description": "Body of creating or saving an event template.",
+        "required": [
+          "calendar_id"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A calendar of the company (`GET /v1/calendars`)."
+          },
+          "title_variable": {
+            "$ref": "#/components/schemas/TitleVariable",
+            "description": "What the title starts with (default `quote_name`)."
+          },
+          "title_text": {
+            "type": "string",
+            "description": "What follows the variable, e.g. \"Plumbing\" (at most 200 characters;\nblank: the variable alone)."
+          }
+        },
+        "additionalProperties": false
       },
       "QuoteSettings": {
         "type": "object",
@@ -96537,6 +96973,23 @@
           }
         }
       },
+      "TemplateOrderInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/schedule/notifications/templates/order`.",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Template ids, first to last. Ids of other companies are ignored."
+          }
+        }
+      },
       "TemplateScope": {
         "type": "string",
         "description": "Who sees a template.",
@@ -98755,6 +99208,14 @@
             "description": "The text (an email starts with its subject line)."
           }
         }
+      },
+      "TitleVariable": {
+        "type": "string",
+        "description": "What an event template's title starts with.",
+        "enum": [
+          "quote_name",
+          "customer_name"
+        ]
       },
       "Todo": {
         "type": "object",

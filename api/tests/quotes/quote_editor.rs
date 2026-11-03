@@ -898,3 +898,190 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
     }
     assert_eq!(counts, [2, 0, 2]);
 }
+
+#[test_db::test(seed)]
+async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    sqlx::query(
+        "INSERT INTO calendars (company_id, name, color, slug) VALUES
+           (100, 'Plumbers', 'green', NULL),
+           (100, 'Electricians', 'red', NULL),
+           (101, 'Elsewhere', 'blue', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let calendar = |name: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i32>("SELECT id FROM calendars WHERE name = ?")
+                .bind(name)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let (plumbers, electricians, elsewhere) = (
+        calendar("Plumbers").await,
+        calendar("Electricians").await,
+        calendar("Elsewhere").await,
+    );
+    // Only admins manage them, and only on their company's calendars.
+    server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::REP)
+        .json(&json!({ "calendar_id": plumbers, "title_text": "Plumbing" }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "calendar_id": elsewhere, "title_text": "Plumbing" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "calendar_id": plumbers, "title_text": "x".repeat(201) }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let res = server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "calendar_id": plumbers, "title_text": " Plumbing " }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let plumbing = res.json::<Value>()["id"].as_i64().unwrap();
+    let res = server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .json(&json!({
+            "calendar_id": plumbers,
+            "title_variable": "customer_name",
+            "title_text": "Electric",
+        }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let electric = res.json::<Value>()["id"].as_i64().unwrap();
+    server
+        .put(&format!("/v1/quote-sale-events/{electric}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({
+            "calendar_id": electricians,
+            "title_variable": "customer_name",
+            "title_text": "Electrical",
+        }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let list = server
+        .get("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .await
+        .json::<Value>();
+    assert_eq!(
+        list,
+        json!([
+            {
+                "id": plumbing,
+                "calendar_id": plumbers,
+                "calendar_name": "Plumbers",
+                "title_variable": "quote_name",
+                "title_text": "Plumbing",
+            },
+            {
+                "id": electric,
+                "calendar_id": electricians,
+                "calendar_name": "Electricians",
+                "title_variable": "customer_name",
+                "title_text": "Electrical",
+            },
+        ])
+    );
+    // Another company's admin can't touch them.
+    server
+        .delete(&format!("/v1/quote-sale-events/{plumbing}"))
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // Selling a quote adds one unscheduled, Not ready event per template,
+    // even with the Jobs to Unscheduled switch off.
+    sqlx::query("UPDATE company SET auto_unscheduled_jobs = 0 WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id = create(
+        &server,
+        json!({ "customer_id": 1004, "quote_name": "Ostrom Kitchen" }),
+    )
+    .await;
+    let path = format!("/v1/quotes/{id}");
+    server
+        .put(&format!("{path}/drawing"))
+        .with_session(sessions::REP)
+        .json(&json!({ "doc": doc("Ubatuba") }))
+        .await
+        .assert_status_ok();
+    let events = || {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, i32, String, Option<String>)>(
+                "SELECT title, calendar_id, CAST(status AS CHAR), location FROM events
+                  WHERE quote_id = ? AND unscheduled <> 0 AND deleted_date IS NULL ORDER BY id",
+            )
+            .bind(id)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    for _ in 0..2 {
+        server
+            .post(&format!("{path}/sale"))
+            .with_session(sessions::REP)
+            .json(&json!({ "option": 0 }))
+            .await
+            .assert_status_ok();
+    }
+    // Once per quote, however often it is sold.
+    let address = Some("5 Oak Ave".to_string());
+    assert_eq!(
+        events().await,
+        [
+            (
+                "Ostrom Kitchen - Plumbing".to_string(),
+                plumbers,
+                "not_ready".to_string(),
+                address.clone(),
+            ),
+            (
+                "Erin Builder - Electrical".to_string(),
+                electricians,
+                "not_ready".to_string(),
+                address.clone(),
+            ),
+        ]
+    );
+    // Undo sale deletes them; selling again adds them anew, without a
+    // deleted template's event.
+    server
+        .delete(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(events().await.is_empty());
+    server
+        .delete(&format!("/v1/quote-sale-events/{electric}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .post(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .json(&json!({ "option": 0 }))
+        .await
+        .assert_status_ok();
+    let titles: Vec<String> = events().await.into_iter().map(|e| e.0).collect();
+    assert_eq!(titles, ["Ostrom Kitchen - Plumbing"]);
+}
