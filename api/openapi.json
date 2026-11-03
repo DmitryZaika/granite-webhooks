@@ -57783,6 +57783,498 @@
         ]
       }
     },
+    "/v1/phone/admin/ports/{id}/loa/sign": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Sign a port's LOA now",
+        "description": "For the authorized person signing on this screen: prints the drawn\nsignature and today's date in the boxes on Telnyx's LOA and attaches it\nas the signed LOA (it replaces one attached). Only while the order takes\nchanges (409 otherwise). Audited with the confirmed name. Company admins\n(and super admins, superusers) only.",
+        "operationId": "sign_phone_port_loa",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The port order (`PortOrder.id`)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoaSignInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The order with the signed LOA attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortOrderDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, no signature box, no drawn signature, or Telnyx refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such port in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order can no longer be changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/admin/ports/{id}/loa/invite": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Send the LOA to be signed",
+        "description": "Emails the authorized person a link to sign the port's LOA on a page of\nits own (no account; good for 7 days and one signature). A new link\nreplaces the port's open one. The order must take changes (409\notherwise). Audited. Company admins (and super admins, superusers) only.",
+        "operationId": "invite_phone_port_loa_signer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The port order (`PortOrder.id`)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoaInviteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The link was emailed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoaInviteSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name or not an email address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such port in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order can no longer be changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The email could not be sent; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/public/port-loa/{token}": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "A signing link's page",
+        "description": "Who is asked to sign which port, and whether the link still works. No\nsession: the link's token is the proof. 404 for an unknown link.",
+        "operationId": "view_port_loa_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The link's token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoaInviteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/port-loa/{token}/template": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "A signing link's LOA",
+        "description": "The port's LOA from Telnyx (a PDF), while the link works (409 once it\nwas signed or expired). No session: the link's token is the proof.",
+        "operationId": "port_loa_invite_template",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The link's token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The LOA to sign",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Telnyx refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The link was signed or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/port-loa/{token}/sign": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Sign through a link",
+        "description": "Prints the drawn signature and today's date in the boxes on the port's\nLOA and attaches it as the signed LOA, as the admin who sent the link;\nthe link then stops working and that admin is emailed. 409 once the link\nwas signed or expired. No session: the link's token is the proof.",
+        "operationId": "sign_port_loa_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The link's token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoaLinkSignInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoaInviteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No signature box, no drawn signature, or Telnyx refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The link was signed or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/phone/pushes/notification": {
       "post": {
         "tags": [
@@ -78987,6 +79479,181 @@
           "recording": {
             "type": "boolean",
             "description": "The call is being recorded now."
+          }
+        }
+      },
+      "LoaBox": {
+        "type": "object",
+        "description": "Where the signature or the date goes on the LOA: points from the page's\ntop-left corner, as the signing editor finds them.",
+        "required": [
+          "type",
+          "page",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/LoaBoxKind",
+            "description": "`signature` or `date`."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "description": "From 1."
+          },
+          "x": {
+            "type": "number",
+            "format": "double",
+            "description": "Left edge."
+          },
+          "y": {
+            "type": "number",
+            "format": "double",
+            "description": "Top edge."
+          },
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "Width."
+          },
+          "height": {
+            "type": "number",
+            "format": "double",
+            "description": "Height."
+          }
+        }
+      },
+      "LoaBoxKind": {
+        "type": "string",
+        "description": "What a box holds.",
+        "enum": [
+          "signature",
+          "date"
+        ]
+      },
+      "LoaInviteInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/admin/ports/{id}/loa/invite`.",
+        "required": [
+          "signerName",
+          "email"
+        ],
+        "properties": {
+          "signerName": {
+            "type": "string",
+            "description": "The authorized person."
+          },
+          "email": {
+            "type": "string",
+            "description": "Where the link goes."
+          }
+        }
+      },
+      "LoaInviteSent": {
+        "type": "object",
+        "description": "The link was emailed.",
+        "required": [
+          "email",
+          "expiresAt"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Who it went to."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the link stops working."
+          }
+        }
+      },
+      "LoaInviteStatus": {
+        "type": "string",
+        "description": "Where a link is.",
+        "enum": [
+          "open",
+          "signed",
+          "expired"
+        ]
+      },
+      "LoaInviteView": {
+        "type": "object",
+        "description": "What the link's page shows.",
+        "required": [
+          "status",
+          "signerName",
+          "companyName",
+          "numbers"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/LoaInviteStatus",
+            "description": "Where the link is."
+          },
+          "signerName": {
+            "type": "string",
+            "description": "The authorized person asked to sign."
+          },
+          "companyName": {
+            "type": "string",
+            "description": "The company moving its numbers."
+          },
+          "numbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The numbers moving (E.164)."
+          }
+        }
+      },
+      "LoaLinkSignInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/port-loa/{token}/sign`.",
+        "required": [
+          "fields",
+          "signature"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoaBox"
+            },
+            "description": "Where to print the signature and the date."
+          },
+          "signature": {
+            "type": "string",
+            "description": "The drawn signature: a PNG data URL."
+          }
+        }
+      },
+      "LoaSignInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/admin/ports/{id}/loa/sign`.",
+        "required": [
+          "fields",
+          "signature",
+          "signerName"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoaBox"
+            },
+            "description": "Where to print the signature and the date."
+          },
+          "signature": {
+            "type": "string",
+            "description": "The drawn signature: a PNG data URL."
+          },
+          "signerName": {
+            "type": "string",
+            "description": "The authorized person the admin confirms they are."
           }
         }
       },
