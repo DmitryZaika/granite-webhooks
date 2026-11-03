@@ -87024,6 +87024,13 @@
             ],
             "format": "int32",
             "description": "The template used (counts toward the default)."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SendAttachment"
+            },
+            "description": "Files sent with the email, each uploaded by the caller\n(`POST /v1/uploads`, folder `emails`, with its `token`)."
           }
         },
         "additionalProperties": false
