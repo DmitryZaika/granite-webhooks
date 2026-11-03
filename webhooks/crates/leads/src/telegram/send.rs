@@ -97,8 +97,11 @@ where
     bot.send_message(ChatId(chat_id), message.to_string()).await
 }
 
-/// The managers' Telegram chats, leaving out managers with the app (they get
-/// the lead there only), and whether any manager has the app.
+/// The managers' Telegram chats, and whether any manager has the app.
+///
+/// Managers with the app still get the lead in Telegram: that message carries
+/// the buttons that assign it to a sales rep. (A rep with the app gets their
+/// leads there only.)
 async fn get_manager_telegram_ids(
     pool: &MySqlPool,
     company_id: i32,
@@ -110,11 +113,7 @@ async fn get_manager_telegram_ids(
         .collect();
     let ids: Vec<i32> = managers.iter().map(|u| u.id).collect();
     let with_app = users_with_app(pool, company_id, &ids).await;
-    let telegram_ids = managers
-        .iter()
-        .filter(|u| !with_app.contains(&u.id))
-        .filter_map(|u| u.telegram_id)
-        .collect();
+    let telegram_ids = managers.iter().filter_map(|u| u.telegram_id).collect();
     (telegram_ids, !with_app.is_empty())
 }
 
