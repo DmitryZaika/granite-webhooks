@@ -16,6 +16,7 @@ struct FeatureRow {
     telnyx_sms: bool,
     auto_sale: bool,
     auto_unscheduled_jobs: bool,
+    auto_invoice: bool,
 }
 
 /// `company c` columns plus the platform-wide rollout defaults
@@ -73,7 +74,8 @@ pub async fn company_features(
                          WHERE t.company_id = c.id AND t.enabled <> 0
                            AND COALESCE(TRIM(t.messaging_profile_id), '') <> '') AS telnyx_sms,
                 c.auto_sale <> 0 AS auto_sale,
-                c.auto_unscheduled_jobs <> 0 AS auto_unscheduled_jobs
+                c.auto_unscheduled_jobs <> 0 AS auto_unscheduled_jobs,
+                c.auto_invoice <> 0 AS auto_invoice
            FROM company c
            {ROLLOUT_JOINS}
           WHERE c.id = ?",
@@ -103,6 +105,7 @@ pub async fn company_features(
             telnyx_sms: false,
             auto_sale: false,
             auto_unscheduled_jobs: false,
+            auto_invoice: false,
         },
         |row| CompanyFeatures {
             quickbooks_enabled: row.quickbooks_enabled,
@@ -117,6 +120,7 @@ pub async fn company_features(
             telnyx_sms: row.telnyx_sms,
             auto_sale: row.auto_sale,
             auto_unscheduled_jobs: row.auto_unscheduled_jobs,
+            auto_invoice: row.auto_invoice,
         },
     ))
 }

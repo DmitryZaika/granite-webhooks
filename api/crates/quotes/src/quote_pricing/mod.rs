@@ -770,7 +770,7 @@ pub async fn mark_quote_sold(
 /// `jobs.full_height_backsplash` each calendar also gets a "FH Backsplash"
 /// job, "not ready", with the same notes. Once per quote: selling it
 /// again adds nothing. Only while the company's switch is on
-/// (`company.auto_unscheduled_jobs`, Admin › Automations).
+/// (`company.auto_unscheduled_jobs`, Admin › Quotes › Automation).
 async fn add_waiting_jobs(
     pool: &MySqlPool,
     quote: &Quote,

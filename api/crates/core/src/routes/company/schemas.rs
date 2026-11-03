@@ -38,10 +38,14 @@ pub struct CompanyFeatures {
     /// it (`/v1/sms/telnyx/...`).
     pub telnyx_sms: bool,
     /// Marking a deal won or a quote sold opens the sale form, filled from
-    /// the quote (Admin › Automations, `PUT /v1/company/auto-sale`).
+    /// the quote (Admin › Quotes › Automation, `PUT /v1/company/auto-sale`).
     pub auto_sale: bool,
     /// Marking a quote sold adds its template and installation to the
-    /// schedule's Unscheduled list (Admin › Automations,
+    /// schedule's Unscheduled list (Admin › Quotes › Automation,
     /// `PUT /v1/company/auto-unscheduled-jobs`).
     pub auto_unscheduled_jobs: bool,
+    /// Marking a quote sold opens its QuickBooks invoice, filled from the sold
+    /// option; confirming it creates the invoice in QuickBooks (Admin › Quotes ›
+    /// Automation, `PUT /v1/company/auto-invoice`).
+    pub auto_invoice: bool,
 }
