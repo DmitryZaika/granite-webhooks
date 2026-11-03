@@ -13414,7 +13414,7 @@
           "deals"
         ],
         "summary": "Create a deal",
-        "description": "Puts the customer in `list_id`. When the customer already has an open\ndeal, that deal is updated and moved instead (`created: false`). The deal\nbelongs to the customer's sales rep, or the caller when there is none; a\ncaller who is a sales rep becomes the rep of a customer without one. Drip\nemails and SMS of the stage are scheduled for lead customers, and the\ncustomer is pushed to the company's CloudTalk contacts.",
+        "description": "Puts the customer in `list_id` as a new deal, even when the customer\nalready has one: existing deals are never changed. The deal\nbelongs to the customer's sales rep, or the caller when there is none; a\ncaller who is a sales rep becomes the rep of a customer without one. Drip\nemails and SMS of the stage are scheduled for lead customers, and the\ncustomer is pushed to the company's CloudTalk contacts.",
         "operationId": "create_deal",
         "requestBody": {
           "content": {
@@ -13428,7 +13428,7 @@
         },
         "responses": {
           "201": {
-            "description": "Deal created or reused",
+            "description": "Deal created",
             "content": {
               "application/json": {
                 "schema": {
@@ -36198,7 +36198,7 @@
           "schedule"
         ],
         "summary": "Tap On my way or Completed",
-        "description": "On my way (today's jobs, before arriving) marks the job and tells the\ncustomer once with the company's On my way message: a text, or an email\nwhen the company cannot text. The status is saved even when the message\ncannot go; `message_error` says why. Completed marks the job done. For the\njob's installer or template maker, or an admin.",
+        "description": "On my way (today's jobs, before arriving) marks the job and tells the\ncustomer once with the company's On my way message: a text, or an email\nwhen the company cannot text. The status is saved even when the message\ncannot go; `message_error` says why. Completed marks the job done; on an\ninstallation its sales rep is told (unless Admin > Schedule turned it\noff). For the\njob's installer or template maker, or an admin.",
         "operationId": "set_crew_status",
         "parameters": [
           {
@@ -38257,7 +38257,7 @@
           "schedule"
         ],
         "summary": "Set the schedule settings",
-        "description": "Saves the day the company's schedule starts its weeks on and the calendar\nestimates are booked on, for everyone.",
+        "description": "Saves the day the company's schedule starts its weeks on, the calendar\nestimates are booked on, and whether the sales rep is told when the\ninstaller taps Completed on an installation, for everyone.",
         "operationId": "set_schedule_settings",
         "requestBody": {
           "content": {
@@ -42422,6 +42422,73 @@
           },
           "502": {
             "description": "OpenAI failed or answered without a template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/port-details-check": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Check a port's business details with AI",
+        "description": "Reads the Business details step as typed and lists what looks wrong\nbefore it is saved. Nothing is saved or sent to Telnyx.",
+        "operationId": "check_port_details",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortCheckInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What looks wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortCheckResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed or answered without a list",
             "content": {
               "application/json": {
                 "schema": {
@@ -71528,11 +71595,11 @@
           "id": {
             "type": "integer",
             "format": "int64",
-            "description": "The new deal, or the customer's open deal that was updated instead."
+            "description": "The new deal."
           },
           "created": {
             "type": "boolean",
-            "description": "False when an open deal of the customer was reused."
+            "description": "Always true: a create never reuses an existing deal."
           }
         }
       },
@@ -83671,6 +83738,106 @@
           }
         }
       },
+      "PortCheckInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/port-details-check`: the form as typed.",
+        "properties": {
+          "phoneNumbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The numbers being ported."
+          },
+          "oldCarrier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The losing carrier, when Telnyx named it."
+          },
+          "entityName": {
+            "type": "string"
+          },
+          "authPersonName": {
+            "type": "string"
+          },
+          "billingPhoneNumber": {
+            "type": "string"
+          },
+          "accountNumber": {
+            "type": "string"
+          },
+          "pinSet": {
+            "type": "boolean",
+            "description": "Whether a PIN is typed or already saved (the PIN itself is not sent)."
+          },
+          "streetAddress": {
+            "type": "string"
+          },
+          "extendedAddress": {
+            "type": "string"
+          },
+          "locality": {
+            "type": "string"
+          },
+          "administrativeArea": {
+            "type": "string"
+          },
+          "postalCode": {
+            "type": "string"
+          },
+          "countryCode": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`full` or `partial`."
+          },
+          "remainingNumbersAction": {
+            "type": "string",
+            "description": "`keep`, `disconnect` or empty."
+          },
+          "newBillingPhoneNumber": {
+            "type": "string"
+          }
+        }
+      },
+      "PortCheckIssue": {
+        "type": "object",
+        "description": "One problem the AI found.",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The form field it is about, or null."
+          },
+          "message": {
+            "type": "string",
+            "description": "What to fix."
+          }
+        }
+      },
+      "PortCheckResult": {
+        "type": "object",
+        "description": "What the AI found; empty when everything looks right.",
+        "required": [
+          "issues"
+        ],
+        "properties": {
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortCheckIssue"
+            }
+          }
+        }
+      },
       "PortComment": {
         "type": "object",
         "description": "A comment on a port.",
@@ -90504,7 +90671,8 @@
         "required": [
           "week_starts_on",
           "company_week_starts_on",
-          "time_24h"
+          "time_24h",
+          "notify_rep_on_install_complete"
         ],
         "properties": {
           "week_starts_on": {
@@ -90533,6 +90701,10 @@
               "null"
             ],
             "description": "The label color the caller gave most of the events they added in the\nlast 90 days (null when none): a new event starts with it."
+          },
+          "notify_rep_on_install_complete": {
+            "type": "boolean",
+            "description": "The job's sales rep is told when the installer taps Completed on an\ninstallation (Admin > Schedule; on unless an admin turned it off)."
           }
         }
       },
@@ -90558,6 +90730,13 @@
             ],
             "format": "int32",
             "description": "A calendar of the caller's company."
+          },
+          "notify_rep_on_install_complete": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Tell the sales rep when the installer taps Completed on an installation."
           }
         }
       },
