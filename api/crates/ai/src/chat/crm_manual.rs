@@ -1261,15 +1261,23 @@ fn asks_inventory_link(normalized: &str) -> bool {
 
 /// Asks for the company's customer quote page ("customer quote link", "link to the online quote"),
 /// not for one quote's link (only its email has it), how to text a quote or why the link
-/// stopped working: the manual's.
+/// stopped working: the manual's. "Customer" may be misspelled ("cusotmer", "costumer"), and
+/// "so a customer can create a quote" asks for the same page.
 fn asks_quote_link(normalized: &str) -> bool {
-    let link = re!(r"\b(?:customer|online|our) quote(?: page)? (?:link|url)\b").is_match(normalized)
-        || re!(r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:customer|online) quote\b")
+    let link = re!(r"\b(?:c[ou]s\w*m\w*rs?|online|our) quote(?: page)? (?:link|url)\b")
+        .is_match(normalized)
+        // "a link ofr a cusotmer quote": any few words between.
+        || re!(r"\b(?:link|url)\b(?: \w+){0,3} (?:c[ou]s\w*m\w*rs?|online) quote\b")
             .is_match(normalized)
         // Not a bare "quote page": that is also the quote page inside the app.
-        || re!(r"\b(?:customer|online) quote page\b").is_match(normalized);
+        || re!(r"\b(?:c[ou]s\w*m\w*rs?|online) quote page\b").is_match(normalized)
+        // Not "the customer got the quote": one quote, by email.
+        || re!(
+            r"\b(?:c[ou]s\w*m\w*rs?|clients?) (?:can |could |to |will |would )?(?:create|make|build|draw|design|start)s? (?:a |an |their |his |her )?(?:own )?(?:online )?quotes?\b"
+        )
+        .is_match(normalized);
     link && !re!(
-        r"\b(?:text|texting|sms|e-?mail|emailed|no longer|not working|doesn'?t work|expired?|(?:de)?activated?)\b"
+        r"\b(?:text|texting|sms|e-?mail|emailed|no longer|not working|doesn'?t work|expired?|(?:de)?activated?)\b|\bto (?:a |the |this )?(?:deal|job|project)\b"
     )
     .is_match(normalized)
 }
@@ -1575,6 +1583,10 @@ mod tests {
             "Link to the online quote please",
             "what's the customer quote page",
             "send me the online quote page",
+            "give me a link ofr a cusotmer quote",
+            "No, so a customer can create a quote.",
+            "link where customers can make their own quote",
+            "costumer quote link",
         ] {
             let answer = customer_link_answer(asked, 7, domain).expect(asked);
             assert!(
@@ -1595,6 +1607,9 @@ mod tests {
             "what does the customer see when i send them the quote link",
             "how to text the quote link",
             "customer says the quote link is no longer active",
+            "how do I link a customer quote to a deal",
+            "how do I create a quote for a customer",
+            "did the customer get the quote",
         ] {
             assert_eq!(customer_link_answer(other, 7, domain), None, "{other}");
         }
