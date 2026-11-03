@@ -64,7 +64,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// top-left corner, as the signing editor finds them.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct LoaBox {
-    /// `signature` or `date`.
+    /// `signature`, `name` (the signer's printed name) or `date`.
     #[serde(rename = "type")]
     pub kind: LoaBoxKind,
     /// From 1.
@@ -84,6 +84,7 @@ pub struct LoaBox {
 #[serde(rename_all = "snake_case")]
 pub enum LoaBoxKind {
     Signature,
+    Name,
     Date,
 }
 
@@ -191,9 +192,14 @@ fn checked_email(typed: &str) -> ApiResult<String> {
     Ok(email.to_string())
 }
 
-/// The boxes as fields with what we print in them: the signature, and
-/// `date` in the date boxes.
-fn stamp_fields(boxes: &[LoaBox], signature: &str, date: &str) -> ApiResult<Vec<SignatureField>> {
+/// The boxes as fields with what we print in them: the signature, the
+/// signer's name and `date`.
+fn stamp_fields(
+    boxes: &[LoaBox],
+    signature: &str,
+    signer: &str,
+    date: &str,
+) -> ApiResult<Vec<SignatureField>> {
     if !boxes.iter().any(|b| b.kind == LoaBoxKind::Signature) || boxes.len() > MAX_BOXES {
         return Err(ApiError::BadRequest(
             "Could not find where to sign on this LOA. Download it and upload a signed copy instead."
@@ -211,6 +217,7 @@ fn stamp_fields(boxes: &[LoaBox], signature: &str, date: &str) -> ApiResult<Vec<
         .map(|b| SignatureField {
             kind: match b.kind {
                 LoaBoxKind::Signature => FieldKind::Signature,
+                LoaBoxKind::Name => FieldKind::Text,
                 LoaBoxKind::Date => FieldKind::Date,
             },
             page: b.page,
@@ -221,6 +228,7 @@ fn stamp_fields(boxes: &[LoaBox], signature: &str, date: &str) -> ApiResult<Vec<
             required: true,
             value: Some(match b.kind {
                 LoaBoxKind::Signature => signature.to_string(),
+                LoaBoxKind::Name => signer.to_string(),
                 LoaBoxKind::Date => date.to_string(),
             }),
             prefill: None,
@@ -265,7 +273,7 @@ async fn sign_and_attach(
         ));
     }
     let date = today(state, row.company_id).await?;
-    let fields = stamp_fields(boxes, signature, &date)?;
+    let fields = stamp_fields(boxes, signature, signer, &date)?;
     let template = state
         .telnyx
         .porting_loa_template(&row.telnyx_order_id)
@@ -771,18 +779,38 @@ mod tests {
         let png = format!(
             "{SIGNATURE_IMAGE_PREFIX}iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
         );
-        let fields = stamp_fields(&[signature_box(), date_box], &png, "11/03/2026").unwrap();
+        let name_box = LoaBox {
+            kind: LoaBoxKind::Name,
+            ..signature_box()
+        };
+        let fields = stamp_fields(
+            &[signature_box(), name_box, date_box],
+            &png,
+            "Georgy Galkin",
+            "11/03/2026",
+        )
+        .unwrap();
         assert_eq!(fields[0].kind, FieldKind::Signature);
         assert_eq!(fields[0].value.as_deref(), Some(png.as_str()));
-        assert_eq!(fields[1].kind, FieldKind::Date);
-        assert_eq!(fields[1].value.as_deref(), Some("11/03/2026"));
+        assert_eq!(fields[1].kind, FieldKind::Text);
+        assert_eq!(fields[1].value.as_deref(), Some("Georgy Galkin"));
+        assert_eq!(fields[2].kind, FieldKind::Date);
+        assert_eq!(fields[2].value.as_deref(), Some("11/03/2026"));
         // No signature box, or no drawn signature: nothing is printed.
         let date_only = LoaBox {
             kind: LoaBoxKind::Date,
             ..signature_box()
         };
-        assert!(stamp_fields(&[date_only], &png, "11/03/2026").is_err());
-        assert!(stamp_fields(&[signature_box()], "not a picture", "11/03/2026").is_err());
+        assert!(stamp_fields(&[date_only], &png, "Georgy Galkin", "11/03/2026").is_err());
+        assert!(
+            stamp_fields(
+                &[signature_box()],
+                "not a picture",
+                "Georgy Galkin",
+                "11/03/2026"
+            )
+            .is_err()
+        );
     }
 
     #[test]
