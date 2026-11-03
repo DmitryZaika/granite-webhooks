@@ -20,6 +20,7 @@ pub mod estimate_time;
 pub mod fuzzy;
 mod handlers;
 pub mod history;
+mod lead_inbox;
 pub mod phones;
 mod projects;
 pub mod queries;
@@ -38,6 +39,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::page))
         .routes(routes!(handlers::emails_batch))
         .routes(routes!(handlers::search))
+        .routes(routes!(lead_inbox::lead_inbox))
         .routes(routes!(duplicates::duplicates))
         .routes(routes!(recipients::recipients))
         .routes(routes!(handlers::get, write::update, write::delete))

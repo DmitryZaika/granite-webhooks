@@ -2212,6 +2212,63 @@
         ]
       }
     },
+    "/v1/customers/lead-inbox": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "List my lead notifications",
+        "description": "The leads assigned to me in the last 14 days; for a sales manager or an\nadmin, also the company's leads of the last 14 days that have no rep yet\nand the sales reps to give them to (with this month's lead count each).",
+        "operationId": "lead_inbox",
+        "responses": {
+          "200": {
+            "description": "My lead notifications",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadInbox"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/duplicates": {
       "get": {
         "tags": [
@@ -76772,6 +76829,93 @@
           }
         }
       },
+      "InboxLead": {
+        "type": "object",
+        "description": "A lead of the inbox.",
+        "required": [
+          "customer_id"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the lead came in."
+          },
+          "assigned_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was first given a rep (null while it has none)."
+          },
+          "sales_rep_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its newest live deal, the one the app opens."
+          }
+        }
+      },
+      "InboxRep": {
+        "type": "object",
+        "description": "A sales rep a manager can give a lead to.",
+        "required": [
+          "id",
+          "month_leads"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "month_leads": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Leads given to them this month (the Telegram button's count)."
+          }
+        }
+      },
       "IndexContact": {
         "type": "object",
         "description": "A customer in the phone's contact index.",
@@ -78008,6 +78152,43 @@
           "has_projects": {
             "type": "boolean",
             "description": "The lead is a business or has projects (show the projects tab)."
+          }
+        }
+      },
+      "LeadInbox": {
+        "type": "object",
+        "description": "`GET /v1/customers/lead-inbox`.",
+        "required": [
+          "is_manager",
+          "unassigned",
+          "assigned",
+          "reps"
+        ],
+        "properties": {
+          "is_manager": {
+            "type": "boolean",
+            "description": "A sales manager or an admin: `unassigned` and `reps` are filled in."
+          },
+          "unassigned": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxLead"
+            },
+            "description": "Leads of the last 14 days without a rep, newest first (managers)."
+          },
+          "assigned": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxLead"
+            },
+            "description": "Leads given a rep in the last 14 days, newest first: mine, or the\ncompany's for a manager."
+          },
+          "reps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxRep"
+            },
+            "description": "The company's sales reps (managers)."
           }
         }
       },
