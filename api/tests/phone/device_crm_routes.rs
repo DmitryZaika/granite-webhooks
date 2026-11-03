@@ -119,14 +119,13 @@ async fn installers_and_template_makers_get_the_schedule_only_app(pool: MySqlPoo
         .add_header(HEADER, token(305))
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
-    // The device token stops at /v1/me/schedule: the rest of /v1/me needs the cookie.
-    for path in ["/v1/me", "/v1/me/todos"] {
-        server
-            .get(path)
-            .add_header(HEADER, token(304))
-            .await
-            .assert_status(StatusCode::UNAUTHORIZED);
-    }
+    // The device token stops at /v1/me/schedule and the to-do list: the rest
+    // of /v1/me needs the cookie.
+    server
+        .get("/v1/me")
+        .add_header(HEADER, token(304))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 
     // A template maker gets the template portal; a super admin never gets one,
     // and neither does a sales rep.
@@ -140,6 +139,55 @@ async fn installers_and_template_makers_get_the_schedule_only_app(pool: MySqlPoo
     )
     .await;
     assert_eq!(portal(&server, 304).await, Value::Null);
+}
+
+#[test_db::test(seed)]
+async fn the_to_do_tab_keeps_the_list_with_its_device_token(pool: MySqlPool) {
+    // Rita (user 100, company 100) signed in on her phone.
+    add_session(&pool, 309, 100, 100).await;
+    let (server, _) = phone_server(pool.clone()).await;
+
+    let added = server
+        .post("/v1/me/todos")
+        .add_header(HEADER, token(309))
+        .json(&json!({ "rich_text": "Call the fabricator" }))
+        .await;
+    added.assert_status(StatusCode::CREATED);
+    let id = added.json::<Value>()["id"].as_i64().unwrap();
+
+    // The phone and her CRM session read the same list.
+    let by_phone = server
+        .get("/v1/me/todos")
+        .add_header(HEADER, token(309))
+        .await;
+    by_phone.assert_status_ok();
+    let by_cookie = server.get("/v1/me/todos").with_session(sessions::REP).await;
+    by_cookie.assert_status_ok();
+    assert_eq!(by_phone.json::<Value>(), by_cookie.json::<Value>());
+    assert!(
+        by_phone.json::<Vec<Value>>().iter().any(|t| t["id"] == id),
+        "the new to-do is listed"
+    );
+
+    server
+        .put(&format!("/v1/me/todos/{id}/done"))
+        .add_header(HEADER, token(309))
+        .json(&json!({ "done": true }))
+        .await
+        .assert_status_success();
+    server
+        .delete("/v1/me/todos/done")
+        .add_header(HEADER, token(309))
+        .await
+        .assert_status_success();
+
+    // A revoked phone reads no list.
+    revoke_session(&pool, 309).await;
+    server
+        .get("/v1/me/todos")
+        .add_header(HEADER, token(309))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 }
 
 #[test_db::test(seed)]

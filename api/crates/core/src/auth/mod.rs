@@ -113,13 +113,17 @@ async fn check_sections(
 /// These prefixes and everything under them. `/v1/me/schedule` is the
 /// schedule-only app of installers and template makers (their web portal);
 /// `/v1/delayed` is the caller's own scheduled texts and emails (list, edit,
-/// send now, cancel), as the composers' Send later list has them on the web.
-pub const DEVICE_ROUTES: [&str; 5] = [
+/// send now, cancel), as the composers' Send later list has them on the web;
+/// `/v1/me/todos` and `/v1/me/todo-order` are the caller's own to-do list
+/// (the app's To do tab).
+pub const DEVICE_ROUTES: [&str; 7] = [
     "/v1/emails",
     "/v1/schedule",
     "/v1/events",
     "/v1/me/schedule",
     "/v1/delayed",
+    "/v1/me/todos",
+    "/v1/me/todo-order",
 ];
 
 /// CRM routes the app reads with its device token, `GET` only (my texts
@@ -479,11 +483,19 @@ mod tests {
             "/v1/delayed/sms",
             "/v1/delayed/emails",
             "/v1/delayed/sms/7/send-now",
+            "/v1/me/todos",
+            "/v1/me/todos/done",
+            "/v1/me/todo-order",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
             assert!(device_route(&Method::POST, path), "{path}");
         }
-        for path in ["/v1/delayed/sms/7", "/v1/delayed/emails/7"] {
+        for path in [
+            "/v1/delayed/sms/7",
+            "/v1/delayed/emails/7",
+            "/v1/me/todos/7",
+            "/v1/me/todos/7/done",
+        ] {
             assert!(device_route(&Method::PUT, path), "{path}");
             assert!(device_route(&Method::DELETE, path), "{path}");
         }
@@ -494,7 +506,7 @@ mod tests {
             "/v1/me",
             "/v1/me/schedulex",
             "/v1/delayedx",
-            "/v1/me/todos",
+            "/v1/me/todosx",
             "/emails",
             "",
         ] {
