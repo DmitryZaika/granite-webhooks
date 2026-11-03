@@ -250,9 +250,9 @@ pub struct DealCreate {
 /// Result of `POST /v1/deals`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DealCreated {
-    /// The new deal, or the customer's open deal that was updated instead.
+    /// The new deal.
     pub id: i64,
-    /// False when an open deal of the customer was reused.
+    /// Always true: a create never reuses an existing deal.
     pub created: bool,
 }
 
