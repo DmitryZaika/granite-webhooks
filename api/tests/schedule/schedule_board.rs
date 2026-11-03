@@ -289,7 +289,7 @@ async fn each_user_picks_their_own_week_start_and_clock(pool: MySqlPool) {
     assert_eq!(admin["time_24h"], false);
 }
 
-#[test_db::test]
+#[test_db::test(seed)]
 async fn settings_name_the_color_a_user_adds_most(pool: MySqlPool) {
     let server = server(pool.clone());
     let favorite = |session: &'static str| {

@@ -246,7 +246,10 @@ async fn tell_rep_installed(
     let Some(job) = job else {
         return Ok(());
     };
-    let Some(rep_id) = job.rep_id.filter(|rep| *rep != by.id) else {
+    // The bell lists it only with a customer, so without one nobody is told.
+    let (Some(rep_id), Some(customer_id)) =
+        (job.rep_id.filter(|rep| *rep != by.id), job.customer_id)
+    else {
         return Ok(());
     };
     let customer = job.customer_name.as_deref().unwrap_or("Your customer");
@@ -260,7 +263,7 @@ async fn tell_rep_installed(
          VALUES (?, ?, ?, ?, 'installation_completed', ?, NOW())",
     )
     .bind(rep_id)
-    .bind(job.customer_id)
+    .bind(customer_id)
     .bind(job.deal_id)
     .bind(&message)
     .bind(by.name.as_deref())
