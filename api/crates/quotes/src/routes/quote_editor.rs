@@ -35,6 +35,8 @@ use crate::quote_pricing::{
 };
 use crate::routes::created::CreatedId;
 use crate::routes::customers::service::IMPORT_PLACEHOLDER;
+use crate::routes::emails::attachment_token;
+use crate::routes::emails::schemas::SendAttachment;
 use crate::routes::emails::thread::sending_address;
 use crate::routes::quote_extras::load_catalog;
 use crate::routes::quote_forms;
@@ -43,7 +45,7 @@ use crate::routes::quote_price_lists::{default_id, find as find_price_list, list
 use crate::routes::templates::order;
 use crate::routes::templates::schemas::{OrderingMode, OrderingType};
 use crate::state::AppState;
-use crate::webhooks_client::OutgoingEmail;
+use crate::webhooks_client::{OutgoingAttachment, OutgoingEmail};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -2334,6 +2336,10 @@ pub struct QuoteEmail {
     /// The template used (counts toward the default).
     #[serde(default)]
     pub template_id: Option<i32>,
+    /// Files sent with the email, each uploaded by the caller
+    /// (`POST /v1/uploads`, folder `emails`, with its `token`).
+    #[serde(default)]
+    pub attachments: Vec<SendAttachment>,
 }
 
 fn escape(text: &str) -> String {
@@ -2392,6 +2398,29 @@ pub async fn email_quote(
             "Recipient and subject are required.".into(),
         ));
     }
+    if input.attachments.len() > 20 {
+        return Err(ApiError::BadRequest(
+            "At most 20 attachments per email.".into(),
+        ));
+    }
+    // Only files the caller uploaded: any other URL could be another company's.
+    if let Some(attachment) = input.attachments.iter().find(|a| {
+        !attachment_token::verify(&state.session_secret, &a.url, user.id, a.token.as_deref())
+    }) {
+        return Err(ApiError::BadRequest(format!(
+            "Attachment is not available: {}",
+            attachment.filename
+        )));
+    }
+    let attachments: Vec<OutgoingAttachment> = input
+        .attachments
+        .iter()
+        .map(|a| OutgoingAttachment {
+            filename: a.filename.clone(),
+            content_type: a.content_type.trim().to_lowercase(),
+            url: a.url.clone(),
+        })
+        .collect();
     // The link exists before filling so `{{quote.link}}` can use it.
     let portal = ensure_portal_token(&state.pool, &quote).await?;
     let email_token = token()?;
@@ -2515,7 +2544,7 @@ pub async fn email_quote(
         reply_to: vec![user.email.clone()],
         in_reply_to: None,
         references: Vec::new(),
-        attachments: Vec::new(),
+        attachments,
         transactional: true,
     };
     if let Err(error) = state.webhooks.send_email(&email).await {
