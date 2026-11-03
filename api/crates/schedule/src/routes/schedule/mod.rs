@@ -57,6 +57,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(notifications::list))
         .routes(routes!(notifications::set_on_my_way))
         .routes(routes!(notifications::create_template))
+        .routes(routes!(notifications::order_templates))
         .routes(routes!(
             notifications::update_template,
             notifications::delete_template

@@ -7,6 +7,7 @@
 //!
 //! - `GET /v1/schedule/notifications` → templates, flows, and whether texting is set up
 //! - `POST /v1/schedule/notifications/templates`, `PUT`/`DELETE …/templates/{id}`
+//! - `PUT /v1/schedule/notifications/templates/order` → the admin's drag order
 //! - `POST /v1/schedule/notifications/flows`, `PUT`/`DELETE …/flows/{id}`
 //! - `PUT /v1/schedule/notifications/on-my-way` → what the customer gets when
 //!   the crew taps On my way (sent by `send_on_my_way`)
@@ -201,6 +202,8 @@ pub struct NotificationTemplate {
     pub subject: Option<String>,
     /// The text, plain; may hold `{{variables}}`.
     pub body: String,
+    /// Place in the admin's order: lower first.
+    pub position: i32,
 }
 
 /// A template of a flow, sent at a time before or after the appointment.
@@ -324,6 +327,13 @@ const fn on() -> bool {
     true
 }
 
+/// Body of `PUT /v1/schedule/notifications/templates/order`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TemplateOrderInput {
+    /// Template ids, first to last. Ids of other companies are ignored.
+    pub ids: Vec<i32>,
+}
+
 /// `POST /v1/schedule/notifications/templates` and `…/flows`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Created {
@@ -339,6 +349,7 @@ struct TemplateRow {
     channel: String,
     subject: Option<String>,
     body: String,
+    position: i32,
 }
 
 impl From<TemplateRow> for NotificationTemplate {
@@ -350,6 +361,7 @@ impl From<TemplateRow> for NotificationTemplate {
             channel: Channel::parse(&row.channel),
             subject: row.subject,
             body: row.body,
+            position: row.position,
         }
     }
 }
@@ -382,10 +394,10 @@ async fn load_templates(
 ) -> Result<Vec<NotificationTemplate>, sqlx::Error> {
     let rows: Vec<TemplateRow> = sqlx::query_as(
         "SELECT id, name, CAST(kind AS CHAR) AS kind, CAST(channel AS CHAR) AS channel,
-                subject, body
+                subject, body, position
            FROM schedule_notification_templates
           WHERE company_id = ? AND deleted_at IS NULL AND (? OR channel <> 'sms')
-          ORDER BY id",
+          ORDER BY position, name, id",
     )
     .bind(company_id)
     .bind(sms_enabled)
@@ -906,8 +918,10 @@ pub async fn create_template(
     let checked = check_template(&state.pool, user.company_id, &input).await?;
     let id = sqlx::query(
         "INSERT INTO schedule_notification_templates
-           (company_id, name, kind, channel, subject, body, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+           (company_id, name, kind, channel, subject, body, created_by, position)
+         SELECT ?, ?, ?, ?, ?, ?, ?, COALESCE(MAX(position), 0) + 1
+           FROM schedule_notification_templates
+          WHERE company_id = ? AND deleted_at IS NULL",
     )
     .bind(user.company_id)
     .bind(checked.name)
@@ -916,6 +930,7 @@ pub async fn create_template(
     .bind(checked.subject)
     .bind(checked.body)
     .bind(user.id)
+    .bind(user.company_id)
     .execute(&state.pool)
     .await?
     .last_insert_id();
@@ -979,6 +994,45 @@ pub async fn update_template(
     .bind(id)
     .execute(&state.pool)
     .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Put customer notification templates in order
+///
+/// The admin's drag order in Admin > Schedule; the event form lists
+/// confirmations the same way.
+#[crate::openapi::path(
+    put,
+    path = "/v1/schedule/notifications/templates/order",
+    operation_id = "order_schedule_notification_templates",
+    tag = "schedule",
+    request_body = TemplateOrderInput,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn order_templates(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    JsonBody(input): JsonBody<TemplateOrderInput>,
+) -> ApiResult<StatusCode> {
+    let mut tx = state.pool.begin().await?;
+    for (position, id) in (1_i32..).zip(&input.ids) {
+        sqlx::query(
+            "UPDATE schedule_notification_templates SET position = ?
+              WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+        )
+        .bind(position)
+        .bind(id)
+        .bind(user.company_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
