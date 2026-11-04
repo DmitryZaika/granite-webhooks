@@ -221,6 +221,18 @@
       "usage_check": "templates_used"
     },
     {
+      "id": "call-coaching",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "call-coaching-panel",
+        "call-coaching-ask"
+      ],
+      "usage_check": "call_coached"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
