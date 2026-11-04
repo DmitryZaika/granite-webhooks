@@ -19,6 +19,7 @@ use crate::openapi::ToSchema;
 use crate::phone::lines::CallerId;
 use crate::routes::company::queries::company_features;
 use crate::state::AppState;
+use crate::storage::{Storage, StorageError};
 use crate::webhooks_client::{OutgoingSms, OutgoingSmsFile, SmsFailure};
 use axum::Json;
 use axum::extract::{Path, State};
@@ -131,6 +132,83 @@ fn valid_key(company_id: i32, key: &str) -> bool {
         && key
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
+}
+
+/// Files saved with an SMS template: the company's uploads, of a type a text
+/// can carry, at most ten; the error token otherwise.
+pub fn check_files(company_id: i32, files: &[SmsFile]) -> Result<(), &'static str> {
+    for file in files {
+        if !valid_key(company_id, &file.s3_key)
+            || !STORED_TYPES.contains(&file.content_type.as_str())
+        {
+            return Err("invalid_attachment");
+        }
+    }
+    if files.len() > MAX_ATTACHMENTS {
+        return Err("too_many_images");
+    }
+    Ok(())
+}
+
+/// The files stored as JSON on an SMS template (`attachments`); none when
+/// unset or unreadable.
+pub fn stored_files(json: Option<&str>) -> Vec<SmsFile> {
+    json.and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default()
+}
+
+/// The files of a company's SMS template, as the webhooks Lambda sends them
+/// (drips and flow steps send them with the text).
+pub async fn template_files(
+    state: &AppState,
+    company_id: i32,
+    template_id: i32,
+) -> Result<Vec<OutgoingSmsFile>, sqlx::Error> {
+    let json: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT CAST(attachments AS CHAR) FROM cloudtalk_sms_templates
+          WHERE id = ? AND company_id = ? LIMIT 1",
+    )
+    .bind(template_id)
+    .bind(company_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let files = stored_files(json.flatten().as_deref());
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+    outgoing_files(&state.storage, &files).map_err(|err| {
+        tracing::error!(?err, template_id, "SMS template files have no public link");
+        sqlx::Error::Protocol(format!("storage: {err:?}"))
+    })
+}
+
+/// The files as the webhooks Lambda sends them, with their public links.
+pub fn outgoing_files(
+    storage: &Storage,
+    files: &[SmsFile],
+) -> Result<Vec<OutgoingSmsFile>, StorageError> {
+    let mut outgoing = Vec::with_capacity(files.len());
+    for file in files {
+        let default_name = if file.content_type.starts_with("image/") {
+            "image"
+        } else {
+            "file"
+        };
+        let filename: String = file.filename.chars().take(255).collect();
+        outgoing.push(OutgoingSmsFile {
+            url: storage.public_url(&file.s3_key)?,
+            s3_key: file.s3_key.clone(),
+            content_type: file.content_type.clone(),
+            filename: if filename.is_empty() {
+                default_name.to_string()
+            } else {
+                filename
+            },
+            width: file.width,
+            height: file.height,
+        });
+    }
+    Ok(outgoing)
 }
 
 /// Checks the request; the error token when it cannot be sent.
@@ -420,30 +498,8 @@ pub async fn deliver_now(
     seat: &Seat,
     request: &SendSmsRequest,
 ) -> Result<Vec<i64>, Undelivered> {
-    let mut attachments = Vec::with_capacity(request.attachments.len());
-    for file in &request.attachments {
-        let default_name = if file.content_type.starts_with("image/") {
-            "image"
-        } else {
-            "file"
-        };
-        let filename: String = file.filename.chars().take(255).collect();
-        attachments.push(OutgoingSmsFile {
-            url: state
-                .storage
-                .public_url(&file.s3_key)
-                .map_err(|err| Undelivered::Api(err.into()))?,
-            s3_key: file.s3_key.clone(),
-            content_type: file.content_type.clone(),
-            filename: if filename.is_empty() {
-                default_name.to_string()
-            } else {
-                filename
-            },
-            width: file.width,
-            height: file.height,
-        });
-    }
+    let attachments = outgoing_files(&state.storage, &request.attachments)
+        .map_err(|err| Undelivered::Api(err.into()))?;
     let outgoing = OutgoingSms {
         provider: provider.as_str().to_string(),
         company_id: user.company_id,

@@ -233,7 +233,12 @@ async fn send_drip(state: &AppState, row: &DueDrip) -> Result<bool, sqlx::Error>
         agent_id: seat.agent_id.clone(),
         phone_digits: phone10,
         text,
-        attachments: Vec::new(),
+        attachments: crate::routes::sms::send::template_files(
+            state,
+            row.company_id,
+            row.template_id,
+        )
+        .await?,
         is_automated: true,
         idempotency_key: Some(format!("sms-drip-{}", row.id)),
     };
