@@ -39,6 +39,7 @@ async fn features_of_each_company(pool: MySqlPool) {
             "telnyx_sms": false,
             "auto_sale": false,
             "auto_unscheduled_jobs": false,
+            "auto_invoice": false,
             "sale_event_templates": false
         })
     );
@@ -57,6 +58,7 @@ async fn features_of_each_company(pool: MySqlPool) {
             "telnyx_sms": false,
             "auto_sale": false,
             "auto_unscheduled_jobs": false,
+            "auto_invoice": false,
             "sale_event_templates": false
         })
     );
@@ -124,6 +126,7 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
             "telnyx_sms": false,
             "auto_sale": false,
             "auto_unscheduled_jobs": false,
+            "auto_invoice": false,
             "sale_event_templates": false
         })
     );

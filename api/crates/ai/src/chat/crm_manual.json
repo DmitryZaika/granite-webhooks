@@ -512,7 +512,13 @@
     "quote email template",
     "quote email templates",
     "pdflink",
-    "pricing settings"
+    "pricing settings",
+    "sale on a win",
+    "jobs to unscheduled",
+    "create invoice from quote",
+    "invoice on sale",
+    "auto invoice",
+    "quote automation"
    ],
    "related": [
     "admin-quotes-price-lists"
