@@ -2218,7 +2218,7 @@
           "customers"
         ],
         "summary": "List my lead notifications",
-        "description": "The leads assigned to me in the last 14 days; for a sales manager or an\nadmin, also the company's leads of the last 14 days that have no rep yet\nand the sales reps to give them to (with this month's lead count each).",
+        "description": "The leads assigned to me in the last 14 days; for a sales manager or an\nadmin, also the company's leads of the last 14 days that have no rep yet\nand the sales reps to give them to (with this month's lead count each).\nEveryone also gets `team`: each sales rep of the company and the leads\ngiven to them this month.",
         "operationId": "lead_inbox",
         "responses": {
           "200": {
@@ -79669,7 +79669,7 @@
       },
       "InboxRep": {
         "type": "object",
-        "description": "A sales rep a manager can give a lead to.",
+        "description": "A sales rep of the company and their lead count this month.",
         "required": [
           "id",
           "month_leads"
@@ -79677,13 +79677,15 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The sales rep's user id (`PUT /v1/customers/{id}/sales-rep` takes it)."
           },
           "name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Their name (null when the account has none)."
           },
           "month_leads": {
             "type": "integer",
@@ -81017,7 +81019,8 @@
           "is_manager",
           "unassigned",
           "assigned",
-          "reps"
+          "reps",
+          "team"
         ],
         "properties": {
           "is_manager": {
@@ -81043,7 +81046,14 @@
             "items": {
               "$ref": "#/components/schemas/InboxRep"
             },
-            "description": "The company's sales reps (managers)."
+            "description": "The company's sales reps to assign a lead to (managers only; empty\nfor a sales rep)."
+          },
+          "team": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxRep"
+            },
+            "description": "Every sales rep of the company with the leads given to them this\nmonth (since the 1st, server time), sorted by name. Filled in for\neveryone, a sales rep too, so they can compare their count with the\nteam's; the same numbers as `reps`."
           }
         }
       },
