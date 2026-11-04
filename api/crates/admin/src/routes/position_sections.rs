@@ -1,14 +1,14 @@
-//! Position access on the Company page: which sections of the app Inventory
-//! Manager and Scheduling Manager open in this company.
+//! Position access on the Company page: which tabs of the app each position
+//! opens in this company.
 //!
-//! - `GET    /v1/company/position-sections`                → every section, and each position's
+//! - `GET    /v1/company/position-sections`                → every tab, and each position's
 //! - `PUT    /v1/company/position-sections/{position_id}`  → this company's own list
 //! - `DELETE /v1/company/position-sections/{position_id}`  → back to the defaults
 //!
-//! The API enforces them (`crate::auth::sections`); the app hides the tabs.
+//! The API applies them (`crate::auth::sections`); the app hides the tabs.
 
 use crate::auth::UserManager;
-use crate::auth::sections::{self, SECTIONED_POSITIONS, SECTIONS};
+use crate::auth::sections::{self, CONFIGURABLE_POSITIONS, TABS};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
@@ -26,26 +26,27 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(save, reset))
 }
 
-/// A part of the app a position may open.
+/// A tab a position may open.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SectionInfo {
-    /// Stable key (`inventory`, `customers`, `schedule`, ...).
+    /// Stable key (`stones`, `customers`, `schedule`, `admin_stones`, ...).
     pub key: &'static str,
-    /// Its name on the Company page.
+    /// Its name on the Company page (admin tabs are listed apart).
     pub label: &'static str,
-    /// Opens admin pages (e.g. the admin inventory) without making the user
-    /// a company admin.
+    /// An admin page: it opens for someone without the Admin switch only
+    /// when one of their positions has it (the Admin switch opens them all).
     pub admin: bool,
 }
 
-/// One sectioned position in the company.
+/// One position whose tabs the company may change.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PositionSections {
-    /// `positions.id`: 12 Inventory Manager, 13 Scheduling Manager.
+    /// `positions.id`: 1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office
+    /// Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager.
     pub position_id: i32,
-    /// The sections it opens in this company, in [`SectionInfo`] order.
+    /// The tabs it opens in this company, in [`SectionInfo`] order.
     pub sections: Vec<&'static str>,
-    /// The sections it opens in a company that has not changed it.
+    /// The tabs it opens in a company that has not changed it.
     pub default_sections: Vec<&'static str>,
     /// The company changed it (false: it uses the defaults).
     pub customized: bool,
@@ -54,9 +55,10 @@ pub struct PositionSections {
 /// `GET /v1/company/position-sections`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PositionAccess {
-    /// Every section, in the order to show them.
+    /// Every tab, in the order to show them: the main app, then admin pages.
     pub sections: Vec<SectionInfo>,
-    /// Each sectioned position. My Account and Report a Bug always stay open.
+    /// Each position whose tabs the company may change. My Account and
+    /// Report a Bug always stay open.
     pub positions: Vec<PositionSections>,
 }
 
@@ -64,19 +66,21 @@ pub struct PositionAccess {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PositionSectionsInput {
-    /// Section keys the position opens (may be empty: then only My Account).
+    /// Tab keys the position opens (may be empty: then only My Account).
     pub sections: Vec<String>,
 }
 
 /// List position access
 ///
-/// Every section of the app, and for Inventory Manager and Scheduling
-/// Manager the sections they open in the company, their defaults and
-/// whether the company changed them. Someone who holds only these positions
-/// reaches only their sections (with several, all of them together); any
-/// other position except the portal ones keeps the whole app. Superusers and
-/// company managers (admins with the Manager position); superusers may pass
-/// `company_id`. Change one with `PUT
+/// Every tab of the app, and for each position the company may change (all
+/// but Super Admin and the portal ones: Shop Worker, Installer, Marketing,
+/// Walk-in, Template Guy) the tabs it opens, its defaults and whether the
+/// company changed them. Someone with several positions gets all their tabs
+/// together. By default every position opens the whole main app, except
+/// Inventory Manager and Scheduling Manager. The Admin switch still opens
+/// every admin page; an admin tab opens that page to someone without it.
+/// Superusers and company managers (admins with the Manager position);
+/// superusers may pass `company_id`. Change one with `PUT
 /// /v1/company/position-sections/{position_id}`.
 #[crate::openapi::path(
     get,
@@ -85,7 +89,7 @@ pub struct PositionSectionsInput {
     tag = "company",
     params(TargetCompany),
     responses(
-        (status = 200, description = "The sections and each position's", body = PositionAccess),
+        (status = 200, description = "The tabs and each position's", body = PositionAccess),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller does not manage the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -98,42 +102,42 @@ pub async fn list(
     Query(query): Query<TargetCompany>,
 ) -> ApiResult<Json<PositionAccess>> {
     let company_id = target(&user, &query);
-    let positions = sections::company_sections(&state.pool, company_id)
+    let positions = sections::company_tabs(&state.pool, company_id)
         .await?
         .into_iter()
         .map(|(position_id, open, customized)| PositionSections {
             position_id,
             sections: open,
-            default_sections: sections::default_sections(position_id).to_vec(),
+            default_sections: sections::default_tabs(position_id),
             customized,
         })
         .collect();
     Ok(Json(PositionAccess {
-        sections: SECTIONS
+        sections: TABS
             .iter()
-            .map(|section| SectionInfo {
-                key: section.key,
-                label: section.label,
-                admin: section.admin,
+            .map(|tab| SectionInfo {
+                key: tab.key,
+                label: tab.label,
+                admin: tab.admin,
             })
             .collect(),
         positions,
     }))
 }
 
-fn sectioned(position_id: i32) -> ApiResult<()> {
-    if SECTIONED_POSITIONS.contains(&position_id) {
+fn configurable(position_id: i32) -> ApiResult<()> {
+    if CONFIGURABLE_POSITIONS.contains(&position_id) {
         Ok(())
     } else {
         Err(ApiError::BadRequest(
-            "Only Inventory Manager and Scheduling Manager have sections".into(),
+            "This position's tabs can't be changed: Super Admin keeps the whole app, and Shop Worker, Installer, Marketing, Walk-in and Template Guy keep their own apps".into(),
         ))
     }
 }
 
-/// Save a position's sections
+/// Save a position's tabs
 ///
-/// Replaces the sections the position opens in the company, from then on
+/// Replaces the tabs the position opens in the company, from then on
 /// for every user holding it (their next request). Unknown keys are refused.
 /// `DELETE` the same path to go back to the defaults.
 #[crate::openapi::path(
@@ -142,13 +146,13 @@ fn sectioned(position_id: i32) -> ApiResult<()> {
     operation_id = "save_position_sections",
     tag = "company",
     params(
-        ("position_id" = i32, Path, description = "12 Inventory Manager, 13 Scheduling Manager"),
+        ("position_id" = i32, Path, description = "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager"),
         TargetCompany,
     ),
     request_body = PositionSectionsInput,
     responses(
         (status = 204, description = "Saved"),
-        (status = 400, description = "Not a sectioned position, or an unknown section", body = ErrorBody),
+        (status = 400, description = "A position whose tabs can't be changed, or an unknown tab", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller does not manage the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -162,15 +166,15 @@ pub async fn save(
     Query(query): Query<TargetCompany>,
     JsonBody(input): JsonBody<PositionSectionsInput>,
 ) -> ApiResult<StatusCode> {
-    sectioned(position_id)?;
+    configurable(position_id)?;
     if let Some(unknown) = input
         .sections
         .iter()
-        .find(|key| sections::section(key).is_none())
+        .find(|key| sections::tab(key).is_none())
     {
-        return Err(ApiError::BadRequest(format!("Unknown section: {unknown}")));
+        return Err(ApiError::BadRequest(format!("Unknown tab: {unknown}")));
     }
-    let keys = sections::parse_sections(&input.sections.join(",")).join(",");
+    let keys = sections::parse_tabs(&input.sections.join(",")).join(",");
     sqlx::query(
         "INSERT INTO company_position_sections (company_id, position_id, sections)
          VALUES (?, ?, ?)
@@ -184,21 +188,21 @@ pub async fn save(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Reset a position's sections
+/// Reset a position's tabs
 ///
-/// The position opens its default sections again in the company.
+/// The position opens its default tabs again in the company.
 #[crate::openapi::path(
     delete,
     path = "/v1/company/position-sections/{position_id}",
     operation_id = "reset_position_sections",
     tag = "company",
     params(
-        ("position_id" = i32, Path, description = "12 Inventory Manager, 13 Scheduling Manager"),
+        ("position_id" = i32, Path, description = "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager"),
         TargetCompany,
     ),
     responses(
         (status = 204, description = "Back to the defaults"),
-        (status = 400, description = "Not a sectioned position", body = ErrorBody),
+        (status = 400, description = "A position whose tabs can't be changed", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller does not manage the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -211,7 +215,7 @@ pub async fn reset(
     Path(position_id): Path<i32>,
     Query(query): Query<TargetCompany>,
 ) -> ApiResult<StatusCode> {
-    sectioned(position_id)?;
+    configurable(position_id)?;
     sqlx::query("DELETE FROM company_position_sections WHERE company_id = ? AND position_id = ?")
         .bind(target(&user, &query))
         .bind(position_id)

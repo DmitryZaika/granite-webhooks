@@ -51539,7 +51539,7 @@
           "company"
         ],
         "summary": "List position access",
-        "description": "Every section of the app, and for Inventory Manager and Scheduling\nManager the sections they open in the company, their defaults and\nwhether the company changed them. Someone who holds only these positions\nreaches only their sections (with several, all of them together); any\nother position except the portal ones keeps the whole app. Superusers and\ncompany managers (admins with the Manager position); superusers may pass\n`company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
+        "description": "Every tab of the app, and for each position the company may change (all\nbut Super Admin and the portal ones: Shop Worker, Installer, Marketing,\nWalk-in, Template Guy) the tabs it opens, its defaults and whether the\ncompany changed them. Someone with several positions gets all their tabs\ntogether. By default every position opens the whole main app, except\nInventory Manager and Scheduling Manager. The Admin switch still opens\nevery admin page; an admin tab opens that page to someone without it.\nSuperusers and company managers (admins with the Manager position);\nsuperusers may pass `company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
         "operationId": "list_position_sections",
         "parameters": [
           {
@@ -51555,7 +51555,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The sections and each position's",
+            "description": "The tabs and each position's",
             "content": {
               "application/json": {
                 "schema": {
@@ -51607,14 +51607,14 @@
         "tags": [
           "company"
         ],
-        "summary": "Save a position's sections",
-        "description": "Replaces the sections the position opens in the company, from then on\nfor every user holding it (their next request). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
+        "summary": "Save a position's tabs",
+        "description": "Replaces the tabs the position opens in the company, from then on\nfor every user holding it (their next request). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
         "operationId": "save_position_sections",
         "parameters": [
           {
             "name": "position_id",
             "in": "path",
-            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
             "required": true,
             "schema": {
               "type": "integer",
@@ -51647,7 +51647,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Not a sectioned position, or an unknown section",
+            "description": "A position whose tabs can't be changed, or an unknown tab",
             "content": {
               "application/json": {
                 "schema": {
@@ -51697,14 +51697,14 @@
         "tags": [
           "company"
         ],
-        "summary": "Reset a position's sections",
-        "description": "The position opens its default sections again in the company.",
+        "summary": "Reset a position's tabs",
+        "description": "The position opens its default tabs again in the company.",
         "operationId": "reset_position_sections",
         "parameters": [
           {
             "name": "position_id",
             "in": "path",
-            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
             "required": true,
             "schema": {
               "type": "integer",
@@ -51727,7 +51727,7 @@
             "description": "Back to the defaults"
           },
           "400": {
-            "description": "Not a sectioned position",
+            "description": "A position whose tabs can't be changed",
             "content": {
               "application/json": {
                 "schema": {
@@ -66825,7 +66825,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The sections of the app the user reaches, when a sectioned position\n(Inventory Manager, Scheduling Manager) limits them: keys such as\n`inventory`, `inventory_admin`, `customers`, `schedule`\n(`GET /v1/company/position-sections` lists them all). The API refuses\nthe rest. Null when they reach the whole app."
+            "description": "The tabs the user's positions open, when the company limits them\n(Position access): keys such as `stones`, `customers`, `schedule`,\n`admin_stones` (`GET /v1/company/position-sections` lists them all).\nThe Admin switch still opens every admin page. Null when nothing is\nlimited."
           },
           "has_cloudtalk_api": {
             "type": "boolean",
@@ -88231,14 +88231,14 @@
             "items": {
               "$ref": "#/components/schemas/SectionInfo"
             },
-            "description": "Every section, in the order to show them."
+            "description": "Every tab, in the order to show them: the main app, then admin pages."
           },
           "positions": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PositionSections"
             },
-            "description": "Each sectioned position. My Account and Report a Bug always stay open."
+            "description": "Each position whose tabs the company may change. My Account and\nReport a Bug always stay open."
           }
         }
       },
@@ -88258,7 +88258,7 @@
       },
       "PositionSections": {
         "type": "object",
-        "description": "One sectioned position in the company.",
+        "description": "One position whose tabs the company may change.",
         "required": [
           "position_id",
           "sections",
@@ -88269,21 +88269,21 @@
           "position_id": {
             "type": "integer",
             "format": "int32",
-            "description": "`positions.id`: 12 Inventory Manager, 13 Scheduling Manager."
+            "description": "`positions.id`: 1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office\nManager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager."
           },
           "sections": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "The sections it opens in this company, in [`SectionInfo`] order."
+            "description": "The tabs it opens in this company, in [`SectionInfo`] order."
           },
           "default_sections": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "The sections it opens in a company that has not changed it."
+            "description": "The tabs it opens in a company that has not changed it."
           },
           "customized": {
             "type": "boolean",
@@ -88303,7 +88303,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Section keys the position opens (may be empty: then only My Account)."
+            "description": "Tab keys the position opens (may be empty: then only My Account)."
           }
         },
         "additionalProperties": false
@@ -94265,7 +94265,7 @@
       },
       "SectionInfo": {
         "type": "object",
-        "description": "A part of the app a position may open.",
+        "description": "A tab a position may open.",
         "required": [
           "key",
           "label",
@@ -94274,15 +94274,15 @@
         "properties": {
           "key": {
             "type": "string",
-            "description": "Stable key (`inventory`, `customers`, `schedule`, ...)."
+            "description": "Stable key (`stones`, `customers`, `schedule`, `admin_stones`, ...)."
           },
           "label": {
             "type": "string",
-            "description": "Its name on the Company page."
+            "description": "Its name on the Company page (admin tabs are listed apart)."
           },
           "admin": {
             "type": "boolean",
-            "description": "Opens admin pages (e.g. the admin inventory) without making the user\na company admin."
+            "description": "An admin page: it opens for someone without the Admin switch only\nwhen one of their positions has it (the Admin switch opens them all)."
           }
         }
       },
