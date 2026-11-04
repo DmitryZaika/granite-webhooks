@@ -267,7 +267,7 @@ async fn other_pictures_redirect_and_icons_are_small_jpegs(pool: MySqlPool) {
     let thumbnails = storage
         .memory_keys()
         .into_iter()
-        .filter(|key| key.starts_with("email-attachment-thumbnails/"))
+        .filter(|key| key.starts_with("email-attachment-thumbnails-v2/"))
         .count();
     assert_eq!(thumbnails, 2);
 }

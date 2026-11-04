@@ -829,6 +829,33 @@ async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool
             ],
         ]
     );
+    // The jobs are named after the quote (a quote without a name: after the
+    // customer, as above).
+    let id = create(
+        &server,
+        json!({ "customer_id": 1004, "quote_name": " Ostrom Properties " }),
+    )
+    .await;
+    let path = format!("/v1/quotes/{id}");
+    server
+        .put(&format!("{path}/drawing"))
+        .with_session(sessions::REP)
+        .json(&json!({ "doc": doc("Ubatuba") }))
+        .await
+        .assert_status_ok();
+    server
+        .post(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .json(&json!({ "option": 0 }))
+        .await
+        .assert_status_ok();
+    let titles: Vec<String> =
+        sqlx::query_scalar("SELECT title FROM events WHERE quote_id = ? ORDER BY id")
+            .bind(id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(titles, ["Ostrom Properties", "Ostrom Properties"]);
     let id = create(&server, json!({ "customer_id": 1004 })).await;
     server
         .post(&format!("/v1/quotes/{id}/sale"))

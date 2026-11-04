@@ -264,6 +264,51 @@ async fn admins_manage_templates_and_flows(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn admins_drag_templates_into_order(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    let mut ids = Vec::new();
+    for name in ["Template", "Cabinets", "Installation"] {
+        let mut body = email_template();
+        body["name"] = json!(name);
+        let created: Value = server
+            .post("/v1/schedule/notifications/templates")
+            .with_session(sessions::ADMIN)
+            .json(&body)
+            .await
+            .json();
+        ids.push(created["id"].as_i64().unwrap());
+    }
+    let names = || async {
+        let body: Value = server
+            .get("/v1/schedule/notifications")
+            .with_session(sessions::ADMIN)
+            .await
+            .json();
+        body["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|template| template["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // New ones go last.
+    assert_eq!(names().await, ["Template", "Cabinets", "Installation"]);
+    server
+        .put("/v1/schedule/notifications/templates/order")
+        .with_session(sessions::REP)
+        .json(&json!({ "ids": [ids[2], ids[0], ids[1]] }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .put("/v1/schedule/notifications/templates/order")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "ids": [ids[2], ids[0], ids[1]] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(names().await, ["Installation", "Template", "Cabinets"]);
+}
+
+#[test_db::test(seed)]
 async fn confirmations_stay_out_of_flows(pool: MySqlPool) {
     sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
     let (server, _) = server(&pool).await;

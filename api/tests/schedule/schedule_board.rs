@@ -288,3 +288,27 @@ async fn each_user_picks_their_own_week_start_and_clock(pool: MySqlPool) {
     assert_eq!(admin["week_starts_on"], "sunday");
     assert_eq!(admin["time_24h"], false);
 }
+
+#[test_db::test(seed)]
+async fn settings_name_the_color_a_user_adds_most(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let favorite = |session: &'static str| {
+        let request = server.get("/v1/schedule/settings").with_session(session);
+        async move { request.await.json::<Value>()["favorite_color"].clone() }
+    };
+    assert_eq!(favorite(sessions::REP).await, Value::Null);
+    sqlx::raw_sql(
+        "INSERT INTO events (id, title, start_date, end_date, created_user_id, color, created_date) VALUES
+           (9720, 'A', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 'green', NOW()),
+           (9721, 'B', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 'green', NOW()),
+           (9722, 'C', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 'red', NOW()),
+           (9723, 'Old', '2026-01-10 15:00:00', '2026-01-10 16:00:00', 100, 'red', NOW() - INTERVAL 200 DAY),
+           (9724, 'Old', '2026-01-10 15:00:00', '2026-01-10 16:00:00', 100, 'red', NOW() - INTERVAL 200 DAY),
+           (9725, 'Other', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 106, 'pink', NOW());",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Events of the last 90 days count; older ones and other users' do not.
+    assert_eq!(favorite(sessions::REP).await, "green");
+}

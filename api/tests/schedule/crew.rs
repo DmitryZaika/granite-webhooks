@@ -329,3 +329,77 @@ async fn moving_a_job_to_another_day_clears_the_crew_status(pool: MySqlPool) {
         .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(crew_status(&pool, 9901).await, None);
 }
+
+async fn rep_notices(pool: &MySqlPool) -> Vec<(i32, Option<i32>, String)> {
+    sqlx::query_as(
+        "SELECT user_id, customer_id, message FROM notifications
+          WHERE notification_type = 'installation_completed' ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+#[test_db::test(seed)]
+async fn completing_an_installation_tells_its_sales_rep_unless_turned_off(pool: MySqlPool) {
+    jobs(&pool).await;
+    let (server, _) = server(&pool).await;
+    let complete = |id: i32| {
+        server
+            .post(&format!("/v1/events/{id}/crew-status"))
+            .with_session(sessions::MANAGER)
+            .json(&json!({ "status": "completed" }))
+    };
+    let on: Value = server
+        .get("/v1/schedule/settings")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(on["notify_rep_on_install_complete"], true);
+
+    // Alice's rep (100) hears once, even when Completed is tapped twice.
+    complete(9900).await.assert_status_ok();
+    complete(9900).await.assert_status_ok();
+    let notices = rep_notices(&pool).await;
+    assert_eq!(notices.len(), 1);
+    let (user, customer, message) = &notices[0];
+    assert_eq!((*user, *customer), (100, Some(1000)));
+    assert_eq!(message, "Alice Lead is installed");
+    let bell: Value = server
+        .get("/v1/notifications")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    let item = bell["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["notification_type"] == "installation_completed")
+        .expect("the bell lists it");
+    assert_eq!(item["type_title"], "Installation Completed");
+    assert_eq!(item["message"], "Alice Lead is installed");
+
+    // A job without a customer has no rep to tell.
+    complete(9901).await.assert_status_ok();
+    assert_eq!(rep_notices(&pool).await.len(), 1);
+
+    // Admin > Schedule turns it off.
+    server
+        .put("/v1/schedule/settings")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "notify_rep_on_install_complete": false }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let off: Value = server
+        .get("/v1/schedule/settings")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(off["notify_rep_on_install_complete"], false);
+    sqlx::query("UPDATE events SET crew_status = NULL, completed_at = NULL WHERE id = 9900")
+        .execute(&pool)
+        .await
+        .unwrap();
+    complete(9900).await.assert_status_ok();
+    assert_eq!(rep_notices(&pool).await.len(), 1);
+}

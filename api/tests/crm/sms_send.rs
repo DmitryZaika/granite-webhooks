@@ -387,3 +387,75 @@ async fn a_retry_that_fails_again_stays_failed(pool: MySqlPool) {
     assert_eq!(res.json::<Value>()["error"], "ringcentral_403");
     assert_eq!(status_of(&pool, failed).await.as_deref(), Some("failed"));
 }
+
+/// Rita texts through CloudTalk now; her text failed earlier through Granite
+/// Phone (Telnyx), where she no longer has a line. Its id.
+async fn failed_telnyx_text(pool: &MySqlPool) -> u64 {
+    sqlx::query(
+        "UPDATE company SET cloudtalk_access_key = 'k', cloudtalk_access_secret = 's' WHERE id = 100",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO telnyx_sms (sender, recipient, text, direction, status, error_message, agent,
+                                 sender_user_id, company_id, recipient10, phone_digits, created_date)
+         VALUES (13175550199, 13175550100, 'Your quote', 'outbound', 'failed', 'telnyx_40010', '100',
+                 100, 100, '3175550100', '3175550100', NOW() - INTERVAL 1 HOUR)",
+    )
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_id()
+}
+
+async fn telnyx_status_of(pool: &MySqlPool, id: u64) -> Option<String> {
+    sqlx::query_scalar("SELECT CAST(status AS CHAR) FROM telnyx_sms WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+}
+
+#[test_db::test(seed)]
+async fn a_retry_goes_out_through_the_reps_current_provider(pool: MySqlPool) {
+    let setup = setup(&pool, Reply::Sent).await;
+    let failed = failed_telnyx_text(&pool).await;
+    let res = setup
+        .server
+        .post(&format!("/v1/sms/telnyx/messages/{failed}/retry"))
+        .with_session(sessions::REP)
+        .await;
+    res.assert_status_ok();
+    let body: Value = res.json();
+    assert_eq!(body["message"]["text"], "Your quote");
+    assert_eq!(body["message"]["status"], "sent");
+    let sent = &setup.seen()[0];
+    assert_eq!(
+        (
+            sent.phone_digits.as_str(),
+            sent.text.as_str(),
+            sent.agent_id.as_str()
+        ),
+        ("3175550100", "Your quote", "5001")
+    );
+    assert_eq!(telnyx_status_of(&pool, failed).await, None);
+}
+
+#[test_db::test(seed)]
+async fn a_retry_through_another_provider_that_fails_keeps_the_old_text(pool: MySqlPool) {
+    let setup = setup(&pool, Reply::Failed(json!({ "error": "cloudtalk_403" }))).await;
+    let failed = failed_telnyx_text(&pool).await;
+    let res = setup
+        .server
+        .post(&format!("/v1/sms/telnyx/messages/{failed}/retry"))
+        .with_session(sessions::REP)
+        .await;
+    res.assert_status(StatusCode::BAD_GATEWAY);
+    assert_eq!(res.json::<Value>()["error"], "cloudtalk_403");
+    assert_eq!(setup.seen().len(), 1);
+    assert_eq!(
+        telnyx_status_of(&pool, failed).await.as_deref(),
+        Some("failed")
+    );
+}

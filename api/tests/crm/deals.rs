@@ -483,31 +483,41 @@ async fn sms_drips_reach_the_customer_sources_they_name(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn creating_reuses_the_customers_open_deal(pool: MySqlPool) {
+async fn creating_adds_a_new_deal_next_to_the_customers_open_one(pool: MySqlPool) {
     // Erin (1004) has open deals 8002 (Rita's, the oldest) and 8601.
+    let before = rows(
+        &pool,
+        "SELECT title, CAST(list_id AS CHAR), status FROM deals WHERE id = 8002",
+    )
+    .await;
     let res = server(pool.clone())
         .post("/v1/deals")
         .with_session(sessions::DEALER)
-        .json(&json!({ "customer_id": 1004, "list_id": 100, "title": "Reused" }))
+        .json(&json!({ "customer_id": 1004, "list_id": 100, "title": "Second job" }))
         .await;
     res.assert_status(StatusCode::CREATED);
-    assert_eq!(res.json::<Value>(), json!({ "id": 8002, "created": false }));
+    let created = res.json::<Value>();
+    assert_eq!(created["created"], true);
+    let id = created["id"].as_i64().unwrap();
+    assert_ne!(id, 8002);
+    assert_eq!(
+        rows(
+            &pool,
+            &format!(
+                "SELECT title, CAST(list_id AS CHAR), CAST(customer_id AS CHAR) FROM deals WHERE id = {id}"
+            )
+        )
+        .await,
+        vec![vec!["Second job", "100", "1004"]]
+    );
+    // The open deal is never changed or moved.
     assert_eq!(
         rows(
             &pool,
             "SELECT title, CAST(list_id AS CHAR), status FROM deals WHERE id = 8002"
         )
         .await,
-        vec![vec!["Reused", "100", "New"]]
-    );
-    // Moved from stage 101: history follows.
-    assert_eq!(
-        scalar_i64(
-            &pool,
-            "SELECT list_id FROM deal_stage_history WHERE deal_id = 8002 AND exited_at IS NULL"
-        )
-        .await,
-        100
+        before
     );
 }
 
@@ -1458,7 +1468,7 @@ async fn seeded_photo_and_documents_kept_in_images(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn creating_for_a_customer_with_an_open_deal_keeps_its_amount_and_title(pool: MySqlPool) {
     // Erin (1004) has open deal 8002. A create that leaves amount and title
-    // empty must not wipe them (the deal is only reused and moved).
+    // empty adds a new deal and leaves 8002's untouched.
     let before = rows(
         &pool,
         "SELECT CAST(amount AS CHAR), title FROM deals WHERE id = 8002",
@@ -1470,7 +1480,9 @@ async fn creating_for_a_customer_with_an_open_deal_keeps_its_amount_and_title(po
         .json(&json!({ "customer_id": 1004, "list_id": 100 }))
         .await;
     res.assert_status(StatusCode::CREATED);
-    assert_eq!(res.json::<Value>(), json!({ "id": 8002, "created": false }));
+    let created = res.json::<Value>();
+    assert_eq!(created["created"], true);
+    assert_ne!(created["id"], 8002);
     assert_eq!(
         rows(
             &pool,

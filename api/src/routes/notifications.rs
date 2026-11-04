@@ -334,6 +334,10 @@ pub struct NotificationItem {
     /// The deal an activity notification is about (the phone app opens it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deal_id: Option<i64>,
+    /// The customer an activity notification is about (the phone app opens
+    /// their card when there is no deal).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer_id: Option<i32>,
 }
 
 /// `GET /v1/notifications`.
@@ -361,6 +365,7 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "estimate_appointment_reminder" => "In-Home Estimate Reminder",
         "installation_appointment_reminder" => "Installation Reminder",
         "template_appointment_reminder" => "Template Appointment Reminder",
+        "installation_completed" => "Installation Completed",
         "note_added" => "Added a Note",
         "note_edited" => "Edited a Note",
         "note_deleted" => "Deleted a Note",
@@ -514,6 +519,7 @@ async fn unread_email(
                 type_title: None,
                 action_label: None,
                 deal_id: None,
+                customer_id: None,
             }
         })
         .collect())
@@ -538,8 +544,11 @@ async fn activity(
            LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, n.customer_id)
           WHERE n.user_id = ? AND n.is_done = 0 AND (? IS NULL OR n.id = ?)
             -- On a live deal, except 911 alerts, the texting registration's,
-            -- number ports' and AI promises' (they name no deal).
+            -- number ports' and AI promises' (they name no deal), and a
+            -- finished installation of a customer without a deal.
             AND ((d.id IS NOT NULL AND c.id IS NOT NULL)
+                 OR (n.notification_type = 'installation_completed' AND c.id IS NOT NULL
+                     AND c.deleted_at IS NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
                                             'phone_port', 'ai_promise_due', 'ai_promise_digest',
                                             'ai_promise_approval'))
@@ -609,6 +618,7 @@ async fn activity(
                 customer_name: (!alert && !texting && !port).then_some(customer),
                 action_label: None,
                 deal_id: row.deal_id.filter(|_| !(alert || texting || port)),
+                customer_id: row.customer_id.filter(|_| !(alert || texting || port)),
             }
         })
         .collect())
@@ -687,6 +697,7 @@ async fn telnyx_calls(
                 }),
                 action_label: None,
                 deal_id: None,
+                customer_id: None,
             }
         })
         .collect())
@@ -717,6 +728,7 @@ async fn billing(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>
             type_title: None,
             action_label: Some(row.action_label),
             deal_id: None,
+            customer_id: None,
         })
         .collect())
 }
@@ -824,6 +836,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
         }),
         action_label: None,
         deal_id: None,
+        customer_id: None,
     }
 }
 
@@ -897,7 +910,8 @@ pub async fn list(
 /// Get one activity notification
 ///
 /// The caller's own due activity notification `notif-<id>`, as
-/// `GET /v1/notifications` lists it, with the deal it opens (`deal_id`).
+/// `GET /v1/notifications` lists it, with the deal it opens (`deal_id`),
+/// else its customer (`customer_id`).
 /// The phone app reads it for a `notification` push, which names only the
 /// id. 404 for another user's, a dismissed one, or one `GET
 /// /v1/notifications` would not list.

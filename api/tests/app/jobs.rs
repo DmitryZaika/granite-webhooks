@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 struct Sent {
     emails: Arc<Mutex<Vec<OutgoingEmail>>>,
     telegrams: Arc<Mutex<Vec<TelegramCrmNotify>>>,
+    texts: Arc<Mutex<Vec<Value>>>,
 }
 
 async fn server(pool: &MySqlPool) -> (TestServer, Sent) {
@@ -243,11 +244,93 @@ async fn sent_address(sent: &Sent) -> String {
                 },
             ),
         )
+        .route(
+            "/sms/send",
+            post(
+                |State(sent): State<Sent>, Json(text): Json<Value>| async move {
+                    sent.texts.lock().unwrap().push(text);
+                    Json(json!({ "ids": [1] }))
+                },
+            ),
+        )
         .with_state(sent.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     format!("http://{address}")
+}
+
+#[test_db::test(seed)]
+async fn managers_hear_once_when_survey_texts_cannot_go_out(pool: MySqlPool) {
+    // Acme texts through CloudTalk; Mark (101) is its office manager, with no
+    // CloudTalk line yet. Alice's checklist (9000) is due.
+    sqlx::raw_sql(
+        "DELETE FROM emails WHERE message_id LIKE 'checklist-survey-%';
+         UPDATE company SET cloudtalk_access_key = 'k', cloudtalk_access_secret = 's' WHERE id = 100;
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 10, 100);
+         UPDATE checklists SET created_at = UTC_TIMESTAMP() - INTERVAL 30 HOUR WHERE id = 9000;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let sent = Sent::default();
+    let address = sent_address(&sent).await;
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+        .with_webhooks(WebhooksClient::new(Some(&address), Some("key")));
+    let survey = api::routes::jobs::survey_notifications::send_due;
+    let told = |sent: &Sent| {
+        sent.emails
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|email| email.subject == "Acme Stone - Survey texts are not going out")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let pool_ref = &pool;
+    let marker = || async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM emails WHERE message_id = 'checklist-survey-sms-down-100'",
+        )
+        .fetch_one(pool_ref)
+        .await
+        .unwrap()
+    };
+
+    survey(&state, chrono::Utc::now()).await.unwrap();
+    {
+        let down = told(&sent);
+        assert_eq!(down.len(), 1);
+        assert_eq!(down[0].to, ["manager@acme.test"]);
+        assert!(
+            down[0]
+                .body
+                .contains("No Office Manager has a CloudTalk line")
+        );
+    }
+    assert!(sent.texts.lock().unwrap().is_empty());
+    assert_eq!(marker().await, 1);
+
+    // The next survey without a line: no second email.
+    sqlx::raw_sql("DELETE FROM emails WHERE message_id = 'checklist-survey-9000'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    survey(&state, chrono::Utc::now()).await.unwrap();
+    assert_eq!(told(&sent).len(), 1);
+
+    // Mark gets a line: the text goes out, and a later outage is told again.
+    sqlx::raw_sql(
+        "DELETE FROM emails WHERE message_id = 'checklist-survey-9000';
+         UPDATE users SET cloudtalk_agent_id = '5101', cloudtalk_phone_number = '3175550199' WHERE id = 101;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    survey(&state, chrono::Utc::now()).await.unwrap();
+    assert_eq!(sent.texts.lock().unwrap().len(), 1);
+    assert_eq!(marker().await, 0);
+    assert_eq!(told(&sent).len(), 1);
 }
 
 #[test_db::test(seed)]

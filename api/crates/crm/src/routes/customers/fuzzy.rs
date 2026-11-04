@@ -115,6 +115,8 @@ pub struct NamedCustomer {
     pub company_name: Option<String>,
     pub phone: Option<String>,
     pub phone_2: Option<String>,
+    /// 0 the searcher's own customer (their live deal or sales rep), 1 not.
+    pub owner_rank: i64,
 }
 
 /// 0 exact, 1 the name starts with the term as a word, 2 contains it, 3 else.
@@ -133,13 +135,14 @@ fn name_rank(name: &str, term: &str) -> u8 {
 }
 
 /// The company's live customers whose name or company matches `term`, typos
-/// allowed, best match first.
+/// allowed: `user_id`'s own customers first, then the best match.
 ///
 /// The SQL fetches loose candidates (with several words, N-1 of N hits) and
 /// [`matches_name_fuzzy`] decides. Port of `findCustomersByFuzzyName`.
 pub async fn find_by_name(
     pool: &sqlx::MySqlPool,
     company_id: i32,
+    user_id: Option<i32>,
     term: &str,
     limit: usize,
 ) -> Result<Vec<NamedCustomer>, sqlx::Error> {
@@ -150,10 +153,19 @@ pub async fn find_by_name(
     let normalized = normalize_term(term);
     let words: Vec<&str> = normalized.split_whitespace().collect();
     let mut sql = sqlx::QueryBuilder::<sqlx::MySql>::new(
-        "SELECT id, name, company_name, phone, phone_2 FROM customers
-          WHERE company_id = ",
+        "SELECT id, name, company_name, phone, phone_2,
+                CAST(CASE WHEN ",
     );
-    sql.push_bind(company_id)
+    sql.push_bind(user_id)
+        .push(" IS NOT NULL AND (sales_rep = ")
+        .push_bind(user_id)
+        .push(
+            " OR EXISTS (SELECT 1 FROM deals mine WHERE mine.customer_id = customers.id
+                           AND mine.deleted_at IS NULL AND mine.user_id = ",
+        )
+        .push_bind(user_id)
+        .push(")) THEN 0 ELSE 1 END AS SIGNED) AS owner_rank FROM customers WHERE company_id = ")
+        .push_bind(company_id)
         .push(" AND deleted_at IS NULL AND (name LIKE ");
     let short = |word: &str| format!("%{}%", word.chars().take(3).collect::<String>());
     if words.len() > 1 {
@@ -183,7 +195,7 @@ pub async fn find_by_name(
         .push(" OR company_name LIKE ")
         .push_bind(format!("%{normalized}%"))
         .push(")))")
-        .push(" ORDER BY name LIMIT ")
+        .push(" ORDER BY owner_rank, name LIMIT ")
         .push_bind(i64::try_from(limit.max(100)).unwrap_or(100));
     let mut rows: Vec<NamedCustomer> = sql.build_query_as().fetch_all(pool).await?;
     rows.retain(|c| {
@@ -195,8 +207,9 @@ pub async fn find_by_name(
             a.name.as_deref().unwrap_or_default(),
             b.name.as_deref().unwrap_or_default(),
         );
-        name_rank(a_name, term)
-            .cmp(&name_rank(b_name, term))
+        a.owner_rank
+            .cmp(&b.owner_rank)
+            .then_with(|| name_rank(a_name, term).cmp(&name_rank(b_name, term)))
             .then_with(|| a_name.to_lowercase().cmp(&b_name.to_lowercase()))
     });
     rows.truncate(limit);
