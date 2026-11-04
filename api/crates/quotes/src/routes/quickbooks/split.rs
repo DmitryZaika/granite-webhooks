@@ -626,6 +626,7 @@ mod tests {
             class_name: Some("Countertops:Tania".into()),
             bill_email_cc: None,
             bill_email_bcc: None,
+            email_status: None,
         }
     }
 

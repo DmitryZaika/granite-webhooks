@@ -29230,6 +29230,182 @@
         ]
       }
     },
+    "/v1/quotes/{id}/invoice-sync": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get a quote's invoice sync",
+        "description": "The quote's invoice kept in step with it; null when it has none.",
+        "operationId": "get_quote_invoice_sync",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/InvoiceSync"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Link a quote's invoice to the quote",
+        "description": "Saves the quote's invoice and how it is kept in step: after it is created\nwith \"Keep in sync with the quote\" ticked, after each sync (the new\n`source_hash`), and with `enabled` off to stop. A quote has one; saving\nreplaces it.",
+        "operationId": "save_quote_invoice_sync",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceSync"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Invalid kind, invoice ids, hash or detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quotes/{id}/drawing": {
       "put": {
         "tags": [
@@ -50578,6 +50754,88 @@
         ]
       }
     },
+    "/v1/company/quote-invoice-sync": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch keeping invoices in sync with their quote",
+        "description": "Admin › Quotes › Automation \"Automatically synchronize quote with\ninvoices\". When on, an invoice created from a quote starts with \"Keep in\nsync with the quote\" ticked: when the quote changes, the invoice is\nrebuilt from it (`quote_invoice_sync` in `GET /v1/company/features`,\n`PUT /v1/quotes/{id}/invoice-sync`).",
+        "operationId": "save_company_quote_invoice_sync",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteInvoiceSyncInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/company/api-token-email": {
       "post": {
         "tags": [
@@ -70332,6 +70590,7 @@
           "auto_sale",
           "auto_unscheduled_jobs",
           "auto_invoice",
+          "quote_invoice_sync",
           "sale_event_templates"
         ],
         "properties": {
@@ -70386,6 +70645,10 @@
           "auto_invoice": {
             "type": "boolean",
             "description": "Marking a quote sold opens its QuickBooks invoice, filled from the sold\noption; confirming it creates the invoice in QuickBooks (Admin › Quotes ›\nAutomation, `PUT /v1/company/auto-invoice`)."
+          },
+          "quote_invoice_sync": {
+            "type": "boolean",
+            "description": "A new invoice from a quote starts with \"Keep in sync with the quote\"\nticked (Admin › Quotes › Automation,\n`PUT /v1/company/quote-invoice-sync`)."
           },
           "sale_event_templates": {
             "type": "boolean",
@@ -75776,6 +76039,13 @@
               "null"
             ],
             "description": "BCC of the invoice email (set on a new invoice only)."
+          },
+          "email_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Whether `QuickBooks` emailed it: `EmailSent`, `NeedToSend` or\n`NotSet` (read only)."
           }
         }
       },
@@ -80337,6 +80607,48 @@
           }
         }
       },
+      "InvoiceSync": {
+        "type": "object",
+        "description": "A quote's invoice and how it is kept in step with the quote.",
+        "required": [
+          "option_index",
+          "kind",
+          "invoice_ids",
+          "detail",
+          "source_hash",
+          "enabled"
+        ],
+        "properties": {
+          "option_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The quote option invoiced."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`qbo` (`QuickBooks` invoices) or `own` (`/v1/invoices`)."
+          },
+          "invoice_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`QuickBooks` invoice ids in order (several for a split), or the own\ninvoice's id."
+          },
+          "detail": {
+            "type": "object",
+            "description": "What rebuilding needs, as the CRM sent it (a split's shares, each\ninvoice's priced lines by part, what was emailed)."
+          },
+          "source_hash": {
+            "type": "string",
+            "description": "The quote's invoice lines when the invoice was last made or synced."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Off: the invoice is no longer changed with the quote."
+          }
+        }
+      },
       "InvoiceUpdate": {
         "type": "object",
         "description": "Body of `PUT /v1/customers/{id}/qbo-invoices/{invoice_id}`.",
@@ -83031,6 +83343,13 @@
                 "type": "null"
               }
             ]
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsFile"
+            },
+            "description": "Up to ten files (`POST /v1/sms/attachments`) sent with the text."
           }
         }
       },
@@ -90627,6 +90946,20 @@
           }
         }
       },
+      "QuoteInvoiceSyncInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/quote-invoice-sync`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: a new invoice from a quote starts with \"Keep in sync with the\nquote\" ticked."
+          }
+        },
+        "additionalProperties": false
+      },
       "QuoteList": {
         "type": "object",
         "description": "`GET /v1/quotes`.",
@@ -95912,7 +96245,8 @@
           "can_edit",
           "minute_delay",
           "customer_sources",
-          "sales_rep_ids"
+          "sales_rep_ids",
+          "attachments"
         ],
         "properties": {
           "id": {
@@ -95991,6 +96325,57 @@
               "format": "int32"
             },
             "description": "Company drip: sales reps whose deals get it; empty: every rep's."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsTemplateFile"
+            },
+            "description": "Files sent with the text (and by its drip and flows)."
+          }
+        }
+      },
+      "SmsTemplateFile": {
+        "type": "object",
+        "description": "A file sent with an SMS template.",
+        "required": [
+          "s3_key",
+          "url",
+          "content_type",
+          "filename"
+        ],
+        "properties": {
+          "s3_key": {
+            "type": "string",
+            "description": "Its key, under `sms-attachments/<company id>/`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Its public link."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "Its type (JPEG, PNG, GIF, PDF, Office, text or CSV)."
+          },
+          "filename": {
+            "type": "string",
+            "description": "The name it was uploaded with."
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pixel width of an image."
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pixel height of an image."
           }
         }
       },
@@ -96020,6 +96405,16 @@
                 "type": "null"
               }
             ]
+          },
+          "attachments": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SmsFile"
+            },
+            "description": "Up to ten files sent with the text; left out keeps the template's."
           }
         }
       },

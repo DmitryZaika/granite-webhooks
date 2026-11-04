@@ -14,6 +14,7 @@ mod online_quotes;
 mod quickbooks;
 mod quote_editor;
 mod quote_forms;
+mod quote_invoice_sync;
 mod quote_presets;
 mod quote_price_lists;
 mod quote_pricing_parity;

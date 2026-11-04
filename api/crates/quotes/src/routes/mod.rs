@@ -12,6 +12,7 @@ pub mod quickbooks;
 pub mod quote_editor;
 pub mod quote_extras;
 pub mod quote_forms;
+pub mod quote_invoice_sync;
 pub mod quote_lookups;
 pub mod quote_portal;
 pub mod quote_presets;

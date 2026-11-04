@@ -243,6 +243,10 @@ pub struct EditableInvoice {
     /// BCC of the invoice email (set on a new invoice only).
     #[serde(default)]
     pub bill_email_bcc: Option<String>,
+    /// Whether `QuickBooks` emailed it: `EmailSent`, `NeedToSend` or
+    /// `NotSet` (read only).
+    #[serde(default)]
+    pub email_status: Option<String>,
 }
 
 pub(super) fn rows(value: &Value) -> Vec<Value> {
@@ -295,6 +299,7 @@ pub fn editable(value: &Value) -> Option<EditableInvoice> {
         class_name: text(&value["ClassRef"]["name"]),
         bill_email_cc: text(&value["BillEmailCc"]["Address"]),
         bill_email_bcc: text(&value["BillEmailBcc"]["Address"]),
+        email_status: text(&value["EmailStatus"]),
     })
 }
 

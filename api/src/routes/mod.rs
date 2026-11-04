@@ -55,6 +55,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(quote_presets::router())
         .merge(quote_extras::router())
         .merge(quote_sale_events::router())
+        .merge(quote_invoice_sync::router())
         .merge(quote_editor::router())
         .merge(quote_lookups::router())
         .merge(quote_portal::router())
