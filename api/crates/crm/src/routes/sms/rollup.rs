@@ -100,7 +100,7 @@ async fn customer_phones_by_name(
     company_id: i32,
     term: &str,
 ) -> Result<BTreeSet<String>, sqlx::Error> {
-    let rows = find_by_name(pool, company_id, term, 100).await?;
+    let rows = find_by_name(pool, company_id, None, term, 100).await?;
     let matching: Vec<&NamedCustomer> = rows.iter().collect();
     let mut phones = BTreeSet::new();
     for customer in &matching {

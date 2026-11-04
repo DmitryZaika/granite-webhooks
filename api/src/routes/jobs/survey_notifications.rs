@@ -9,6 +9,12 @@
 //! Each send is claimed first with a marker row in `emails`
 //! (`checklist-survey-<id>`, `checklist-survey-reminder-<n>-<id>`); a
 //! submitted survey leaves `checklist-survey-done-<id>`.
+//!
+//! When a survey text can't go out from the office manager's line (no line on
+//! the company's provider, or the provider refused it, e.g. RingCentral
+//! signed out) the office managers (else the managers) get one email saying
+//! so; `checklist-survey-sms-down-<company>` remembers it until a survey text
+//! goes out again.
 
 use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
@@ -29,6 +35,11 @@ use std::fmt::Write;
 const SENT_PREFIX: &str = "checklist-survey-";
 const REMINDER_PREFIX: &str = "checklist-survey-reminder-";
 const DONE_PREFIX: &str = "checklist-survey-done-";
+/// The company's office managers were told survey texts are down.
+const LINE_DOWN_PREFIX: &str = "checklist-survey-sms-down-";
+/// `positions.id`s.
+const OFFICE_MANAGER_POSITION: i32 = 10;
+const MANAGER_POSITION: i32 = 5;
 const NO_REPLY: &str = "noreply@granite-manager.com";
 
 /// A reminder: its number, the day it is due and how many days it may go out.
@@ -228,44 +239,78 @@ struct DueChecklist {
 struct Sms {
     provider: SmsProvider,
     manager_id: i32,
+    manager_name: Option<String>,
     seat: crate::routes::sms::send::Seat,
     phone_digits: String,
+}
+
+/// Where the survey text would go, or why it can't.
+enum Target {
+    Ready(Sms),
+    /// No customer, or no 10-digit phone on them.
+    NoPhone,
+    /// The company doesn't text.
+    NoTexting,
+    /// The company texts on `provider`, but no office manager has a line.
+    NoLine(SmsProvider),
 }
 
 async fn sms_target(
     state: &AppState,
     company_id: i32,
     customer_id: Option<i32>,
-) -> Result<Option<Sms>, sqlx::Error> {
+) -> Result<Target, sqlx::Error> {
     let Some(customer_id) = customer_id else {
-        return Ok(None);
+        return Ok(Target::NoPhone);
+    };
+    let Some(phone_digits) = customer_phone(&state.pool, company_id, customer_id)
+        .await?
+        .map(|phone| phone10(&phone))
+        .filter(|digits| digits.len() == 10)
+    else {
+        return Ok(Target::NoPhone);
     };
     let Some((provider, manager, seat)) =
         crate::routes::events::notify::notice_sender(&state.pool, company_id).await?
     else {
-        return Ok(None);
+        let features =
+            crate::routes::company::queries::company_features(&state.pool, company_id).await?;
+        return Ok(features
+            .sms_provider()
+            .or_else(|| features.telnyx_sms.then_some(SmsProvider::Telnyx))
+            .map_or(Target::NoTexting, Target::NoLine));
     };
-    let digits = customer_phone(&state.pool, company_id, customer_id)
-        .await?
-        .map(|phone| phone10(&phone))
-        .filter(|digits| digits.len() == 10);
-    Ok(digits.map(|phone_digits| Sms {
+    Ok(Target::Ready(Sms {
         provider,
         manager_id: manager.id,
+        manager_name: manager.name,
         seat,
         phone_digits,
     }))
 }
 
-/// Texts the survey; false when there is no line to text from or it failed.
+/// Texts the survey; false when it didn't go out. A text the office
+/// manager's line can't send (no line, or the line refused it) emails the
+/// company's office managers once, until a survey text goes out again.
 async fn send_sms(
     state: &AppState,
     company_id: i32,
     customer_id: Option<i32>,
+    company: &str,
     text: &str,
 ) -> Result<bool, sqlx::Error> {
-    let Some(target) = sms_target(state, company_id, customer_id).await? else {
-        return Ok(false);
+    let target = match sms_target(state, company_id, customer_id).await? {
+        Target::Ready(target) => target,
+        Target::NoPhone | Target::NoTexting => return Ok(false),
+        Target::NoLine(provider) => {
+            tracing::warn!(
+                company_id,
+                provider = provider.as_str(),
+                "checklist survey SMS: no office manager line"
+            );
+            line_down(state, company_id, company, &LineProblem::NoLine(provider)).await?;
+            return Ok(false);
+        }
     };
     let sms = OutgoingSms {
         provider: target.provider.as_str().to_string(),
@@ -279,12 +324,188 @@ async fn send_sms(
         idempotency_key: None,
     };
     match crate::routes::sms::send::send_text(state, target.provider, &target.seat, &sms).await {
-        Ok(_) => Ok(true),
+        Ok(_) => {
+            line_up(state, company_id).await?;
+            Ok(true)
+        }
         Err(failure) => {
-            tracing::warn!(error = %failure.error, "checklist survey SMS failed");
+            tracing::warn!(company_id, error = %failure.error, "checklist survey SMS failed");
+            if failure.error != "opted_out" {
+                let problem = LineProblem::Failed {
+                    provider: target.provider,
+                    manager: target.manager_name.unwrap_or_default(),
+                    error: failure.error,
+                };
+                line_down(state, company_id, company, &problem).await?;
+            }
             Ok(false)
         }
     }
+}
+
+/// Why survey texts aren't going out.
+enum LineProblem {
+    NoLine(SmsProvider),
+    Failed {
+        provider: SmsProvider,
+        manager: String,
+        error: String,
+    },
+}
+
+const fn provider_name(provider: SmsProvider) -> &'static str {
+    match provider {
+        SmsProvider::Cloudtalk => "CloudTalk",
+        SmsProvider::Ringcentral => "RingCentral",
+        SmsProvider::Telnyx => "Granite Phone",
+    }
+}
+
+impl LineProblem {
+    /// What happened, then what to do, for the office managers' email.
+    fn explain(&self) -> (String, String) {
+        match self {
+            Self::NoLine(provider) => {
+                let name = provider_name(*provider);
+                (
+                    format!(
+                        "No Office Manager has a {name} line, so there is no number to text the surveys from."
+                    ),
+                    format!(
+                        "Give an Office Manager a {name} line: Admin > Company settings > Users > Edit."
+                    ),
+                )
+            }
+            Self::Failed {
+                provider,
+                manager,
+                error,
+            } => {
+                let name = provider_name(*provider);
+                let owner = if manager.trim().is_empty() {
+                    "the Office Manager".to_string()
+                } else {
+                    manager.trim().to_string()
+                };
+                if error == "ringcentral_not_signed_in" {
+                    (
+                        format!(
+                            "{owner}'s RingCentral is disconnected, so the surveys can't be texted from their number."
+                        ),
+                        format!("{owner} should open My Account and click Connect my RingCentral."),
+                    )
+                } else {
+                    (
+                        format!(
+                            "{name} refused to send the survey text from {owner}'s number (error: {error})."
+                        ),
+                        format!(
+                            "Check that {owner}'s {name} number is connected and can send texts."
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/// Marker of a company whose office managers were told survey texts are down.
+fn line_down_marker(company_id: i32) -> String {
+    format!("{LINE_DOWN_PREFIX}{company_id}")
+}
+
+/// Office managers' emails, else managers'.
+async fn manager_emails(state: &AppState, company_id: i32) -> Result<Vec<String>, sqlx::Error> {
+    for position in [OFFICE_MANAGER_POSITION, MANAGER_POSITION] {
+        let emails: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT TRIM(u.email) FROM users u
+               JOIN users_positions up ON up.user_id = u.id
+              WHERE up.company_id = ? AND up.position_id = ? AND u.is_deleted = 0
+                AND TRIM(COALESCE(u.email, '')) <> ''
+              ORDER BY 1",
+        )
+        .bind(company_id)
+        .bind(position)
+        .fetch_all(&state.pool)
+        .await?;
+        if !emails.is_empty() {
+            return Ok(emails);
+        }
+    }
+    Ok(Vec::new())
+}
+
+/// Emails the office managers that survey texts aren't going out, once.
+async fn line_down(
+    state: &AppState,
+    company_id: i32,
+    company: &str,
+    problem: &LineProblem,
+) -> Result<(), sqlx::Error> {
+    let marker = line_down_marker(company_id);
+    if marker_exists(state, &marker).await? {
+        return Ok(());
+    }
+    let to = manager_emails(state, company_id).await?;
+    if to.is_empty() {
+        tracing::warn!(
+            company_id,
+            "survey texts are down and the company has no manager to tell"
+        );
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO emails (subject, body, message_id, company_id, sender_email, receiver_email, sent_at)
+         VALUES ('Survey texts are not going out', '', ?, ?, ?, '', UTC_TIMESTAMP())",
+    )
+    .bind(&marker)
+    .bind(company_id)
+    .bind(NO_REPLY)
+    .execute(&state.pool)
+    .await?;
+    let (what, fix) = problem.explain();
+    let email = OutgoingEmail {
+        from_name: None,
+        from_address: NO_REPLY.into(),
+        to,
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: format!("{company} - Survey texts are not going out"),
+        body: line_down_html(&what, &fix),
+        signature: None,
+        reply_to: Vec::new(),
+        in_reply_to: None,
+        references: Vec::new(),
+        attachments: Vec::new(),
+        transactional: true,
+    };
+    if let Err(err) = state.webhooks.send_email(&email).await {
+        tracing::warn!(company_id, error = ?err, "survey texts down email failed");
+        // Not told: try again on the next survey.
+        sqlx::query("DELETE FROM emails WHERE message_id = ? AND company_id = ?")
+            .bind(&marker)
+            .bind(company_id)
+            .execute(&state.pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// A survey text went out: the next outage is told again.
+async fn line_up(state: &AppState, company_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM emails WHERE message_id = ? AND company_id = ?")
+        .bind(line_down_marker(company_id))
+        .bind(company_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(())
+}
+
+fn line_down_html(what: &str, fix: &str) -> String {
+    let (what, fix) = (escape(what), escape(fix));
+    format!(
+        r#"<div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.5;color:#18181b"><p style="margin:0 0 12px"><strong>Post-installation survey texts are not going out.</strong></p><p style="margin:0 0 12px">{what}</p><p style="margin:0 0 12px">Customers still get the survey by email, but most answer the text.</p><p style="margin:0 0 12px"><strong>To fix it:</strong> {fix}</p><p style="margin:0;font-size:13px;color:#71717a">You get this email once. If texts stop again after they are fixed, you will be told again.</p></div>"#
+    )
 }
 
 struct EmailFailed;
@@ -358,7 +579,7 @@ async fn notify(
     if reminder.is_some_and(|config| config.email_only_when_texted) {
         let texted = matches!(
             sms_target(state, row.company_id, row.customer_id).await?,
-            Some(Sms {
+            Target::Ready(Sms {
                 provider: SmsProvider::Cloudtalk,
                 ..
             })
@@ -375,7 +596,7 @@ async fn notify(
         .sms_provider()
         == Some(SmsProvider::Cloudtalk);
     if is_reminder && cloudtalk {
-        if send_sms(state, row.company_id, row.customer_id, &text).await? {
+        if send_sms(state, row.company_id, row.customer_id, &company, &text).await? {
             return Ok(Ok(Outcome::Sent));
         }
         return Ok(send_email(state, email, &company, &url, true)
@@ -385,7 +606,7 @@ async fn notify(
     if let Err(failed) = send_email(state, email, &company, &url, is_reminder).await {
         return Ok(Err(failed));
     }
-    send_sms(state, row.company_id, row.customer_id, &text).await?;
+    send_sms(state, row.company_id, row.customer_id, &company, &text).await?;
     Ok(Ok(Outcome::Sent))
 }
 

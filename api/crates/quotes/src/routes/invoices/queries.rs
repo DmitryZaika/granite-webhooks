@@ -35,10 +35,13 @@ pub async fn find_invoice(
     .await
 }
 
-/// The company's invoices matching `filter`, highest number first.
+/// The company's invoices matching `filter`, highest number first; a search
+/// puts the typed number, then `user_id`'s own (made by them or for their
+/// customer) first.
 pub async fn list_invoices(
     pool: &MySqlPool,
     company_id: i32,
+    user_id: i32,
     filter: &InvoiceListQuery,
     status: Option<InvoiceStatus>,
 ) -> Result<Vec<InvoiceSummary>, sqlx::Error> {
@@ -73,7 +76,11 @@ pub async fn list_invoices(
                  OR i.bill_to_name LIKE ?
                  OR i.bill_to_email LIKE ?
                  OR i.project_address LIKE ?)
-          ORDER BY i.invoice_number DESC
+          ORDER BY i.invoice_number <=> ? DESC,
+                   ? IS NOT NULL AND (i.created_by <=> ? OR EXISTS (
+                       SELECT 1 FROM customers mine
+                        WHERE mine.id = i.customer_id AND mine.sales_rep = ?)) DESC,
+                   i.invoice_number DESC
           LIMIT ?",
     )
     .bind(company_id)
@@ -88,6 +95,10 @@ pub async fn list_invoices(
     .bind(like.as_deref())
     .bind(like.as_deref())
     .bind(like.as_deref())
+    .bind(number)
+    .bind(like.as_deref())
+    .bind(user_id)
+    .bind(user_id)
     .bind(LIST_LIMIT)
     .fetch_all(pool)
     .await

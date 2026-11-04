@@ -23,6 +23,7 @@ mod email_drafts;
 mod email_signatures;
 mod email_signatures_native;
 mod emails;
+mod lead_inbox;
 mod media_previews;
 mod send_email;
 mod sms;

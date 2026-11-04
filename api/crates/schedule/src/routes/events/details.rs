@@ -784,9 +784,12 @@ pub struct FoundEvent {
 /// Search events
 ///
 /// The company's events where every word of `q` is in the title, customer's
-/// name, location, description or notes, newest first; with `calendar_ids`,
-/// only those
+/// name, location, description or notes; with `calendar_ids`, only those
 /// calendars' events.
+///
+/// Smart order: the caller's own first (assigned to or made by them, or for
+/// their customer), then title or customer-name hits before hits only in the
+/// place or notes, then the nearest to now; unscheduled ones last.
 #[crate::openapi::path(
     get,
     path = "/v1/events/search",
@@ -820,6 +823,8 @@ pub async fn search(
         .collect();
     let word_match = "(e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)";
     let words_match = vec![word_match; likes.len()].join(" AND ");
+    // Every word in the title or customer's name ranks the event higher
+    let name_match = vec!["(e.title LIKE ? OR c.name LIKE ?)"; likes.len()].join(" AND ");
     // The calendars as a clean id list for FIND_IN_SET
     let calendars: Option<String> = query.calendar_ids.as_deref().map(|ids| {
         ids.split(',')
@@ -841,7 +846,15 @@ pub async fn search(
           WHERE u.company_id = ? AND e.deleted_date IS NULL
             AND {words_match}
             AND (? IS NULL OR IF(? = '', e.calendar_id IS NULL, FIND_IN_SET(e.calendar_id, ?) > 0))
-          ORDER BY e.start_date DESC
+          ORDER BY CASE WHEN e.assigned_user_id = ? OR e.created_user_id = ? OR c.sales_rep = ?
+                          OR EXISTS (SELECT 1 FROM deals mine
+                                      WHERE mine.customer_id = e.customer_id AND mine.user_id = ?
+                                        AND mine.deleted_at IS NULL)
+                        THEN 0 ELSE 1 END,
+                   CASE WHEN {name_match} THEN 0 ELSE 1 END,
+                   COALESCE(e.unscheduled, 0) <> 0,
+                   ABS(TIMESTAMPDIFF(SECOND, e.start_date, UTC_TIMESTAMP())),
+                   e.id DESC
           LIMIT ?"
     );
     // Only fixed "?" fragments are spliced in; every word is a bind.
@@ -851,13 +864,18 @@ pub async fn search(
             found = found.bind(like);
         }
     }
-    let rows: Vec<FoundRow> = found
+    found = found
         .bind(&calendars)
         .bind(&calendars)
         .bind(&calendars)
-        .bind(limit)
-        .fetch_all(&state.pool)
-        .await?;
+        .bind(user.id)
+        .bind(user.id)
+        .bind(user.id)
+        .bind(user.id);
+    for like in &likes {
+        found = found.bind(like).bind(like);
+    }
+    let rows: Vec<FoundRow> = found.bind(limit).fetch_all(&state.pool).await?;
     Ok(Json(
         rows.into_iter()
             .map(|row| FoundEvent {

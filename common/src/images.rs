@@ -147,8 +147,47 @@ pub fn decode_heic(bytes: &[u8]) -> Result<DynamicImage, ImageError> {
     })
 }
 
+/// A gray or RGB JPEG read with `jpeg-decoder`, upright; `None` for other
+/// pixel formats (CMYK, 16-bit), which `image` reads. zune-jpeg 0.5.15, the
+/// reader inside `image`, turns JPEGs with optimized Huffman tables (all that
+/// [`encode_jpeg`] writes) solid green; browsers read them fine.
+fn decode_jpeg(bytes: &[u8]) -> Option<Result<DynamicImage, ImageError>> {
+    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
+    if let Err(err) = decoder.read_info() {
+        return Some(Err(ImageError::Decode(err.to_string())));
+    }
+    let info = decoder.info()?;
+    let (width, height) = (u32::from(info.width), u32::from(info.height));
+    if let Err(err) = check_size(u64::from(width), u64::from(height)) {
+        return Some(Err(err));
+    }
+    let pixels = match decoder.decode() {
+        Ok(pixels) => pixels,
+        Err(err) => return Some(Err(ImageError::Decode(err.to_string()))),
+    };
+    let mut image: DynamicImage = match info.pixel_format {
+        jpeg_decoder::PixelFormat::L8 => image::GrayImage::from_raw(width, height, pixels)?.into(),
+        jpeg_decoder::PixelFormat::RGB24 => {
+            image::RgbImage::from_raw(width, height, pixels)?.into()
+        }
+        _ => return None,
+    };
+    if let Some(orientation) = decoder
+        .exif_data()
+        .and_then(image::metadata::Orientation::from_exif_chunk)
+    {
+        image.apply_orientation(orientation);
+    }
+    Some(Ok(image))
+}
+
 /// Any supported still picture (the first frame of a GIF), upright.
 pub fn decode(bytes: &[u8]) -> Result<DynamicImage, ImageError> {
+    if sniff(bytes) == Some(Kind::Jpeg)
+        && let Some(decoded) = decode_jpeg(bytes)
+    {
+        return decoded;
+    }
     match sniff(bytes) {
         Some(Kind::Heic) => decode_heic(bytes),
         Some(Kind::Avif) | None => Err(ImageError::Unsupported),
@@ -658,5 +697,22 @@ mod tests {
             .unwrap()
             .to_rgb8();
         assert!(jpeg.pixels().all(|p| p.0.iter().all(|c| *c > 245)));
+    }
+
+    #[test]
+    fn our_jpegs_read_back_in_their_colors() {
+        let gray = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            148,
+            320,
+            image::Rgb([128, 128, 128]),
+        ));
+        let read = decode(&encode_jpeg(&gray, 75)).unwrap().to_rgb8();
+        assert_eq!((read.width(), read.height()), (148, 320));
+        assert!(
+            read.pixels()
+                .all(|p| p.0.iter().all(|c| c.abs_diff(128) <= 3)),
+            "{:?}",
+            read.get_pixel(74, 160)
+        );
     }
 }

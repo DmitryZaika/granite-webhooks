@@ -55,6 +55,7 @@
 //! - `DELETE /v1/phone/admin/devices/{id}`     → sign a company phone out (audited)
 //! - `GET|PUT /v1/superuser/companies/{id}/telnyx` → a company's Telnyx setup (superusers)
 //! - `/v1/phone/admin/ports*`            → moving existing numbers to Telnyx (`porting.rs`)
+//! - `/v1/phone/admin/ports/{id}/loa/*`, `/v1/public/port-loa/*` → e-signing a port's LOA (`port_loa.rs`)
 //! - `/v1/phone/admin/tendlc*`, `/v1/superuser/tendlc`, `/v1/superuser/companies/{id}/tendlc*`
 //!   → the 10DLC texting registration: Managers fill it in, superusers send it (`tendlc.rs`)
 //!
@@ -83,6 +84,7 @@ mod connect;
 mod contacts;
 mod devices;
 mod hold;
+mod port_loa;
 mod porting;
 mod pushes;
 mod recording;
@@ -161,6 +163,7 @@ pub fn router() -> OpenApiRouter<AppState> {
             superuser::save_company_telnyx_config
         ))
         .merge(porting::router())
+        .merge(port_loa::router())
         .routes(routes!(pushes::push_notification_route))
         .routes(routes!(pushes::push_lead_route))
         .routes(routes!(test_pushes::send_test_push))

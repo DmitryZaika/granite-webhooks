@@ -33,12 +33,13 @@ regex = "1"
 ammonia = "4.2.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"], optional = true }
 jpeg-encoder = { version = "0.7", optional = true }
+jpeg-decoder = { version = "0.3", default-features = false, optional = true }
 zune-heic = { version = "0.5", optional = true }
 
 [features]
 # Reading and re-encoding pictures (`images`): only the apps that store them
 # build the decoders.
-images = ["dep:image", "dep:jpeg-encoder", "dep:zune-heic"]
+images = ["dep:image", "dep:jpeg-encoder", "dep:jpeg-decoder", "dep:zune-heic"]
 
 [dev-dependencies]
 test-db = { path = "../test-db" }

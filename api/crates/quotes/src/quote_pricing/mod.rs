@@ -357,7 +357,23 @@ pub async fn pricing_for_quote(pool: &MySqlPool, quote: &Quote) -> ApiResult<(Va
             .await;
         taken
     };
-    Ok((price_list::with_live_choices(&taken, &latest), latest))
+    let quoted: HashSet<String> = quote
+        .doc()
+        .color_options
+        .iter()
+        .flat_map(|o| o.by_area.values())
+        .map(|c| {
+            format!(
+                "{}|{}",
+                price_list::key(&c.product),
+                price_list::key(&c.color)
+            )
+        })
+        .collect();
+    Ok((
+        price_list::with_live_choices(&taken, &latest, &quoted),
+        latest,
+    ))
 }
 
 fn lower(text: &str) -> String {
@@ -814,16 +830,14 @@ async fn add_waiting_jobs(
     .fetch_optional(pool)
     .await?;
     let (name, address) = customer.unwrap_or_default();
-    // Named after the customer, else the quote.
-    let title: String = name
-        .or_else(|| {
-            quote
-                .quote_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_string)
-        })
+    // Named after the quote, else the customer.
+    let title: String = quote
+        .quote_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|quote_name| !quote_name.is_empty())
+        .map(str::to_string)
+        .or(name)
         .unwrap_or_else(|| format!("Customer #{}", quote.customer_id))
         .chars()
         .take(255)

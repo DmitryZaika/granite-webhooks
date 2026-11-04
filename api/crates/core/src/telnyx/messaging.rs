@@ -5,7 +5,7 @@
 //! Nothing here logs phone numbers, message text, media links or Telnyx's
 //! error details.
 
-use super::{DOWNLOAD_TIMEOUT, Telnyx, TelnyxError};
+use super::{DOWNLOAD_TIMEOUT, Telnyx, TelnyxError, segment};
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -67,6 +67,16 @@ impl Telnyx {
             id: id.to_string(),
             status: data["to"][0]["status"].as_str().map(str::to_string),
         })
+    }
+
+    /// Reads a text we sent (`GET /messages/{id}`): its recipients' delivery
+    /// status and errors, as a webhook would report them.
+    pub async fn get_message(&self, id: &str) -> Result<MessagePayload, TelnyxError> {
+        let answer = self
+            .json(Method::GET, &format!("/messages/{}", segment(id)), None)
+            .await?;
+        serde_json::from_value(answer["data"].clone())
+            .map_err(|_| TelnyxError::Unexpected("message not readable"))
     }
 
     /// Downloads a file of an inbound MMS from the link Telnyx's webhook

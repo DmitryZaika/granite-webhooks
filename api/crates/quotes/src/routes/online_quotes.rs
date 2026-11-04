@@ -68,6 +68,8 @@ const SALES_MANAGER: i32 = 2;
 const MAX_PIECES: usize = 8;
 const MAX_COLORS: usize = 10;
 const MAX_CUTOUTS: usize = 6;
+/// The longest notes the customer may add, in characters.
+const MAX_NOTES: usize = 2000;
 /// Online quotes one address may get a day, and a company may get an hour.
 const QUOTES_PER_EMAIL_PER_DAY: i64 = 3;
 const QUOTES_PER_COMPANY_PER_HOUR: i64 = 30;
@@ -338,6 +340,10 @@ pub struct OnlineQuoteInput {
     /// team's notice says so. Null: no preference.
     #[serde(default)]
     pub contact_by: Option<OnlineContactBy>,
+    /// Anything the customer wants to tell the team, up to 2000 characters;
+    /// saved as the quote's notes and put in the team's notice. Optional.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// The saved quote.
@@ -1295,6 +1301,8 @@ struct Notice<'a> {
     emailed: bool,
     /// How the customer asked to be contacted about the quote.
     contact_by: Option<OnlineContactBy>,
+    /// What the customer wrote at the end, if anything.
+    notes: Option<&'a str>,
 }
 
 impl Notice<'_> {
@@ -1323,6 +1331,11 @@ impl Notice<'_> {
                 text,
                 "\nContact: the customer asked for {how} about the quote."
             );
+        }
+        if let Some(notes) = self.notes {
+            // One row per line: the notes' own line breaks become spaces.
+            let flat = notes.split_whitespace().collect::<Vec<_>>().join(" ");
+            let _ = write!(text, "\nNotes: {flat}");
         }
         if !self.emailed {
             text.push_str(
@@ -1619,6 +1632,14 @@ pub async fn create(
         ));
     }
     let (name, email, phone) = contact(&input)?;
+    let notes = input
+        .notes
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    if notes.is_some_and(|n| n.chars().count() > MAX_NOTES) {
+        return Err(bad("Keep your notes under 2000 characters."));
+    }
     let company = company_of(&state.pool, company_id).await?;
     let (offer, colors, sinks) = ready_offer(&state.pool, company_id).await?;
     let extras = checked_extras(&state.pool, company_id, &input.extras).await?;
@@ -1670,8 +1691,8 @@ pub async fn create(
                              salesperson_id, created_by, price_list_id, price_list_revision_id,
                              expiration_date, deal_id, draft_drawing_json, status, updated_at,
                              phone, email, tax_pct, payment_terms_json, price_snapshot_json,
-                             portal_token, current_step, current_revision)
-         VALUES (?, ?, '', NOW(), ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 'active', NOW(), ?, ?, ?, ?, ?, ?, 1, 1)",
+                             portal_token, current_step, current_revision, notes)
+         VALUES (?, ?, '', NOW(), ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 'active', NOW(), ?, ?, ?, ?, ?, ?, 1, 1, ?)",
     )
     .bind(customer_id)
     .bind(&quote_name)
@@ -1688,6 +1709,7 @@ pub async fn create(
     .bind(offer.terms.as_ref().map(|t| json!({ "terms": t }).to_string()))
     .bind(offer.prices.to_string())
     .bind(&portal)
+    .bind(notes)
     .execute(&mut *tx)
     .await?
     .last_insert_id();
@@ -1801,6 +1823,7 @@ pub async fn create(
         link: &link,
         emailed,
         contact_by: input.contact_by,
+        notes,
     };
     match (&known, &rep) {
         (None, _) => {

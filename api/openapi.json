@@ -2212,6 +2212,63 @@
         ]
       }
     },
+    "/v1/customers/lead-inbox": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "List my lead notifications",
+        "description": "The leads assigned to me in the last 14 days; for a sales manager or an\nadmin, also the company's leads of the last 14 days that have no rep yet\nand the sales reps to give them to (with this month's lead count each).",
+        "operationId": "lead_inbox",
+        "responses": {
+          "200": {
+            "description": "My lead notifications",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadInbox"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/duplicates": {
       "get": {
         "tags": [
@@ -13357,7 +13414,7 @@
           "deals"
         ],
         "summary": "Create a deal",
-        "description": "Puts the customer in `list_id`. When the customer already has an open\ndeal, that deal is updated and moved instead (`created: false`). The deal\nbelongs to the customer's sales rep, or the caller when there is none; a\ncaller who is a sales rep becomes the rep of a customer without one. Drip\nemails and SMS of the stage are scheduled for lead customers, and the\ncustomer is pushed to the company's CloudTalk contacts.",
+        "description": "Puts the customer in `list_id` as a new deal, even when the customer\nalready has one: existing deals are never changed. The deal\nbelongs to the customer's sales rep, or the caller when there is none; a\ncaller who is a sales rep becomes the rep of a customer without one. Drip\nemails and SMS of the stage are scheduled for lead customers, and the\ncustomer is pushed to the company's CloudTalk contacts.",
         "operationId": "create_deal",
         "requestBody": {
           "content": {
@@ -13371,7 +13428,7 @@
         },
         "responses": {
           "201": {
-            "description": "Deal created or reused",
+            "description": "Deal created",
             "content": {
               "application/json": {
                 "schema": {
@@ -22533,7 +22590,7 @@
           "sms"
         ],
         "summary": "Retry a failed text",
-        "description": "Sends one of the caller's failed texts again, with its files, and\nreplaces it with the new attempt: the sent text, or the new failure.\nErrors come back as a token in `error`, as when sending.",
+        "description": "Sends one of the caller's failed texts again, with its files, through\nthe provider the caller texts through now (`provider` names where the\nfailed text is stored), and replaces it with the new attempt: the sent\ntext, or the new failure.\nErrors come back as a token in `error`, as when sending.",
         "operationId": "retry_sms",
         "parameters": [
           {
@@ -36141,7 +36198,7 @@
           "schedule"
         ],
         "summary": "Tap On my way or Completed",
-        "description": "On my way (today's jobs, before arriving) marks the job and tells the\ncustomer once with the company's On my way message: a text, or an email\nwhen the company cannot text. The status is saved even when the message\ncannot go; `message_error` says why. Completed marks the job done. For the\njob's installer or template maker, or an admin.",
+        "description": "On my way (today's jobs, before arriving) marks the job and tells the\ncustomer once with the company's On my way message: a text, or an email\nwhen the company cannot text. The status is saved even when the message\ncannot go; `message_error` says why. Completed marks the job done; on an\ninstallation its sales rep is told (unless Admin > Schedule turned it\noff). For the\njob's installer or template maker, or an admin.",
         "operationId": "set_crew_status",
         "parameters": [
           {
@@ -36404,7 +36461,7 @@
           "schedule"
         ],
         "summary": "Search events",
-        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`, newest first.",
+        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`, newest first; with `calendar_ids`, only those\ncalendars' events.",
         "operationId": "search_events",
         "parameters": [
           {
@@ -36424,6 +36481,15 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "calendar_ids",
+            "in": "query",
+            "description": "Only these calendars, comma-separated ids; empty means events with no\ncalendar. Left out: every calendar.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -38146,7 +38212,7 @@
           "schedule"
         ],
         "summary": "Get the schedule settings",
-        "description": "The day the caller's schedule starts its weeks on (their own choice, else\nthe company's: Sunday unless an admin picked Monday), whether they show\n24-hour times, and the calendar estimates are booked on.",
+        "description": "The day the caller's schedule starts its weeks on (their own choice, else\nthe company's: Sunday unless an admin picked Monday), whether they show\n24-hour times, the calendar estimates are booked on, and the label color\nthey use most.",
         "operationId": "get_schedule_settings",
         "responses": {
           "200": {
@@ -38191,7 +38257,7 @@
           "schedule"
         ],
         "summary": "Set the schedule settings",
-        "description": "Saves the day the company's schedule starts its weeks on and the calendar\nestimates are booked on, for everyone.",
+        "description": "Saves the day the company's schedule starts its weeks on, the calendar\nestimates are booked on, and whether the sales rep is told when the\ninstaller taps Completed on an installation, for everyone.",
         "operationId": "set_schedule_settings",
         "requestBody": {
           "content": {
@@ -42372,6 +42438,227 @@
         ]
       }
     },
+    "/v1/ai/port-details-check": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Check a port's business details with AI",
+        "description": "Reads the Business details step as typed and lists what looks wrong\nbefore it is saved. Nothing is saved or sent to Telnyx.",
+        "operationId": "check_port_details",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortCheckInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What looks wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortCheckResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed or answered without a list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/port-ask": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Ask AI about a port's steps",
+        "description": "Answers a question such as what goes in a field or what to upload, from\nthe step the user is on and the details as typed. Nothing is saved.",
+        "operationId": "ask_port",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortAskInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortAskResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No question, or a question too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed or answered nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/port-bill-read": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Read a port's business details from the carrier's bill with AI",
+        "description": "Reads a PDF, JPEG or PNG of the current carrier's bill (at most 4 MB,\nsent base64) and returns the Business details it shows, copied as\nprinted. Nothing is saved, kept or sent to Telnyx. Company admins (and\nsuper admins, superusers) only.",
+        "operationId": "read_port_bill",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortBillInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the bill shows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortBillDetails"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not base64, empty, too big, or not a PDF, JPEG or PNG",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed or answered without the details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/ai/invoice-edit": {
       "post": {
         "tags": [
@@ -43837,7 +44124,7 @@
           "notifications"
         ],
         "summary": "Get one activity notification",
-        "description": "The caller's own due activity notification `notif-<id>`, as\n`GET /v1/notifications` lists it, with the deal it opens (`deal_id`).\nThe phone app reads it for a `notification` push, which names only the\nid. 404 for another user's, a dismissed one, or one `GET\n/v1/notifications` would not list.",
+        "description": "The caller's own due activity notification `notif-<id>`, as\n`GET /v1/notifications` lists it, with the deal it opens (`deal_id`),\nelse its customer (`customer_id`).\nThe phone app reads it for a `notification` push, which names only the\nid. 404 for another user's, a dismissed one, or one `GET\n/v1/notifications` would not list.",
         "operationId": "get_notification",
         "parameters": [
           {
@@ -45611,7 +45898,7 @@
           "jobs"
         ],
         "summary": "Run Granite Phone's upkeep",
-        "description": "Signs out the phones of users who may no longer use Granite Phone (or\nwhose company was deleted) and browser phones whose CRM sign-in ended, deletes\nleftover Telnyx credentials of signed-out phones (backing off on\nfailures), deletes Telnyx callbacks older than 30 days, closes calls\nTelnyx never reported the end of (after 6 hours), keeps the customer\nphone index that matches calls to customers in step (customers changed\nor added since the last run; each company's first fill, at most 5,000\ncustomers a run), writes up to 3 AI notes (transcript, note tidied like\nthe CRM's, on the call and its deal, the deal's people notified), gives\nanswered outbound calls their call points (provider `telnyx`), deletes\nTelnyx's copies of copied recordings whose delete failed, retries failed\nrecording copies (5 attempts), brings port-in orders up to date from\nTelnyx (adding ported numbers to the company), and last reads sent 10DLC\ntexting registrations and pending number assignments again. Bounded work per run, and\nno new work after 20 seconds; the next run takes the rest. Returns what\nwas done.",
+        "description": "Signs out the phones of users who may no longer use Granite Phone (or\nwhose company was deleted) and browser phones whose CRM sign-in ended, deletes\nleftover Telnyx credentials of signed-out phones (backing off on\nfailures), deletes Telnyx callbacks older than 30 days, closes calls\nTelnyx never reported the end of (after 6 hours), keeps the customer\nphone index that matches calls to customers in step (customers changed\nor added since the last run; each company's first fill, at most 5,000\ncustomers a run), writes up to 3 AI notes (transcript, note tidied like\nthe CRM's, on the call and its deal, the deal's people notified), gives\nanswered outbound calls their call points (provider `telnyx`), deletes\nTelnyx's copies of copied recordings whose delete failed, retries failed\nrecording copies (5 attempts), brings port-in orders up to date from\nTelnyx (adding ported numbers to the company), asks Telnyx again about\nsent texts with no final status yet (so one that did not go out shows as\nfailed), and last reads sent 10DLC\ntexting registrations and pending number assignments again. Bounded work per run, and\nno new work after 20 seconds; the next run takes the rest. Returns what\nwas done.",
         "operationId": "run_phone_job",
         "responses": {
           "200": {
@@ -54212,7 +54499,7 @@
           "phone"
         ],
         "summary": "List my text threads",
-        "description": "The conversations of the numbers I may call from, one per line and other\nnumber, newest activity first (page back with `before` = `nextBefore`),\noptionally only those with one other `number`. Each has our line, the\nother number, the customer with it, the newest text and my unread count;\n`unread` totals every thread. 403 `texting_disabled` unless the company\ntexts through Telnyx. Next: `GET /v1/phone/texts/threads/{key}/messages`.",
+        "description": "The conversations of the numbers I may call from, one per line and other\nnumber, newest activity first (page back with `before` = `nextBefore`),\noptionally only those with one other `number`, or only those with texts I\nhaven't read (`unread=true`, paged the same way). Each has our line, the\nother number, the customer with it, the newest text and my unread count;\n`unread` totals every thread. 403 `texting_disabled` unless the company\ntexts through Telnyx. Next: `GET /v1/phone/texts/threads/{key}/messages`.",
         "operationId": "list_phone_text_threads",
         "parameters": [
           {
@@ -54241,6 +54528,15 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "description": "`true`: only the threads with texts I haven't read (the Unread tab).\nDefault `false`, every thread.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -57571,6 +57867,498 @@
             "session_cookie": []
           }
         ]
+      }
+    },
+    "/v1/phone/admin/ports/{id}/loa/sign": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Sign a port's LOA now",
+        "description": "For the authorized person signing on this screen: prints the drawn\nsignature and today's date in the boxes on Telnyx's LOA and attaches it\nas the signed LOA (it replaces one attached). Only while the order takes\nchanges (409 otherwise). Audited with the confirmed name. Company admins\n(and super admins, superusers) only.",
+        "operationId": "sign_phone_port_loa",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The port order (`PortOrder.id`)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoaSignInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The order with the signed LOA attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortOrderDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, no signature box, no drawn signature, or Telnyx refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such port in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order can no longer be changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/admin/ports/{id}/loa/invite": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Send the LOA to be signed",
+        "description": "Emails the authorized person a link to sign the port's LOA on a page of\nits own (no account; good for 7 days and one signature). A new link\nreplaces the port's open one. The order must take changes (409\notherwise). Audited. Company admins (and super admins, superusers) only.",
+        "operationId": "invite_phone_port_loa_signer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The port order (`PortOrder.id`)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoaInviteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The link was emailed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoaInviteSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name or not an email address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such port in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order can no longer be changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The email could not be sent; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/public/port-loa/{token}": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "A signing link's page",
+        "description": "Who is asked to sign which port, and whether the link still works. No\nsession: the link's token is the proof. 404 for an unknown link.",
+        "operationId": "view_port_loa_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The link's token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoaInviteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/port-loa/{token}/template": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "A signing link's LOA",
+        "description": "The port's LOA from Telnyx (a PDF), while the link works (409 once it\nwas signed or expired). No session: the link's token is the proof.",
+        "operationId": "port_loa_invite_template",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The link's token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The LOA to sign",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Telnyx refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The link was signed or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/port-loa/{token}/sign": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Sign through a link",
+        "description": "Prints the drawn signature and today's date in the boxes on the port's\nLOA and attaches it as the signed LOA, as the admin who sent the link;\nthe link then stops working and that admin is emailed. 409 once the link\nwas signed or expired. No session: the link's token is the proof.",
+        "operationId": "sign_port_loa_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The link's token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoaLinkSignInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoaInviteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No signature box, no drawn signature, or Telnyx refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The link was signed or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/phone/pushes/notification": {
@@ -62161,7 +62949,7 @@
             }
           },
           "403": {
-            "description": "The messaging profile is not the company's",
+            "description": "An inbound text through a messaging profile that is not the company's",
             "content": {
               "application/json": {
                 "schema": {
@@ -71462,11 +72250,11 @@
           "id": {
             "type": "integer",
             "format": "int64",
-            "description": "The new deal, or the customer's open deal that was updated instead."
+            "description": "The new deal."
           },
           "created": {
             "type": "boolean",
-            "description": "False when an open deal of the customer was reused."
+            "description": "Always true: a create never reuses an existing deal."
           }
         }
       },
@@ -75780,6 +76568,7 @@
           "start_date",
           "end_date",
           "all_day",
+          "unscheduled",
           "created_user_id"
         ],
         "properties": {
@@ -75826,6 +76615,10 @@
           "all_day": {
             "type": "boolean",
             "description": "All-day event."
+          },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Not on the calendar yet; its dates are only when it was made."
           },
           "color": {
             "type": [
@@ -76755,6 +77548,93 @@
             "type": "integer",
             "description": "Phones FCM accepted the push for; 0 when nobody is told (unknown,\ndeleted, draft or outbound email, a company without inbound email,\nnobody whose inbox shows it, or no signed-in phone).",
             "minimum": 0
+          }
+        }
+      },
+      "InboxLead": {
+        "type": "object",
+        "description": "A lead of the inbox.",
+        "required": [
+          "customer_id"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the lead came in."
+          },
+          "assigned_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was first given a rep (null while it has none)."
+          },
+          "sales_rep_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its newest live deal, the one the app opens."
+          }
+        }
+      },
+      "InboxRep": {
+        "type": "object",
+        "description": "A sales rep a manager can give a lead to.",
+        "required": [
+          "id",
+          "month_leads"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "month_leads": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Leads given to them this month (the Telegram button's count)."
           }
         }
       },
@@ -77997,6 +78877,43 @@
           }
         }
       },
+      "LeadInbox": {
+        "type": "object",
+        "description": "`GET /v1/customers/lead-inbox`.",
+        "required": [
+          "is_manager",
+          "unassigned",
+          "assigned",
+          "reps"
+        ],
+        "properties": {
+          "is_manager": {
+            "type": "boolean",
+            "description": "A sales manager or an admin: `unassigned` and `reps` are filled in."
+          },
+          "unassigned": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxLead"
+            },
+            "description": "Leads of the last 14 days without a rep, newest first (managers)."
+          },
+          "assigned": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxLead"
+            },
+            "description": "Leads given a rep in the last 14 days, newest first: mine, or the\ncompany's for a manager."
+          },
+          "reps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxRep"
+            },
+            "description": "The company's sales reps (managers)."
+          }
+        }
+      },
       "LeadInput": {
         "type": "object",
         "description": "Body of `POST` and `PUT` on a lead.",
@@ -78648,6 +79565,182 @@
           "recording": {
             "type": "boolean",
             "description": "The call is being recorded now."
+          }
+        }
+      },
+      "LoaBox": {
+        "type": "object",
+        "description": "Where the signature or the date goes on the LOA: points from the page's\ntop-left corner, as the signing editor finds them.",
+        "required": [
+          "type",
+          "page",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/LoaBoxKind",
+            "description": "`signature`, `name` (the signer's printed name) or `date`."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "description": "From 1."
+          },
+          "x": {
+            "type": "number",
+            "format": "double",
+            "description": "Left edge."
+          },
+          "y": {
+            "type": "number",
+            "format": "double",
+            "description": "Top edge."
+          },
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "Width."
+          },
+          "height": {
+            "type": "number",
+            "format": "double",
+            "description": "Height."
+          }
+        }
+      },
+      "LoaBoxKind": {
+        "type": "string",
+        "description": "What a box holds.",
+        "enum": [
+          "signature",
+          "name",
+          "date"
+        ]
+      },
+      "LoaInviteInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/admin/ports/{id}/loa/invite`.",
+        "required": [
+          "signerName",
+          "email"
+        ],
+        "properties": {
+          "signerName": {
+            "type": "string",
+            "description": "The authorized person."
+          },
+          "email": {
+            "type": "string",
+            "description": "Where the link goes."
+          }
+        }
+      },
+      "LoaInviteSent": {
+        "type": "object",
+        "description": "The link was emailed.",
+        "required": [
+          "email",
+          "expiresAt"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Who it went to."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the link stops working."
+          }
+        }
+      },
+      "LoaInviteStatus": {
+        "type": "string",
+        "description": "Where a link is.",
+        "enum": [
+          "open",
+          "signed",
+          "expired"
+        ]
+      },
+      "LoaInviteView": {
+        "type": "object",
+        "description": "What the link's page shows.",
+        "required": [
+          "status",
+          "signerName",
+          "companyName",
+          "numbers"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/LoaInviteStatus",
+            "description": "Where the link is."
+          },
+          "signerName": {
+            "type": "string",
+            "description": "The authorized person asked to sign."
+          },
+          "companyName": {
+            "type": "string",
+            "description": "The company moving its numbers."
+          },
+          "numbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The numbers moving (E.164)."
+          }
+        }
+      },
+      "LoaLinkSignInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/port-loa/{token}/sign`.",
+        "required": [
+          "fields",
+          "signature"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoaBox"
+            },
+            "description": "Where to print the signature and the date."
+          },
+          "signature": {
+            "type": "string",
+            "description": "The drawn signature: a PNG data URL."
+          }
+        }
+      },
+      "LoaSignInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/admin/ports/{id}/loa/sign`.",
+        "required": [
+          "fields",
+          "signature",
+          "signerName"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoaBox"
+            },
+            "description": "Where to print the signature and the date."
+          },
+          "signature": {
+            "type": "string",
+            "description": "The drawn signature: a PNG data URL."
+          },
+          "signerName": {
+            "type": "string",
+            "description": "The authorized person the admin confirms they are."
           }
         }
       },
@@ -80583,6 +81676,14 @@
             ],
             "format": "int64",
             "description": "The deal an activity notification is about (the phone app opens it)."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer an activity notification is about (the phone app opens\ntheir card when there is no deal)."
           }
         }
       },
@@ -81485,6 +82586,13 @@
                 "type": "null"
               }
             ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Anything the customer wants to tell the team, up to 2000 characters;\nsaved as the quote's notes and put in the team's notice. Optional."
           }
         },
         "additionalProperties": false
@@ -82800,6 +83908,11 @@
             "description": "Ported orders whose numbers were added to the company and set up\non Telnyx; left out when none.",
             "minimum": 0
           },
+          "text_statuses_checked": {
+            "type": "integer",
+            "description": "Texts sent through Telnyx whose status was read again from Telnyx;\nleft out when none.",
+            "minimum": 0
+          },
           "tendlc_refreshed": {
             "type": "integer",
             "description": "10DLC texting registrations read again from Telnyx\n(`phone::tendlc_registry`); left out when none.",
@@ -83468,6 +84581,241 @@
           "comment": {
             "type": "boolean",
             "description": "Write to Telnyx's porting team (`POST .../comments`)."
+          }
+        }
+      },
+      "PortAskInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/port-ask`.",
+        "required": [
+          "question",
+          "details"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "What the user asks."
+          },
+          "step": {
+            "type": "string",
+            "description": "The step they are on: `business`, `documents`, `date` or `review`."
+          },
+          "loaAttached": {
+            "type": "boolean",
+            "description": "Whether the signed LOA and the recent bill are attached."
+          },
+          "billAttached": {
+            "type": "boolean"
+          },
+          "details": {
+            "$ref": "#/components/schemas/PortCheckInput",
+            "description": "The Business details as typed (the PIN itself is not sent)."
+          }
+        }
+      },
+      "PortAskResult": {
+        "type": "object",
+        "description": "The AI's answer.",
+        "required": [
+          "answer"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          }
+        }
+      },
+      "PortBillDetails": {
+        "type": "object",
+        "description": "What the AI read off the bill; null where the bill does not show it.",
+        "properties": {
+          "entityName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The business name on the account."
+          },
+          "authPersonName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The person the account is billed to."
+          },
+          "billingPhoneNumber": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account's main (billing) number, as printed."
+          },
+          "accountNumber": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account number, as printed."
+          },
+          "streetAddress": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The service address's street line."
+          },
+          "extendedAddress": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Suite, floor or unit."
+          },
+          "locality": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The city."
+          },
+          "administrativeArea": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The 2-letter state or province."
+          },
+          "postalCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ZIP or postal code."
+          },
+          "countryCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`US` or `CA`."
+          }
+        }
+      },
+      "PortBillInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/port-bill-read`.",
+        "required": [
+          "filename",
+          "contentBase64"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "The file's name, e.g. `bill.pdf`."
+          },
+          "contentBase64": {
+            "type": "string",
+            "description": "The bill, base64: a PDF, JPEG or PNG of at most 4 MB."
+          }
+        }
+      },
+      "PortCheckInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/port-details-check`: the form as typed.",
+        "properties": {
+          "phoneNumbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The numbers being ported."
+          },
+          "oldCarrier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The losing carrier, when Telnyx named it."
+          },
+          "entityName": {
+            "type": "string"
+          },
+          "authPersonName": {
+            "type": "string"
+          },
+          "billingPhoneNumber": {
+            "type": "string"
+          },
+          "accountNumber": {
+            "type": "string"
+          },
+          "pinSet": {
+            "type": "boolean",
+            "description": "Whether a PIN is typed or already saved (the PIN itself is not sent)."
+          },
+          "streetAddress": {
+            "type": "string"
+          },
+          "extendedAddress": {
+            "type": "string"
+          },
+          "locality": {
+            "type": "string"
+          },
+          "administrativeArea": {
+            "type": "string"
+          },
+          "postalCode": {
+            "type": "string"
+          },
+          "countryCode": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`full` or `partial`."
+          },
+          "remainingNumbersAction": {
+            "type": "string",
+            "description": "`keep`, `disconnect` or empty."
+          },
+          "newBillingPhoneNumber": {
+            "type": "string"
+          }
+        }
+      },
+      "PortCheckIssue": {
+        "type": "object",
+        "description": "One problem the AI found.",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The form field it is about, or null."
+          },
+          "message": {
+            "type": "string",
+            "description": "What to fix."
+          }
+        }
+      },
+      "PortCheckResult": {
+        "type": "object",
+        "description": "What the AI found; empty when everything looks right.",
+        "required": [
+          "issues"
+        ],
+        "properties": {
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortCheckIssue"
+            }
           }
         }
       },
@@ -86824,6 +88172,13 @@
             ],
             "format": "int32",
             "description": "The template used (counts toward the default)."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SendAttachment"
+            },
+            "description": "Files sent with the email, each uploaded by the caller\n(`POST /v1/uploads`, folder `emails`, with its `token`)."
           }
         },
         "additionalProperties": false
@@ -90297,7 +91652,8 @@
         "required": [
           "week_starts_on",
           "company_week_starts_on",
-          "time_24h"
+          "time_24h",
+          "notify_rep_on_install_complete"
         ],
         "properties": {
           "week_starts_on": {
@@ -90319,6 +91675,17 @@
             ],
             "format": "int32",
             "description": "The calendar the deal page's Schedule estimate button books on: the\none an admin picked, else the built-in Estimates calendar (null when\nthere is neither)."
+          },
+          "favorite_color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The label color the caller gave most of the events they added in the\nlast 90 days (null when none): a new event starts with it."
+          },
+          "notify_rep_on_install_complete": {
+            "type": "boolean",
+            "description": "The job's sales rep is told when the installer taps Completed on an\ninstallation (Admin > Schedule; on unless an admin turned it off)."
           }
         }
       },
@@ -90344,6 +91711,13 @@
             ],
             "format": "int32",
             "description": "A calendar of the caller's company."
+          },
+          "notify_rep_on_install_complete": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Tell the sales rep when the installer taps Completed on an installation."
           }
         }
       },

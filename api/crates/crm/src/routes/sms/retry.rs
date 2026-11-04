@@ -1,14 +1,16 @@
 //! Retrying a text that failed: `POST /v1/sms/{provider}/messages/{id}/retry`.
 //!
 //! The failed row is sent again as it was stored (text and files) by the
-//! rep who sent it, and the new attempt takes its place in the conversation.
+//! rep who sent it, through the provider the rep texts through now (which
+//! may differ from the one it failed on), and the new attempt takes its
+//! place in the conversation.
 //! While it goes out the row shows as sending (`pending`, dated now, so the
 //! stale-send upkeep leaves it alone and a second retry cannot claim it).
 
 use super::provider::{SmsProvider, phone10};
 use super::send::{
     SendSmsRequest, SentSms, SmsFile, SmsSendError, Undelivered, check, deliver_now,
-    failure_response, refuse, seat, take_send_slot,
+    failure_response, refuse, seat, take_send_slot, user_provider,
 };
 use super::thread::message_by_id;
 use crate::auth::EmployeeUser;
@@ -88,30 +90,45 @@ async fn claim(pool: &MySqlPool, provider: SmsProvider, id: i32) -> Result<bool,
     Ok(done.rows_affected() == 1)
 }
 
-/// After a failed attempt: the provider's new failed row replaces the old
-/// one; without one (nothing reached the provider) the old one is failed
-/// again.
+/// The newest row id of `provider`'s texts, so a failure stored by the new
+/// attempt can be told apart from older ones.
+async fn last_id(pool: &MySqlPool, provider: SmsProvider) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT CAST(COALESCE(MAX(id), 0) AS SIGNED) FROM {}",
+        provider.sms_table()
+    )))
+    .fetch_one(pool)
+    .await
+}
+
+/// After a failed attempt through `via`: its new failed row (newer than
+/// `after`) replaces the old one in `stored`; without one (nothing reached
+/// the provider) the old one is failed again.
+#[allow(clippy::too_many_arguments)]
 async fn settle_failure(
     pool: &MySqlPool,
-    provider: SmsProvider,
+    stored: SmsProvider,
+    via: SmsProvider,
     company_id: i32,
     user_id: i32,
     id: i32,
+    after: i64,
     phone: &str,
 ) -> Result<(), sqlx::Error> {
-    let table = provider.sms_table();
-    let newer: Option<i32> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT id FROM {table}
+    let newer: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT CAST(id AS SIGNED) FROM {}
           WHERE company_id = ? AND sender_user_id = ? AND direction = 'outbound'
             AND status = 'failed' AND id > ? AND phone_digits = ?
-          LIMIT 1"
+          LIMIT 1",
+        via.sms_table()
     )))
     .bind(company_id)
     .bind(user_id)
-    .bind(id)
+    .bind(after)
     .bind(phone)
     .fetch_optional(pool)
     .await?;
+    let table = stored.sms_table();
     let sql = if newer.is_some() {
         format!("DELETE FROM {table} WHERE id = ? AND status = 'pending'")
     } else {
@@ -126,8 +143,10 @@ async fn settle_failure(
 
 /// Retry a failed text
 ///
-/// Sends one of the caller's failed texts again, with its files, and
-/// replaces it with the new attempt: the sent text, or the new failure.
+/// Sends one of the caller's failed texts again, with its files, through
+/// the provider the caller texts through now (`provider` names where the
+/// failed text is stored), and replaces it with the new attempt: the sent
+/// text, or the new failure.
 /// Errors come back as a token in `error`, as when sending.
 #[crate::openapi::path(
     post,
@@ -155,7 +174,10 @@ pub async fn retry(
     Path((provider, id)): Path<(SmsProvider, i32)>,
 ) -> ApiResult<Response> {
     let pool = &state.pool;
-    let Some(seat) = seat(pool, provider, &user).await? else {
+    let via = user_provider(pool, user.company_id, user.id)
+        .await?
+        .unwrap_or(provider);
+    let Some(seat) = seat(pool, via, &user).await? else {
         return Ok(refuse(StatusCode::FORBIDDEN, "agent_not_linked"));
     };
     let Some(row) = failed_row(pool, provider, user.company_id, user.id, id).await? else {
@@ -180,10 +202,25 @@ pub async fn retry(
         return Err(ApiError::NotFound);
     }
     let digits = phone10(&request.phone_digits);
-    let ids = match deliver_now(&state, &user, provider, &seat, &request).await {
+    let after = if via == provider {
+        i64::from(id)
+    } else {
+        last_id(pool, via).await?
+    };
+    let ids = match deliver_now(&state, &user, via, &seat, &request).await {
         Ok(ids) => ids,
         Err(undelivered) => {
-            settle_failure(pool, provider, user.company_id, user.id, id, &digits).await?;
+            settle_failure(
+                pool,
+                provider,
+                via,
+                user.company_id,
+                user.id,
+                id,
+                after,
+                &digits,
+            )
+            .await?;
             return match undelivered {
                 Undelivered::Api(err) => Err(err),
                 Undelivered::Sms(failure) => Ok(failure_response(failure)),
@@ -198,7 +235,7 @@ pub async fn retry(
     .execute(pool)
     .await?;
     let message = match ids.first() {
-        Some(id) => message_by_id(pool, provider, user.company_id, &digits, *id).await?,
+        Some(id) => message_by_id(pool, via, user.company_id, &digits, *id).await?,
         None => None,
     };
     Ok(Json(SentSms {
