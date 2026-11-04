@@ -10,6 +10,7 @@ use crate::state::AppState;
 use crate::telegram::Bot;
 use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
+use common::crud::lead_automation::DRIP_TEMPLATE_FOR_REP;
 use common::crud::phone_app::has_app;
 use common::telegram::crm::format_activity_notification;
 use common::utils::email_send_window::{
@@ -167,9 +168,10 @@ impl DripChannel {
 
 /// Cancels the deal's pending drips and schedules those of `list_id`.
 ///
-/// Port of `syncDealListDripEmails` + `syncDealListDripSms`. Only deals of
-/// customers with an owner get drips: leads, or for an SMS template the
-/// sources it names; a new deal of a customer who already has another deal
+/// Port of `syncDealListDripEmails` + `syncDealListDripSms`. Only deals with
+/// an owner get drips: the company's for that sales rep, or the rep's own when
+/// they chose their own automations; to leads, or for an SMS template the
+/// sources it names. A new deal of a customer who already has another deal
 /// gets none.
 pub async fn sync_drip(
     pool: &MySqlPool,
@@ -219,15 +221,21 @@ pub async fn sync_drip(
     };
 
     for channel in [DripChannel::Email, DripChannel::Sms] {
+        // The company's drips for this rep, or the rep's own when they chose
+        // their own automations (Employee CRM › Automations).
         let templates: Vec<DripTemplate> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {} FROM {}
-             WHERE company_id = ? AND user_id IS NULL AND lead_list_id = ? AND deleted_at IS NULL
-             ORDER BY hour_delay ASC, id ASC",
+            "SELECT {} FROM {} t
+             WHERE t.company_id = ? AND t.lead_list_id = ? AND t.deleted_at IS NULL
+               AND {DRIP_TEMPLATE_FOR_REP}
+             ORDER BY t.hour_delay ASC, t.id ASC",
             channel.template_columns(),
             channel.template_table()
         )))
         .bind(context.company_id)
         .bind(list_id)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(user_id)
         .fetch_all(pool)
         .await?;
         for template in templates {
