@@ -79,7 +79,7 @@ pub async fn board(
     let mut sql = QueryBuilder::<MySql>::new(project_select());
     sql.push(" WHERE p.company_id = ")
         .push_bind(viewer.company_id);
-    sql.push(format!(" AND {}", viewer.visible_sql(false)));
+    sql.push(format!(" AND {}", viewer.visible_sql()));
     if !query.archived {
         sql.push(" AND p.archived_at IS NULL");
     }
@@ -140,9 +140,11 @@ pub async fn board(
             .push_bind(viewer.company_id)
             .push(" AND t.deleted_at IS NULL AND t.completed_at IS NULL");
         crate::sql::push_in(&mut tasks, "t.project_id", &ids);
-        tasks.push(
-            " ORDER BY t.deadline IS NULL, t.deadline, FIELD(t.priority, 'high', 'medium', 'low'), t.id",
-        );
+        // The caller's own task first: it is the one their card shows.
+        tasks
+            .push(" ORDER BY t.assigned_user_id <=> ")
+            .push_bind(viewer.user_id)
+            .push(" DESC, t.deadline IS NULL, t.deadline, t.id");
         let tasks: Vec<ProjectTask> = tasks.build_query_as().fetch_all(&mut *conn).await?;
         let mut next = QueryBuilder::<MySql>::new(APPOINTMENT_SELECT);
         next.push(" AND cal.company_id = ")
@@ -156,10 +158,7 @@ pub async fn board(
     };
     Ok(Json(ProjectsBoard {
         projects,
-        stages: Stage::ALL
-            .into_iter()
-            .filter(|stage| viewer.stages.contains(stage) || viewer.own)
-            .collect(),
+        stages: Stage::ALL.to_vec(),
         owners,
         appointments,
         tasks,
@@ -378,7 +377,7 @@ pub async fn deal_project(
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "The caller's position can't start projects", body = ErrorBody),
         (status = 404, description = "No such deal the caller may see, or Projects is off", body = ErrorBody),
-        (status = 409, description = "The deal isn't won", body = ErrorBody),
+        (status = 409, description = "The deal is lost", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))

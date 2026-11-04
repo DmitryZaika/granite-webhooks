@@ -32,6 +32,8 @@ const CHECK_IN: i32 = 8;
 const MARKETING: i32 = 7;
 const SHOP_WORKER: i32 = 4;
 const TEMPLATE_MAKER: i32 = 11;
+const INVENTORY_MANAGER: i32 = 12;
+const SCHEDULING_MANAGER: i32 = 13;
 
 /// The company requests act in, for the header.
 #[derive(Debug, Serialize, ToSchema)]
@@ -299,6 +301,8 @@ pub async fn shell(
                     SHOP_MANAGER,
                     MANAGER,
                     OFFICE_MANAGER,
+                    INVENTORY_MANAGER,
+                    SCHEDULING_MANAGER,
                 ]
                 .into_iter()
                 .any(here)),

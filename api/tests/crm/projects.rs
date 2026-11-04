@@ -7,7 +7,8 @@ use sqlx::MySqlPool;
 
 // Seed: in company 100 Rita (100) is a sales rep and owns the open deal 8002
 // "Erin countertops" of Erin Builder (1004); Mark (101) is the Sales Manager;
-// Ada (102) is the admin. Projects starts off.
+// Ada (102) is the admin. Projects starts off; `turn_on` also turns on
+// "Project on a sale".
 
 async fn run(pool: &MySqlPool, sql: &str) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
@@ -19,7 +20,7 @@ async fn run(pool: &MySqlPool, sql: &str) {
 async fn turn_on(pool: &MySqlPool) {
     run(
         pool,
-        "UPDATE company SET projects_enabled = 1 WHERE id = 100",
+        "UPDATE company SET projects_enabled = 1, auto_project = 1 WHERE id = 100",
     )
     .await;
 }
@@ -123,9 +124,13 @@ async fn each_position_sees_its_part_of_the_board(pool: MySqlPool) {
     let id = projects_of_8002(&pool).await[0];
     let only = [i64::from(id)];
 
-    // Rita sold it; Mark is the Sales Manager.
+    // Rita sold it. Mark, the Sales Manager, has no task on it yet.
     assert_eq!(ids(&board(&pool, sessions::REP).await), only);
-    assert_eq!(ids(&board(&pool, sessions::MANAGER).await), only);
+    assert!(ids(&board(&pool, sessions::MANAGER).await).is_empty());
+    assert_eq!(
+        board(&pool, sessions::MANAGER).await["stages"],
+        json!(["new", "templated", "fabrication", "installed", "completed"])
+    );
 
     // Another rep's project is not Rita's.
     run(
@@ -140,38 +145,33 @@ async fn each_position_sees_its_part_of_the_board(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NOT_FOUND);
 
-    // The Office Manager schedules: Awaiting Template to In Fabrication.
+    // An Inventory Manager sees it once given a task, and keeps it when done.
     run(
         &pool,
-        "UPDATE users_positions SET position_id = 10 WHERE user_id = 101 AND company_id = 100",
+        "UPDATE users_positions SET position_id = 12 WHERE user_id = 101 AND company_id = 100",
     )
     .await;
-    let office = board(&pool, sessions::MANAGER).await;
-    assert_eq!(office["stages"], json!(["new", "templated", "fabrication"]));
-    assert_eq!(ids(&office), only);
-
-    // The Shop Manager: Templated onward.
-    run(
-        &pool,
-        "UPDATE users_positions SET position_id = 3 WHERE user_id = 101 AND company_id = 100",
-    )
-    .await;
-    let shop = board(&pool, sessions::MANAGER).await;
-    assert_eq!(
-        shop["stages"],
-        json!(["templated", "fabrication", "installed", "completed"])
-    );
-    assert!(ids(&shop).is_empty());
-    let moved = act(
-        &pool,
-        id,
-        sessions::ADMIN,
-        json!({ "intent": "stage", "version": version(&pool, id).await, "stage": "templated" }),
-    )
-    .await;
-    moved.assert_status_ok();
-    assert_eq!(moved.json::<Value>()["stage_code"], "templated");
+    assert!(ids(&board(&pool, sessions::MANAGER).await).is_empty());
+    let created = server(pool.clone())
+        .post(&format!("/v1/projects/{id}/tasks"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Make the layout", "assignedUserId": 101 }))
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let task = created.json::<Value>()["id"].as_i64().unwrap();
     assert_eq!(ids(&board(&pool, sessions::MANAGER).await), only);
+    server(pool.clone())
+        .patch(&format!("/v1/projects/{id}/tasks/{task}"))
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "completed": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(ids(&board(&pool, sessions::MANAGER).await), only);
+    server(pool.clone())
+        .get(&format!("/v1/projects/{id}"))
+        .with_session(sessions::MANAGER)
+        .await
+        .assert_status_ok();
 
     // No position, no board.
     run(
@@ -184,6 +184,42 @@ async fn each_position_sees_its_part_of_the_board(pool: MySqlPool) {
         .with_session(sessions::MANAGER)
         .await
         .assert_status(StatusCode::FORBIDDEN);
+}
+
+#[test_db::test(seed)]
+async fn without_project_on_a_sale_a_project_is_added_by_hand(pool: MySqlPool) {
+    turn_on(&pool).await;
+    run(&pool, "UPDATE company SET auto_project = 0 WHERE id = 100").await;
+    win_8002(&pool).await;
+    assert!(projects_of_8002(&pool).await.is_empty());
+
+    // Rita adds it from her own deal; adding it again finds the same one.
+    let server = server(pool.clone());
+    let added = server
+        .post("/v1/deals/8002/project")
+        .with_session(sessions::REP)
+        .await;
+    added.assert_status_success();
+    let id = projects_of_8002(&pool).await;
+    assert_eq!(id.len(), 1);
+    server
+        .post("/v1/deals/8002/project")
+        .with_session(sessions::REP)
+        .await
+        .assert_status_success();
+    assert_eq!(projects_of_8002(&pool).await, id);
+}
+
+#[test_db::test(seed)]
+async fn a_lost_deal_gets_no_project(pool: MySqlPool) {
+    turn_on(&pool).await;
+    run(&pool, "UPDATE deals SET is_won = 0 WHERE id = 8002").await;
+    server(pool.clone())
+        .post("/v1/deals/8002/project")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    assert!(projects_of_8002(&pool).await.is_empty());
 }
 
 #[test_db::test(seed)]

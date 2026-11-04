@@ -71,7 +71,7 @@ pub async fn visible_project(
     let sql = format!(
         "{} WHERE p.id = ? AND p.company_id = ? AND {}",
         project_select(),
-        viewer.visible_sql(true)
+        viewer.visible_sql()
     );
     sqlx::query_as::<_, Project>(sqlx::AssertSqlSafe(sql))
         .bind(id)
@@ -728,13 +728,14 @@ pub async fn convert_deal(
     .await?;
     // Sales reps convert their own deals.
     let (_, is_won) = deal
-        .filter(|(owner, _)| viewer.permissions.view_all || *owner == Some(viewer.user_id))
+        .filter(|(owner, _)| viewer.convert_any || *owner == Some(viewer.user_id))
         .ok_or(ApiError::NotFound)?;
     if let Some(id) = deal_project(&mut tx, viewer.company_id, deal_id).await? {
         return Ok((id, false));
     }
-    if is_won != Some(1) {
-        return Err(conflict("Mark the deal won first"));
+    // Added by hand: an open deal too, never a lost one.
+    if is_won == Some(0) {
+        return Err(conflict("That deal is lost. Pick another deal."));
     }
     let id = create_project(&mut tx, viewer.company_id, deal_id, Some(viewer.user_id)).await?;
     tx.commit().await?;
@@ -742,7 +743,7 @@ pub async fn convert_deal(
 }
 
 /// A deal was won (deals board, sold quote): its project starts, when the
-/// company has Projects. Logged, never returned: the win is already saved.
+/// company has Projects and Admin › Quotes › Automation "Project on a sale". Logged, never returned: the win is already saved.
 pub async fn start_for_won_deal(
     pool: &MySqlPool,
     company_id: i32,
@@ -760,7 +761,12 @@ async fn try_start(
     deal_id: i64,
     actor_id: Option<i32>,
 ) -> ApiResult<()> {
-    if !enabled(pool, company_id).await? {
+    let automatic: Option<bool> =
+        sqlx::query_scalar("SELECT COALESCE(auto_project, 0) <> 0 FROM company WHERE id = ?")
+            .bind(company_id)
+            .fetch_optional(pool)
+            .await?;
+    if automatic != Some(true) || !enabled(pool, company_id).await? {
         return Ok(());
     }
     let mut tx = pool.begin().await?;

@@ -15,8 +15,10 @@ const SALES_REP: i32 = 1;
 const SALES_MANAGER: i32 = 2;
 const SHOP_MANAGER: i32 = 3;
 const MANAGER: i32 = 5;
-/// The scheduling manager.
+/// Office Manager.
 const OFFICE_MANAGER: i32 = 10;
+const INVENTORY_MANAGER: i32 = 12;
+const SCHEDULING_MANAGER: i32 = 13;
 
 /// Where a project is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
@@ -101,9 +103,9 @@ pub fn check_transition(from: Stage, to: Stage) -> ApiResult<()> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Permissions {
-    /// Sees every project in every stage.
+    /// Sees every project.
     pub view_all: bool,
-    /// Turns won deals into projects (their own, or any for managers).
+    /// Turns deals into projects (their own, or any for managers).
     pub convert: bool,
     /// Moves projects forward, links transactions, books appointments.
     pub production: bool,
@@ -119,16 +121,19 @@ pub struct Viewer {
     pub user_id: i32,
     pub company_id: i32,
     pub permissions: Permissions,
-    /// Every project in these stages, whoever sold it.
-    pub stages: Vec<Stage>,
-    /// Their own deals' projects, in every stage (sales reps).
+    /// Their own deals' projects (sales reps).
     pub own: bool,
+    /// Starts projects from anyone's deals (admins, Managers, Sales Managers).
+    pub convert_any: bool,
+    /// Has a Projects board.
+    board: bool,
 }
 
 impl Viewer {
-    /// Admins and Managers and Sales Managers: every project. Office Managers
-    /// (scheduling): Awaiting Template to In Fabrication. Shop Managers:
-    /// Templated onward. Sales reps: their own.
+    /// Admins and Managers see every project. Sales reps see their own
+    /// deals' projects. Everyone sees the projects they have a task on, done
+    /// or not: that is all a Sales, Shop, Office, Scheduling or Inventory
+    /// Manager sees.
     pub fn new(user: &SessionUser, positions: &[UserPositionRow]) -> Self {
         let has = |position: i32| {
             positions
@@ -140,37 +145,21 @@ impl Viewer {
         let office = has(OFFICE_MANAGER);
         let shop = has(SHOP_MANAGER);
         let rep = has(SALES_REP);
-        let mut stages: Vec<Stage> = if admin || sales_manager {
-            Stage::ALL.to_vec()
-        } else {
-            let mut stages = Vec::new();
-            if office {
-                stages.extend([Stage::New, Stage::Templated, Stage::Fabrication]);
-            }
-            if shop {
-                stages.extend([
-                    Stage::Templated,
-                    Stage::Fabrication,
-                    Stage::Installed,
-                    Stage::Completed,
-                ]);
-            }
-            stages
-        };
-        stages.sort();
-        stages.dedup();
+        let tasked =
+            sales_manager || office || shop || has(SCHEDULING_MANAGER) || has(INVENTORY_MANAGER);
         Self {
             user_id: user.id,
             company_id: user.company_id,
             permissions: Permissions {
-                view_all: stages.len() == Stage::ALL.len(),
+                view_all: admin,
                 convert: admin || sales_manager || rep,
                 production: admin || office || shop,
                 mark_paid: admin || sales_manager,
                 manage: admin || office,
             },
-            stages,
             own: rep,
+            convert_any: admin || sales_manager,
+            board: admin || rep || tasked,
         }
     }
 
@@ -181,40 +170,26 @@ impl Viewer {
     }
 
     /// Has a Projects board.
-    pub fn has_board(&self) -> bool {
-        !self.stages.is_empty() || self.own
+    pub const fn has_board(&self) -> bool {
+        self.board
     }
 
-    /// SQL condition on `projects p` (with `sales s`): the projects the board
-    /// shows. `with_tasks` also lets in a project the caller has an open
-    /// task on, so a task's notification always opens.
-    pub fn visible_sql(&self, with_tasks: bool) -> String {
+    /// SQL condition on `projects p`: the projects the caller sees. A task
+    /// given to them keeps its project in view after it is done.
+    pub fn visible_sql(&self) -> String {
         if self.permissions.view_all {
             return "TRUE".into();
         }
         let mut any = Vec::new();
-        if !self.stages.is_empty() {
-            let list: Vec<String> = self
-                .stages
-                .iter()
-                .map(|stage| format!("'{}'", stage.as_str()))
-                .collect();
-            any.push(format!("{STAGE_SQL} IN ({})", list.join(", ")));
-        }
         if self.own {
             any.push(format!("p.sales_rep_id = {}", self.user_id));
         }
-        if with_tasks {
-            any.push(format!(
-                "EXISTS (SELECT 1 FROM project_activities ta
-                          WHERE ta.project_id = p.id AND ta.assigned_user_id = {}
-                            AND ta.deleted_at IS NULL AND ta.completed_at IS NULL)",
-                self.user_id
-            ));
-        }
-        if any.is_empty() {
-            return "FALSE".into();
-        }
+        any.push(format!(
+            "EXISTS (SELECT 1 FROM project_activities ta
+                      WHERE ta.project_id = p.id AND ta.assigned_user_id = {}
+                        AND ta.deleted_at IS NULL)",
+            self.user_id
+        ));
         format!("({})", any.join(" OR "))
     }
 
@@ -279,25 +254,19 @@ mod tests {
     }
 
     #[test]
-    fn who_sees_which_stages() {
-        assert_eq!(viewer(true, &[]).stages, Stage::ALL.to_vec());
-        assert_eq!(viewer(false, &[MANAGER]).stages, Stage::ALL.to_vec());
-        assert_eq!(viewer(false, &[SALES_MANAGER]).stages, Stage::ALL.to_vec());
-        assert_eq!(
-            viewer(false, &[OFFICE_MANAGER]).stages,
-            vec![Stage::New, Stage::Templated, Stage::Fabrication]
-        );
-        assert_eq!(
-            viewer(false, &[SHOP_MANAGER]).stages,
-            vec![
-                Stage::Templated,
-                Stage::Fabrication,
-                Stage::Installed,
-                Stage::Completed
-            ]
-        );
-        let rep = viewer(false, &[SALES_REP]);
-        assert!(rep.stages.is_empty() && rep.own && rep.has_board());
+    fn who_has_a_board() {
+        assert!(viewer(true, &[]).has_board());
+        for position in [
+            MANAGER,
+            SALES_REP,
+            SALES_MANAGER,
+            SHOP_MANAGER,
+            OFFICE_MANAGER,
+            SCHEDULING_MANAGER,
+            INVENTORY_MANAGER,
+        ] {
+            assert!(viewer(false, &[position]).has_board(), "{position}");
+        }
         assert!(!viewer(false, &[]).has_board());
     }
 
@@ -312,13 +281,17 @@ mod tests {
 
     #[test]
     fn visibility_sql() {
-        assert_eq!(viewer(false, &[SALES_MANAGER]).visible_sql(true), "TRUE");
-        assert_eq!(viewer(false, &[]).visible_sql(false), "FALSE");
-        let rep = viewer(false, &[SALES_REP]).visible_sql(false);
-        assert_eq!(rep, "(p.sales_rep_id = 7)");
-        let office = viewer(false, &[OFFICE_MANAGER]).visible_sql(true);
-        assert!(office.contains("IN ('new', 'templated', 'fabrication')"));
-        assert!(office.contains("ta.assigned_user_id = 7"));
+        assert_eq!(viewer(true, &[]).visible_sql(), "TRUE");
+        assert_eq!(viewer(false, &[MANAGER]).visible_sql(), "TRUE");
+        // Managers below them see only the projects they have a task on.
+        for position in [SALES_MANAGER, SHOP_MANAGER, INVENTORY_MANAGER] {
+            let sql = viewer(false, &[position]).visible_sql();
+            assert!(sql.contains("ta.assigned_user_id = 7"));
+            assert!(!sql.contains("completed_at"), "done tasks keep it in view");
+            assert!(!sql.contains("sales_rep_id"));
+        }
+        let rep = viewer(false, &[SALES_REP]).visible_sql();
+        assert!(rep.contains("p.sales_rep_id = 7") && rep.contains("ta.assigned_user_id = 7"));
     }
 
     #[test]
@@ -327,10 +300,11 @@ mod tests {
         assert!(office.production && office.manage && !office.mark_paid && !office.convert);
         let shop = viewer(false, &[SHOP_MANAGER]).permissions;
         assert!(shop.production && !shop.manage && !shop.mark_paid);
-        let sales = viewer(false, &[SALES_MANAGER]).permissions;
-        assert!(sales.view_all && sales.convert && sales.mark_paid && !sales.production);
-        let rep = viewer(false, &[SALES_REP]).permissions;
-        assert!(rep.convert && !rep.view_all && !rep.production);
+        let sales = viewer(false, &[SALES_MANAGER]);
+        assert!(!sales.permissions.view_all && sales.convert_any);
+        assert!(sales.permissions.convert && sales.permissions.mark_paid);
+        let rep = viewer(false, &[SALES_REP]);
+        assert!(rep.permissions.convert && !rep.convert_any && !rep.permissions.view_all);
     }
 
     #[test]

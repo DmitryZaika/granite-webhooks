@@ -4,6 +4,7 @@
 //! transaction. Off until a superuser turns Projects on for the company.
 //!
 //! - `GET    /v1/projects`                         → the caller's board
+//! - `GET    /v1/projects/payments`               → paid or not, from QuickBooks invoices
 //! - `GET    /v1/projects/{id}`                    → one project's page
 //! - `POST   /v1/projects/{id}/actions`            → move, link, pay, hold, cancel, archive, correct
 //! - `GET`/`POST /v1/deals/{id}/project`            → a deal's project; start it by hand
@@ -15,6 +16,7 @@
 
 pub mod access;
 mod handlers;
+mod payments;
 pub mod schemas;
 pub mod service;
 mod tasks;
@@ -27,6 +29,7 @@ use crate::state::AppState;
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::board))
+        .routes(routes!(payments::list))
         .routes(routes!(handlers::get))
         .routes(routes!(handlers::act))
         .routes(routes!(handlers::deal_project, handlers::convert_deal))
