@@ -27,6 +27,9 @@ pub mod takeoff;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::events::history::{History, record};
+use crate::routes::quote_sale_events::{
+    QuoteSaleEvent, TitleVariable, sale_event_title, sale_events,
+};
 use crate::routes::schedule::board::sole_template_maker;
 use doc::QuoteDoc;
 use price_list::{Stock, StockSink, StockStone};
@@ -674,6 +677,18 @@ pub struct SaleJobs {
     /// Full Height Backsplash (higher than 15"): also a "FH Backsplash"
     /// template and installation job.
     pub full_height_backsplash: bool,
+    /// The event templates the seller ticked (Mark as Sold › Extra events),
+    /// each with its notes.
+    pub extra_events: Vec<ExtraEventPick>,
+}
+
+/// An event template ticked in Mark as Sold, and the notes for its event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtraEventPick {
+    /// `quote_sale_event_templates.id`.
+    pub template_id: i32,
+    /// Notes on the event.
+    pub notes: Option<String>,
 }
 
 /// `markQuoteSold`: the quote is sold with option `option_index` (none: not
@@ -779,14 +794,23 @@ pub async fn mark_quote_sold(
     Ok(Some(QuoteSale { deal_id, amount }))
 }
 
-/// A sold quote's template and installation: one unscheduled event on each
-/// of those calendars for the schedule manager to date: the template "ready"
-/// (or "not ready" when `jobs.template_ready` is false), the installation
-/// "not ready", each with its notes from `jobs`. With
-/// `jobs.full_height_backsplash` each calendar also gets a "FH Backsplash"
-/// job, "not ready", with the same notes. Once per quote: selling it
-/// again adds nothing. Only while the company's switch is on
-/// (`company.auto_unscheduled_jobs`, Admin › Quotes › Automation).
+/// A sold quote's jobs on the schedule, unscheduled for the schedule manager
+/// to date.
+///
+/// While the company's switch is on (`company.auto_unscheduled_jobs`, Admin ›
+/// Quotes › Automation): one on each of the templates and installations
+/// calendars, the template "ready" (or "not ready" when `jobs.template_ready`
+/// is false), the installation "not ready", each with its notes from `jobs`.
+/// With `jobs.full_height_backsplash` each calendar also gets a "FH
+/// Backsplash" job, "not ready", with the same notes.
+///
+/// Then, switch or not, one "not ready" event per event template the seller
+/// ticked (`jobs.extra_events`; the company's `quote_sale_event_templates`,
+/// Admin › Quotes › Automation › Event templates) on its calendar, titled by
+/// `sale_event_title`, with the notes given for it. Ids of other companies'
+/// or deleted templates are skipped.
+///
+/// Once per quote: selling it again adds nothing.
 async fn add_waiting_jobs(
     pool: &MySqlPool,
     quote: &Quote,
@@ -798,7 +822,9 @@ async fn add_waiting_jobs(
             .bind(quote.company_id)
             .fetch_optional(pool)
             .await?;
-    if on != Some(true) {
+    let on = on == Some(true);
+    let extra = picked_extra_events(pool, quote.company_id, &jobs.extra_events).await?;
+    if !on && extra.is_empty() {
         return Ok(());
     }
     let Some(creator) = user_id.or(quote.salesperson_id).or(quote.created_by) else {
@@ -813,14 +839,18 @@ async fn add_waiting_jobs(
     if added.is_some() {
         return Ok(());
     }
-    let calendars: Vec<(i32, bool)> = sqlx::query_as(
-        "SELECT id, slug = 'templates' FROM calendars
-          WHERE company_id = ? AND slug IN ('templates', 'installations') AND deleted_at IS NULL
-          ORDER BY slug = 'installations', id",
-    )
-    .bind(quote.company_id)
-    .fetch_all(pool)
-    .await?;
+    let calendars: Vec<(i32, bool)> = if on {
+        sqlx::query_as(
+            "SELECT id, slug = 'templates' FROM calendars
+              WHERE company_id = ? AND slug IN ('templates', 'installations') AND deleted_at IS NULL
+              ORDER BY slug = 'installations', id",
+        )
+        .bind(quote.company_id)
+        .fetch_all(pool)
+        .await?
+    } else {
+        Vec::new()
+    };
     let customer: Option<(Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT NULLIF(TRIM(name), ''), NULLIF(TRIM(address), '') FROM customers
           WHERE id = ? AND company_id = ?",
@@ -830,69 +860,151 @@ async fn add_waiting_jobs(
     .fetch_optional(pool)
     .await?;
     let (name, address) = customer.unwrap_or_default();
-    // Named after the quote, else the customer.
-    let title: String = quote
+    let quote_name = quote
         .quote_name
         .as_deref()
         .map(str::trim)
-        .filter(|quote_name| !quote_name.is_empty())
-        .map(str::to_string)
-        .or(name)
-        .unwrap_or_else(|| format!("Customer #{}", quote.customer_id))
-        .chars()
-        .take(255)
-        .collect();
-    let fh_title: String = format!("{title} - FH Backsplash")
-        .chars()
-        .take(255)
-        .collect();
-    // Each calendar's job, then (Full Height Backsplash) its FH Backsplash job.
-    let events: Vec<(i32, bool, bool)> = calendars
-        .into_iter()
-        .flat_map(|(calendar_id, template)| {
-            [(calendar_id, template, false), (calendar_id, template, true)]
-        })
-        .filter(|&(_, _, fh)| !fh || jobs.full_height_backsplash)
-        .collect();
-    for (calendar_id, template, fh) in events {
-        let assignee = sole_template_maker(pool, calendar_id).await?;
-        let notes = if template {
-            &jobs.template_notes
-        } else {
-            &jobs.install_notes
-        };
-        let notes = notes.as_deref().map(str::trim).filter(|n| !n.is_empty());
-        let id = sqlx::query(
-            "INSERT INTO events (title, location, notes, start_date, end_date, all_day, unscheduled,
-                color, status, created_user_id, assigned_user_id, customer_id, calendar_id, quote_id)
-             VALUES (?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(if fh { &fh_title } else { &title })
-        .bind(address.as_deref())
-        .bind(notes)
-        .bind(if jobs.template_ready && template && !fh {
-            "ready"
-        } else {
-            "not_ready"
-        })
-        .bind(creator)
-        .bind(assignee)
-        .bind(quote.customer_id)
-        .bind(calendar_id)
-        .bind(quote.id)
-        .execute(pool)
-        .await?
-        .last_insert_id();
-        if let Ok(event_id) = i32::try_from(id) {
-            let line = History::new(event_id, quote.company_id, "created", None)
-                .message("Added when the quote was sold");
-            record(pool, &line).await;
-        }
+        .filter(|quote_name| !quote_name.is_empty());
+    let fallback = format!("Customer #{}", quote.customer_id);
+    // Named after the quote, else the customer.
+    let title = sale_event_title(
+        TitleVariable::QuoteName,
+        "",
+        quote_name,
+        name.as_deref(),
+        &fallback,
+    );
+    // The template and installation jobs, then the event templates' events.
+    let mut events = built_in_jobs(&calendars, jobs, &title);
+    events.extend(extra.into_iter().map(|(template, notes)| NewJob {
+        calendar_id: template.calendar_id,
+        title: sale_event_title(
+            template.title_variable,
+            &template.title_text,
+            quote_name,
+            name.as_deref(),
+            &fallback,
+        ),
+        notes,
+        ready: false,
+    }));
+    for job in events {
+        insert_job(pool, quote, creator, address.as_deref(), &job).await?;
     }
     Ok(())
 }
 
-/// Undo sale: deletes the template and installation the sale added (see
+/// The template and installation jobs titled `title` on `calendars` (id, is
+/// the templates calendar), each followed (Full Height Backsplash) by its FH
+/// Backsplash job.
+fn built_in_jobs(calendars: &[(i32, bool)], jobs: &SaleJobs, title: &str) -> Vec<NewJob> {
+    let fh_title: String = format!("{title} - FH Backsplash")
+        .chars()
+        .take(255)
+        .collect();
+    calendars
+        .iter()
+        .flat_map(|&(calendar_id, template)| {
+            [
+                (calendar_id, template, false),
+                (calendar_id, template, true),
+            ]
+        })
+        .filter(|&(_, _, fh)| !fh || jobs.full_height_backsplash)
+        .map(|(calendar_id, template, fh)| {
+            let notes = if template {
+                &jobs.template_notes
+            } else {
+                &jobs.install_notes
+            };
+            NewJob {
+                calendar_id,
+                title: if fh {
+                    fh_title.clone()
+                } else {
+                    title.to_string()
+                },
+                notes: notes
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .map(str::to_string),
+                ready: jobs.template_ready && template && !fh,
+            }
+        })
+        .collect()
+}
+
+/// The company's event templates among `picks`, in the company's order, each
+/// with its notes (trimmed; blank: none). Unknown or deleted ids are skipped.
+async fn picked_extra_events(
+    pool: &MySqlPool,
+    company_id: i32,
+    picks: &[ExtraEventPick],
+) -> Result<Vec<(QuoteSaleEvent, Option<String>)>, sqlx::Error> {
+    if picks.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sale_events(pool, company_id)
+        .await?
+        .into_iter()
+        .filter_map(|template| {
+            let pick = picks.iter().find(|pick| pick.template_id == template.id)?;
+            let notes = pick
+                .notes
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_string);
+            Some((template, notes))
+        })
+        .collect())
+}
+
+/// Adds `job` for `quote` to the schedule's Unscheduled list, assigned to
+/// the calendar's only template maker when it has one, with a history line.
+async fn insert_job(
+    pool: &MySqlPool,
+    quote: &Quote,
+    creator: i32,
+    address: Option<&str>,
+    job: &NewJob,
+) -> Result<(), sqlx::Error> {
+    let assignee = sole_template_maker(pool, job.calendar_id).await?;
+    let id = sqlx::query(
+        "INSERT INTO events (title, location, notes, start_date, end_date, all_day, unscheduled,
+            color, status, created_user_id, assigned_user_id, customer_id, calendar_id, quote_id)
+         VALUES (?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&job.title)
+    .bind(address)
+    .bind(job.notes.as_deref())
+    .bind(if job.ready { "ready" } else { "not_ready" })
+    .bind(creator)
+    .bind(assignee)
+    .bind(quote.customer_id)
+    .bind(job.calendar_id)
+    .bind(quote.id)
+    .execute(pool)
+    .await?
+    .last_insert_id();
+    if let Ok(event_id) = i32::try_from(id) {
+        let line = History::new(event_id, quote.company_id, "created", None)
+            .message("Added when the quote was sold");
+        record(pool, &line).await;
+    }
+    Ok(())
+}
+
+/// An event `add_waiting_jobs` adds.
+struct NewJob {
+    calendar_id: i32,
+    title: String,
+    notes: Option<String>,
+    ready: bool,
+}
+
+/// Undo sale: deletes the jobs and events the sale added (see
 /// `add_waiting_jobs`), so selling the quote again adds them anew.
 pub async fn remove_waiting_jobs(
     pool: &MySqlPool,

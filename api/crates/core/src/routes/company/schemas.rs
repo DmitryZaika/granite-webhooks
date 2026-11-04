@@ -48,4 +48,8 @@ pub struct CompanyFeatures {
     /// option; confirming it creates the invoice in QuickBooks (Admin › Quotes ›
     /// Automation, `PUT /v1/company/auto-invoice`).
     pub auto_invoice: bool,
+    /// The company has event templates: Mark as Sold offers them as Extra
+    /// events, and each one ticked adds an event to the schedule's Unscheduled
+    /// list, whatever `auto_unscheduled_jobs` says (`GET /v1/quote-sale-events`).
+    pub sale_event_templates: bool,
 }
