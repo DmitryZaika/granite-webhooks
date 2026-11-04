@@ -31608,7 +31608,7 @@
           "commissions"
         ],
         "summary": "Sync commissions with QuickBooks",
-        "description": "Works out what every signed quote earns and whether its customer paid\n(the matching `QuickBooks` invoice). Quotes paid and signed over 60 days\nago are left alone.",
+        "description": "Works out what every sold quote earns, whether its customer paid (the\nmatching `QuickBooks` invoice) and when it was installed. Commissions\nalready added to the salary are left alone; ones of quotes no longer sold\ngo (unless an admin set their amounts).",
         "operationId": "sync_commissions",
         "responses": {
           "200": {
@@ -31659,13 +31659,264 @@
         ]
       }
     },
+    "/v1/commissions/{id}/payroll": {
+      "post": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Add a commission to the salary",
+        "description": "A sold quote's commission once its customer paid and the job was\ninstalled (a row with no quote at any time). It is paid with the payroll\nof the week after the one it was paid and installed in, or the next\npayroll when that one has gone by.",
+        "operationId": "add_commission_to_payroll",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Commission row id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddedToPayroll"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not paid and installed yet, or already in the salary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such commission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/commissions/{id}": {
+      "put": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Change a commission",
+        "description": "Sets the contract and commission by hand (they win over the calculated\nones and the sync keeps them) and the payroll date. No payroll date takes\nit out of the salary.",
+        "operationId": "update_commission",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Commission row id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommissionEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "A negative amount or a bad date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such commission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Delete a commission",
+        "description": "Only rows with no quote (a rep's sheet, a bonus); a sold quote's\ncommission goes when the quote is no longer sold.",
+        "operationId": "delete_commission",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Commission row id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such row with no quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/commissions/payouts": {
       "post": {
         "tags": [
           "commissions"
         ],
         "summary": "Mark commissions paid out",
-        "description": "Only commissions whose customer paid are marked.",
+        "description": "Only commissions added to the salary (with a payroll date) are marked.",
         "operationId": "pay_out_commissions",
         "requestBody": {
           "content": {
@@ -36489,6 +36740,85 @@
         ]
       }
     },
+    "/v1/events/{id}/scheduling-texts": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "List an event's scheduling texts",
+        "description": "The company's scheduling texts (`confirmation` templates sent by text)\nfor the event's calendar, each filled in for this event, for the event\ndetails' Send SMS. They go out from the office manager's line with\n`POST /v1/events/{id}/confirmation`.",
+        "operationId": "list_event_scheduling_texts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The texts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulingTexts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, admin or shop manager or worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/events/{id}/crew-status": {
       "post": {
         "tags": [
@@ -36758,13 +37088,13 @@
           "schedule"
         ],
         "summary": "Search events",
-        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`; with `calendar_ids`, only those calendars' events.\n\nSmart order: the caller's own first (assigned to or made by them, or for\ntheir customer), then title or customer-name hits before hits only in the\nplace or notes, then the nearest to now; unscheduled ones last.",
+        "description": "The company's events where every word of `q` is in the title, customer's\nname, location, description or notes; with `calendar_ids`, only those\ncalendars' events.\n\nSmart order: the caller's own first (assigned to or made by them, or for\ntheir customer), then title or customer-name hits before hits only in the\nplace or notes, then the nearest to now; unscheduled ones last.",
         "operationId": "search_events",
         "parameters": [
           {
             "name": "q",
             "in": "query",
-            "description": "Part of the title, customer name, location, description or notes.",
+            "description": "Words, each in the title, customer name, location, description or\nnotes (any of them, in any order).",
             "required": false,
             "schema": {
               "type": "string"
@@ -38508,6 +38838,66 @@
         ]
       }
     },
+    "/v1/schedule/crew-positions": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Where the crew is",
+        "description": "Every installer and template maker of the company with their phone's\nlatest position (Granite Phone sends it from 5 AM until 9 PM), and the\nshop or job they are at. Admins only.",
+        "operationId": "get_crew_positions",
+        "responses": {
+          "200": {
+            "description": "The crew, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CrewPosition"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/schedule/people/{user_id}/color": {
       "put": {
         "tags": [
@@ -39144,6 +39534,76 @@
           },
           "400": {
             "description": "Too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/notifications/scheduling": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Save the scheduling texts' settings",
+        "description": "\"Mark Ready when the customer agrees\" and the texting hours follow-ups\nkeep to.",
+        "operationId": "set_scheduling_text_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulingSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No texting day, or the hours end before they start",
             "content": {
               "application/json": {
                 "schema": {
@@ -49398,88 +49858,6 @@
         ]
       }
     },
-    "/v1/company/auto-invoice": {
-      "put": {
-        "tags": [
-          "company"
-        ],
-        "summary": "Switch the invoice on a sold quote",
-        "description": "Admin › Quotes › Automation \"Create invoice from quote\". When on, marking\na quote sold opens its QuickBooks invoice, filled from the sold option;\nconfirming it creates the invoice in QuickBooks (`auto_invoice` in\n`GET /v1/company/features`).",
-        "operationId": "save_company_auto_invoice",
-        "parameters": [
-          {
-            "name": "company_id",
-            "in": "query",
-            "description": "Superusers only: the company to act on (default: the caller's).",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AutoInvoiceInput"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Saved"
-          },
-          "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Caller does not manage the company",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such company",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Database error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session_cookie": []
-          }
-        ]
-      }
-    },
     "/v1/company/auto-sale": {
       "put": {
         "tags": [
@@ -49587,6 +49965,88 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AutoUnscheduledJobsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/auto-invoice": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch the invoice on a sold quote",
+        "description": "Admin › Quotes › Automation \"Create invoice from quote\". When on, marking\na quote sold opens its QuickBooks invoice, filled from the sold option;\nconfirming it creates the invoice in QuickBooks (`auto_invoice` in\n`GET /v1/company/features`).",
+        "operationId": "save_company_auto_invoice",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoInvoiceInput"
               }
             }
           },
@@ -64680,6 +65140,19 @@
         },
         "additionalProperties": false
       },
+      "AddedToPayroll": {
+        "type": "object",
+        "description": "Where a job went in the salary.",
+        "required": [
+          "payrollDate"
+        ],
+        "properties": {
+          "payrollDate": {
+            "type": "string",
+            "description": "The payroll it is paid with (YYYY-MM-DD)."
+          }
+        }
+      },
       "Address": {
         "type": "object",
         "description": "An address of an invoice.",
@@ -66020,6 +66493,20 @@
           }
         }
       },
+      "AutoInvoiceInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/auto-invoice`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: marking a quote sold opens its QuickBooks invoice to confirm."
+          }
+        },
+        "additionalProperties": false
+      },
       "AutoPlan": {
         "type": "object",
         "description": "`POST /v1/schedule/auto-plan`.",
@@ -66093,20 +66580,6 @@
             "description": "The waiting statuses to plan (`ready`, `called`, `not_ready`)."
           }
         }
-      },
-      "AutoInvoiceInput": {
-        "type": "object",
-        "description": "Body of `PUT /v1/company/auto-invoice`.",
-        "required": [
-          "enabled"
-        ],
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "description": "On: marking a quote sold opens its QuickBooks invoice to confirm."
-          }
-        },
-        "additionalProperties": false
       },
       "AutoSaleInput": {
         "type": "object",
@@ -68774,6 +69247,36 @@
           }
         }
       },
+      "CommissionEdit": {
+        "type": "object",
+        "description": "An admin's own contract, commission and payroll date for a row.",
+        "properties": {
+          "quoteTotal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The contract (none: the calculated one)."
+          },
+          "commission": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The commission (none: the calculated one)."
+          },
+          "payrollDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The payroll it is paid with, YYYY-MM-DD (none: not in the salary)."
+          }
+        },
+        "additionalProperties": false
+      },
       "CommissionPart": {
         "type": "object",
         "description": "One rule's share of a quote's commission.",
@@ -68817,15 +69320,17 @@
       },
       "CommissionRow": {
         "type": "object",
-        "description": "A signed quote's commission (`CommissionRow`).",
+        "description": "A sold quote's commission, or a row with no quote (a rep's sheet, a\nbonus) (`CommissionRow`).",
         "required": [
           "id",
-          "quoteId",
           "quoteName",
           "customerName",
           "rep",
           "quoteTotal",
+          "calculatedTotal",
           "commission",
+          "calculatedCommission",
+          "adjusted",
           "parts",
           "status"
         ],
@@ -68836,9 +69341,12 @@
             "description": "Row id."
           },
           "quoteId": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "The quote."
+            "description": "The quote (none: a row with no quote)."
           },
           "quoteName": {
             "type": "string",
@@ -68865,17 +69373,31 @@
               "string",
               "null"
             ],
-            "description": "When the quote was signed (YYYY-MM-DD)."
+            "description": "When the quote was sold or signed (YYYY-MM-DD)."
           },
           "quoteTotal": {
             "type": "number",
             "format": "double",
-            "description": "The option's total."
+            "description": "The contract: the admin's own amount, else the option's total."
+          },
+          "calculatedTotal": {
+            "type": "number",
+            "format": "double",
+            "description": "The option's total as calculated."
           },
           "commission": {
             "type": "number",
             "format": "double",
-            "description": "Earned."
+            "description": "Earned: the admin's own amount, else what the rules work out."
+          },
+          "calculatedCommission": {
+            "type": "number",
+            "format": "double",
+            "description": "What the rules work out."
+          },
+          "adjusted": {
+            "type": "boolean",
+            "description": "An admin set the contract or the commission by hand."
           },
           "parts": {
             "type": "array",
@@ -68895,12 +69417,19 @@
             ],
             "description": "When the customer paid (YYYY-MM-DD)."
           },
+          "installedDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the job was installed: its last Installations event, once all\nof them are dated and gone by (YYYY-MM-DD)."
+          },
           "payrollDate": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The payroll it is paid with (YYYY-MM-DD)."
+            "description": "The payroll it is paid with, once added to the salary (YYYY-MM-DD)."
           },
           "paidOutAt": {
             "type": [
@@ -68939,7 +69468,7 @@
           },
           "applies": {
             "type": "string",
-            "description": "`material` (the stone per area), `quote` (the whole quote before\ntax), `lines` (price lines matching `lineMatch`) or `monthly_goal`."
+            "description": "`material` (the stone of each room: a percent of everything in the\nroom, or dollars per sq ft of stone), `quote` (the whole quote before\ntax), `lines` (price lines matching `lineMatch`) or `monthly_goal`."
           },
           "rateType": {
             "type": "string",
@@ -71161,6 +71690,80 @@
           "on_my_way",
           "completed"
         ]
+      },
+      "CrewPosition": {
+        "type": "object",
+        "description": "An installer or template maker and where their phone last was.",
+        "required": [
+          "user_id",
+          "name",
+          "role",
+          "at_shop"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "`installer` or `template`."
+          },
+          "latitude": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Degrees; null when their phone never sent a position."
+          },
+          "longitude": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Degrees; null when their phone never sent a position."
+          },
+          "recorded_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the phone sent it."
+          },
+          "at_shop": {
+            "type": "boolean",
+            "description": "They are at the shop."
+          },
+          "place_event_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The job they are at."
+          },
+          "place_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That job's title."
+          },
+          "place_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Since when they are at the shop or that job."
+          }
+        }
       },
       "CrewStatus": {
         "type": "string",
@@ -77037,6 +77640,28 @@
         },
         "additionalProperties": false
       },
+      "Followup": {
+        "type": "object",
+        "description": "A scheduling text's follow-up: sent when the customer has not replied\n`after_hours` after it, within the company's texting hours.",
+        "required": [
+          "after_hours"
+        ],
+        "properties": {
+          "template_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Another scheduling text of the company; null sends the same text again."
+          },
+          "after_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 to 168 (7 days)."
+          }
+        }
+      },
       "FollowupInstruction": {
         "type": "object",
         "description": "The company's AI follow-up instruction.",
@@ -82351,7 +82976,8 @@
           "templates",
           "flows",
           "sms_enabled",
-          "on_my_way"
+          "on_my_way",
+          "scheduling"
         ],
         "properties": {
           "templates": {
@@ -82375,6 +83001,10 @@
           "on_my_way": {
             "$ref": "#/components/schemas/OnMyWayMessage",
             "description": "What the customer gets when the crew taps On my way."
+          },
+          "scheduling": {
+            "$ref": "#/components/schemas/SchedulingSettings",
+            "description": "The Scheduling texts tab's switch and texting hours."
           }
         }
       },
@@ -82387,7 +83017,8 @@
           "kind",
           "channel",
           "body",
-          "position"
+          "position",
+          "calendar_ids"
         ],
         "properties": {
           "id": {
@@ -82422,6 +83053,25 @@
             "type": "integer",
             "format": "int32",
             "description": "Place in the admin's order: lower first."
+          },
+          "calendar_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Scheduling texts (`confirmation`): the calendars it is for; empty for\nevery calendar."
+          },
+          "followup": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Followup",
+                "description": "Scheduling texts: what the customer gets when they have not replied;\nnull for nothing."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -82463,6 +83113,28 @@
           "body": {
             "type": "string",
             "description": "Up to 1600 characters for a text."
+          },
+          "calendar_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Scheduling texts: the calendars it is for (empty for every calendar).\nLeft out: every calendar for a new template, unchanged on edit."
+          },
+          "followup": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Followup",
+                "description": "Scheduling texts sent by text: the follow-up, or null for none. Left\nout: none for a new template, unchanged on edit."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -84095,7 +84767,7 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "Commission row ids; only paid ones are marked."
+            "description": "Commission row ids; only ones in the salary are marked."
           }
         },
         "additionalProperties": false
@@ -90216,7 +90888,10 @@
           "rep_failed",
           "rule_processed",
           "rule_sent",
-          "rule_failed"
+          "rule_failed",
+          "answers_read",
+          "marked_ready",
+          "followups_sent"
         ],
         "properties": {
           "processed": {
@@ -90262,6 +90937,21 @@
           "rule_failed": {
             "type": "integer",
             "description": "Notification-rule messages that failed.",
+            "minimum": 0
+          },
+          "answers_read": {
+            "type": "integer",
+            "description": "Scheduling-text replies the AI read.",
+            "minimum": 0
+          },
+          "marked_ready": {
+            "type": "integer",
+            "description": "Jobs the AI marked Ready because the customer agreed.",
+            "minimum": 0
+          },
+          "followups_sent": {
+            "type": "integer",
+            "description": "Scheduling-text follow-ups sent to customers who had not replied.",
             "minimum": 0
           }
         }
@@ -92458,6 +93148,110 @@
               "null"
             ],
             "description": "Tell the sales rep when the installer taps Completed on an installation."
+          }
+        }
+      },
+      "SchedulingSettings": {
+        "type": "object",
+        "description": "Admin > Schedule > Scheduling texts: what happens after a scheduling text.",
+        "required": [
+          "ai_ready",
+          "text_days",
+          "text_start",
+          "text_end"
+        ],
+        "properties": {
+          "ai_ready": {
+            "type": "boolean",
+            "description": "AI reads the customer's replies to a scheduling text and, when it is\ncertain they agreed to the date, marks the job Ready and tells the\nScheduling Managers."
+          },
+          "text_days": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Days follow-ups may go out: 0 Monday ... 6 Sunday."
+          },
+          "text_start": {
+            "type": "string",
+            "description": "Store time (`HH:MM`) follow-ups may start going out."
+          },
+          "text_end": {
+            "type": "string",
+            "description": "Store time (`HH:MM`) after which they wait for the next texting day."
+          }
+        }
+      },
+      "SchedulingTextPreview": {
+        "type": "object",
+        "description": "A scheduling text the event form's Send SMS lists.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Template id: send it with `POST /v1/events/{id}/confirmation`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The text as the customer would get it; null when it can't be filled."
+          },
+          "problem": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it can't go, e.g. the event has no address."
+          },
+          "followup": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Followup",
+                "description": "What happens when the customer doesn't reply."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SchedulingTexts": {
+        "type": "object",
+        "description": "`GET /v1/events/{id}/scheduling-texts`.",
+        "required": [
+          "templates",
+          "ai_ready"
+        ],
+        "properties": {
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchedulingTextPreview"
+            },
+            "description": "The scheduling texts for the event's calendar, in the admin's order."
+          },
+          "problem": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why no text can go to this event's customer (no customer, no phone,\nno office manager line); null when they can."
+          },
+          "ai_ready": {
+            "type": "boolean",
+            "description": "AI marks the job Ready when the customer agrees."
           }
         }
       },
