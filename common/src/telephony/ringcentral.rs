@@ -11,8 +11,21 @@ use std::time::Duration;
 const SERVER_RETRIES: usize = 3;
 const SERVER_BACKOFF_SECS: [u64; 3] = [2, 4, 8];
 const RATE_LIMIT_RETRIES: usize = 2;
-/// Longest single wait on a 429 (`RingCentral` asks for 60 s).
-const MAX_RATE_LIMIT_WAIT_SECS: u64 = 30;
+/// Longest wait on a 429 before trying again. `RingCentral` usually asks for
+/// 30–60 s, longer than a 30 s Lambda lives, so such a 429 fails right away
+/// (the caller or the next job run tries later) instead of sleeping until
+/// the Lambda times out and billing every second of the sleep.
+const MAX_RATE_LIMIT_WAIT_SECS: u64 = 5;
+
+/// Seconds to wait on a 429 with this `Retry-After`, or `None` when the wait
+/// is too long to sit out. No usable header waits the full short wait.
+fn rate_limit_wait(retry_after: Option<&str>) -> Option<u64> {
+    let wait = retry_after
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(MAX_RATE_LIMIT_WAIT_SECS);
+    (wait <= MAX_RATE_LIMIT_WAIT_SECS).then_some(wait)
+}
 
 /// A failed call: the HTTP status and `RingCentral`'s own message.
 #[derive(Debug)]
@@ -226,18 +239,26 @@ async fn call(
             continue;
         }
         if status == StatusCode::TOO_MANY_REQUESTS && rate_attempt < RATE_LIMIT_RETRIES {
-            let wait = response
+            let retry_after = response
                 .headers()
                 .get("Retry-After")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok())
-                .filter(|secs| *secs > 0)
-                .unwrap_or(5)
-                .min(MAX_RATE_LIMIT_WAIT_SECS);
-            tracing::warn!(company_id, path, wait, "RingCentral rate limited");
-            tokio::time::sleep(Duration::from_secs(wait)).await;
-            rate_attempt += 1;
-            continue;
+                .and_then(|value| value.to_str().ok());
+            if let Some(wait) = rate_limit_wait(retry_after) {
+                tracing::warn!(company_id, path, wait, "RingCentral rate limited");
+                tokio::time::sleep(Duration::from_secs(wait)).await;
+                rate_attempt += 1;
+                continue;
+            }
+            tracing::warn!(
+                company_id,
+                path,
+                retry_after,
+                "RingCentral rate limited, not waiting"
+            );
+            return Err(ApiError {
+                status: status.as_u16(),
+                message: Some("RingCentral is busy, try again in a minute".to_string()),
+            });
         }
         if status.is_server_error() && server_attempt < SERVER_RETRIES {
             tokio::time::sleep(Duration::from_secs(SERVER_BACKOFF_SECS[server_attempt])).await;
@@ -469,6 +490,17 @@ mod tests {
         assert_eq!(mms_filename("quote", "application/pdf"), "quote.pdf");
         assert_eq!(mms_filename(".jpg", "image/jpeg"), "file.jpg");
         assert_eq!(mms_filename("sheet.xlsx", "application/zip"), "sheet.xlsx");
+    }
+
+    #[test]
+    fn a_long_rate_limit_wait_fails_fast() {
+        assert_eq!(rate_limit_wait(Some("30")), None);
+        assert_eq!(rate_limit_wait(Some("60")), None);
+        assert_eq!(rate_limit_wait(Some("3")), Some(3));
+        assert_eq!(rate_limit_wait(Some(" 5 ")), Some(5));
+        assert_eq!(rate_limit_wait(Some("0")), Some(5));
+        assert_eq!(rate_limit_wait(Some("soon")), Some(5));
+        assert_eq!(rate_limit_wait(None), Some(5));
     }
 
     #[test]
