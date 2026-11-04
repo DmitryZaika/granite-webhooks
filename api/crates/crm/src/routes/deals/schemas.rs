@@ -513,6 +513,8 @@ pub struct CustomerDeal {
     pub amount: Option<String>,
     /// Name of the deal's current stage.
     pub list_name: Option<String>,
+    /// 1 won, 0 lost, null still open.
+    pub is_won: Option<i32>,
     /// Up to two notes, pinned first, then newest.
     #[sqlx(skip)]
     pub notes: Vec<NotePreview>,

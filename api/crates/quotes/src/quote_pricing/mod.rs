@@ -657,7 +657,8 @@ async fn create_won_deal(
 /// Which deal a sale marks won.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SaleDeal {
-    /// The quote's own deal, else the customer's open or won deal.
+    /// The quote's own deal, else the customer's open deal (never a won or
+    /// lost one); none makes a new won deal.
     Auto,
     /// This deal of the quote's customer, picked by the user.
     Existing(i64),
@@ -715,7 +716,7 @@ pub async fn mark_quote_sold(
             sqlx::query_as(
                 "SELECT CAST(d.id AS SIGNED), CAST(d.is_won AS SIGNED) FROM deals d
                   WHERE d.deleted_at IS NULL
-                    AND (d.id = ? OR (d.customer_id = ? AND (d.is_won IS NULL OR d.is_won = 1)))
+                    AND (d.id = ? OR (d.customer_id = ? AND d.is_won IS NULL))
                   ORDER BY d.id = ? DESC, d.updated_at DESC, d.id DESC
                   LIMIT 1",
             )

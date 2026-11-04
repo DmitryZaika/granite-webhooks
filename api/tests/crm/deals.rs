@@ -1253,6 +1253,7 @@ async fn deals_of_a_customer_callers_first(pool: MySqlPool) {
             "status": "New",
             "amount": "1500.25",
             "list_name": "New",
+            "is_won": null,
             "notes": [
                 { "id": 8630, "content": "Prefers white quartz", "created_at": "2026-04-01T13:00:00.000Z" },
                 { "id": 8631, "content": "Second note", "created_at": "2026-04-01T14:00:00.000Z" }
