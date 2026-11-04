@@ -31415,7 +31415,7 @@
           "commissions"
         ],
         "summary": "Get the commission settings",
-        "description": "Friday payroll and no base until saved.",
+        "description": "Friday payroll until saved.",
         "operationId": "get_commission_settings",
         "responses": {
           "200": {
@@ -31470,7 +31470,7 @@
           "commissions"
         ],
         "summary": "Save the commission settings",
-        "description": "A negative base becomes 0; the weekday is kept within 0 to 6.",
+        "description": "The weekday is kept within 0 to 6.",
         "operationId": "save_commission_settings",
         "requestBody": {
           "content": {
@@ -31524,13 +31524,300 @@
         ]
       }
     },
+    "/v1/commission-base-pay": {
+      "get": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "List base pay",
+        "description": "Every rep's base pay schedules.",
+        "operationId": "list_commission_base_pay",
+        "responses": {
+          "200": {
+            "description": "The base pay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BasePay"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Add base pay",
+        "description": "A rep's base pay: an amount every week, two weeks or month from the\nfirst payday (monthly: on that day of the month), until an optional last\nday. It shows in the paychecks on those days.",
+        "operationId": "create_commission_base_pay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BasePayInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Check the base pay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/commission-base-pay/{id}": {
+      "put": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Save base pay",
+        "description": "Replaces the whole base pay; past paychecks follow it too.",
+        "operationId": "update_commission_base_pay",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Base pay id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BasePayInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Check the base pay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such base pay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Delete base pay",
+        "description": "Its paydays leave the paychecks, past ones too; to stop it from a day\non, set its last day instead.",
+        "operationId": "delete_commission_base_pay",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Base pay id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/commissions": {
       "get": {
         "tags": [
           "commissions"
         ],
         "summary": "List commissions",
-        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) signed\nquotes with what they earn, and the paychecks: paid commissions, monthly\ngoal bonuses and the weekly base per payroll date.",
+        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) signed\nquotes with what they earn, and the paychecks: paid commissions, monthly\ngoal bonuses and base pay per payroll date.",
         "operationId": "list_commissions",
         "parameters": [
           {
@@ -66714,6 +67001,92 @@
           "OutsideHours"
         ]
       },
+      "BasePay": {
+        "type": "object",
+        "description": "A rep's base pay (`commission_base_pay`): `amount` every week, two weeks\nor month from the first payday, until an optional last day.",
+        "required": [
+          "id",
+          "userId",
+          "rep",
+          "amount",
+          "frequency",
+          "startDate"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Base pay id."
+          },
+          "userId": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The rep."
+          },
+          "rep": {
+            "type": "string",
+            "description": "Their name."
+          },
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "Paid each time."
+          },
+          "frequency": {
+            "type": "string",
+            "description": "`weekly`, `biweekly` (every two weeks) or `monthly`."
+          },
+          "startDate": {
+            "type": "string",
+            "description": "The first payday (YYYY-MM-DD); monthly pays on its day of the month."
+          },
+          "endDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last day it is paid (YYYY-MM-DD); none: no end."
+          }
+        }
+      },
+      "BasePayInput": {
+        "type": "object",
+        "description": "A rep's base pay as an admin sets it.",
+        "required": [
+          "userId",
+          "amount",
+          "frequency",
+          "startDate"
+        ],
+        "properties": {
+          "userId": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The rep (an employee of the company)."
+          },
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "Paid each time; not negative."
+          },
+          "frequency": {
+            "type": "string",
+            "description": "`weekly`, `biweekly` (every two weeks) or `monthly`."
+          },
+          "startDate": {
+            "type": "string",
+            "description": "The first payday, YYYY-MM-DD; monthly pays on its day of the month."
+          },
+          "endDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last day it is paid, YYYY-MM-DD; none: no end."
+          }
+        },
+        "additionalProperties": false
+      },
       "BillingGate": {
         "allOf": [
           {
@@ -69538,17 +69911,11 @@
       },
       "CommissionSettings": {
         "type": "object",
-        "description": "Base pay and payroll week.",
+        "description": "The payroll week (base pay has its own schedules: `/v1/commission-base-pay`).",
         "required": [
-          "baseWeekly",
           "payrollWeekday"
         ],
         "properties": {
-          "baseWeekly": {
-            "type": "number",
-            "format": "double",
-            "description": "Paid every payroll week on top of commissions (not negative)."
-          },
           "payrollWeekday": {
             "type": "integer",
             "format": "int32",
@@ -77642,7 +78009,7 @@
       },
       "Followup": {
         "type": "object",
-        "description": "A scheduling text's follow-up: sent when the customer has not replied\n`after_hours` after it, within the company's texting hours.",
+        "description": "An AI text's follow-up: sent when the customer has not replied\n`after_hours` after it, within the company's texting hours.",
         "required": [
           "after_hours"
         ],
@@ -77653,7 +78020,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Another scheduling text of the company; null sends the same text again."
+            "description": "Another AI text of the company; null sends the same text again."
           },
           "after_hours": {
             "type": "integer",
@@ -83004,7 +83371,7 @@
           },
           "scheduling": {
             "$ref": "#/components/schemas/SchedulingSettings",
-            "description": "The Scheduling texts tab's switch and texting hours."
+            "description": "The AI texts tab's switch and texting hours."
           }
         }
       },
@@ -83032,7 +83399,7 @@
           },
           "kind": {
             "$ref": "#/components/schemas/TemplateKind",
-            "description": "`reminder` (flows send it) or `confirmation` (sent by hand)."
+            "description": "`reminder` (flows send it), `confirmation` (a scheduling text, sent by\nhand) or `question` (an AI text, sent by hand; AI reads the answer)."
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -83060,13 +83427,13 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "Scheduling texts (`confirmation`): the calendars it is for; empty for\nevery calendar."
+            "description": "Scheduling and AI texts: the calendars it is for; empty for every\ncalendar."
           },
           "followup": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Followup",
-                "description": "Scheduling texts: what the customer gets when they have not replied;\nnull for nothing."
+                "description": "AI texts: what the customer gets when they have not replied; null for\nnothing."
               },
               {
                 "type": "null"
@@ -83092,7 +83459,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/TemplateKind",
-                "description": "`reminder` or `confirmation`. Left out: `reminder` for a new template,\nunchanged on edit. A template a flow uses stays a reminder."
+                "description": "`reminder`, `confirmation` or `question`. Left out: `reminder` for a new template,\nunchanged on edit. A template a flow uses stays a reminder."
               },
               {
                 "type": "null"
@@ -83123,7 +83490,7 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "Scheduling texts: the calendars it is for (empty for every calendar).\nLeft out: every calendar for a new template, unchanged on edit."
+            "description": "Scheduling and AI texts: the calendars it is for (empty for every calendar).\nLeft out: every calendar for a new template, unchanged on edit."
           },
           "followup": {
             "oneOf": [
@@ -84808,7 +85175,7 @@
           "base": {
             "type": "number",
             "format": "double",
-            "description": "The weekly base."
+            "description": "Base pay due that day."
           },
           "total": {
             "type": "number",
@@ -93153,7 +93520,7 @@
       },
       "SchedulingSettings": {
         "type": "object",
-        "description": "Admin > Schedule > Scheduling texts: what happens after a scheduling text.",
+        "description": "Admin > Schedule > AI texts: what happens after an AI text.",
         "required": [
           "ai_ready",
           "text_days",
@@ -93163,7 +93530,7 @@
         "properties": {
           "ai_ready": {
             "type": "boolean",
-            "description": "AI reads the customer's replies to a scheduling text and, when it is\ncertain they agreed to the date, marks the job Ready and tells the\nScheduling Managers."
+            "description": "AI reads the customer's replies to an AI text and, when it is\ncertain they agreed to the date, marks the job Ready and tells the\nScheduling Managers."
           },
           "text_days": {
             "type": "array",
@@ -93189,7 +93556,8 @@
         "description": "A scheduling text the event form's Send SMS lists.",
         "required": [
           "id",
-          "name"
+          "name",
+          "ai"
         ],
         "properties": {
           "id": {
@@ -93224,6 +93592,10 @@
                 "type": "null"
               }
             ]
+          },
+          "ai": {
+            "type": "boolean",
+            "description": "An AI text: AI reads the customer's answer."
           }
         }
       },
@@ -98064,7 +98436,8 @@
         "description": "What a template is for.",
         "enum": [
           "reminder",
-          "confirmation"
+          "confirmation",
+          "question"
         ]
       },
       "TemplateOrder": {

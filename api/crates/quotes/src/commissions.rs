@@ -4,7 +4,7 @@
 //! an admin builds (Admin > Quotes > Commissions) applied to the option the
 //! customer took, the customer's `QuickBooks` invoice that says whether it
 //! was paid, and the paychecks (commissions, monthly goal bonuses, the
-//! weekly base) per payroll date.
+//! reps' base pay on its own schedule) per payroll date.
 
 use crate::openapi::ToSchema;
 use crate::quote_pricing::doc::QuoteDoc;
@@ -392,7 +392,7 @@ pub struct PayrollRep {
     pub commission: f64,
     /// Monthly goal bonuses.
     pub bonus: f64,
-    /// The weekly base.
+    /// Base pay due that day.
     pub base: f64,
     /// All of it.
     pub total: f64,
@@ -408,14 +408,76 @@ pub struct PayrollWeek {
     pub reps: Vec<PayrollRep>,
 }
 
+/// A rep's base pay (`commission_base_pay`): `amount` every week, two weeks
+/// or month from the first payday, until an optional last day.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BasePay {
+    /// Base pay id.
+    pub id: i64,
+    /// The rep.
+    pub user_id: i32,
+    /// Their name.
+    pub rep: String,
+    /// Paid each time.
+    pub amount: f64,
+    /// `weekly`, `biweekly` (every two weeks) or `monthly`.
+    pub frequency: String,
+    /// The first payday (YYYY-MM-DD); monthly pays on its day of the month.
+    pub start_date: String,
+    /// The last day it is paid (YYYY-MM-DD); none: no end.
+    pub end_date: Option<String>,
+}
+
+/// The days a base pay is paid: from the first payday every week, two weeks
+/// or month (monthly: on that day of the month, the month's last day when
+/// shorter), until the last day, and no further than the first payday after
+/// `today`.
+pub fn base_pay_dates(
+    start: NaiveDate,
+    frequency: &str,
+    end: Option<NaiveDate>,
+    today: NaiveDate,
+) -> Vec<NaiveDate> {
+    let mut dates = Vec::new();
+    // Ten years of weeks at most.
+    for i in 0..=520_u32 {
+        let date = match frequency {
+            "weekly" => start + chrono::Duration::days(7 * i64::from(i)),
+            "biweekly" => start + chrono::Duration::days(14 * i64::from(i)),
+            "monthly" => {
+                let months = start.year() * 12 + i32::try_from(start.month0() + i).unwrap_or(0);
+                let (year, month) = (months / 12, u32::try_from(months % 12).unwrap_or(0) + 1);
+                let Some(date) = (0..4).find_map(|back| {
+                    NaiveDate::from_ymd_opt(year, month, start.day().checked_sub(back)?)
+                }) else {
+                    break;
+                };
+                date
+            }
+            _ => break,
+        };
+        if end.is_some_and(|end| date > end) {
+            break;
+        }
+        dates.push(date);
+        if date > today {
+            break;
+        }
+    }
+    dates
+}
+
 /// `payrollWeeks`: per payroll date (newest first), every rep's commissions
 /// an admin added to the salary, monthly bonuses (paid with the first payroll
-/// after the month) and the weekly base.
+/// after the month) and their base pay on its own days (through the next
+/// payday after `today`).
 pub fn payroll_weeks(
     rows: &[PaidRow],
     rules: &[CommissionRule],
-    base_weekly: f64,
+    base_pay: &[BasePay],
     weekday: u32,
+    today: NaiveDate,
 ) -> Vec<PayrollWeek> {
     // date → reps in the order first seen.
     let mut weeks: BTreeMap<String, Vec<PayrollRep>> = BTreeMap::new();
@@ -433,7 +495,7 @@ pub fn payroll_weeks(
             rep: rep.to_string(),
             commission: 0.0,
             bonus: 0.0,
-            base: base_weekly,
+            base: 0.0,
             total: 0.0,
         });
         reps.len() - 1
@@ -479,6 +541,18 @@ pub fn payroll_weeks(
         };
         let i = cell(&mut weeks, &date, user_id, &rep);
         weeks.get_mut(date.as_str()).expect("cell")[i].bonus += bonus;
+    }
+    for pay in base_pay {
+        let ymd = |s: &str| NaiveDate::parse_from_str(s.get(..10)?, "%Y-%m-%d").ok();
+        let Some(start) = ymd(&pay.start_date) else {
+            continue;
+        };
+        let end = pay.end_date.as_deref().and_then(ymd);
+        for date in base_pay_dates(start, &pay.frequency, end, today) {
+            let date = date.format("%Y-%m-%d").to_string();
+            let i = cell(&mut weeks, &date, Some(pay.user_id), &pay.rep);
+            weeks.get_mut(date.as_str()).expect("cell")[i].base += pay.amount;
+        }
     }
     weeks
         .into_iter()
@@ -594,19 +668,105 @@ mod tests {
             paid_date: Some(paid.into()),
             payroll_date: Some(payroll.into()),
         };
+        // $100 every Friday from 9/11 to 10/2: paid on weeks with no commission too.
+        let base = BasePay {
+            id: 1,
+            user_id: 100,
+            rep: "Rita".into(),
+            amount: 100.0,
+            frequency: "weekly".into(),
+            start_date: "2026-09-11".into(),
+            end_date: Some("2026-10-02".into()),
+        };
         let weeks = payroll_weeks(
             &[
                 row("2026-09-10", "2026-09-11", 600.0),
                 row("2026-09-20", "2026-09-25", 600.0),
             ],
             &[goal],
-            100.0,
+            &[base],
             5,
+            d("2026-10-20"),
         );
         let dates: Vec<&str> = weeks.iter().map(|w| w.payroll_date.as_str()).collect();
-        assert_eq!(dates, ["2026-10-02", "2026-09-25", "2026-09-11"]);
+        assert_eq!(
+            dates,
+            ["2026-10-02", "2026-09-25", "2026-09-18", "2026-09-11"]
+        );
         assert_eq!(weeks[0].reps[0].bonus, 250.0);
         assert_eq!(weeks[0].reps[0].total, 350.0);
         assert_eq!(weeks[1].reps[0].total, 150.0);
+        assert_eq!(weeks[2].reps[0].total, 100.0);
+    }
+
+    fn d(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn base_pay_runs_every_week_two_weeks_or_month_through_the_next_payday() {
+        let ymd = |dates: Vec<NaiveDate>| -> Vec<String> {
+            dates
+                .iter()
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .collect()
+        };
+        // Weekly: through the first payday after today (Wednesday 11/4).
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-10-16"),
+                "weekly",
+                None,
+                d("2026-11-04")
+            )),
+            ["2026-10-16", "2026-10-23", "2026-10-30", "2026-11-06"]
+        );
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-10-09"),
+                "biweekly",
+                None,
+                d("2026-11-04")
+            )),
+            ["2026-10-09", "2026-10-23", "2026-11-06"]
+        );
+        // Every 20th; a 31st falls back to the month's last day.
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-09-20"),
+                "monthly",
+                None,
+                d("2026-11-04")
+            )),
+            ["2026-09-20", "2026-10-20", "2026-11-20"]
+        );
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-12-31"),
+                "monthly",
+                None,
+                d("2027-03-01")
+            )),
+            ["2026-12-31", "2027-01-31", "2027-02-28", "2027-03-31"]
+        );
+        // Until a last day; not started yet: only the first payday.
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-10-16"),
+                "weekly",
+                Some(d("2026-10-29")),
+                d("2026-11-04")
+            )),
+            ["2026-10-16", "2026-10-23"]
+        );
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-12-04"),
+                "weekly",
+                None,
+                d("2026-11-04")
+            )),
+            ["2026-12-04"]
+        );
     }
 }
