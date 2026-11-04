@@ -316,6 +316,57 @@ mod local_tests {
         assert_eq!(manager_chat_ids, vec![456, 789]);
     }
 
+    /// The rule the owner asked for: a new lead reaches every sales manager in
+    /// the app (the push for the managers) and in Telegram, even with one
+    /// manager's Telegram failing (a blocked bot) and one manager holding the
+    /// manager position twice.
+    #[test_db::test]
+    async fn a_new_lead_reaches_every_sales_manager_in_the_app_and_in_telegram(pool: MySqlPool) {
+        use crate::tests::stub_http::{StubServer, use_api};
+
+        let company_id = 1;
+        let api = StubServer::start(|_| Some(json!({ "pushed": 3 }))).await;
+        use_api(&api.base);
+        let bot = MockTelegram::new();
+        // 111 blocked the bot: Telegram refuses at once, the others answer later.
+        bot.fail_send_chat_ids.lock().unwrap().push(111);
+
+        positioned_user(&pool, company_id, 1, 123).await;
+        let with_app = positioned_user(&pool, company_id, 2, 456).await;
+        positioned_user(&pool, company_id, 2, 111).await;
+        let twice = positioned_user(&pool, company_id, 2, 789).await;
+        assigned_user_position(&pool, company_id, 2, twice)
+            .await
+            .unwrap();
+        give_app(&pool, company_id, with_app).await;
+
+        let lead: NewLeadForm =
+            serde_json::from_value(json!({ "name": "Test", "phone": "+13179995973" })).unwrap();
+        let response = new_lead_form_inner(company_id, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        // Telegram: every manager who can be reached, once each.
+        let mut chats: Vec<i64> = bot
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| message.1.ends_with("Choose a salesperson."))
+            .map(|message| message.0)
+            .collect();
+        chats.sort_unstable();
+        assert_eq!(chats, vec![456, 789]);
+
+        // The app: one push for the company's managers (the API finds their phones).
+        let pushes = api.requests();
+        assert_eq!(pushes.len(), 1, "{pushes:?}");
+        assert_eq!(pushes[0].path, "/v1/phone/pushes/lead");
+        let body: Value = serde_json::from_str(&pushes[0].body).unwrap();
+        assert_eq!(body["company_id"], company_id);
+        assert_eq!(body["kind"], "new");
+        assert!(body.get("user_id").is_none(), "{body}");
+    }
+
     #[test_db::test]
     async fn managers_with_the_app_still_get_repeat_leads_in_telegram(pool: MySqlPool) {
         let company_id = 1;

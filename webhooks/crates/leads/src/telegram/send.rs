@@ -77,13 +77,25 @@ where
         });
     }
 
+    // Every manager's message is awaited: one that fails (a blocked bot) must
+    // not stop the others (returning early dropped the set and cancelled the
+    // sends still in flight). An error only when nobody got it.
     let mut out = Vec::new();
+    let mut last_error = None;
     while let Some(res) = set.join_next().await {
-        let msg = res.expect("task panicked or was cancelled")?;
-        out.push(msg);
+        match res {
+            Ok(Ok(msg)) => out.push(msg),
+            Ok(Err(error)) => {
+                tracing::error!(?error, lead_id, "Lead message to a manager failed");
+                last_error = Some(error);
+            }
+            Err(error) => tracing::error!(?error, lead_id, "Lead message task failed"),
+        }
     }
-
-    Ok(out)
+    match last_error {
+        Some(error) if out.is_empty() => Err(error),
+        _ => Ok(out),
+    }
 }
 
 pub async fn send_plain_message_to_chat<T>(
@@ -113,7 +125,10 @@ async fn get_manager_telegram_ids(
         .collect();
     let ids: Vec<i32> = managers.iter().map(|u| u.id).collect();
     let with_app = users_with_app(pool, company_id, &ids).await;
-    let telegram_ids = managers.iter().filter_map(|u| u.telegram_id).collect();
+    // One message per chat, however many manager positions its user holds.
+    let mut telegram_ids: Vec<i64> = managers.iter().filter_map(|u| u.telegram_id).collect();
+    telegram_ids.sort_unstable();
+    telegram_ids.dedup();
     (telegram_ids, !with_app.is_empty())
 }
 
