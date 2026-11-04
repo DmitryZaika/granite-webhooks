@@ -27,7 +27,8 @@
 //! attachment upload, Improve message, AI reply, the typing suggestion and
 //! what it learns, filling a template) and on
 //! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes and
-//! files; not deleting a deal or the board setup) the
+//! files; not deleting a deal or the board setup), and a customer's sales
+//! rep (`customer_write`: the contact card's and the lead inbox's Assign) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -129,11 +130,11 @@ pub const DEVICE_ROUTES: [&str; 5] = [
 /// schedule's calendars, and the More screens: Deals, Customers, Stones,
 /// Suppliers, Images (with its folders), Transactions and Quotes; the CRM
 /// notification a push names; the shop's maintenance checks a push says are
-/// due; and the customer stones page the typing
-/// suggestion offers to link).
+/// due; the customer stones page the typing
+/// suggestion offers to link; and the sales reps that Assign a sales rep lists).
 /// These prefixes and everything under them; writes there still need the CRM
 /// session.
-pub const DEVICE_READ_ROUTES: [&str; 18] = [
+pub const DEVICE_READ_ROUTES: [&str; 19] = [
     "/v1/sms/mine",
     "/v1/ai/compose/inventory-url",
     "/v1/calendars",
@@ -152,6 +153,7 @@ pub const DEVICE_READ_ROUTES: [&str; 18] = [
     "/v1/quotes",
     "/v1/notifications",
     "/v1/shop/maintenance",
+    "/v1/users/sales-reps",
 ];
 
 /// CRM actions the app's composer calls with its device token: exactly these
@@ -235,6 +237,18 @@ fn deal_write(method: &Method, path: &str) -> bool {
     }
 }
 
+/// The customer changes the app makes with its device token, exactly these:
+/// a customer's sales rep (`PUT /v1/customers/{id}/sales-rep`), from the
+/// contact card's Assign and the lead inbox. Editing or deleting a customer
+/// stays with the CRM session.
+fn customer_write(method: &Method, path: &str) -> bool {
+    method == Method::PUT
+        && path
+            .strip_prefix("/v1/customers/")
+            .and_then(|rest| rest.strip_suffix("/sales-rep"))
+            .is_some_and(is_id)
+}
+
 /// The text and email templates the app's Use Template list adds, edits and
 /// deletes with its device token: `POST /v1/sms-templates` and
 /// `/v1/email-templates`, `PUT|DELETE` on `/{id}` of either (the caller's own,
@@ -256,12 +270,14 @@ fn template_write(method: &Method, path: &str) -> bool {
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
-/// ([`deal_write`]) and the templates' ([`template_write`]).
+/// ([`deal_write`]), a customer's sales rep ([`customer_write`]) and the
+/// templates' ([`template_write`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
         || (method == Method::POST && (DEVICE_ACTIONS.contains(&path) || sms_send(path)))
         || deal_write(method, path)
+        || customer_write(method, path)
         || template_write(method, path)
 }
 
@@ -591,6 +607,27 @@ mod tests {
             (Method::DELETE, "/v1/deal-stages/2"),
             (Method::POST, "/v1/dealsx"),
             (Method::DELETE, "/v1/deal-activities/suggestions"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn the_phone_assigns_a_sales_rep() {
+        assert!(device_route(&Method::GET, "/v1/users/sales-reps"));
+        assert!(device_route(&Method::PUT, "/v1/customers/7/sales-rep"));
+        for (method, path) in [
+            (Method::POST, "/v1/users/sales-reps"),
+            (Method::GET, "/v1/users/employees"),
+            (Method::GET, "/v1/users/sales-repsx"),
+            (Method::POST, "/v1/customers/7/sales-rep"),
+            (Method::PUT, "/v1/customers/x/sales-rep"),
+            (Method::PUT, "/v1/customers//sales-rep"),
+            (Method::PUT, "/v1/customers/7/8/sales-rep"),
+            (Method::PUT, "/v1/customers/7/temperature"),
+            (Method::PUT, "/v1/customers/7/invalid"),
+            (Method::PUT, "/v1/customers/7"),
+            (Method::DELETE, "/v1/customers/7"),
         ] {
             assert!(!device_route(&method, path), "{method} {path}");
         }
