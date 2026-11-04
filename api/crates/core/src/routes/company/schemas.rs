@@ -41,7 +41,11 @@ pub struct CompanyFeatures {
     /// the quote (Admin › Automations, `PUT /v1/company/auto-sale`).
     pub auto_sale: bool,
     /// Marking a quote sold adds its template and installation to the
-    /// schedule's Unscheduled list (Admin › Automations,
+    /// schedule's Unscheduled list (Admin › Quotes › Automation,
     /// `PUT /v1/company/auto-unscheduled-jobs`).
     pub auto_unscheduled_jobs: bool,
+    /// The company has event templates: Mark as Sold offers them as Extra
+    /// events, and each one ticked adds an event to the schedule's Unscheduled
+    /// list, whatever `auto_unscheduled_jobs` says (`GET /v1/quote-sale-events`).
+    pub sale_event_templates: bool,
 }

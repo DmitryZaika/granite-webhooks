@@ -30,8 +30,8 @@ use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
-    self, SaleDeal, SaleJobs, load_company_quote, mark_quote_sold, pricing_for_quote,
-    quote_for_contract_file, with_current_sink_models,
+    self, ExtraEventPick, SaleDeal, SaleJobs, load_company_quote, mark_quote_sold,
+    pricing_for_quote, quote_for_contract_file, with_current_sink_models,
 };
 use crate::routes::created::CreatedId;
 use crate::routes::customers::service::IMPORT_PLACEHOLDER;
@@ -1887,6 +1887,24 @@ pub struct Sale {
     /// template and installation job, both `not_ready`.
     #[serde(default)]
     pub full_height_backsplash: bool,
+    /// Extra events to add (Mark as Sold › Extra events): the event templates
+    /// ticked (`GET /v1/quote-sale-events`), each with optional notes. Each
+    /// adds one unscheduled, `not_ready` event on its template's calendar,
+    /// whether or not the company adds template and installation jobs. Left
+    /// out or empty: none. Unknown template ids are skipped.
+    #[serde(default)]
+    pub extra_events: Vec<SaleExtraEvent>,
+}
+
+/// An extra event ticked in Mark as Sold.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SaleExtraEvent {
+    /// The event template (`GET /v1/quote-sale-events`).
+    pub template_id: i32,
+    /// Notes on the event (trimmed; blank: none).
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// What selling did.
@@ -1899,7 +1917,10 @@ pub struct SaleResult {
 /// Mark a quote sold
 ///
 /// The quote keeps the option sold and its deal is won with that option's
-/// total (a won deal is made when the customer has none).
+/// total (a won deal is made when the customer has none). With the company's
+/// Jobs to Unscheduled switch on, it adds the template and installation jobs
+/// to the schedule's Unscheduled list; each of `extra_events` adds one more
+/// event there. Selling a quote again adds no events.
 #[crate::openapi::path(
     post,
     path = "/v1/quotes/{id}/sale",
@@ -1953,6 +1974,14 @@ pub async fn mark_sold(
             template_notes: input.template_notes,
             install_notes: input.install_notes,
             full_height_backsplash: input.full_height_backsplash,
+            extra_events: input
+                .extra_events
+                .into_iter()
+                .map(|extra| ExtraEventPick {
+                    template_id: extra.template_id,
+                    notes: extra.notes,
+                })
+                .collect(),
         },
     )
     .await?
@@ -1965,7 +1994,8 @@ pub async fn mark_sold(
 /// Undo a sale
 ///
 /// The quote is active again (no option, no signature), its deal reopens and
-/// the template and installation jobs the sale added are deleted.
+/// the template and installation jobs and extra events the sale added are
+/// deleted.
 #[crate::openapi::path(
     delete,
     path = "/v1/quotes/{id}/sale",
