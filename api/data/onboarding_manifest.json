@@ -233,6 +233,18 @@
       "usage_check": "call_coached"
     },
     {
+      "id": "contract-signature",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "quote-contract-dialog",
+        "quote-contract-signing"
+      ],
+      "usage_check": "signature_sent"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
