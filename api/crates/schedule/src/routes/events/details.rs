@@ -844,7 +844,8 @@ pub async fn search(
           ORDER BY e.start_date DESC
           LIMIT ?"
     );
-    let mut found = sqlx::query_as::<_, FoundRow>(&sql).bind(user.company_id);
+    // Only fixed "?" fragments are spliced in; every word is a bind.
+    let mut found = sqlx::query_as::<_, FoundRow>(sqlx::AssertSqlSafe(sql)).bind(user.company_id);
     for like in &likes {
         for _ in 0..5 {
             found = found.bind(like);
