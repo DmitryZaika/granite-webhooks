@@ -6,6 +6,7 @@
 //!   (`crew_map`)
 //! - `GET /v1/schedule/day-map` → a map of the company and a day's stops
 //! - `POST /v1/schedule/optimize-route` → reorder a day's stops by drive time
+//! - `POST /v1/schedule/route-preview` → the same order and new times, unsaved
 //! - `/v1/schedule/notifications` → admins' texts and emails to customers
 //!   before their appointments (`notifications`)
 //! - `/v1/schedule/settings` → the day the weeks start on and 12- or 24-hour
@@ -46,6 +47,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(day_map))
         .routes(routes!(optimize_route))
+        .routes(routes!(route_preview))
         .routes(routes!(board::events))
         .routes(routes!(board::unscheduled))
         .routes(routes!(board::my_schedule))
@@ -152,11 +154,16 @@ pub async fn day_map(
     }))
 }
 
-/// Body of `POST /v1/schedule/optimize-route`.
+/// Body of `POST /v1/schedule/optimize-route` and `route-preview`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RouteInput {
     /// The day's events with an address, 2 to 20.
     pub event_ids: Vec<i32>,
+    /// The approved order from `route-preview` (the same ids). Saves exactly
+    /// that order without asking Google again; omitted, the fastest order is
+    /// worked out.
+    #[serde(default)]
+    pub order: Option<Vec<i32>>,
 }
 
 /// `POST /v1/schedule/optimize-route`.
@@ -208,33 +215,35 @@ fn bad(message: &str) -> ApiError {
     ApiError::BadRequest(message.into())
 }
 
-/// Optimize a day's route
-///
-/// Orders the events by the shortest drive from the company address and
-/// hands the day's existing start times out in that order (each event keeps
-/// its length). All-day and repeating events are ordered but keep their
-/// times. Moved events get a history line and re-timed reminders.
-#[crate::openapi::path(
-    post,
-    path = "/v1/schedule/optimize-route",
-    operation_id = "optimize_schedule_route",
-    tag = "schedule",
-    request_body = RouteInput,
-    responses(
-        (status = 200, description = "Route", body = OptimizedRoute),
-        (status = 400, description = "Fewer than 2 or more than 20 events, events without an address, or no company address", body = ErrorBody),
-        (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
-        (status = 502, description = "Google Maps could not build the route", body = ErrorBody),
-        (status = 500, description = "Database error", body = ErrorBody),
-    ),
-    security(("session_cookie" = []))
-)]
-pub async fn optimize_route(
-    State(state): State<AppState>,
-    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
-    JsonBody(input): JsonBody<RouteInput>,
-) -> ApiResult<Json<OptimizedRoute>> {
+/// A stop that gets a new time on the route.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RouteMove {
+    pub id: i32,
+    /// New start, UTC (`2030-01-15T14:00:00Z`).
+    pub start: String,
+    /// New end, UTC.
+    pub end: String,
+}
+
+/// `POST /v1/schedule/route-preview`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RoutePreview {
+    /// Event ids in driving order from the company.
+    pub order: Vec<i32>,
+    /// Timed events whose start would change, with their new times.
+    pub moves: Vec<RouteMove>,
+    /// Events on the route.
+    pub stops: usize,
+}
+
+/// A worked-out route: the stops, their order and the timed ones that move.
+struct Plan {
+    stops: Vec<Stop>,
+    order: Vec<i32>,
+    moved: Vec<TimedStop>,
+}
+
+async fn plan_route(state: &AppState, company_id: i32, input: RouteInput) -> ApiResult<Plan> {
     let pool = &state.pool;
     let mut ids: Vec<i32> = input.event_ids.into_iter().filter(|id| *id > 0).collect();
     ids.sort_unstable();
@@ -247,27 +256,39 @@ pub async fn optimize_route(
             "A route can have at most {MAX_ROUTE_STOPS} stops."
         )));
     }
-    let stops = load_stops(pool, user.company_id, &ids).await?;
+    let stops = load_stops(pool, company_id, &ids).await?;
     if stops.len() != ids.len() {
         return Err(bad(
             "Some events changed or can no longer be routed. Refresh and try again.",
         ));
     }
-    let home = company_address(pool, user.company_id)
-        .await?
-        .ok_or_else(|| {
-            bad("Add the company address in settings so the route has a starting point.")
-        })?;
-    let locations: Vec<String> = stops.iter().map(|stop| stop.location.clone()).collect();
-    let cost = state
-        .maps
-        .drive_times(&home, &locations)
-        .await
-        .map_err(ApiError::Upstream)?;
-    let order: Vec<i32> = solve_open_route(&cost)
-        .into_iter()
-        .map(|point| stops[point - 1].id)
-        .collect();
+    let order: Vec<i32> = match input.order {
+        // The order approved from the preview, saved as is.
+        Some(order) => {
+            let mut given = order.clone();
+            given.sort_unstable();
+            if given != ids {
+                return Err(bad("The route's stops changed. Build the route again."));
+            }
+            order
+        }
+        None => {
+            let home = company_address(pool, company_id).await?.ok_or_else(|| {
+                bad("Add the company address in settings so the route has a starting point.")
+            })?;
+            let locations: Vec<String> =
+                stops.iter().map(|stop| stop.location.clone()).collect();
+            let cost = state
+                .maps
+                .drive_times(&home, &locations)
+                .await
+                .map_err(ApiError::Upstream)?;
+            solve_open_route(&cost)
+                .into_iter()
+                .map(|point| stops[point - 1].id)
+                .collect()
+        }
+    };
     // Only one-off timed events get new times.
     let timed: Vec<TimedStop> = stops
         .iter()
@@ -289,7 +310,7 @@ pub async fn optimize_route(
         .copied()
         .filter(|id| timed.iter().any(|stop| stop.id == *id))
         .collect();
-    let changed: Vec<TimedStop> = assign_time_slots(&timed, &timed_order)
+    let moved: Vec<TimedStop> = assign_time_slots(&timed, &timed_order)
         .into_iter()
         .filter(|slot| {
             timed
@@ -297,6 +318,93 @@ pub async fn optimize_route(
                 .any(|stop| stop.id == slot.id && stop.start != slot.start)
         })
         .collect();
+    Ok(Plan {
+        stops,
+        order,
+        moved,
+    })
+}
+
+fn utc(time: NaiveDateTime) -> String {
+    time.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// Preview a day's route
+///
+/// The fastest order from the company address and the new times the timed
+/// events would get, without saving anything. Send the order back to
+/// `optimize-route` to apply it.
+#[crate::openapi::path(
+    post,
+    path = "/v1/schedule/route-preview",
+    operation_id = "preview_schedule_route",
+    tag = "schedule",
+    request_body = RouteInput,
+    responses(
+        (status = 200, description = "Proposed route", body = RoutePreview),
+        (status = 400, description = "Fewer than 2 or more than 20 events, events without an address, or no company address", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
+        (status = 502, description = "Google Maps could not build the route", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn route_preview(
+    State(state): State<AppState>,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
+    JsonBody(input): JsonBody<RouteInput>,
+) -> ApiResult<Json<RoutePreview>> {
+    let plan = plan_route(&state, user.company_id, input).await?;
+    Ok(Json(RoutePreview {
+        moves: plan
+            .moved
+            .iter()
+            .map(|slot| RouteMove {
+                id: slot.id,
+                start: utc(slot.start),
+                end: utc(slot.end),
+            })
+            .collect(),
+        stops: plan.stops.len(),
+        order: plan.order,
+    }))
+}
+
+/// Optimize a day's route
+///
+/// Orders the events by the shortest drive from the company address (or in
+/// the approved `order` from the preview) and hands the day's existing start
+/// times out in that order (each event keeps its length). All-day and
+/// repeating events are ordered but keep their times. Moved events get a
+/// history line and re-timed reminders.
+#[crate::openapi::path(
+    post,
+    path = "/v1/schedule/optimize-route",
+    operation_id = "optimize_schedule_route",
+    tag = "schedule",
+    request_body = RouteInput,
+    responses(
+        (status = 200, description = "Route", body = OptimizedRoute),
+        (status = 400, description = "Fewer than 2 or more than 20 events, events without an address, an order that is not those events, or no company address", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
+        (status = 502, description = "Google Maps could not build the route", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn optimize_route(
+    State(state): State<AppState>,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
+    JsonBody(input): JsonBody<RouteInput>,
+) -> ApiResult<Json<OptimizedRoute>> {
+    let pool = &state.pool;
+    let Plan {
+        stops,
+        order,
+        moved: changed,
+    } = plan_route(&state, user.company_id, input).await?;
     let mut tx = pool.begin().await?;
     for slot in &changed {
         sqlx::query(
