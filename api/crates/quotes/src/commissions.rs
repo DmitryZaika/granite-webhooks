@@ -27,7 +27,8 @@ pub struct CommissionRule {
     pub id: i64,
     /// Name.
     pub name: String,
-    /// `material` (the stone per area), `quote` (the whole quote before
+    /// `material` (the stone of each room: a percent of everything in the
+    /// room, or dollars per sq ft of stone), `quote` (the whole quote before
     /// tax), `lines` (price lines matching `lineMatch`) or `monthly_goal`.
     pub applies: String,
     /// `percent` or `flat` (dollars per sq ft, unit, quote or goal).
@@ -192,7 +193,9 @@ pub fn quote_commission(
         let color = picked.map_or("", |p| p.color.trim());
         let level = level_of(price_list, product, color);
         let material: Vec<&PriceLine> = area.lines.iter().filter(|l| is_material_line(l)).collect();
-        let material_dollars = material.iter().fold(0.0, |s, l| s + l.total) * area.quantity;
+        // A stone rule's percent is of everything in the room: the room's
+        // stone sets the rate for all of its items.
+        let room_dollars = area.lines.iter().fold(0.0, |s, l| s + l.total) * area.quantity;
         let sq_ft = material.iter().fold(0.0, |s, l| s + line_quantity(l)) * area.quantity;
         let mut stopped = false;
         for rule in &ordered {
@@ -201,11 +204,7 @@ pub fn quote_commission(
                 {
                     continue;
                 }
-                let base = if percent(rule) {
-                    material_dollars
-                } else {
-                    sq_ft
-                };
+                let base = if percent(rule) { room_dollars } else { sq_ft };
                 let what: Vec<&str> = [product, color]
                     .into_iter()
                     .filter(|s| !s.is_empty())
@@ -214,12 +213,7 @@ pub fn quote_commission(
                     rule_id: rule.id,
                     rule: rule.name.clone(),
                     base: money(base),
-                    base_label: if percent(rule) {
-                        "$ of material"
-                    } else {
-                        "sq ft"
-                    }
-                    .into(),
+                    base_label: if percent(rule) { "$ of room" } else { "sq ft" }.into(),
                     amount: pay(rule, base),
                     note: format!("{}: {}", area.name, what.join(" "))
                         .trim()
@@ -307,6 +301,20 @@ pub fn monthly_bonus(rules: &[CommissionRule], paid_sales: f64) -> f64 {
         .fold(0.0, |s, r| s + money(r.rate))
 }
 
+/// The payroll a job is paid with once an admin adds it to the salary: the
+/// payroll `weekday` of the week after the one it was paid and installed in
+/// (weeks start on Monday), or the next payroll from `today` when that one
+/// has gone by.
+pub fn next_week_payroll(done: NaiveDate, today: NaiveDate, weekday: u32) -> NaiveDate {
+    let monday = done - chrono::Duration::days(i64::from(done.weekday().num_days_from_monday()));
+    let payday = monday + chrono::Duration::days(7 + i64::from((weekday + 6) % 7));
+    if payday >= today {
+        return payday;
+    }
+    let ahead = (weekday + 7 - today.weekday().num_days_from_sunday()) % 7;
+    today + chrono::Duration::days(i64::from(ahead))
+}
+
 /// `payrollDateFor`: the payroll `weekday` (0 = Sunday) on or after a date.
 pub fn payroll_date_for(paid_date: &str, weekday: u32) -> Option<String> {
     let date = NaiveDate::parse_from_str(paid_date.get(..10)?, "%Y-%m-%d").ok()?;
@@ -366,7 +374,6 @@ pub fn status_of(invoice: Option<&InvoiceSummary>) -> &'static str {
 pub struct PaidRow {
     pub user_id: Option<i32>,
     pub rep: String,
-    pub status: String,
     pub quote_total: f64,
     pub commission: f64,
     pub paid_date: Option<String>,
@@ -401,9 +408,9 @@ pub struct PayrollWeek {
     pub reps: Vec<PayrollRep>,
 }
 
-/// `payrollWeeks`: per payroll date (newest first), every rep's paid
-/// commissions, monthly bonuses (paid with the first payroll after the
-/// month) and the weekly base.
+/// `payrollWeeks`: per payroll date (newest first), every rep's commissions
+/// an admin added to the salary, monthly bonuses (paid with the first payroll
+/// after the month) and the weekly base.
 pub fn payroll_weeks(
     rows: &[PaidRow],
     rules: &[CommissionRule],
@@ -434,12 +441,11 @@ pub fn payroll_weeks(
     // (user, month) → sales, in the order first seen.
     let mut months: Vec<(Option<i32>, String, String, f64)> = Vec::new();
     for row in rows {
-        let (Some(payroll), Some(paid)) = (&row.payroll_date, &row.paid_date) else {
+        // Only what an admin added to the salary is paid.
+        let Some(payroll) = &row.payroll_date else {
             continue;
         };
-        if row.status != "paid" {
-            continue;
-        }
+        let paid = row.paid_date.as_ref().unwrap_or(payroll);
         let i = cell(&mut weeks, payroll, row.user_id, &row.rep);
         weeks.get_mut(payroll.as_str()).expect("cell")[i].commission += row.commission;
         let month = paid.get(..7).unwrap_or_default().to_string();
@@ -513,6 +519,36 @@ mod tests {
     }
 
     #[test]
+    fn added_jobs_are_paid_the_week_after_paid_and_installed() {
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let today = d("2026-11-03");
+        // Done Monday or Friday of the week of 11/2: Friday of the next week.
+        assert_eq!(
+            next_week_payroll(d("2026-11-02"), today, 5),
+            d("2026-11-13")
+        );
+        assert_eq!(
+            next_week_payroll(d("2026-11-06"), today, 5),
+            d("2026-11-13")
+        );
+        // Sunday still ends that week.
+        assert_eq!(
+            next_week_payroll(d("2026-11-08"), today, 5),
+            d("2026-11-13")
+        );
+        // Done the week before: this Friday.
+        assert_eq!(
+            next_week_payroll(d("2026-10-28"), today, 5),
+            d("2026-11-06")
+        );
+        // Long ago: the next payroll from today, never one gone by.
+        assert_eq!(
+            next_week_payroll(d("2026-09-01"), today, 5),
+            d("2026-11-06")
+        );
+    }
+
+    #[test]
     fn invoices_match_by_total_then_date() {
         let invoices = vec![
             invoice("1", "2026-01-01", 100.0, 0.0),
@@ -553,7 +589,6 @@ mod tests {
         let row = |paid: &str, payroll: &str, total: f64| PaidRow {
             user_id: Some(100),
             rep: "Rita".into(),
-            status: "paid".into(),
             quote_total: total,
             commission: 50.0,
             paid_date: Some(paid.into()),

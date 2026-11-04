@@ -192,3 +192,146 @@ async fn the_sync_works_out_signed_quotes_and_payroll_pays_them(pool: MySqlPool)
             .unwrap();
     assert!(paid_out.is_some());
 }
+
+#[test_db::test(seed)]
+async fn admins_add_paid_installed_jobs_to_the_salary_and_set_amounts(pool: MySqlPool) {
+    let server = server(pool.clone());
+    signed_quote(&pool).await;
+    // Marked sold (no signature), with its install done; and a sheet row.
+    sqlx::raw_sql(
+        "UPDATE quotes SET signed_at = NULL, status = 'converted' WHERE id = 9701;
+         INSERT INTO calendars (id, company_id, name, color, slug) VALUES (8830, 100, 'Installations', 'blue', 'installations');
+         INSERT INTO events (title, start_date, end_date, created_user_id, quote_id, calendar_id)
+           VALUES ('Install', '2026-01-05 09:00:00', '2026-01-05 12:00:00', 100, 9701, 8830);
+         INSERT INTO quote_commissions (company_id, user_id, customer_label, quote_total, commission_amount, status, signed_at)
+           VALUES (100, 100, 'Old sale (sheet)', 1000, 50, 'no_invoice', '2025-12-01 12:00:00');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    server
+        .post("/v1/commissions/sync")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status_ok();
+    let rows = server
+        .get("/v1/commissions?scope=company")
+        .with_session(sessions::ADMIN)
+        .await
+        .json::<Value>()["rows"]
+        .clone();
+    let quote_row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["quoteId"] == 9701)
+        .unwrap()
+        .clone();
+    let sheet_row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["quoteId"].is_null())
+        .unwrap()
+        .clone();
+    assert_eq!(quote_row["installedDate"], "2026-01-05");
+    assert!(quote_row["payrollDate"].is_null());
+    assert_eq!(sheet_row["customerName"], "Old sale (sheet)");
+    let quote_id = quote_row["id"].as_i64().unwrap();
+    let sheet_id = sheet_row["id"].as_i64().unwrap();
+
+    // Not paid yet: it cannot go into the salary.
+    let res = server
+        .post(&format!("/v1/commissions/{quote_id}/payroll"))
+        .with_session(sessions::ADMIN)
+        .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    server
+        .post("/v1/commissions/payouts")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "ids": [quote_id] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let paid_out: Option<String> = sqlx::query_scalar(
+        "SELECT DATE_FORMAT(paid_out_at, '%Y') FROM quote_commissions WHERE quote_id = 9701",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(paid_out.is_none());
+
+    // Paid long ago and installed: the next payroll Friday from today.
+    sqlx::raw_sql("UPDATE quote_commissions SET status = 'paid', paid_date = '2026-01-07' WHERE quote_id = 9701;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let res = server
+        .post(&format!("/v1/commissions/{quote_id}/payroll"))
+        .with_session(sessions::ADMIN)
+        .await;
+    res.assert_status_ok();
+    let payroll = res.json::<Value>()["payrollDate"].as_str().unwrap().to_string();
+    let date = chrono::NaiveDate::parse_from_str(&payroll, "%Y-%m-%d").unwrap();
+    assert_eq!(date.format("%a").to_string(), "Fri");
+    assert!(date >= chrono::Utc::now().date_naive());
+    server
+        .post(&format!("/v1/commissions/{quote_id}/payroll"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // The admin's own amounts win, and the sync keeps them.
+    server
+        .put(&format!("/v1/commissions/{quote_id}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "quoteTotal": 900, "commission": 45.5, "payrollDate": payroll }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .put(&format!("/v1/commissions/{sheet_id}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "quoteTotal": null, "commission": -1, "payrollDate": null }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .put(&format!("/v1/commissions/{quote_id}"))
+        .with_session(sessions::REP)
+        .json(&json!({ "commission": 1 }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/v1/commissions/sync")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status_ok();
+    let mine = server
+        .get("/v1/commissions")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    let row = mine["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["quoteId"] == 9701)
+        .unwrap()
+        .clone();
+    assert_eq!(row["quoteTotal"], 900.0);
+    assert_eq!(row["commission"], 45.5);
+    assert_eq!(row["calculatedTotal"], 100.0);
+    assert_eq!(row["adjusted"], true);
+    assert_eq!(mine["weeks"][0]["payrollDate"], payroll);
+    assert_eq!(mine["weeks"][0]["reps"][0]["commission"], 45.5);
+
+    // Only a row with no quote can be deleted.
+    server
+        .delete(&format!("/v1/commissions/{quote_id}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .delete(&format!("/v1/commissions/{sheet_id}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}
