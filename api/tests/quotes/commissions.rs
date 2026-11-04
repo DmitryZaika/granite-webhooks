@@ -94,12 +94,12 @@ async fn admins_manage_rules_and_settings(pool: MySqlPool) {
             .with_session(sessions::ADMIN)
             .await
             .json::<Value>(),
-        json!({ "baseWeekly": 0.0, "payrollWeekday": 5 })
+        json!({ "payrollWeekday": 5 })
     );
     server
         .put("/v1/commission-settings")
         .with_session(sessions::ADMIN)
-        .json(&json!({ "baseWeekly": -5, "payrollWeekday": 9 }))
+        .json(&json!({ "payrollWeekday": 9 }))
         .await
         .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(
@@ -108,7 +108,7 @@ async fn admins_manage_rules_and_settings(pool: MySqlPool) {
             .with_session(sessions::ADMIN)
             .await
             .json::<Value>(),
-        json!({ "baseWeekly": 0.0, "payrollWeekday": 6 })
+        json!({ "payrollWeekday": 6 })
     );
     server
         .get("/v1/commission-rules")
@@ -157,10 +157,11 @@ async fn the_sync_works_out_signed_quotes_and_payroll_pays_them(pool: MySqlPool)
     assert_eq!(row["parts"][1]["note"], "2 - Sealer");
     assert_eq!(mine["weeks"], json!([]));
 
-    // Once paid, it lands on the next payroll Friday with the base.
+    // Once paid, it lands on the next payroll Friday with the rep's base pay.
     sqlx::raw_sql(
         "UPDATE quote_commissions SET status = 'paid', paid_date = '2026-10-13', payroll_date = '2026-10-16';
-         INSERT INTO commission_settings (company_id, base_weekly, payroll_weekday) VALUES (100, 100, 5);",
+         INSERT INTO commission_base_pay (company_id, user_id, amount, frequency, start_date, end_date)
+           VALUES (100, 100, 100, 'weekly', '2026-10-16', '2026-10-16');",
     )
     .execute(&pool)
     .await
@@ -270,7 +271,10 @@ async fn admins_add_paid_installed_jobs_to_the_salary_and_set_amounts(pool: MySq
         .with_session(sessions::ADMIN)
         .await;
     res.assert_status_ok();
-    let payroll = res.json::<Value>()["payrollDate"].as_str().unwrap().to_string();
+    let payroll = res.json::<Value>()["payrollDate"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let date = chrono::NaiveDate::parse_from_str(&payroll, "%Y-%m-%d").unwrap();
     assert_eq!(date.format("%a").to_string(), "Fri");
     assert!(date >= chrono::Utc::now().date_naive());
@@ -334,4 +338,96 @@ async fn admins_add_paid_installed_jobs_to_the_salary_and_set_amounts(pool: MySq
         .with_session(sessions::ADMIN)
         .await
         .assert_status(StatusCode::NO_CONTENT);
+}
+
+#[test_db::test(seed)]
+async fn admins_set_each_reps_base_pay_schedule(pool: MySqlPool) {
+    let server = server(pool.clone());
+    // $500 on the 20th of every month, from 9/20 to 10/20.
+    let res = server
+        .post("/v1/commission-base-pay")
+        .with_session(sessions::ADMIN)
+        .json(
+            &json!({ "userId": 100, "amount": 500, "frequency": "monthly",
+                       "startDate": "2026-09-20", "endDate": "2026-10-20" }),
+        )
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    for bad in [
+        json!({ "userId": 100, "amount": -1, "frequency": "weekly", "startDate": "2026-09-20" }),
+        json!({ "userId": 100, "amount": 1, "frequency": "daily", "startDate": "2026-09-20" }),
+        json!({ "userId": 100, "amount": 1, "frequency": "weekly", "startDate": "9/20/2026" }),
+        json!({ "userId": 100, "amount": 1, "frequency": "weekly", "startDate": "2026-09-20", "endDate": "2026-09-01" }),
+        // Another company's user.
+        json!({ "userId": 103, "amount": 1, "frequency": "weekly", "startDate": "2026-09-20" }),
+    ] {
+        server
+            .post("/v1/commission-base-pay")
+            .with_session(sessions::ADMIN)
+            .json(&bad)
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+    let list = server
+        .get("/v1/commission-base-pay")
+        .with_session(sessions::ADMIN)
+        .await
+        .json::<Value>();
+    assert_eq!(list[0]["rep"], "Rita Rep");
+    assert_eq!(list[0]["frequency"], "monthly");
+    assert_eq!(list[0]["endDate"], "2026-10-20");
+
+    // The rep's paychecks: the base on 9/20 and 10/20, with no commissions.
+    let mine = server
+        .get("/v1/commissions")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    let dates: Vec<&str> = mine["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["payrollDate"].as_str().unwrap())
+        .collect();
+    assert_eq!(dates, ["2026-10-20", "2026-09-20"]);
+    assert_eq!(mine["weeks"][0]["reps"][0]["base"], 500.0);
+    assert_eq!(mine["weeks"][0]["reps"][0]["total"], 500.0);
+
+    // Every two weeks from 10/2, until 10/16.
+    server
+        .put(&format!("/v1/commission-base-pay/{id}"))
+        .with_session(sessions::ADMIN)
+        .json(
+            &json!({ "userId": 100, "amount": 250, "frequency": "biweekly",
+                       "startDate": "2026-10-02", "endDate": "2026-10-16" }),
+        )
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let weeks = server
+        .get("/v1/commissions")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>()["weeks"]
+        .clone();
+    assert_eq!(weeks.as_array().unwrap().len(), 2);
+    assert_eq!(weeks[0]["payrollDate"], "2026-10-16");
+    server
+        .get("/v1/commission-base-pay")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .delete(&format!("/v1/commission-base-pay/{id}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        server
+            .get("/v1/commissions")
+            .with_session(sessions::REP)
+            .await
+            .json::<Value>()["weeks"],
+        json!([])
+    );
 }

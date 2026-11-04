@@ -2,7 +2,8 @@
 //! own page).
 //!
 //! - `GET    /v1/commission-rules`, `POST`, `PUT|DELETE /v1/commission-rules/{id}`
-//! - `GET|PUT /v1/commission-settings` → weekly base and payroll weekday
+//! - `GET|PUT /v1/commission-settings` → payroll weekday
+//! - `GET    /v1/commission-base-pay`, `POST`, `PUT|DELETE /v1/commission-base-pay/{id}` → reps' base pay schedules
 //! - `GET    /v1/commissions?scope=mine|company` → sold quotes' commissions and the paychecks
 //! - `POST   /v1/commissions/sync`    → work out every sold quote's commission, payment (`QuickBooks`) and install
 //! - `POST   /v1/commissions/{id}/payroll` → add a paid, installed job to the salary
@@ -14,8 +15,8 @@
 
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::commissions::{
-    CommissionPart, CommissionRule, PaidRow, PayrollWeek, next_week_payroll, payroll_weeks,
-    pick_invoice, quote_commission, status_of,
+    BasePay, CommissionPart, CommissionRule, PaidRow, PayrollWeek, next_week_payroll,
+    payroll_weeks, pick_invoice, quote_commission, status_of,
 };
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -41,6 +42,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_rules, create_rule))
         .routes(routes!(update_rule, delete_rule))
         .routes(routes!(get_settings, save_settings))
+        .routes(routes!(list_base_pay, create_base_pay))
+        .routes(routes!(update_base_pay, delete_base_pay))
         .routes(routes!(list_commissions))
         .routes(routes!(sync_commissions))
         .routes(routes!(add_to_payroll))
@@ -377,39 +380,30 @@ pub async fn delete_rule(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Base pay and payroll week.
+/// The payroll week (base pay has its own schedules: `/v1/commission-base-pay`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CommissionSettings {
-    /// Paid every payroll week on top of commissions (not negative).
-    pub base_weekly: f64,
     /// 0 = Sunday … 6 = Saturday: the day payroll goes out.
     pub payroll_weekday: u32,
 }
 
-/// `loadCommissionSettings` (Friday payroll and no base until saved).
+/// `loadCommissionSettings` (Friday payroll until saved).
 pub async fn load_settings(pool: &MySqlPool, company_id: i32) -> ApiResult<CommissionSettings> {
-    let row: Option<(f64, i32)> = sqlx::query_as(
-        "SELECT CAST(base_weekly AS DOUBLE), CAST(payroll_weekday AS SIGNED) FROM commission_settings WHERE company_id = ?",
+    let weekday: Option<i32> = sqlx::query_scalar(
+        "SELECT CAST(payroll_weekday AS SIGNED) FROM commission_settings WHERE company_id = ?",
     )
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map_or(
-        CommissionSettings {
-            base_weekly: 0.0,
-            payroll_weekday: 5,
-        },
-        |(base, weekday)| CommissionSettings {
-            base_weekly: base,
-            payroll_weekday: u32::try_from(weekday.clamp(0, 6)).unwrap_or(5),
-        },
-    ))
+    Ok(CommissionSettings {
+        payroll_weekday: weekday.map_or(5, |w| u32::try_from(w.clamp(0, 6)).unwrap_or(5)),
+    })
 }
 
 /// Get the commission settings
 ///
-/// Friday payroll and no base until saved.
+/// Friday payroll until saved.
 #[crate::openapi::path(
     get,
     path = "/v1/commission-settings",
@@ -432,7 +426,7 @@ pub async fn get_settings(
 
 /// Save the commission settings
 ///
-/// A negative base becomes 0; the weekday is kept within 0 to 6.
+/// The weekday is kept within 0 to 6.
 #[crate::openapi::path(
     put,
     path = "/v1/commission-settings",
@@ -453,12 +447,284 @@ pub async fn save_settings(
     JsonBody(input): JsonBody<CommissionSettings>,
 ) -> ApiResult<StatusCode> {
     sqlx::query(
-        "INSERT INTO commission_settings (company_id, base_weekly, payroll_weekday) VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE base_weekly = VALUES(base_weekly), payroll_weekday = VALUES(payroll_weekday)",
+        "INSERT INTO commission_settings (company_id, payroll_weekday) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE payroll_weekday = VALUES(payroll_weekday)",
     )
     .bind(user.company_id)
-    .bind(if input.base_weekly.is_finite() { input.base_weekly.max(0.0) } else { 0.0 })
     .bind(input.payroll_weekday.min(6))
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(sqlx::FromRow)]
+struct BasePayRow {
+    id: i32,
+    user_id: i32,
+    rep: Option<String>,
+    amount: f64,
+    frequency: String,
+    start_date: String,
+    end_date: Option<String>,
+}
+
+/// The company's base pay (one rep's with `user_id`), by rep then first payday.
+pub async fn load_base_pay(
+    pool: &MySqlPool,
+    company_id: i32,
+    user_id: Option<i32>,
+) -> ApiResult<Vec<BasePay>> {
+    let rows: Vec<BasePayRow> = sqlx::query_as(
+        "SELECT b.id, b.user_id, u.name AS rep, CAST(b.amount AS DOUBLE) AS amount, b.frequency,
+                DATE_FORMAT(b.start_date, '%Y-%m-%d') AS start_date,
+                DATE_FORMAT(b.end_date, '%Y-%m-%d') AS end_date
+           FROM commission_base_pay b
+           LEFT JOIN users u ON u.id = b.user_id
+          WHERE b.company_id = ? AND b.deleted_at IS NULL AND (? IS NULL OR b.user_id = ?)
+          ORDER BY u.name, b.start_date, b.id",
+    )
+    .bind(company_id)
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| BasePay {
+            id: i64::from(r.id),
+            user_id: r.user_id,
+            rep: r.rep.unwrap_or_else(|| "Unassigned".into()),
+            amount: r.amount,
+            frequency: r.frequency,
+            start_date: r.start_date,
+            end_date: r.end_date,
+        })
+        .collect())
+}
+
+/// List base pay
+///
+/// Every rep's base pay schedules.
+#[crate::openapi::path(
+    get,
+    path = "/v1/commission-base-pay",
+    operation_id = "list_commission_base_pay",
+    tag = "commissions",
+    responses(
+        (status = 200, description = "The base pay", body = [BasePay]),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn list_base_pay(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+) -> ApiResult<Json<Vec<BasePay>>> {
+    Ok(Json(
+        load_base_pay(&state.pool, user.company_id, None).await?,
+    ))
+}
+
+/// A rep's base pay as an admin sets it.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BasePayInput {
+    /// The rep (an employee of the company).
+    pub user_id: i32,
+    /// Paid each time; not negative.
+    pub amount: f64,
+    /// `weekly`, `biweekly` (every two weeks) or `monthly`.
+    pub frequency: String,
+    /// The first payday, YYYY-MM-DD; monthly pays on its day of the month.
+    pub start_date: String,
+    /// The last day it is paid, YYYY-MM-DD; none: no end.
+    #[serde(default)]
+    pub end_date: Option<String>,
+}
+
+fn base_pay_date(text: &str) -> Option<String> {
+    let text = text.trim();
+    (text.len() == 10)
+        .then(|| chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").ok())
+        .flatten()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+}
+
+async fn save_base_pay(
+    pool: &MySqlPool,
+    company_id: i32,
+    user_id: i32,
+    id: Option<i32>,
+    input: BasePayInput,
+) -> ApiResult<i64> {
+    if !input.amount.is_finite() || input.amount < 0.0 {
+        return Err(ApiError::BadRequest(
+            "The amount cannot be negative.".into(),
+        ));
+    }
+    if !matches!(input.frequency.as_str(), "weekly" | "biweekly" | "monthly") {
+        return Err(ApiError::BadRequest(
+            "Pick how often: every week, every two weeks or every month.".into(),
+        ));
+    }
+    let start = base_pay_date(&input.start_date)
+        .ok_or_else(|| ApiError::BadRequest("Pick the first payday.".into()))?;
+    let end = match input.end_date.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(text) => Some(
+            base_pay_date(text).ok_or_else(|| ApiError::BadRequest("Pick the last day.".into()))?,
+        ),
+    };
+    if end.as_ref().is_some_and(|end| *end < start) {
+        return Err(ApiError::BadRequest(
+            "The last day is before the first payday.".into(),
+        ));
+    }
+    let rep: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0",
+    )
+    .bind(input.user_id)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    if rep.is_none() {
+        return Err(ApiError::BadRequest("Pick a rep of your company.".into()));
+    }
+    let amount = crate::commissions::money(input.amount);
+    if let Some(id) = id {
+        let found: Option<i32> = sqlx::query_scalar(
+            "SELECT id FROM commission_base_pay WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .bind(company_id)
+        .fetch_optional(pool)
+        .await?;
+        if found.is_none() {
+            return Err(ApiError::NotFound);
+        }
+        sqlx::query(
+            "UPDATE commission_base_pay
+                SET user_id = ?, amount = ?, frequency = ?, start_date = ?, end_date = ?
+              WHERE id = ? AND company_id = ?",
+        )
+        .bind(input.user_id)
+        .bind(amount)
+        .bind(&input.frequency)
+        .bind(&start)
+        .bind(end.as_deref())
+        .bind(id)
+        .bind(company_id)
+        .execute(pool)
+        .await?;
+        return Ok(i64::from(id));
+    }
+    let id = sqlx::query(
+        "INSERT INTO commission_base_pay
+           (company_id, user_id, amount, frequency, start_date, end_date, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(company_id)
+    .bind(input.user_id)
+    .bind(amount)
+    .bind(&input.frequency)
+    .bind(&start)
+    .bind(end.as_deref())
+    .bind(user_id)
+    .execute(pool)
+    .await?
+    .last_insert_id();
+    Ok(i64::try_from(id).unwrap_or_default())
+}
+
+/// Add base pay
+///
+/// A rep's base pay: an amount every week, two weeks or month from the
+/// first payday (monthly: on that day of the month), until an optional last
+/// day. It shows in the paychecks on those days.
+#[crate::openapi::path(
+    post,
+    path = "/v1/commission-base-pay",
+    operation_id = "create_commission_base_pay",
+    tag = "commissions",
+    request_body = BasePayInput,
+    responses(
+        (status = 201, description = "Added", body = CreatedId),
+        (status = 400, description = "Check the base pay", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn create_base_pay(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    JsonBody(input): JsonBody<BasePayInput>,
+) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    let id = save_base_pay(&state.pool, user.company_id, user.id, None, input).await?;
+    Ok((StatusCode::CREATED, Json(CreatedId { id })))
+}
+
+/// Save base pay
+///
+/// Replaces the whole base pay; past paychecks follow it too.
+#[crate::openapi::path(
+    put,
+    path = "/v1/commission-base-pay/{id}",
+    operation_id = "update_commission_base_pay",
+    tag = "commissions",
+    params(("id" = i32, Path, description = "Base pay id")),
+    request_body = BasePayInput,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 400, description = "Check the base pay", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such base pay", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn update_base_pay(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<BasePayInput>,
+) -> ApiResult<StatusCode> {
+    save_base_pay(&state.pool, user.company_id, user.id, Some(id), input).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete base pay
+///
+/// Its paydays leave the paychecks, past ones too; to stop it from a day
+/// on, set its last day instead.
+#[crate::openapi::path(
+    delete,
+    path = "/v1/commission-base-pay/{id}",
+    operation_id = "delete_commission_base_pay",
+    tag = "commissions",
+    params(("id" = i32, Path, description = "Base pay id")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete_base_pay(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+) -> ApiResult<StatusCode> {
+    sqlx::query(
+        "UPDATE commission_base_pay SET deleted_at = NOW() WHERE id = ? AND company_id = ?",
+    )
+    .bind(id)
+    .bind(user.company_id)
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -615,7 +881,7 @@ pub struct Commissions {
 ///
 /// The caller's (`mine`) or, for admins, everyone's (`company`) signed
 /// quotes with what they earn, and the paychecks: paid commissions, monthly
-/// goal bonuses and the weekly base per payroll date.
+/// goal bonuses and base pay per payroll date.
 #[crate::openapi::path(
     get,
     path = "/v1/commissions",
@@ -645,6 +911,7 @@ pub async fn list_commissions(
     let rows = load_rows(&state.pool, user.company_id, only).await?;
     let rules = load_rules(&state.pool, user.company_id).await?;
     let settings = load_settings(&state.pool, user.company_id).await?;
+    let base_pay = load_base_pay(&state.pool, user.company_id, only).await?;
     let paid: Vec<PaidRow> = rows
         .iter()
         .map(|r| PaidRow {
@@ -659,8 +926,9 @@ pub async fn list_commissions(
     let weeks = payroll_weeks(
         &paid,
         &rules,
-        settings.base_weekly,
+        &base_pay,
         settings.payroll_weekday,
+        chrono::Utc::now().date_naive(),
     );
     Ok(Json(Commissions { rows, weeks }))
 }
