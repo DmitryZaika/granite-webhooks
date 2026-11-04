@@ -68,7 +68,8 @@ async fn server(pool: &MySqlPool) -> (TestServer, Arc<Mutex<Vec<OutgoingEmail>>>
     let base = format!("http://{address}");
     let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
         .with_webhooks(WebhooksClient::new(Some(&base), Some("key")))
-        .with_maps(Maps::new(Some("key"), &format!("{base}/matrix"), &base));
+        .with_maps(Maps::new(Some("key"), &format!("{base}/matrix"), &base))
+        .with_job_key("job-secret");
     (TestServer::new(app(state)), emails)
 }
 
@@ -402,6 +403,66 @@ async fn completing_an_installation_tells_its_sales_rep_unless_turned_off(pool: 
         .unwrap();
     complete(9900).await.assert_status_ok();
     assert_eq!(rep_notices(&pool).await.len(), 1);
+}
+
+#[test_db::test(seed)]
+async fn a_completed_step_goes_out_when_the_crew_taps_completed(pool: MySqlPool) {
+    jobs(&pool).await;
+    let (server, emails) = server(&pool).await;
+    let template: Value = server
+        .post("/v1/schedule/notifications/templates")
+        .with_session(sessions::ADMIN)
+        .json(&json!({
+            "name": "Thanks", "kind": "reminder", "channel": "email",
+            "subject": "Thank you", "body": "Hi {{customer.first_name}}, your job is done.",
+        }))
+        .await
+        .json();
+    server
+        .post("/v1/schedule/notifications/flows")
+        .with_session(sessions::ADMIN)
+        .json(&json!({
+            "calendar_id": 9890, "name": "Done", "is_default": true, "is_active": true,
+            "steps": [{
+                "template_id": template["id"], "offset_value": 1, "offset_unit": "hours",
+                "direction": "completed", "send_time": null,
+            }],
+        }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let settings: Value = server
+        .get("/v1/schedule/notifications")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(settings["flows"][0]["steps"][0]["direction"], "completed");
+
+    // The clock never sends it.
+    server
+        .post("/v1/jobs/appointment-reminders")
+        .add_header("Authorization", "job-secret")
+        .await
+        .assert_status_ok();
+    assert!(emails.lock().unwrap().is_empty());
+
+    // Completed sends it at once, and only once.
+    let complete = || {
+        server
+            .post("/v1/events/9900/crew-status")
+            .with_session(sessions::MANAGER)
+            .json(&json!({ "status": "completed" }))
+    };
+    complete().await.assert_status_ok();
+    complete().await.assert_status_ok();
+    sqlx::query("UPDATE events SET crew_status = NULL, completed_at = NULL WHERE id = 9900")
+        .execute(&pool)
+        .await
+        .unwrap();
+    complete().await.assert_status_ok();
+    let sent = emails.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].subject, "Thank you");
+    assert_eq!(sent[0].body, "<p>Hi Alice, your job is done.</p>");
 }
 
 #[test_db::test(seed)]

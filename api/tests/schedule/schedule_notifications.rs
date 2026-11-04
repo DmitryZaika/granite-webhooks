@@ -360,7 +360,7 @@ async fn confirmations_stay_out_of_flows(pool: MySqlPool) {
     refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
         refused.json::<Value>()["error"],
-        "A confirmation can't go in a flow; make the template a reminder first"
+        "A scheduling text can't go in a flow; make the template a reminder first"
     );
 
     // A reminder a flow sends can't become a confirmation.
@@ -380,7 +380,7 @@ async fn confirmations_stay_out_of_flows(pool: MySqlPool) {
     refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
         refused.json::<Value>()["error"],
-        "A confirmation can't go in a flow. Remove it from these flows first: Installation"
+        "A scheduling text can't go in a flow. Remove it from these flows first: Installation"
     );
 
     // Left out, the kind is kept; a confirmation made a reminder can go in a flow.
@@ -823,7 +823,7 @@ async fn history(pool: &MySqlPool, event: i32) -> Vec<String> {
 }
 
 #[test_db::test(seed)]
-async fn scheduling_texts_follow_up_until_the_customer_agrees(pool: MySqlPool) {
+async fn ai_texts_follow_up_until_the_customer_agrees(pool: MySqlPool) {
     sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
     sqlx::raw_sql(TEXTING).execute(&pool).await.unwrap();
     // Rita schedules the jobs.
@@ -836,7 +836,7 @@ async fn scheduling_texts_follow_up_until_the_customer_agrees(pool: MySqlPool) {
     let (server, sent) = server(&pool).await;
     let template = |calendars: Value| {
         json!({
-            "name": "Install date", "kind": "confirmation", "channel": "sms",
+            "name": "Install date", "kind": "question", "channel": "sms",
             "body": "Hi {{customer.first_name}}, can we install {{appointment.date}}, {{appointment.time_range}}? Reply YES.",
             "calendar_ids": calendars,
             "followup": { "template_id": null, "after_hours": 2 },
@@ -856,6 +856,16 @@ async fn scheduling_texts_follow_up_until_the_customer_agrees(pool: MySqlPool) {
         .await
         .json();
     let id = created["id"].as_i64().unwrap();
+    // A plain scheduling text keeps no follow-up: nothing waits for its answer.
+    let mut plain = template(json!([8830]));
+    plain["name"] = json!("Thanks");
+    plain["kind"] = json!("confirmation");
+    server
+        .post("/v1/schedule/notifications/templates")
+        .with_session(sessions::ADMIN)
+        .json(&plain)
+        .await
+        .assert_status(StatusCode::CREATED);
     server
         .put("/v1/schedule/notifications/scheduling")
         .with_session(sessions::ADMIN)
@@ -882,6 +892,8 @@ async fn scheduling_texts_follow_up_until_the_customer_agrees(pool: MySqlPool) {
         json!({ "template_id": null, "after_hours": 2 })
     );
     assert_eq!(list["scheduling"]["ai_ready"], true);
+    assert_eq!(list["templates"][1]["kind"], "confirmation");
+    assert_eq!(list["templates"][1]["followup"], Value::Null);
 
     event(&pool, 8830, "1000", 72, false).await;
     let install = last_event(&pool).await;
@@ -901,6 +913,8 @@ async fn scheduling_texts_follow_up_until_the_customer_agrees(pool: MySqlPool) {
     assert_eq!(texts["problem"], Value::Null);
     assert_eq!(texts["ai_ready"], true);
     assert_eq!(texts["templates"][0]["id"], id);
+    assert_eq!(texts["templates"][0]["ai"], true);
+    assert_eq!(texts["templates"][1]["ai"], false);
     assert!(
         texts["templates"][0]["text"]
             .as_str()

@@ -19,7 +19,7 @@ use crate::openapi::ToSchema;
 use crate::phone::crm_push::push_notification_logged;
 use crate::routes::events::history::{History, record};
 use crate::routes::schedule::company_address;
-use crate::routes::schedule::notifications::{Channel, send_on_my_way};
+use crate::routes::schedule::notifications::{Channel, send_on_complete, send_on_my_way};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -354,6 +354,10 @@ pub async fn set_status(
                         event = id,
                         "could not tell the rep the job is installed"
                     );
+                }
+                // Flow steps set to go out when the job is completed.
+                if let Err(error) = send_on_complete(&state, id).await {
+                    tracing::warn!(?error, event = id, "could not send the completed texts");
                 }
             }
             Ok(Json(CrewStatusSaved {
