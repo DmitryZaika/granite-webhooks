@@ -1305,9 +1305,39 @@ pub fn morning_list(
     Some((summary, text))
 }
 
+/// A phone's reaction to a message, sent as a text: `Loved “See you then”`,
+/// `Laughed at “…”`, `Reacted 👍 to “…”`, `Removed a heart from “…”`.
+fn is_reaction(text: &str) -> bool {
+    const VERBS: [&str; 7] = [
+        "liked ",
+        "loved ",
+        "disliked ",
+        "laughed at ",
+        "emphasized ",
+        "emphasised ",
+        "questioned ",
+    ];
+    const QUOTES: [char; 5] = ['“', '"', '”', '‘', '\''];
+    let lower = text.trim_start().to_lowercase();
+    let quoted = |rest: &str| rest.trim_start().starts_with(QUOTES);
+    if let Some(rest) = VERBS.iter().find_map(|verb| lower.strip_prefix(verb)) {
+        return quoted(rest);
+    }
+    ["reacted ", "removed "].iter().any(|verb| {
+        lower.strip_prefix(verb).is_some_and(|rest| {
+            rest.split_once(" to ")
+                .or_else(|| rest.split_once(" from "))
+                .is_some_and(|(what, rest)| what.chars().count() <= 12 && quoted(rest))
+        })
+    })
+}
+
 /// A short text that ends a conversation ("Thank you!", "Ok", "Sounds good",
-/// a lone emoji): no reply is owed.
+/// a lone emoji) or a reaction to a message ([`is_reaction`]): no reply is owed.
 pub fn is_closing(text: &str) -> bool {
+    if is_reaction(text) {
+        return true;
+    }
     const CLOSERS: [&str; 22] = [
         "thanks",
         "thank you",
@@ -2536,6 +2566,13 @@ mod tests {
             "Sounds good.",
             "👍",
             "Thanks so much!!",
+            "Loved “Thank you, I appreciate you too. It’s been very easy working with you”",
+            "Liked \"See you Friday\"",
+            "Laughed at “haha”",
+            "Emphasized “The install is Monday”",
+            "Reacted 👍 to “Your quote is ready”",
+            "Reacted ❤️ to \"Thanks\"",
+            "Removed a heart from “See you then”",
         ] {
             assert!(is_closing(text), "{text}");
         }
@@ -2543,6 +2580,9 @@ mod tests {
             "Yes please that would be great",
             "Can you send the price?",
             "Ok, can we do Friday instead?",
+            "Loved the samples, can you send the price?",
+            "Liked the white one better",
+            "Reacted to the quote, it's too high to be honest",
         ] {
             assert!(!is_closing(text), "{text}");
         }
