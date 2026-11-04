@@ -628,7 +628,10 @@ pub fn sync_with_inventory(info: &Value, stock: &Stock) -> Value {
 }
 
 /// `withLiveChoices`: the snapshot's prices with today's new choices added.
-pub fn with_live_choices(snapshot: &Value, latest: &Value) -> Value {
+/// `quoted` holds the quote's own `material|color` keys: a stone added since
+/// under a color the quote typed as a special order is left out, so the typed
+/// price stays until Update prices.
+pub fn with_live_choices(snapshot: &Value, latest: &Value, quoted: &HashSet<String>) -> Value {
     let latest_products = arr(Some(latest), "arrProducts");
     let products: Vec<Value> = arr(Some(snapshot), "arrProducts")
         .iter()
@@ -668,10 +671,14 @@ pub fn with_live_choices(snapshot: &Value, latest: &Value) -> Value {
                 .iter()
                 .map(|v| key(name_of(v)))
                 .collect();
+            let material = key(name_of(p));
             variants.extend(
                 now_variants
                     .iter()
-                    .filter(|v| !known.contains(&key(name_of(v))))
+                    .filter(|v| {
+                        let color = key(name_of(v));
+                        !known.contains(&color) && !quoted.contains(&format!("{material}|{color}"))
+                    })
                     .cloned(),
             );
             let mut p = obj(p);
@@ -727,6 +734,35 @@ pub fn with_live_choices(snapshot: &Value, latest: &Value) -> Value {
     );
     out["arrOtherItems"] = Value::Array(items);
     out
+}
+
+#[cfg(test)]
+mod live_choice_tests {
+    use super::*;
+
+    #[test]
+    fn a_stone_added_under_a_special_order_color_waits_for_update_prices() {
+        let snapshot = json!({
+            "arrProducts": [{ "name": "Quartz", "arrVariants": [{ "name": "Calacatta Alto", "stockPrice": 50 }] }],
+        });
+        let latest = json!({
+            "arrProducts": [{ "name": "Quartz", "arrVariants": [
+                { "name": "Calacatta Alto", "stockPrice": 50 },
+                { "name": "Calacata Alto", "stockPrice": 50 },
+                { "name": "Lumos", "stockPrice": 70 },
+            ] }],
+        });
+        let quoted = HashSet::from(["quartz|calacata alto".to_string()]);
+        let names: Vec<String> = arr(
+            Some(&with_live_choices(&snapshot, &latest, &quoted)["arrProducts"][0]),
+            "arrVariants",
+        )
+        .iter()
+        .map(|v| name_of(v).to_string())
+        .collect();
+        // The quote's special order keeps its typed price; other new stones can be picked.
+        assert_eq!(names, ["Calacatta Alto", "Lumos"]);
+    }
 }
 
 #[cfg(test)]
