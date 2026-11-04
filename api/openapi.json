@@ -2731,7 +2731,7 @@
           "customers"
         ],
         "summary": "Assign a customer's sales rep",
-        "description": "Records the change in the audit trail, stamps the first assignment\ndate, gives the rep the open deal and two reminders (text within a\nday, check within three).",
+        "description": "Records the change in the audit trail, stamps the first assignment\ndate, gives the rep the open deal and two reminders (text within a\nday, check within three). A newly assigned rep (other than the caller)\nis told on their phones (a `lead` push) and in Telegram. The Granite\nPhone app may call this with its device token.",
         "operationId": "set_customer_sales_rep",
         "parameters": [
           {

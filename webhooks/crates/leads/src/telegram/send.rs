@@ -100,8 +100,8 @@ where
 /// The managers' Telegram chats, and whether any manager has the app.
 ///
 /// Managers with the app still get the lead in Telegram: that message carries
-/// the buttons that assign it to a sales rep. (A rep with the app gets their
-/// leads there only.)
+/// the buttons that assign it to a sales rep. (Reps with the app get their
+/// leads in Telegram too.)
 async fn get_manager_telegram_ids(
     pool: &MySqlPool,
     company_id: i32,

@@ -1412,8 +1412,8 @@ async fn keep_lead_message(
 /// The sales managers get the lead in Telegram with a button per sales rep
 /// (this month's leads on it) to assign it, as the lead pipeline sends new
 /// leads, plus one to open the quote. Managers who could not be reached in
-/// Telegram are emailed when none was. Their phones get a `lead` push, and
-/// managers with the app get only that.
+/// Telegram are emailed when none was. Their phones get a `lead` push too:
+/// the app does not replace Telegram for leads.
 async fn notify_managers(
     state: &AppState,
     company_id: i32,
@@ -1464,13 +1464,11 @@ async fn notify_managers(
         None,
     )
     .await;
-    // Managers with the app get it there only.
+    // A manager with the app still gets the Telegram message: it carries the
+    // buttons that assign the lead. The app counts as reaching them.
     let with_app = users_with_app(&state.pool, company_id, &manager_ids).await;
     let mut reached = !with_app.is_empty();
     for manager in &managers {
-        if with_app.contains(&manager.id) {
-            continue;
-        }
         let Some(chat_id) = manager.telegram_id else {
             continue;
         };
@@ -1520,7 +1518,8 @@ async fn notify_managers(
 }
 
 /// The customer's sales rep gets the quote in Telegram (lead alerts), else
-/// by email, and a `lead` push on their phones (only that with the app).
+/// by email, and a `lead` push on their phones: leads go to the app and to
+/// Telegram both. A rep with the app and no Telegram gets no email.
 async fn notify_rep(
     state: &AppState,
     company_id: i32,
@@ -1539,13 +1538,9 @@ async fn notify_rep(
         None,
     )
     .await;
-    // A rep with the app gets it there only.
-    if users_with_app(&state.pool, company_id, &[rep.id])
+    let has_app = users_with_app(&state.pool, company_id, &[rep.id])
         .await
-        .contains(&rep.id)
-    {
-        return;
-    }
+        .contains(&rep.id);
     if let Some(chat_id) = rep.telegram_id {
         let text = format!("{title}.\n{}", notice.details());
         let rows = vec![vec![
@@ -1559,6 +1554,10 @@ async fn notify_rep(
             keep_lead_message(state, customer_id, company_id, chat_id, message_id).await;
             return;
         }
+    }
+    // Not in Telegram: the push reached a rep with the app; the others get an email.
+    if has_app {
+        return;
     }
     let Some(address) = rep.email() else {
         tracing::warn!(
