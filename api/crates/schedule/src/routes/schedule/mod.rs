@@ -2,6 +2,8 @@
 //! Google Maps.
 //!
 //! - `GET /v1/schedule/activity` → the latest changes to events (`activity`)
+//! - `GET /v1/schedule/crew-positions` → where the crew's phones are
+//!   (`crew_map`)
 //! - `GET /v1/schedule/day-map` → a map of the company and a day's stops
 //! - `POST /v1/schedule/optimize-route` → reorder a day's stops by drive time
 //! - `/v1/schedule/notifications` → admins' texts and emails to customers
@@ -15,6 +17,7 @@
 
 pub mod activity;
 pub mod board;
+pub mod crew_map;
 pub mod job_time;
 pub mod notifications;
 pub mod route;
@@ -48,6 +51,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(board::my_schedule))
         .routes(routes!(board::people))
         .routes(routes!(activity::activity))
+        .routes(routes!(crew_map::crew_positions))
         .routes(routes!(board::set_color))
         .routes(routes!(settings::settings, settings::set_settings))
         .routes(routes!(settings::set_my_settings))

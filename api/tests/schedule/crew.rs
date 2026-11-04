@@ -403,3 +403,56 @@ async fn completing_an_installation_tells_its_sales_rep_unless_turned_off(pool: 
     complete(9900).await.assert_status_ok();
     assert_eq!(rep_notices(&pool).await.len(), 1);
 }
+
+#[test_db::test(seed)]
+async fn admins_see_where_the_crew_last_was(pool: MySqlPool) {
+    jobs(&pool).await;
+    let (server, _) = server(&pool).await;
+    let crew = || {
+        server
+            .get("/v1/schedule/crew-positions")
+            .with_session(sessions::ADMIN)
+    };
+
+    // Before the phone sends anything the installer is listed without a position.
+    let before = crew().await.json::<Value>();
+    let installer = before
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|person| person["user_id"] == 101)
+        .unwrap()
+        .clone();
+    assert_eq!(installer["role"], "installer");
+    assert!(installer["latitude"].is_null());
+    assert!(installer["recorded_at"].is_null());
+
+    // At the first job's address.
+    let job_lat = SHOP_LAT + 5.02 / MILES_PER_DEGREE;
+    server
+        .post("/v1/me/location")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "latitude": job_lat, "longitude": LNG, "accuracy_m": 10.0 }))
+        .await
+        .assert_status_ok();
+    let after = crew().await.json::<Value>();
+    let installer = after
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|person| person["user_id"] == 101)
+        .unwrap();
+    assert_eq!(installer["latitude"], job_lat);
+    assert_eq!(installer["longitude"], LNG);
+    assert!(installer["recorded_at"].is_string());
+    assert_eq!(installer["at_shop"], false);
+    assert_eq!(installer["place_event_id"], 9900);
+    assert_eq!(installer["place_title"], "Install");
+
+    // Only admins see it.
+    server
+        .get("/v1/schedule/crew-positions")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+}
