@@ -147,6 +147,71 @@ async fn a_route_reorders_the_day(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_route_preview_saves_nothing_until_approved(pool: MySqlPool) {
+    sqlx::raw_sql(DAY).execute(&pool).await.unwrap();
+    let server = server(pool.clone()).await;
+    let times = || async {
+        sqlx::query_as::<_, (i32, String)>(
+            "SELECT id, CAST(start_date AS CHAR) FROM events WHERE id IN (9100, 9101, 9102) ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    let before = times().await;
+    let preview = server
+        .post("/v1/schedule/route-preview")
+        .with_session(sessions::REP)
+        .json(&json!({ "event_ids": [9100, 9101, 9102] }))
+        .await;
+    preview.assert_status_ok();
+    assert_eq!(
+        preview.json::<Value>(),
+        json!({
+            "order": [9102, 9100, 9101],
+            "moves": [
+                { "id": 9102, "start": "2030-01-15T14:00:00Z", "end": "2030-01-15T16:00:00Z" },
+                { "id": 9100, "start": "2030-01-15T15:00:00Z", "end": "2030-01-15T16:00:00Z" },
+                { "id": 9101, "start": "2030-01-15T16:00:00Z", "end": "2030-01-15T16:30:00Z" },
+            ],
+            "stops": 3,
+        })
+    );
+    assert_eq!(times().await, before);
+
+    // Approving saves exactly the given order.
+    let approved = server
+        .post("/v1/schedule/optimize-route")
+        .with_session(sessions::REP)
+        .json(&json!({ "event_ids": [9100, 9101, 9102], "order": [9101, 9100, 9102] }))
+        .await;
+    approved.assert_status_ok();
+    assert_eq!(
+        approved.json::<Value>(),
+        json!({ "order": [9101, 9100, 9102], "changed": 2, "stops": 3 })
+    );
+    assert_eq!(
+        times().await,
+        [
+            (9100, "2030-01-15 15:00:00".into()),
+            (9101, "2030-01-15 14:00:00".into()),
+            (9102, "2030-01-15 16:00:00".into()),
+        ]
+    );
+
+    let mismatch = server
+        .post("/v1/schedule/optimize-route")
+        .with_session(sessions::REP)
+        .json(&json!({ "event_ids": [9100, 9101, 9102], "order": [9100, 9101] }))
+        .await;
+    mismatch.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        mismatch.json::<Value>()["error"],
+        "The route's stops changed. Build the route again."
+    );
+}
+
+#[test_db::test(seed)]
 async fn a_day_map_is_drawn(pool: MySqlPool) {
     sqlx::raw_sql(DAY).execute(&pool).await.unwrap();
     let body: Value = server(pool)

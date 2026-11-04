@@ -37953,7 +37953,7 @@
           "schedule"
         ],
         "summary": "Optimize a day's route",
-        "description": "Orders the events by the shortest drive from the company address and\nhands the day's existing start times out in that order (each event keeps\nits length). All-day and repeating events are ordered but keep their\ntimes. Moved events get a history line and re-timed reminders.",
+        "description": "Orders the events by the shortest drive from the company address (or in\nthe approved `order` from the preview) and hands the day's existing start\ntimes out in that order (each event keeps its length). All-day and\nrepeating events are ordered but keep their times. Moved events get a\nhistory line and re-timed reminders.",
         "operationId": "optimize_schedule_route",
         "requestBody": {
           "content": {
@@ -37972,6 +37972,93 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OptimizedRoute"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Fewer than 2 or more than 20 events, events without an address, an order that is not those events, or no company address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, admin or shop manager or worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Google Maps could not build the route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/route-preview": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Preview a day's route",
+        "description": "The fastest order from the company address and the new times the timed\nevents would get, without saving anything. Send the order back to\n`optimize-route` to apply it.",
+        "operationId": "preview_schedule_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Proposed route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutePreview"
                 }
               }
             }
@@ -90652,7 +90739,7 @@
       },
       "RouteInput": {
         "type": "object",
-        "description": "Body of `POST /v1/schedule/optimize-route`.",
+        "description": "Body of `POST /v1/schedule/optimize-route` and `route-preview`.",
         "required": [
           "event_ids"
         ],
@@ -90664,6 +90751,71 @@
               "format": "int32"
             },
             "description": "The day's events with an address, 2 to 20."
+          },
+          "order": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The approved order from `route-preview` (the same ids). Saves exactly\nthat order without asking Google again; omitted, the fastest order is\nworked out."
+          }
+        }
+      },
+      "RouteMove": {
+        "type": "object",
+        "description": "A stop that gets a new time on the route.",
+        "required": [
+          "id",
+          "start",
+          "end"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "start": {
+            "type": "string",
+            "description": "New start, UTC (`2030-01-15T14:00:00Z`)."
+          },
+          "end": {
+            "type": "string",
+            "description": "New end, UTC."
+          }
+        }
+      },
+      "RoutePreview": {
+        "type": "object",
+        "description": "`POST /v1/schedule/route-preview`.",
+        "required": [
+          "order",
+          "moves",
+          "stops"
+        ],
+        "properties": {
+          "order": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Event ids in driving order from the company."
+          },
+          "moves": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RouteMove"
+            },
+            "description": "Timed events whose start would change, with their new times."
+          },
+          "stops": {
+            "type": "integer",
+            "description": "Events on the route.",
+            "minimum": 0
           }
         }
       },
