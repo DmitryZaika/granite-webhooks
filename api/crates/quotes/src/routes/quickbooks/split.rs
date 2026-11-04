@@ -313,15 +313,16 @@ fn part_keys(base: &EditableInvoice, parts: &[Part]) -> String {
         .join(",")
 }
 
-/// Keeps how a quote was invoiced: its layout (for a split) and the
-/// classes its parts got. Losing it loses only the lesson.
+/// Keeps how a quote was invoiced: the `made` invoices, the split's
+/// `layout` (empty for one invoice) and the classes its parts got. Losing
+/// it loses only the lesson.
 pub async fn remember(
     pool: &MySqlPool,
     user: &SessionUser,
     quote_id: Option<i32>,
     base: &EditableInvoice,
     made: &[EditableInvoice],
-    labels: &[Option<String>],
+    layout: &[LayoutInvoice],
     parts: &[Part],
 ) {
     let ids = made
@@ -329,11 +330,6 @@ pub async fn remember(
         .map(|invoice| invoice.id.as_str())
         .collect::<Vec<_>>()
         .join(",");
-    let layout = if made.len() > 1 {
-        layout(base, made, labels, parts)
-    } else {
-        Vec::new()
-    };
     let result = sqlx::query(
         "INSERT INTO qbo_invoice_splits
             (company_id, user_id, quote_id, qbo_invoice_ids, invoice_count, part_keys,
@@ -496,7 +492,9 @@ pub async fn create_split(
         input.quote_id,
         &input.invoice,
         &made,
-        &labels,
+        // The planned invoices keep the editor's line ids (`QuickBooks`
+        // gives the made ones its own).
+        &layout(&input.invoice, &planned, &labels, &input.parts),
         &input.parts,
     )
     .await;
