@@ -2528,6 +2528,9 @@ pub async fn send_confirmation(
         &History::new(id, user.company_id, "updated", user.name.as_deref()).message(&line),
     )
     .await;
+    if message.channel == Channel::Sms {
+        mark_called(pool, user.company_id, id, user.name.as_deref()).await?;
+    }
     if let Some(sent) = sent
         && TemplateKind::parse(&template.kind) == TemplateKind::Question
     {
@@ -2536,6 +2539,35 @@ pub async fn send_confirmation(
     Ok(Json(ConfirmationSent {
         channel: message.channel,
     }))
+}
+
+/// The customer was texted: the job turns Called, unless it is already
+/// Called or Ready.
+async fn mark_called(
+    pool: &MySqlPool,
+    company_id: i32,
+    event_id: i32,
+    user_name: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let changed = sqlx::query(
+        "UPDATE events SET status = 'called'
+          WHERE id = ? AND deleted_date IS NULL
+            AND COALESCE(status, '') NOT IN ('called', 'ready')",
+    )
+    .bind(event_id)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1;
+    if changed {
+        record(
+            pool,
+            &History::new(event_id, company_id, "updated", user_name)
+                .message("Status changed to Called: the customer was texted"),
+        )
+        .await;
+    }
+    Ok(())
 }
 
 /// A template of the company, not deleted.
