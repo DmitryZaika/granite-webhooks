@@ -74,6 +74,10 @@ pub struct QuoteSaleEvent {
     pub title_variable: TitleVariable,
     /// What follows the variable, e.g. "Plumbing"; empty: the variable alone.
     pub title_text: String,
+    /// Catalog extras (`GET /v1/quote-extras` ids) that tick this event in
+    /// Mark as Sold when the quote has one of them (a line whose `catalogId`
+    /// is one of these). Empty: the seller ticks it by hand.
+    pub trigger_extra_ids: Vec<i64>,
 }
 
 #[derive(FromRow)]
@@ -83,6 +87,7 @@ struct SaleEventRow {
     calendar_name: String,
     title_variable: String,
     title_text: String,
+    trigger_extra_ids: Option<String>,
 }
 
 impl From<SaleEventRow> for QuoteSaleEvent {
@@ -93,6 +98,10 @@ impl From<SaleEventRow> for QuoteSaleEvent {
             calendar_name: row.calendar_name,
             title_variable: TitleVariable::parse(&row.title_variable),
             title_text: row.title_text,
+            trigger_extra_ids: row
+                .trigger_extra_ids
+                .and_then(|ids| serde_json::from_str(&ids).ok())
+                .unwrap_or_default(),
         }
     }
 }
@@ -110,6 +119,11 @@ pub struct QuoteSaleEventInput {
     /// blank: the variable alone).
     #[serde(default)]
     pub title_text: String,
+    /// Catalog extras (`GET /v1/quote-extras` ids) that tick this event in
+    /// Mark as Sold when the quote has one. Ids not in the company's catalog
+    /// are dropped. Default none.
+    #[serde(default)]
+    pub trigger_extra_ids: Vec<i64>,
 }
 
 /// `POST /v1/quote-sale-events`.
@@ -152,7 +166,8 @@ pub async fn sale_events(
 ) -> Result<Vec<QuoteSaleEvent>, sqlx::Error> {
     let rows: Vec<SaleEventRow> = sqlx::query_as(
         "SELECT t.id, t.calendar_id, c.name AS calendar_name,
-                CAST(t.title_variable AS CHAR) AS title_variable, t.title_text
+                CAST(t.title_variable AS CHAR) AS title_variable, t.title_text,
+                CAST(t.trigger_extra_ids AS CHAR) AS trigger_extra_ids
            FROM quote_sale_event_templates t
            JOIN calendars c ON c.id = t.calendar_id AND c.company_id = t.company_id
                            AND c.deleted_at IS NULL
@@ -165,12 +180,19 @@ pub async fn sale_events(
     Ok(rows.into_iter().map(QuoteSaleEvent::from).collect())
 }
 
-/// The text trimmed and checked; the calendar the company's.
+/// What `check` accepted: the text trimmed, the trigger extras as JSON.
+struct Checked {
+    text: String,
+    triggers: String,
+}
+
+/// The text trimmed and checked; the calendar the company's; the trigger
+/// extras kept when in the company's catalog, once each.
 async fn check(
     pool: &MySqlPool,
     company_id: i32,
     input: &QuoteSaleEventInput,
-) -> ApiResult<String> {
+) -> ApiResult<Checked> {
     let text = input.title_text.trim().to_string();
     if text.chars().count() > MAX_TEXT {
         return Err(ApiError::BadRequest(format!(
@@ -187,7 +209,24 @@ async fn check(
     if calendar.is_none() {
         return Err(ApiError::BadRequest("Choose a calendar".into()));
     }
-    Ok(text)
+    let catalog: Vec<i64> = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM quote_extras WHERE company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(company_id)
+    .fetch_all(pool)
+    .await?;
+    let mut triggers: Vec<i64> = input
+        .trigger_extra_ids
+        .iter()
+        .copied()
+        .filter(|id| catalog.contains(id))
+        .collect();
+    triggers.sort_unstable();
+    triggers.dedup();
+    Ok(Checked {
+        text,
+        triggers: serde_json::to_string(&triggers).unwrap_or_else(|_| "[]".into()),
+    })
 }
 
 /// 404 unless template `id` is the company's.
@@ -206,7 +245,8 @@ async fn find(pool: &MySqlPool, company_id: i32, id: i32) -> ApiResult<()> {
 ///
 /// Returns the company's event templates (Admin > Quotes > Automation), in
 /// the order they were added: the checkboxes under Mark as Sold › Extra
-/// events. Pass the ticked ones as `extra_events` to
+/// events. One starts ticked when the quote has a line of one of its
+/// `trigger_extra_ids` extras. Pass the ticked ones as `extra_events` to
 /// `POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left
 /// out. Any employee may read them; admins change them with
 /// `POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.
@@ -257,16 +297,17 @@ pub async fn create_sale_event(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<QuoteSaleEventInput>,
 ) -> ApiResult<(StatusCode, Json<CreatedSaleEvent>)> {
-    let text = check(&state.pool, user.company_id, &input).await?;
+    let checked = check(&state.pool, user.company_id, &input).await?;
     let id = sqlx::query(
         "INSERT INTO quote_sale_event_templates
-           (company_id, calendar_id, title_variable, title_text, created_by)
-         VALUES (?, ?, ?, ?, ?)",
+           (company_id, calendar_id, title_variable, title_text, trigger_extra_ids, created_by)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(user.company_id)
     .bind(input.calendar_id)
     .bind(input.title_variable.as_str())
-    .bind(text)
+    .bind(checked.text)
+    .bind(checked.triggers)
     .bind(user.id)
     .execute(&state.pool)
     .await?
@@ -276,8 +317,8 @@ pub async fn create_sale_event(
 
 /// Edit an extra event a quote's sale can add to the schedule
 ///
-/// Quotes sold from then on get the new calendar and title; events already
-/// added stay as they are.
+/// Quotes sold from then on get the new calendar, title and trigger extras;
+/// events already added stay as they are.
 #[crate::openapi::path(
     put,
     path = "/v1/quote-sale-events/{id}",
@@ -302,15 +343,16 @@ pub async fn update_sale_event(
     JsonBody(input): JsonBody<QuoteSaleEventInput>,
 ) -> ApiResult<StatusCode> {
     find(&state.pool, user.company_id, id).await?;
-    let text = check(&state.pool, user.company_id, &input).await?;
+    let checked = check(&state.pool, user.company_id, &input).await?;
     sqlx::query(
         "UPDATE quote_sale_event_templates
-            SET calendar_id = ?, title_variable = ?, title_text = ?
+            SET calendar_id = ?, title_variable = ?, title_text = ?, trigger_extra_ids = ?
           WHERE id = ? AND company_id = ?",
     )
     .bind(input.calendar_id)
     .bind(input.title_variable.as_str())
-    .bind(text)
+    .bind(checked.text)
+    .bind(checked.triggers)
     .bind(id)
     .bind(user.company_id)
     .execute(&state.pool)

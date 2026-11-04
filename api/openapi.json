@@ -28939,7 +28939,7 @@
           "quotes"
         ],
         "summary": "List the extra events a quote's sale can add to the schedule",
-        "description": "Returns the company's event templates (Admin > Quotes > Automation), in\nthe order they were added: the checkboxes under Mark as Sold › Extra\nevents. Pass the ticked ones as `extra_events` to\n`POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left\nout. Any employee may read them; admins change them with\n`POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.",
+        "description": "Returns the company's event templates (Admin > Quotes > Automation), in\nthe order they were added: the checkboxes under Mark as Sold › Extra\nevents. One starts ticked when the quote has a line of one of its\n`trigger_extra_ids` extras. Pass the ticked ones as `extra_events` to\n`POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left\nout. Any employee may read them; admins change them with\n`POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.",
         "operationId": "list_quote_sale_events",
         "responses": {
           "200": {
@@ -29074,7 +29074,7 @@
           "quotes"
         ],
         "summary": "Edit an extra event a quote's sale can add to the schedule",
-        "description": "Quotes sold from then on get the new calendar and title; events already\nadded stay as they are.",
+        "description": "Quotes sold from then on get the new calendar, title and trigger extras;\nevents already added stay as they are.",
         "operationId": "update_quote_sale_event",
         "parameters": [
           {
@@ -89327,7 +89327,8 @@
           "calendar_id",
           "calendar_name",
           "title_variable",
-          "title_text"
+          "title_text",
+          "trigger_extra_ids"
         ],
         "properties": {
           "id": {
@@ -89351,6 +89352,14 @@
           "title_text": {
             "type": "string",
             "description": "What follows the variable, e.g. \"Plumbing\"; empty: the variable alone."
+          },
+          "trigger_extra_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Catalog extras (`GET /v1/quote-extras` ids) that tick this event in\nMark as Sold when the quote has one of them (a line whose `catalogId`\nis one of these). Empty: the seller ticks it by hand."
           }
         }
       },
@@ -89373,6 +89382,14 @@
           "title_text": {
             "type": "string",
             "description": "What follows the variable, e.g. \"Plumbing\" (at most 200 characters;\nblank: the variable alone)."
+          },
+          "trigger_extra_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Catalog extras (`GET /v1/quote-extras` ids) that tick this event in\nMark as Sold when the quote has one. Ids not in the company's catalog\nare dropped. Default none."
           }
         },
         "additionalProperties": false
