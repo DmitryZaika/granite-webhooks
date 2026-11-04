@@ -242,6 +242,40 @@ async fn moving_a_rep_to_ringcentral_keeps_their_texts(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
+    // A CloudTalk picture CloudTalk never handed over (no words, no file)
+    // stays behind: on RingCentral it would only say "No preview available.".
+    // A picture-only text with its file does follow her.
+    sqlx::query(
+        "INSERT INTO cloudtalk_sms
+           (recipient, text, direction, agent, sender_user_id, company_id,
+            sender10, recipient10, phone_digits)
+         VALUES (13175550199, ' ', 'outbound', '42', 100, 100,
+                 '3175550111', '3175550199', '3175550199')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let picture_id = sqlx::query(
+        "INSERT INTO cloudtalk_sms
+           (recipient, text, direction, agent, sender_user_id, company_id,
+            sender10, recipient10, phone_digits)
+         VALUES (13175550199, '', 'outbound', '42', 100, 100,
+                 '3175550111', '3175550199', '3175550199')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_id();
+    sqlx::query(
+        "INSERT INTO cloudtalk_sms_attachments
+           (cloudtalk_sms_id, content_type, filename, s3_key, s3_url, position)
+         VALUES (?, 'image/png', 'slab.png', 'sms-attachments/100/slab.png',
+                 'https://example.test/slab.png', 0)",
+    )
+    .bind(picture_id)
+    .execute(&pool)
+    .await
+    .unwrap();
     let server = server(pool.clone());
     let save = || {
         server
@@ -274,6 +308,19 @@ async fn moving_a_rep_to_ringcentral_keeps_their_texts(pool: MySqlPool) {
             ("Thanks".to_string(), Some("777".to_string())),
         ]
     );
+    // The picture-only text came with its file; the empty one stayed behind.
+    let blank: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT r.text,
+                (SELECT COUNT(*) FROM ringcentral_sms_attachments a
+                  WHERE a.ringcentral_sms_id = r.id)
+           FROM ringcentral_sms r
+          WHERE r.company_id = 100 AND r.idempotency_key LIKE 'cloudtalk:%'
+            AND TRIM(r.text) = ''",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(blank, [(String::new(), 1)]);
     // And the five the seed has her sending; the second save copied nothing.
     let copies: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM ringcentral_sms
@@ -282,7 +329,7 @@ async fn moving_a_rep_to_ringcentral_keeps_their_texts(pool: MySqlPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(copies, 7);
+    assert_eq!(copies, 8);
     // Her agent id is remembered after the save cleared it.
     let agents: Vec<String> = sqlx::query_scalar(
         "SELECT value FROM user_sms_identities
