@@ -74,11 +74,11 @@ pub struct AppShell {
     pub portal: Option<String>,
     /// That portal's start page.
     pub portal_home: Option<String>,
-    /// The sections of the app the user reaches, when a sectioned position
-    /// (Inventory Manager, Scheduling Manager) limits them: keys such as
-    /// `inventory`, `inventory_admin`, `customers`, `schedule`
-    /// (`GET /v1/company/position-sections` lists them all). The API refuses
-    /// the rest. Null when they reach the whole app.
+    /// The tabs the user's positions open, when the company limits them
+    /// (Position access): keys such as `stones`, `customers`, `schedule`,
+    /// `admin_stones` (`GET /v1/company/position-sections` lists them all).
+    /// The Admin switch still opens every admin page. Null when nothing is
+    /// limited.
     pub sections: Option<Vec<String>>,
     /// The company has CloudTalk.
     pub has_cloudtalk_api: bool,
@@ -238,9 +238,9 @@ pub async fn shell(
         crate::routes::onboarding::team::capabilities(pool, home.unwrap_or(user.company_id))
             .await?;
     let portal = portal(&user, user_is_super_admin, &all);
-    let sections = crate::auth::sections::user_access(pool, &user, &rows)
+    let sections = crate::auth::sections::user_tabs(pool, &user, &rows)
         .await?
-        .keys();
+        .map(|keys| keys.into_iter().map(ToString::to_string).collect());
     let sms_images_enabled = !std::env::var("SMS_IMAGES_ENABLED").is_ok_and(|value| {
         matches!(
             value.trim().to_lowercase().as_str(),
