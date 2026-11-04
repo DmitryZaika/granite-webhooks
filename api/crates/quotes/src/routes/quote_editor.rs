@@ -1867,7 +1867,7 @@ pub struct Sale {
     /// Index of the color option sold.
     pub option: i32,
     /// The customer's deal to mark won (none: the quote's own deal, else the
-    /// customer's latest open or won one).
+    /// customer's latest open one; never a won or lost one).
     #[serde(default)]
     pub deal_id: Option<i64>,
     /// Make a new won deal instead of using an existing one.

@@ -72606,6 +72606,14 @@
             ],
             "description": "Name of the deal's current stage."
           },
+          "is_won": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1 won, 0 lost, null still open."
+          },
           "notes": {
             "type": "array",
             "items": {
@@ -92368,7 +92376,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "The customer's deal to mark won (none: the quote's own deal, else the\ncustomer's latest open or won one)."
+            "description": "The customer's deal to mark won (none: the quote's own deal, else the\ncustomer's latest open one; never a won or lost one)."
           },
           "new_deal": {
             "type": "boolean",
