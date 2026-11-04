@@ -529,6 +529,8 @@ async fn insert_derived_row(
 }
 
 /// Whether this exact message is already stored, regardless of provider id.
+/// Spaces around the body do not count: `RingCentral` echoes a picture-only
+/// send with a single-space body, and that is the same message.
 async fn same_message_already_stored(
     pool: &MySqlPool,
     provider: SmsProvider,
@@ -538,7 +540,7 @@ async fn same_message_already_stored(
         "SELECT 1 FROM {} \
           WHERE company_id = ? \
             AND direction = ? \
-            AND text = ? \
+            AND TRIM(text) = TRIM(?) \
             AND recipient = ? \
             AND (sender <=> ? OR (direction = 'outbound' AND sender IS NULL)) \
             AND created_date >= (? - INTERVAL {PROVIDER_ID_REUSE_LOOKBACK_HOURS} HOUR) \
@@ -957,6 +959,46 @@ mod tests {
                 Some(3_913_486_426_027),
                 "Hi Lisa, is your customer still looking?".to_string()
             )],
+        );
+    }
+
+    // A picture-only CRM send is stored with an empty body; RingCentral's echo
+    // carries the same id and a single-space body. It must not become a second,
+    // empty row (shown as "No preview available.").
+    #[test_db::test]
+    async fn blank_echo_of_a_picture_only_send_is_not_duplicated(pool: MySqlPool) {
+        let mut crm_send = row(
+            SmsDirection::Outbound,
+            SmsStatus::Sent,
+            COMPANY_LINE,
+            CUSTOMER,
+            "",
+            Some("540273"),
+            at(0, 0),
+        );
+        crm_send.sender = None;
+        crm_send.provider_id = Some(3_937_349_647_027);
+        insert_sms(&pool, SmsProvider::Ringcentral, &crm_send)
+            .await
+            .expect("crm send");
+
+        let mut echo = row(
+            SmsDirection::Outbound,
+            SmsStatus::Sent,
+            COMPANY_LINE,
+            CUSTOMER,
+            " ",
+            Some("540273"),
+            at(0, 7),
+        );
+        echo.provider_id = Some(3_937_349_647_027);
+        insert_sms(&pool, SmsProvider::Ringcentral, &echo)
+            .await
+            .expect("echo");
+
+        assert_eq!(
+            stored_texts(&pool, SmsProvider::Ringcentral).await,
+            vec![(Some(3_937_349_647_027), String::new())],
         );
     }
 

@@ -211,6 +211,18 @@ async fn copy_texts(
     );
     let mine = "SELECT i.value FROM user_sms_identities i
                  WHERE i.company_id = ? AND i.user_id = ?";
+    // RingCentral never shows "No preview available.": a text with no words
+    // and no files (a CloudTalk picture CloudTalk never handed over) stays
+    // where it is.
+    let has_content = if target == SmsProvider::Ringcentral {
+        let (from_files, from_sms) = source.attachments();
+        format!(
+            "AND (TRIM(s.text) <> ''
+                  OR EXISTS (SELECT 1 FROM {from_files} f WHERE f.{from_sms} = s.id))"
+        )
+    } else {
+        String::new()
+    };
     let sql = format!(
         "INSERT INTO {table}
            (sender, recipient, text, direction, status, error_message, idempotency_key, agent,
@@ -229,6 +241,7 @@ async fn copy_texts(
             AND {original} NOT IN (
               SELECT r.idempotency_key FROM {table} r
                WHERE r.company_id = ? AND r.idempotency_key REGEXP '{COPY_KEY}')
+            {has_content}
           ORDER BY s.created_date, s.id",
         target_name = target.as_str(),
         line_column = if line_id.is_some() { "number_id, " } else { "" },
