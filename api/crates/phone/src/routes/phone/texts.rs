@@ -7,12 +7,13 @@ use super::{bad_request, denied, rate_limited};
 use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::phone::numbers::{is_nanp, last10, to_e164};
 use crate::phone::texting;
 use crate::phone::texts::{self, TextMessage, TextThread, ThreadFilter, ThreadKey};
+use crate::routes::sms::send::{SendSmsRequest, SmsFile, check};
 use crate::serde_helpers::js_date_required;
 use crate::state::AppState;
-use crate::routes::sms::send::{SendSmsRequest, SmsFile, check};
 use crate::webhooks_client::{OutgoingSms, OutgoingSmsFile};
 use axum::Json;
 use axum::extract::{Path, State};
@@ -20,7 +21,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use crate::openapi::{IntoParams, ToSchema};
 
 /// Threads per page by default, and at most.
 const DEFAULT_THREADS: i64 = 30;
@@ -40,6 +40,9 @@ pub struct ThreadsQuery {
     pub limit: Option<i64>,
     /// Only the threads with this other number (E.164 or 10 digits).
     pub number: Option<String>,
+    /// `true`: only the threads with texts I haven't read (the Unread tab).
+    /// Default `false`, every thread.
+    pub unread: Option<bool>,
 }
 
 /// `GET /v1/phone/texts/threads`.
@@ -162,7 +165,8 @@ async fn my_thread(
 ///
 /// The conversations of the numbers I may call from, one per line and other
 /// number, newest activity first (page back with `before` = `nextBefore`),
-/// optionally only those with one other `number`. Each has our line, the
+/// optionally only those with one other `number`, or only those with texts I
+/// haven't read (`unread=true`, paged the same way). Each has our line, the
 /// other number, the customer with it, the newest text and my unread count;
 /// `unread` totals every thread. 403 `texting_disabled` unless the company
 /// texts through Telnyx. Next: `GET /v1/phone/texts/threads/{key}/messages`.
@@ -208,6 +212,7 @@ pub async fn list_text_threads(
     let filter = ThreadFilter {
         other10,
         before,
+        unread_only: query.unread.unwrap_or(false),
         ..ThreadFilter::default()
     };
     let (threads, next_before) =

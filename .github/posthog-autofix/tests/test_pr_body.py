@@ -10,6 +10,9 @@ from autofix import pr_body
 class NamingTest(unittest.TestCase):
     def test_branch(self) -> None:
         self.assertEqual(pr_body.branch_name(ISSUE_ID, "42"), "ai-fix/posthog-0192f3a4-42")
+        self.assertEqual(
+            pr_body.branch_name(ISSUE_ID, "42", "0123456789ab"), "ai-fix/bug-0123456789ab-42"
+        )
 
     def test_labels(self) -> None:
         self.assertEqual(pr_body.labels("fixed_with_test", "verified"), ["ai-fix"])
@@ -52,21 +55,82 @@ class EscapeTest(unittest.TestCase):
 
 
 class RenderTest(unittest.TestCase):
-    def render(self, result: dict, verification: str, notes: str | None = None) -> str:
+    def render(
+        self, result: dict, verification: str, notes: str | None = None, bug_id: str = ""
+    ) -> str:
         inputs = pr_body.BodyInputs(
-            ISSUE_ID, result, verification, notes, "https://github.com/x/actions/runs/1", 1.5
+            ISSUE_ID,
+            result,
+            verification,
+            notes,
+            "https://github.com/x/actions/runs/1",
+            1.5,
+            bug_id,
         )
         return pr_body.render(inputs)
 
     def test_verified_body(self) -> None:
         body = self.render(sample_result(root_cause="Uses <minus> @someone"), "verified")
-        self.assertIn(f"https://us.posthog.com/project/141685/error-tracking/{ISSUE_ID}", body)
+        self.assertIn(
+            f"[PostHog issue](https://us.posthog.com/project/141685/error-tracking/{ISSUE_ID})",
+            body,
+        )
+        self.assertIn("Verified: the test failed before the fix and passes after it.", body)
         self.assertIn("**Verified.**", body)
         self.assertIn("cargo test -p toy adds", body)
         self.assertIn("&lt;minus&gt;", body)
         self.assertNotIn("@someone", body)
         self.assertIn("Agent cost: $1.50", body)
         self.assertIn("https://github.com/x/actions/runs/1", body)
+
+    def test_the_visible_part_is_short_and_the_rest_is_collapsed(self) -> None:
+        body = self.render(sample_result(), "verified", bug_id="0123456789ab")
+        visible, details = body.split("<details><summary>Details</summary>", 1)
+        self.assertIn("**Given** a toy library with two numbers", visible)
+        self.assertIn("**When** a caller adds 2 and 3 with add()", visible)
+        self.assertIn("**Then** add() returns -1", visible)
+        self.assertIn("**Actual:** Adding two numbers subtracts them.", visible)
+        self.assertIn("**Expected:** add() returns their sum.", visible)
+        self.assertIn("**Impact:** Callers get wrong totals.", visible)
+        self.assertIn("**Fix:** Use `+`.", visible)
+        self.assertIn("**Test:** Repeat Given/When → add() returns 5.", visible)
+        self.assertNotIn("**Issue:**", visible)
+        self.assertIn("**Bug ID:** `0123456789ab` · [PostHog issue](", visible)
+        self.assertNotIn("Root cause", visible)
+        for text in ("Opened by the PostHog auto-fix workflow", "## Root cause", "## Test"):
+            self.assertIn(text, details)
+        for text in ("## Verification", "## Risk", "Agent cost: $1.50"):
+            self.assertIn(text, details)
+        self.assertTrue(body.rstrip().endswith("</details>"))
+
+    def test_without_a_bug_id_there_is_only_the_posthog_link(self) -> None:
+        visible = self.render(sample_result(), "verified").split("<details>", 1)[0]
+        self.assertNotIn("Bug ID", visible)
+        self.assertIn("[PostHog issue](", visible)
+
+    def test_an_empty_check_renders_a_placeholder(self) -> None:
+        visible = self.render(sample_result(check=""), "verified").split("<details>", 1)[0]
+        self.assertIn("**Test:** _None given._", visible)
+
+    def test_the_verdict_line(self) -> None:
+        cases = {
+            "verified": "Verified: the test failed before the fix and passes after it.",
+            "not_applicable": "Not verified by a test: checks passed, needs a manual test.",
+            "unverified": "Unverified: a check failed, so this is a draft.",
+        }
+        for verification, line in cases.items():
+            with self.subTest(verification):
+                visible = self.render(sample_result(), verification).split("<details>", 1)[0]
+                self.assertIn(line, visible)
+
+    def test_agent_text_stays_escaped_in_the_visible_part(self) -> None:
+        result = sample_result(
+            when="<b>hi</b> @dima", then="cc @dima", fix_summary="[x](https://e.example)"
+        )
+        visible = self.render(result, "verified").split("<details>", 1)[0]
+        self.assertIn("&lt;b&gt;hi", visible)
+        self.assertNotIn("@dima", visible)
+        self.assertIn("\\[x\\](https://e.example)", visible)
 
     def test_a_tested_fix_also_says_how_to_check_it_in_the_app(self) -> None:
         result = sample_result()

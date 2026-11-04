@@ -363,6 +363,25 @@ static SHORTENER: LazyLock<Regex> = LazyLock::new(|| {
 });
 static OPT_OUT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\bstop\b").expect("valid pattern"));
+static HELP_WORD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bhelp\b").expect("valid pattern"));
+/// "Message frequency varies", "Msg freq may vary".
+static FREQUENCY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bfreq(uency)?\b").expect("valid pattern"));
+/// "Message and data rates may apply", "Msg & data rates may apply".
+static RATES: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bdata\s+rates?\b").expect("valid pattern"));
+static NOT_A_CONDITION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bnot\s+a\s+condition\s+of\s+(any\s+)?purchase").expect("valid pattern")
+});
+/// "will receive no further messages", "won't get more texts".
+static NO_MORE_TEXTS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bno\s+(more|further|longer)\b|\b(will\s+not|won't|won’t)\s+(get|receive|be\s+sent)\b")
+        .expect("valid pattern")
+});
+static EMAIL_IN_TEXT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}").expect("valid pattern")
+});
 
 fn chars(text: &str) -> usize {
     text.chars().count()
@@ -419,6 +438,30 @@ fn business_names(brand: &TenDlcBrandDraft) -> Vec<String> {
 fn mentions(text: &str, names: &[String]) -> bool {
     let text = text.to_lowercase();
     names.iter().any(|name| text.contains(name.as_str()))
+}
+
+/// The campaign's texts include marketing.
+fn has_marketing(campaign: &TenDlcCampaignDraft) -> bool {
+    campaign.usecase == Some(UseCase::Marketing)
+        || campaign.sub_usecases.contains(&UseCase::Marketing)
+}
+
+/// A link without its scheme, `www.` and last slash, lower case: the same
+/// page however it is written.
+pub fn link_core(link: &str) -> String {
+    let lower = link.trim().to_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(lower.as_str());
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    rest.trim_end_matches('/').to_string()
+}
+
+/// `text` gives the link, however it writes it (see [`link_core`]).
+pub fn gives_link(text: &str, link: &str) -> bool {
+    let core = link_core(link);
+    !core.is_empty() && text.to_lowercase().contains(&core)
 }
 
 /// The form as saved: text trimmed, the phone as E.164 when it is a US or
@@ -723,6 +766,58 @@ fn keyword_problems(
     }
 }
 
+/// What Telnyx's code 611 requires of the answers to opting in, HELP and
+/// STOP (the business name is checked with their length).
+fn answer_problems(campaign: &TenDlcCampaignDraft, problems: &mut Vec<TenDlcProblem>) {
+    let optin = &campaign.optin_message;
+    if chars(optin) >= MESSAGE_CHARS.0 {
+        let mut missing: Vec<&str> = Vec::new();
+        if !HELP_WORD.is_match(optin) {
+            missing.push("Reply HELP for help");
+        }
+        if !FREQUENCY.is_match(optin) {
+            missing.push("Msg frequency varies");
+        }
+        if !RATES.is_match(optin) {
+            missing.push("Msg & data rates may apply");
+        }
+        if !OPT_OUT.is_match(optin) {
+            missing.push("Reply STOP to opt out");
+        }
+        if has_marketing(campaign) && !NOT_A_CONDITION.is_match(optin) {
+            missing.push("Consent is not a condition of purchase");
+        }
+        if !missing.is_empty() {
+            problems.push(problem(
+                "campaign.optinMessage",
+                format!(
+                    "Carriers require the opt-in message to say: {}.",
+                    missing.join("; ")
+                ),
+            ));
+        }
+    }
+    let help = &campaign.help_message;
+    if chars(help) >= MESSAGE_CHARS.0
+        && mask_numbers(help) == *help
+        && !EMAIL_IN_TEXT.is_match(help)
+        && !LINK.is_match(help)
+    {
+        problems.push(problem(
+            "campaign.helpMessage",
+            "The help message must say how to reach you: your phone number, email or website.",
+        ));
+    }
+    let optout = &campaign.optout_message;
+    if chars(optout) >= MESSAGE_CHARS.0 && !NO_MORE_TEXTS.is_match(optout) {
+        problems.push(problem(
+            "campaign.optoutMessage",
+            "The opt-out message must confirm they get no more texts, like \"You will receive no \
+             further messages.\"",
+        ));
+    }
+}
+
 fn campaign_problems(
     campaign: &TenDlcCampaignDraft,
     names: &[String],
@@ -778,6 +873,15 @@ fn campaign_problems(
         problems.push(problem(
             "campaign.samples",
             format!("Write at most {} sample texts.", SAMPLES.1),
+        ));
+    } else if samples.len() < campaign.sub_usecases.len() {
+        // Telnyx: a mixed campaign shows a sample of each kind of texts.
+        problems.push(problem(
+            "campaign.samples",
+            format!(
+                "Write a sample text for each kind of texts you chose ({} kinds).",
+                campaign.sub_usecases.len()
+            ),
         ));
     }
     let mut has_link = false;
@@ -836,6 +940,20 @@ fn campaign_problems(
             "A sample text has a phone number: say the texts carry phone numbers.",
         ));
     }
+    // Telnyx's code 601: an answer of yes needs a sample that shows it.
+    if campaign.embedded_link && !has_link && !samples.is_empty() {
+        problems.push(problem(
+            "campaign.embeddedLink",
+            "You say the texts carry links: a sample text must have one, or say they don't.",
+        ));
+    }
+    if campaign.embedded_phone && !has_phone && !samples.is_empty() {
+        problems.push(problem(
+            "campaign.embeddedPhone",
+            "You say the texts carry phone numbers: a sample text must have one, or say they \
+             don't.",
+        ));
+    }
     for (field, name, text) in [
         (
             "campaign.helpMessage",
@@ -861,6 +979,31 @@ fn campaign_problems(
                 field,
                 format!("The {name} must name the business."),
             ));
+        }
+    }
+    answer_problems(campaign, problems);
+    // Telnyx's checklist: the description says who sends the texts, and
+    // the message flow gives the opt-in page and the privacy policy.
+    if chars(&campaign.description) >= DESCRIPTION_CHARS.0
+        && !names.is_empty()
+        && !mentions(&campaign.description, names)
+    {
+        problems.push(problem(
+            "campaign.description",
+            "The description must say who sends the texts: name the business.",
+        ));
+    }
+    if chars(&campaign.message_flow) >= MESSAGE_FLOW_CHARS.0 {
+        for (link, name) in [
+            (&campaign.optin_form_link, "quote form"),
+            (&campaign.privacy_policy_link, "privacy policy"),
+        ] {
+            if web_url(link) && !gives_link(&campaign.message_flow, link) {
+                problems.push(problem(
+                    "campaign.messageFlow",
+                    format!("The message flow must give the {name}'s address: {link}"),
+                ));
+            }
         }
     }
     keyword_problems(
@@ -934,8 +1077,11 @@ fn campaign_problems(
 /// What blocks marking the (normalized) form ready or sending it: every
 /// field Telnyx and the carriers need, in the formats they take, and the
 /// carriers' content rules (each sample names the business and says how to
-/// opt out; links and phone numbers declared; no link shorteners). Empty
-/// when it is complete.
+/// opt out; links and phone numbers declared both ways; no link shorteners;
+/// a sample per kind of texts; the answers to opting in, HELP and STOP as
+/// Telnyx's code 611 has them; the business named in the description; the
+/// opt-in page and privacy policy in the message flow). Empty when it is
+/// complete.
 pub fn problems(draft: &TenDlcDraft) -> Vec<TenDlcProblem> {
     let mut problems = Vec::new();
     brand_problems(&draft.brand, &mut problems);
@@ -986,8 +1132,14 @@ pub fn suggestion(
     let mut contact = contact_name.unwrap_or_default().split_whitespace();
     let first_name = contact.next().unwrap_or_default().to_string();
     let last_name = contact.collect::<Vec<_>>().join(" ");
+    let website = domain
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty() && !domain.contains('/'))
+        .map(|domain| format!("https://{domain}"));
+    // Telnyx: the answer to HELP says how to reach the business.
     let call = main_line
         .map(|line| format!(" or call {}", display_number(line)))
+        .or_else(|| website.as_ref().map(|site| format!(" or visit {site}")))
         .unwrap_or_default();
     TenDlcDraft {
         brand: TenDlcBrandDraft {
@@ -999,11 +1151,7 @@ pub fn suggestion(
             last_name: last_name.chars().take(NAME_CHARS).collect(),
             phone: main_line.unwrap_or_default().to_string(),
             email: email.trim().chars().take(NAME_CHARS).collect(),
-            website: domain
-                .map(str::trim)
-                .filter(|domain| !domain.is_empty() && !domain.contains('/'))
-                .map(|domain| format!("https://{domain}"))
-                .unwrap_or_default(),
+            website: website.unwrap_or_default(),
             vertical: Some(Vertical::Construction),
             ..TenDlcBrandDraft::default()
         },
@@ -1021,12 +1169,14 @@ pub fn suggestion(
                  to receive them."
             ),
             message_flow: format!(
-                "Customers give {name} their mobile number when they request a quote on our \
-                 website, call us or visit our showroom, and agree to receive texts. They are \
-                 told: \"By giving us your number you agree to receive texts from {name} about \
-                 your project, appointments and offers. Msg frequency varies. Msg & data rates \
-                 may apply. Reply HELP for help, STOP to opt out.\" We only text customers who \
-                 agreed and stop as soon as they reply STOP."
+                "Customers opt in on the quote form of {name}'s website: they enter their mobile \
+                 number and check a box that is not checked in advance and not required to send \
+                 the form. Next to it they read: \"By checking this box, I agree to receive texts \
+                 from {name} about my quote, appointments, project updates and offers. Message \
+                 frequency varies. Message and data rates may apply. Reply STOP to opt out. \
+                 Reply HELP for help. Consent is not a condition of purchase. We will not share \
+                 mobile information with third parties for promotional or marketing purposes.\" \
+                 Links to our privacy policy and terms are next to the box."
             ),
             samples: vec![
                 format!(
@@ -1049,8 +1199,8 @@ pub fn suggestion(
             help_keywords: "HELP,INFO".into(),
             optin_message: format!(
                 "{name}: you will get texts about your project, appointments and offers. Msg \
-                 frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to opt \
-                 out."
+                 frequency varies. Msg & data rates may apply. Consent is not a condition of \
+                 purchase. Reply HELP for help, STOP to opt out."
             ),
             optin_keywords: "START,UNSTOP".into(),
             optout_message: format!(
@@ -1488,8 +1638,20 @@ mod tests {
         draft.campaign.optin_form_link = "https://acmestone.com/quote".into();
         draft.campaign.privacy_policy_link = "https://acmestone.com/privacy".into();
         draft.campaign.terms_and_conditions_link = "https://acmestone.com/terms".into();
+        draft.campaign.message_flow = format!(
+            "{} The quote form: https://acmestone.com/quote. Privacy policy: \
+             https://acmestone.com/privacy/.",
+            draft.campaign.message_flow
+        );
         draft.campaign.terms_accepted = true;
         normalized(&draft)
+    }
+
+    fn messages(draft: &TenDlcDraft) -> Vec<(String, String)> {
+        problems(draft)
+            .into_iter()
+            .map(|problem| (problem.field, problem.message))
+            .collect()
     }
 
     fn fields(draft: &TenDlcDraft) -> Vec<String> {
@@ -1621,6 +1783,91 @@ mod tests {
                 "campaign.optoutKeywords"
             ]
         );
+    }
+
+    #[test]
+    fn the_answers_say_what_telnyx_requires() {
+        let mut draft = complete();
+        draft.campaign.optin_message =
+            "Acme Stone: thanks for signing up! Reply STOP to opt out.".into();
+        draft.campaign.help_message = "Acme Stone: reply to this text for help.".into();
+        draft.campaign.optout_message = "Acme Stone: you are unsubscribed.".into();
+        assert_eq!(
+            messages(&normalized(&draft)),
+            [
+                (
+                    "campaign.optinMessage".to_string(),
+                    "Carriers require the opt-in message to say: Reply HELP for help; Msg \
+                     frequency varies; Msg & data rates may apply; Consent is not a condition of \
+                     purchase."
+                        .to_string()
+                ),
+                (
+                    "campaign.helpMessage".to_string(),
+                    "The help message must say how to reach you: your phone number, email or \
+                     website."
+                        .to_string()
+                ),
+                (
+                    "campaign.optoutMessage".to_string(),
+                    "The opt-out message must confirm they get no more texts, like \"You will \
+                     receive no further messages.\""
+                        .to_string()
+                ),
+            ]
+        );
+        // In other words, and without marketing no purchase condition.
+        draft.campaign.sub_usecases = vec![UseCase::CustomerCare, UseCase::AccountNotification];
+        draft.campaign.optin_message =
+            "Acme Stone: you're in! Msg freq may vary. Std msg&data rates apply. Text HELP for \
+             help, STOP to end."
+                .into();
+        draft.campaign.help_message = "Acme Stone: write to help@acmestone.com.".into();
+        draft.campaign.optout_message =
+            "Acme Stone: you won't receive any more texts from us.".into();
+        assert_eq!(
+            messages(&normalized(&draft)),
+            Vec::<(String, String)>::new()
+        );
+    }
+
+    #[test]
+    fn samples_flow_and_description_match_the_campaign() {
+        let mut draft = complete();
+        draft.campaign.samples.truncate(2);
+        draft.campaign.embedded_link = true;
+        draft.campaign.embedded_phone = true;
+        draft.campaign.description =
+            "We text customers about quotes, appointments and occasional offers.".into();
+        draft.campaign.message_flow =
+            "Customers check a box on our quote form at https://acmestone.com/quote to agree."
+                .into();
+        let found: Vec<String> = messages(&normalized(&draft))
+            .into_iter()
+            .map(|(field, message)| format!("{field}: {message}"))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                "campaign.samples: Write a sample text for each kind of texts you chose (3 kinds).",
+                "campaign.embeddedLink: You say the texts carry links: a sample text must have \
+                 one, or say they don't.",
+                "campaign.embeddedPhone: You say the texts carry phone numbers: a sample text \
+                 must have one, or say they don't.",
+                "campaign.description: The description must say who sends the texts: name the \
+                 business.",
+                "campaign.messageFlow: The message flow must give the privacy policy's address: \
+                 https://acmestone.com/privacy",
+            ]
+        );
+        assert!(gives_link(
+            "see WWW.AcmeStone.com/Quote/ now",
+            "https://acmestone.com/quote"
+        ));
+        assert!(!gives_link(
+            "see acmestone.com",
+            "https://acmestone.com/quote"
+        ));
     }
 
     #[test]

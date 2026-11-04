@@ -1,7 +1,7 @@
 //! Per-provider SQL. Every table and column name spliced into it comes from
 //! [`SmsProvider`] (`crate::sms_provider`), never from input.
 
-pub use crate::sms_provider::{SmsProvider, phone10};
+pub use crate::sms_provider::{COPY_KEY, SmsProvider, not_a_copy, phone10};
 use sqlx::mysql::MySqlArguments;
 use sqlx::{Arguments, MySql};
 

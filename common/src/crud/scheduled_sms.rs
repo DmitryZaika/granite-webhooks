@@ -283,9 +283,17 @@ mod tests {
         }
         let (customer_id, deal_id) = insert_customer_deal(&pool, &s, "leads").await;
 
-        schedule_templates_for_deal_list(&pool, s.list_id, 1, deal_id, customer_id, s.user_id, true)
-            .await
-            .unwrap();
+        schedule_templates_for_deal_list(
+            &pool,
+            s.list_id,
+            1,
+            deal_id,
+            customer_id,
+            s.user_id,
+            true,
+        )
+        .await
+        .unwrap();
         // Their own template and the every-rep one; not the other rep's.
         assert_eq!(pending(&pool, customer_id).await, 2);
     }

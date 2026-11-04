@@ -37,7 +37,12 @@ async fn features_of_each_company(pool: MySqlPool) {
             "cloudtalk": false,
             "ringcentral": false,
             "telnyx": false,
-            "telnyx_sms": false
+            "telnyx_sms": false,
+            "auto_sale": false,
+            "auto_unscheduled_jobs": false,
+            "auto_invoice": false,
+            "quote_invoice_sync": false,
+            "sale_event_templates": false
         })
     );
     assert_eq!(
@@ -53,7 +58,12 @@ async fn features_of_each_company(pool: MySqlPool) {
             "cloudtalk": true,
             "ringcentral": false,
             "telnyx": false,
-            "telnyx_sms": false
+            "telnyx_sms": false,
+            "auto_sale": false,
+            "auto_unscheduled_jobs": false,
+            "auto_invoice": false,
+            "quote_invoice_sync": false,
+            "sale_event_templates": false
         })
     );
 }
@@ -118,7 +128,12 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
             "cloudtalk": false,
             "ringcentral": true,
             "telnyx": true,
-            "telnyx_sms": false
+            "telnyx_sms": false,
+            "auto_sale": false,
+            "auto_unscheduled_jobs": false,
+            "auto_invoice": false,
+            "quote_invoice_sync": false,
+            "sale_event_templates": false
         })
     );
     // A blank secret is no CloudTalk; an expired RingCentral refresh token is

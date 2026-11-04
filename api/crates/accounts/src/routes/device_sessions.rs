@@ -191,8 +191,8 @@ pub struct DeviceSession {
     pub call_key: String,
     /// The device session (`SignedInDevice.id`).
     pub session_id: i64,
-    /// When the sign-in ends at the latest: 12 months from now (sooner when
-    /// the phone is unused for 30 days, signs out or is revoked).
+    /// 12 months from now, for display only: the sign-in never ends by time,
+    /// only when the phone signs out or is revoked.
     #[serde(serialize_with = "js_date_required")]
     pub expires_at: DateTime<Utc>,
     /// Who signed in.
@@ -279,8 +279,8 @@ async fn signed_in_user(pool: &MySqlPool, user_id: i32) -> sqlx::Result<Option<S
 /// Failed attempts count together with `POST /v1/auth/login`'s (10 per
 /// email and address, 50 per email in 15 minutes, then 429
 /// `rate_limited`), and a wrong email and a wrong password both answer 401
-/// `invalid_credentials`. The sign-in lasts 12 months, or until the phone
-/// is unused for 30 days, signs out or is revoked. Next:
+/// `invalid_credentials`. The sign-in lasts until the phone signs out or is
+/// revoked, never ending by time. Next:
 /// `POST /v1/phone/devices` registers the phone for calling.
 #[crate::openapi::path(
     post,

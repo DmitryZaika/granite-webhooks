@@ -6,6 +6,9 @@
 //! app. Companies set up before Connect existed paste JWT credentials
 //! instead, exchanged for a token here. Port of the CRM's
 //! `ringcentralOauth.server.ts` and `getAccessToken`.
+//!
+//! A rep may connect their own login too (`ringcentral_user_logins`): it
+//! texts and reads as their extension, which the company's login may not.
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -154,6 +157,53 @@ async fn post_token(
     Ok(response.json().await?)
 }
 
+/// Tokens from a refresh grant, with the times they end.
+struct Fresh {
+    access: String,
+    refresh: String,
+    access_expires: i64,
+    refresh_expires: i64,
+}
+
+/// Trades `refresh` for new tokens through Granite Manager's own app;
+/// `None` when Connect is not configured here.
+async fn refresh_tokens(
+    client: &reqwest::Client,
+    refresh: &str,
+) -> Result<Option<Fresh>, AuthError> {
+    let (Ok(app_id), Ok(app_secret)) = (
+        std::env::var("RINGCENTRAL_OAUTH_CLIENT_ID"),
+        std::env::var("RINGCENTRAL_OAUTH_CLIENT_SECRET"),
+    ) else {
+        return Ok(None);
+    };
+    let basic = STANDARD.encode(format!("{}:{}", app_id.trim(), app_secret.trim()));
+    let reply = post_token(
+        client,
+        &server_url(None),
+        &basic,
+        &[("grant_type", "refresh_token"), ("refresh_token", refresh)],
+    )
+    .await?;
+    let (Some(access), Some(refresh)) = (reply.access_token, reply.refresh_token) else {
+        return Err(AuthError::Token {
+            status: 502,
+            body: "RingCentral token response is incomplete".into(),
+        });
+    };
+    let now = now_secs();
+    Ok(Some(Fresh {
+        access,
+        refresh,
+        access_expires: now + reply.expires_in.filter(|secs| *secs > 0).unwrap_or(3600),
+        refresh_expires: now
+            + reply
+                .refresh_token_expires_in
+                .filter(|secs| *secs > 0)
+                .unwrap_or(604_800),
+    }))
+}
+
 /// The OAuth token of a company that pressed Connect, refreshed when due;
 /// `None` when it has no (live) connection.
 async fn oauth_token(
@@ -209,51 +259,165 @@ async fn oauth_token(
         .await?;
         return Ok(None);
     }
-    let (Ok(app_id), Ok(app_secret)) = (
-        std::env::var("RINGCENTRAL_OAUTH_CLIENT_ID"),
-        std::env::var("RINGCENTRAL_OAUTH_CLIENT_SECRET"),
-    ) else {
+    let Some(fresh) = refresh_tokens(client, &refresh).await? else {
         tracing::warn!(
             company_id,
             "RingCentral connect is not configured; cannot refresh"
         );
         return Ok(None);
     };
-    let basic = STANDARD.encode(format!("{}:{}", app_id.trim(), app_secret.trim()));
-    let reply = post_token(
-        client,
-        &server_url(None),
-        &basic,
-        &[("grant_type", "refresh_token"), ("refresh_token", &refresh)],
-    )
-    .await?;
-    let (Some(access), Some(refresh)) = (reply.access_token, reply.refresh_token) else {
-        return Err(AuthError::Token {
-            status: 502,
-            body: "RingCentral token response is incomplete".into(),
-        });
-    };
-    let expires = reply.expires_in.filter(|secs| *secs > 0).unwrap_or(3600);
-    let refresh_expires = reply
-        .refresh_token_expires_in
-        .filter(|secs| *secs > 0)
-        .unwrap_or(604_800);
     sqlx::query(
         "UPDATE company SET ringcentral_access_token = ?, ringcentral_refresh_token = ?,
                 ringcentral_access_expires = ?, ringcentral_refresh_expires = ?
           WHERE id = ?",
     )
-    .bind(encrypt(key, &access))
-    .bind(encrypt(key, &refresh))
-    .bind(now + expires)
-    .bind(now + refresh_expires)
+    .bind(encrypt(key, &fresh.access))
+    .bind(encrypt(key, &fresh.refresh))
+    .bind(fresh.access_expires)
+    .bind(fresh.refresh_expires)
     .bind(company_id)
     .execute(pool)
     .await?;
     Ok(Some(AccessToken {
-        token: access,
+        token: fresh.access,
         server_url: server,
     }))
+}
+
+#[derive(sqlx::FromRow)]
+struct LoginRow {
+    user_id: i32,
+    access_token: Vec<u8>,
+    refresh_token: Vec<u8>,
+    access_expires: i64,
+    refresh_expires: i64,
+}
+
+/// The own sign-in of the rep on `extension_id` (Connect my `RingCentral`),
+/// refreshed when due or when `renew`; `None` without a live one. A login
+/// `RingCentral` ended or refused is forgotten: the rep connects again.
+async fn login_token(
+    pool: &MySqlPool,
+    client: &reqwest::Client,
+    company_id: i32,
+    extension_id: &str,
+    key: &[u8; 32],
+    renew: bool,
+) -> Result<Option<AccessToken>, AuthError> {
+    let row: Option<LoginRow> = sqlx::query_as(
+        "SELECT user_id, access_token, refresh_token, access_expires, refresh_expires
+           FROM ringcentral_user_logins WHERE company_id = ? AND extension_id = ?",
+    )
+    .bind(company_id)
+    .bind(extension_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let (Some(access), Some(refresh)) = (
+        decrypt(key, &row.access_token),
+        decrypt(key, &row.refresh_token),
+    ) else {
+        return Ok(None);
+    };
+    let now = now_secs();
+    if !renew && row.access_expires - ACCESS_REFRESH_SKEW_SECS > now {
+        return Ok(Some(AccessToken {
+            token: access,
+            server_url: server_url(None),
+        }));
+    }
+    if row.refresh_expires > now {
+        match refresh_tokens(client, &refresh).await {
+            Ok(Some(fresh)) => {
+                sqlx::query(
+                    "UPDATE ringcentral_user_logins
+                        SET access_token = ?, refresh_token = ?, access_expires = ?, refresh_expires = ?
+                      WHERE user_id = ?",
+                )
+                .bind(encrypt(key, &fresh.access))
+                .bind(encrypt(key, &fresh.refresh))
+                .bind(fresh.access_expires)
+                .bind(fresh.refresh_expires)
+                .bind(row.user_id)
+                .execute(pool)
+                .await?;
+                return Ok(Some(AccessToken {
+                    token: fresh.access,
+                    server_url: server_url(None),
+                }));
+            }
+            Ok(None) => return Ok(None),
+            // RingCentral refused the refresh token (signed out, password changed).
+            Err(AuthError::Token {
+                status: 400 | 401, ..
+            }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    tracing::warn!(
+        company_id,
+        user_id = row.user_id,
+        "a rep's RingCentral sign-in ended; they must connect again"
+    );
+    sqlx::query("DELETE FROM ringcentral_user_logins WHERE user_id = ?")
+        .bind(row.user_id)
+        .execute(pool)
+        .await?;
+    Ok(None)
+}
+
+/// A token for the company, as the rep on `extension` when they connected
+/// their own `RingCentral` (the company's login may not text or read as
+/// another user); else the company's ([`access_token`]).
+pub async fn access_token_as(
+    pool: &MySqlPool,
+    client: &reqwest::Client,
+    company_id: i32,
+    extension: Option<&str>,
+) -> Result<AccessToken, AuthError> {
+    if let Some(extension) = extension
+        && let Some(key) = env_key()
+    {
+        match login_token(pool, client, company_id, extension, &key, false).await {
+            Ok(Some(token)) => return Ok(token),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(company_id, extension, %error, "rep's RingCentral sign-in unusable");
+            }
+        }
+    }
+    access_token(pool, client, company_id).await
+}
+
+/// Renews the reps' own sign-ins that would lapse within two days:
+/// `RingCentral` ends a refresh token a week after its last use. Returns
+/// how many were renewed.
+pub async fn renew_lapsing_logins(
+    pool: &MySqlPool,
+    client: &reqwest::Client,
+) -> Result<usize, AuthError> {
+    let Some(key) = env_key() else {
+        return Ok(0);
+    };
+    let lapsing: Vec<(i32, String)> = sqlx::query_as(
+        "SELECT company_id, extension_id FROM ringcentral_user_logins
+          WHERE refresh_expires < UNIX_TIMESTAMP() + 2 * 86400",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut renewed = 0;
+    for (company_id, extension) in lapsing {
+        match login_token(pool, client, company_id, &extension, &key, true).await {
+            Ok(Some(_)) => renewed += 1,
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(company_id, extension, %error, "renewing a rep's RingCentral sign-in failed");
+            }
+        }
+    }
+    Ok(renewed)
 }
 
 #[derive(sqlx::FromRow)]
@@ -438,5 +602,52 @@ mod tests {
                 .await
                 .unwrap();
         assert!(cleared.is_none());
+    }
+
+    async fn sign_in(pool: &MySqlPool, key: &[u8; 32], access_expires: i64, refresh_expires: i64) {
+        sqlx::query(
+            "INSERT INTO ringcentral_user_logins
+                    (user_id, company_id, extension_id, access_token, refresh_token,
+                     access_expires, refresh_expires)
+             VALUES (5, 77, '555', ?, ?, ?, ?)",
+        )
+        .bind(encrypt(key, "rep-access").into_bytes())
+        .bind(encrypt(key, "rep-refresh").into_bytes())
+        .bind(access_expires)
+        .bind(refresh_expires)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[test_db::test]
+    async fn a_reps_sign_in_serves_their_extension_only(pool: MySqlPool) {
+        let key = parse_hex_key(KEY_HEX).unwrap();
+        sign_in(&pool, &key, now_secs() + 3600, now_secs() + 86_400).await;
+        let client = crate::http::client();
+        let token = login_token(&pool, &client, 77, "555", &key, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(token.token, "rep-access");
+        let other_extension = login_token(&pool, &client, 77, "556", &key, false).await;
+        assert!(other_extension.unwrap().is_none());
+        let other_company = login_token(&pool, &client, 78, "555", &key, false).await;
+        assert!(other_company.unwrap().is_none());
+    }
+
+    #[test_db::test]
+    async fn a_reps_lapsed_sign_in_is_forgotten(pool: MySqlPool) {
+        let key = parse_hex_key(KEY_HEX).unwrap();
+        sign_in(&pool, &key, 1, 2).await;
+        let token = login_token(&pool, &crate::http::client(), 77, "555", &key, false)
+            .await
+            .unwrap();
+        assert!(token.is_none());
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ringcentral_user_logins")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
     }
 }

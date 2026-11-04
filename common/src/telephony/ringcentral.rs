@@ -1,7 +1,7 @@
 //! Texts through `RingCentral`: plain SMS, and MMS with the pictures attached.
 //! Port of the CRM's `ringcentralSendSms.server.ts` and `ringcentralRequest`.
 
-use super::ringcentral_auth::{AuthError, access_token, forget};
+use super::ringcentral_auth::{AuthError, access_token_as, forget};
 use reqwest::multipart::{Form, Part};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{Value, json};
@@ -11,8 +11,21 @@ use std::time::Duration;
 const SERVER_RETRIES: usize = 3;
 const SERVER_BACKOFF_SECS: [u64; 3] = [2, 4, 8];
 const RATE_LIMIT_RETRIES: usize = 2;
-/// Longest single wait on a 429 (`RingCentral` asks for 60 s).
-const MAX_RATE_LIMIT_WAIT_SECS: u64 = 30;
+/// Longest wait on a 429 before trying again. `RingCentral` usually asks for
+/// 30–60 s, longer than a 30 s Lambda lives, so such a 429 fails right away
+/// (the caller or the next job run tries later) instead of sleeping until
+/// the Lambda times out and billing every second of the sleep.
+const MAX_RATE_LIMIT_WAIT_SECS: u64 = 5;
+
+/// Seconds to wait on a 429 with this `Retry-After`, or `None` when the wait
+/// is too long to sit out. No usable header waits the full short wait.
+fn rate_limit_wait(retry_after: Option<&str>) -> Option<u64> {
+    let wait = retry_after
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(MAX_RATE_LIMIT_WAIT_SECS);
+    (wait <= MAX_RATE_LIMIT_WAIT_SECS).then_some(wait)
+}
 
 /// A failed call: the HTTP status and `RingCentral`'s own message.
 #[derive(Debug)]
@@ -81,8 +94,19 @@ fn api_message(body: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The extension an `account/~/extension/<id>/...` path acts for: the
+/// request goes out with that rep's own sign-in when they have one.
+pub fn path_extension(path: &str) -> Option<&str> {
+    let rest = path
+        .trim_start_matches('/')
+        .strip_prefix("account/~/extension/")?;
+    let id = rest.split(['/', '?']).next()?;
+    (!id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())).then_some(id)
+}
+
 /// Calls `restapi/v1.0/<path>`: retries a refused token, 5xx answers and
-/// rate limits (honouring `Retry-After`, up to 30 s at a time).
+/// rate limits (honouring `Retry-After`, up to 30 s at a time). A path of
+/// one extension uses that rep's own sign-in when they connected one.
 pub async fn request(
     pool: &MySqlPool,
     client: &Client,
@@ -92,10 +116,37 @@ pub async fn request(
     body: &Body<'_>,
     idempotency_key: Option<&str>,
 ) -> Result<Value, ApiError> {
+    request_as(
+        pool,
+        client,
+        company_id,
+        path_extension(path),
+        method,
+        path,
+        body,
+        idempotency_key,
+    )
+    .await
+}
+
+/// [`request`] as the rep on `extension` (their own sign-in when they
+/// connected one, else the company's), whatever the path.
+#[allow(clippy::too_many_arguments)]
+pub async fn request_as(
+    pool: &MySqlPool,
+    client: &Client,
+    company_id: i32,
+    extension: Option<&str>,
+    method: Method,
+    path: &str,
+    body: &Body<'_>,
+    idempotency_key: Option<&str>,
+) -> Result<Value, ApiError> {
     let response = call(
         pool,
         client,
         company_id,
+        extension,
         method,
         path,
         body,
@@ -119,6 +170,7 @@ pub async fn get_raw(
         pool,
         client,
         company_id,
+        path_extension(path),
         Method::GET,
         path,
         &Body::Empty,
@@ -144,6 +196,7 @@ async fn call(
     pool: &MySqlPool,
     client: &Client,
     company_id: i32,
+    extension: Option<&str>,
     method: Method,
     path: &str,
     body: &Body<'_>,
@@ -153,7 +206,7 @@ async fn call(
     let mut server_attempt = 0;
     let mut rate_attempt = 0;
     loop {
-        let token = access_token(pool, client, company_id).await?;
+        let token = access_token_as(pool, client, company_id, extension).await?;
         let url = format!(
             "{}/restapi/v1.0/{}",
             token.server_url,
@@ -186,18 +239,26 @@ async fn call(
             continue;
         }
         if status == StatusCode::TOO_MANY_REQUESTS && rate_attempt < RATE_LIMIT_RETRIES {
-            let wait = response
+            let retry_after = response
                 .headers()
                 .get("Retry-After")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok())
-                .filter(|secs| *secs > 0)
-                .unwrap_or(5)
-                .min(MAX_RATE_LIMIT_WAIT_SECS);
-            tracing::warn!(company_id, path, wait, "RingCentral rate limited");
-            tokio::time::sleep(Duration::from_secs(wait)).await;
-            rate_attempt += 1;
-            continue;
+                .and_then(|value| value.to_str().ok());
+            if let Some(wait) = rate_limit_wait(retry_after) {
+                tracing::warn!(company_id, path, wait, "RingCentral rate limited");
+                tokio::time::sleep(Duration::from_secs(wait)).await;
+                rate_attempt += 1;
+                continue;
+            }
+            tracing::warn!(
+                company_id,
+                path,
+                retry_after,
+                "RingCentral rate limited, not waiting"
+            );
+            return Err(ApiError {
+                status: status.as_u16(),
+                message: Some("RingCentral is busy, try again in a minute".to_string()),
+            });
         }
         if status.is_server_error() && server_attempt < SERVER_RETRIES {
             tokio::time::sleep(Duration::from_secs(SERVER_BACKOFF_SECS[server_attempt])).await;
@@ -313,6 +374,11 @@ pub async fn send(
 /// The token the CRM shows for a failed SMS.
 pub fn sms_error_token(error: &ApiError) -> String {
     let message = error.message.as_deref().unwrap_or_default().to_lowercase();
+    // CMN-419: the company's login may not text as another user; the rep
+    // has to connect their own RingCentral.
+    if message.contains("for another extension") {
+        return "ringcentral_not_signed_in".into();
+    }
     if message.contains("not enough credits") || message.contains("insufficient") {
         return "ringcentral_insufficient_funds".into();
     }
@@ -427,6 +493,34 @@ mod tests {
     }
 
     #[test]
+    fn a_long_rate_limit_wait_fails_fast() {
+        assert_eq!(rate_limit_wait(Some("30")), None);
+        assert_eq!(rate_limit_wait(Some("60")), None);
+        assert_eq!(rate_limit_wait(Some("3")), Some(3));
+        assert_eq!(rate_limit_wait(Some(" 5 ")), Some(5));
+        assert_eq!(rate_limit_wait(Some("0")), Some(5));
+        assert_eq!(rate_limit_wait(Some("soon")), Some(5));
+        assert_eq!(rate_limit_wait(None), Some(5));
+    }
+
+    #[test]
+    fn a_path_of_one_extension_names_it() {
+        assert_eq!(
+            path_extension("account/~/extension/2929009027/sms"),
+            Some("2929009027")
+        );
+        assert_eq!(
+            path_extension("/account/~/extension/12/message-store?messageType=SMS"),
+            Some("12")
+        );
+        assert_eq!(path_extension("account/~/extension/12"), Some("12"));
+        assert_eq!(path_extension("account/~/extension/~/phone-number"), None);
+        assert_eq!(path_extension("account/~/extension?type=User"), None);
+        assert_eq!(path_extension("account/~/call-log"), None);
+        assert_eq!(path_extension("subscription"), None);
+    }
+
+    #[test]
     fn error_tokens() {
         let error = |status, message: &str| ApiError {
             status,
@@ -437,6 +531,13 @@ mod tests {
             "ringcentral_invalid_phone"
         );
         assert_eq!(sms_error_token(&error(503, "down")), "ringcentral_503");
+        assert_eq!(
+            sms_error_token(&error(
+                403,
+                "In order to call this API endpoint for another extension, one of the following permissions [OutboundSMS] have to be granted with extended scope to the authorized user."
+            )),
+            "ringcentral_not_signed_in"
+        );
         assert_eq!(
             mms_error_token(&error(400, "nope")),
             "ringcentral_mms_not_supported"
@@ -482,6 +583,89 @@ pub fn sms_event_filters(extension_ids: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Where `RingCentral` pushes the company's texts and the token it sends
+/// along; `None` when `LAMBDA_URL` or `RINGCENTRAL_WEBHOOK_TOKEN` is unset.
+fn webhook_target(company_id: i32) -> Option<(String, String)> {
+    let address = notify_address(company_id)?;
+    // RingCentral rejects hyphens; the webhook parses the 32-hex form as the same UUID.
+    let token = std::env::var("RINGCENTRAL_WEBHOOK_TOKEN")
+        .unwrap_or_default()
+        .trim()
+        .replace('-', "");
+    (!token.is_empty()).then_some((address, token))
+}
+
+/// The id of the login's subscription pushing to `address`, if any.
+async fn existing_subscription(
+    pool: &MySqlPool,
+    client: &Client,
+    company_id: i32,
+    extension: Option<&str>,
+    address: &str,
+) -> Result<Option<String>, ApiError> {
+    let subscriptions = request_as(
+        pool,
+        client,
+        company_id,
+        extension,
+        Method::GET,
+        "subscription",
+        &Body::Empty,
+        None,
+    )
+    .await?;
+    Ok(subscriptions["records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|record| record["deliveryMode"]["address"].as_str() == Some(address))
+        .and_then(|record| record["id"].as_str().map(str::to_string)))
+}
+
+/// Creates or renews the login's subscription to the texts of
+/// `extension_ids`.
+async fn subscribe(
+    pool: &MySqlPool,
+    client: &Client,
+    company_id: i32,
+    extension: Option<&str>,
+    extension_ids: &[String],
+) -> Result<SubscriptionOutcome, ApiError> {
+    let Some((address, token)) = webhook_target(company_id) else {
+        return Ok(SubscriptionOutcome::Skipped);
+    };
+    let existing = existing_subscription(pool, client, company_id, extension, &address).await?;
+    let body = json!({
+        "eventFilters": sms_event_filters(extension_ids),
+        "deliveryMode": { "transportType": "WebHook", "address": address, "verificationToken": token },
+        "expiresIn": SUBSCRIPTION_EXPIRES_IN_SECONDS,
+    });
+    let (method, path, outcome) = match &existing {
+        Some(id) => (
+            Method::PUT,
+            format!("subscription/{id}"),
+            SubscriptionOutcome::Renewed,
+        ),
+        None => (
+            Method::POST,
+            "subscription".to_string(),
+            SubscriptionOutcome::Created,
+        ),
+    };
+    request_as(
+        pool,
+        client,
+        company_id,
+        extension,
+        method,
+        &path,
+        &Body::Json(&body),
+        None,
+    )
+    .await?;
+    Ok(outcome)
+}
+
 /// Creates the company's SMS webhook subscription, or renews it with the
 /// current extensions so reps added since are covered too. Without it
 /// inbound texts never reach the CRM. Port of
@@ -491,15 +675,7 @@ pub async fn ensure_sms_subscription(
     client: &Client,
     company_id: i32,
 ) -> Result<SubscriptionOutcome, ApiError> {
-    let Some(address) = notify_address(company_id) else {
-        return Ok(SubscriptionOutcome::Skipped);
-    };
-    // RingCentral rejects hyphens; the webhook parses the 32-hex form as the same UUID.
-    let token = std::env::var("RINGCENTRAL_WEBHOOK_TOKEN")
-        .unwrap_or_default()
-        .trim()
-        .replace('-', "");
-    if token.is_empty() {
+    if webhook_target(company_id).is_none() {
         return Ok(SubscriptionOutcome::Skipped);
     }
     let extensions = request(
@@ -527,48 +703,51 @@ pub async fn ensure_sms_subscription(
     if extension_ids.is_empty() {
         return Ok(SubscriptionOutcome::Skipped);
     }
-    let subscriptions = request(
+    subscribe(pool, client, company_id, None, &extension_ids).await
+}
+
+/// The SMS webhook subscription of a rep's own sign-in, for their
+/// extension: the company's login may not read another user's texts.
+pub async fn ensure_rep_sms_subscription(
+    pool: &MySqlPool,
+    client: &Client,
+    company_id: i32,
+    extension: &str,
+) -> Result<SubscriptionOutcome, ApiError> {
+    subscribe(
         pool,
         client,
         company_id,
-        Method::GET,
-        "subscription",
-        &Body::Empty,
-        None,
+        Some(extension),
+        &[extension.to_string()],
     )
-    .await?;
-    let existing = subscriptions["records"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|record| record["deliveryMode"]["address"].as_str() == Some(address.as_str()))
-        .and_then(|record| record["id"].as_str().map(str::to_string));
-    let body = json!({
-        "eventFilters": sms_event_filters(&extension_ids),
-        "deliveryMode": { "transportType": "WebHook", "address": address, "verificationToken": token },
-        "expiresIn": SUBSCRIPTION_EXPIRES_IN_SECONDS,
-    });
-    let (method, path, outcome) = match &existing {
-        Some(id) => (
-            Method::PUT,
-            format!("subscription/{id}"),
-            SubscriptionOutcome::Renewed,
-        ),
-        None => (
-            Method::POST,
-            "subscription".to_string(),
-            SubscriptionOutcome::Created,
-        ),
+    .await
+}
+
+/// Stops `RingCentral` pushing texts to the rep's own sign-in (while it
+/// still works).
+pub async fn remove_rep_sms_subscription(
+    pool: &MySqlPool,
+    client: &Client,
+    company_id: i32,
+    extension: &str,
+) -> Result<(), ApiError> {
+    let Some((address, _)) = webhook_target(company_id) else {
+        return Ok(());
     };
-    request(
-        pool,
-        client,
-        company_id,
-        method,
-        &path,
-        &Body::Json(&body),
-        None,
-    )
-    .await?;
-    Ok(outcome)
+    let extension = Some(extension);
+    if let Some(id) = existing_subscription(pool, client, company_id, extension, &address).await? {
+        request_as(
+            pool,
+            client,
+            company_id,
+            extension,
+            Method::DELETE,
+            &format!("subscription/{id}"),
+            &Body::Empty,
+            None,
+        )
+        .await?;
+    }
+    Ok(())
 }

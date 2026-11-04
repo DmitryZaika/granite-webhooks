@@ -348,6 +348,52 @@ async fn the_page_changes_info_settings_and_prices(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_sale_marks_the_deal_the_user_picked(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    let sell = |id: i64, body: Value| {
+        let server = &server;
+        async move {
+            let path = format!("/v1/quotes/{id}");
+            server
+                .put(&format!("{path}/drawing"))
+                .with_session(sessions::REP)
+                .json(&json!({ "doc": doc("Ubatuba") }))
+                .await
+                .assert_status_ok();
+            server
+                .post(&format!("{path}/sale"))
+                .with_session(sessions::REP)
+                .json(&body)
+                .await
+        }
+    };
+    let first = create(&server, json!({ "customer_id": 1004 })).await;
+    let res = sell(first, json!({ "option": 0 })).await;
+    res.assert_status_ok();
+    let first_deal = res.json::<Value>()["deal_id"].as_i64().unwrap();
+
+    // A new deal although the customer already has a won one.
+    let second = create(&server, json!({ "customer_id": 1004 })).await;
+    let res = sell(second, json!({ "option": 0, "new_deal": true })).await;
+    res.assert_status_ok();
+    let second_deal = res.json::<Value>()["deal_id"].as_i64().unwrap();
+    assert_ne!(second_deal, first_deal);
+
+    // The older deal, picked by hand.
+    let third = create(&server, json!({ "customer_id": 1004 })).await;
+    let res = sell(third, json!({ "option": 0, "deal_id": first_deal })).await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>()["deal_id"].as_i64(), Some(first_deal));
+
+    // A deal that is not the customer's is refused.
+    let fourth = create(&server, json!({ "customer_id": 1004 })).await;
+    sell(fourth, json!({ "option": 0, "deal_id": 999_999 }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[test_db::test(seed)]
 async fn quotes_are_sold_copied_and_printed(pool: MySqlPool) {
     let (server, _) = server(&pool).await;
     price_list(&server, &pool).await;
@@ -569,6 +615,40 @@ async fn emailing_sends_the_link_and_moves_the_deal(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn the_view_link_opens_the_customer_page_for_staff(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    let id = create(&server, json!({ "customer_id": 1004 })).await;
+    let path = format!("/v1/quotes/{id}");
+    let url = server
+        .get(&format!("{path}/view-link"))
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>()["url"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let token = server
+        .post(&format!("{path}/portal-token"))
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The same customer link, made on the first ask and kept.
+    assert!(
+        url.ends_with(&format!("/quote-portal/{token}?staff=1")),
+        "{url}"
+    );
+    server
+        .get("/v1/quotes/999999/view-link")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[test_db::test(seed)]
 async fn the_customer_accepts_and_signs(pool: MySqlPool) {
     let (server, _) = server(&pool).await;
     price_list(&server, &pool).await;
@@ -665,4 +745,385 @@ async fn reps_keep_email_templates_of_their_own(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .assert_status(StatusCode::NO_CONTENT);
+}
+
+#[test_db::test(seed)]
+async fn a_sold_quote_waits_in_unscheduled_only_when_switched_on(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    sqlx::query(
+        "INSERT INTO calendars (company_id, name, color, slug) VALUES
+           (100, 'Templates', 'green', 'templates'),
+           (100, 'Installations', 'blue', 'installations')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut jobs = Vec::new();
+    for (on, sale) in [
+        (false, json!({ "option": 0 })),
+        (true, json!({ "option": 0 })),
+        (
+            true,
+            json!({
+                "option": 0,
+                "job_status": "not_ready",
+                "template_notes": " Measure the island ",
+                "install_notes": "",
+            }),
+        ),
+        (
+            true,
+            json!({
+                "option": 0,
+                "install_notes": "Tall splash",
+                "full_height_backsplash": true,
+            }),
+        ),
+    ] {
+        sqlx::query("UPDATE company SET auto_unscheduled_jobs = ? WHERE id = 100")
+            .bind(on)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let id = create(&server, json!({ "customer_id": 1004 })).await;
+        let path = format!("/v1/quotes/{id}");
+        server
+            .put(&format!("{path}/drawing"))
+            .with_session(sessions::REP)
+            .json(&json!({ "doc": doc("Ubatuba") }))
+            .await
+            .assert_status_ok();
+        server
+            .post(&format!("{path}/sale"))
+            .with_session(sessions::REP)
+            .json(&sale)
+            .await
+            .assert_status_ok();
+        let statuses: Vec<String> = sqlx::query_scalar(
+            "SELECT CONCAT(IF(title LIKE '% - FH Backsplash', 'FH ', ''),
+                      CAST(status AS CHAR), '|', COALESCE(notes, '-'))
+               FROM events WHERE quote_id = ? AND unscheduled <> 0 ORDER BY id",
+        )
+        .bind(id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        jobs.push(statuses);
+    }
+    // Off: nothing added; on: a template, Ready unless the seller picked Not
+    // ready, and an installation, always Not ready; each with its notes
+    // (trimmed, blank stays none). Full Height Backsplash adds a Not ready
+    // FH Backsplash template and installation.
+    assert_eq!(
+        jobs,
+        [
+            vec![],
+            vec!["ready|-", "not_ready|-"],
+            vec!["not_ready|Measure the island", "not_ready|-"],
+            vec![
+                "ready|-",
+                "FH not_ready|-",
+                "not_ready|Tall splash",
+                "FH not_ready|Tall splash",
+            ],
+        ]
+    );
+    // The jobs are named after the quote (a quote without a name: after the
+    // customer, as above).
+    let id = create(
+        &server,
+        json!({ "customer_id": 1004, "quote_name": " Ostrom Properties " }),
+    )
+    .await;
+    let path = format!("/v1/quotes/{id}");
+    server
+        .put(&format!("{path}/drawing"))
+        .with_session(sessions::REP)
+        .json(&json!({ "doc": doc("Ubatuba") }))
+        .await
+        .assert_status_ok();
+    server
+        .post(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .json(&json!({ "option": 0 }))
+        .await
+        .assert_status_ok();
+    let titles: Vec<String> =
+        sqlx::query_scalar("SELECT title FROM events WHERE quote_id = ? ORDER BY id")
+            .bind(id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(titles, ["Ostrom Properties", "Ostrom Properties"]);
+    let id = create(&server, json!({ "customer_id": 1004 })).await;
+    server
+        .post(&format!("/v1/quotes/{id}/sale"))
+        .with_session(sessions::REP)
+        .json(&json!({ "option": 0, "job_status": "maybe" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    // Undo sale deletes both jobs; selling again adds them anew.
+    let path = format!("/v1/quotes/{id}");
+    server
+        .put(&format!("{path}/drawing"))
+        .with_session(sessions::REP)
+        .json(&json!({ "doc": doc("Ubatuba") }))
+        .await
+        .assert_status_ok();
+    let mut counts = Vec::new();
+    for undo in [false, true, false] {
+        if undo {
+            server
+                .delete(&format!("{path}/sale"))
+                .with_session(sessions::REP)
+                .await
+                .assert_status(StatusCode::NO_CONTENT);
+        } else {
+            server
+                .post(&format!("{path}/sale"))
+                .with_session(sessions::REP)
+                .json(&json!({ "option": 0 }))
+                .await
+                .assert_status_ok();
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM events WHERE quote_id = ? AND deleted_date IS NULL",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        counts.push(count);
+    }
+    assert_eq!(counts, [2, 0, 2]);
+}
+
+#[test_db::test(seed)]
+async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    sqlx::query(
+        "INSERT INTO calendars (company_id, name, color, slug) VALUES
+           (100, 'Plumbers', 'green', NULL),
+           (100, 'Electricians', 'red', NULL),
+           (101, 'Elsewhere', 'blue', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let calendar = |name: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i32>("SELECT id FROM calendars WHERE name = ?")
+                .bind(name)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let (plumbers, electricians, elsewhere) = (
+        calendar("Plumbers").await,
+        calendar("Electricians").await,
+        calendar("Elsewhere").await,
+    );
+    // Only admins change them, and only on their company's calendars.
+    server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::REP)
+        .json(&json!({ "calendar_id": plumbers, "title_text": "Plumbing" }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "calendar_id": elsewhere, "title_text": "Plumbing" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "calendar_id": plumbers, "title_text": "x".repeat(201) }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let res = server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "calendar_id": plumbers, "title_text": " Plumbing " }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let plumbing = res.json::<Value>()["id"].as_i64().unwrap();
+    let res = server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .json(&json!({
+            "calendar_id": plumbers,
+            "title_variable": "customer_name",
+            "title_text": "Electric",
+        }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let electric = res.json::<Value>()["id"].as_i64().unwrap();
+    server
+        .put(&format!("/v1/quote-sale-events/{electric}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({
+            "calendar_id": electricians,
+            "title_variable": "customer_name",
+            "title_text": "Electrical",
+        }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let list = server
+        .get("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .await
+        .json::<Value>();
+    assert_eq!(
+        list,
+        json!([
+            {
+                "id": plumbing,
+                "calendar_id": plumbers,
+                "calendar_name": "Plumbers",
+                "title_variable": "quote_name",
+                "title_text": "Plumbing",
+                "trigger_extra_ids": [],
+            },
+            {
+                "id": electric,
+                "calendar_id": electricians,
+                "calendar_name": "Electricians",
+                "title_variable": "customer_name",
+                "title_text": "Electrical",
+                "trigger_extra_ids": [],
+            },
+        ])
+    );
+    // Everyone's company features say there are templates (the quote
+    // page's Undo sale warns their events will go).
+    let features = server
+        .get("/v1/company/features")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    assert_eq!(features["sale_event_templates"], true);
+    // Another company's admin can't touch them.
+    server
+        .delete(&format!("/v1/quote-sale-events/{plumbing}"))
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // Salespeople read them: they are Mark as Sold's Extra events.
+    let offered = server
+        .get("/v1/quote-sale-events")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    assert_eq!(offered, list);
+
+    // A sale adds only the extra events ticked, each Not ready with its notes,
+    // even with the Jobs to Unscheduled switch off.
+    sqlx::query("UPDATE company SET auto_unscheduled_jobs = 0 WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id = create(
+        &server,
+        json!({ "customer_id": 1004, "quote_name": "Ostrom Kitchen" }),
+    )
+    .await;
+    let path = format!("/v1/quotes/{id}");
+    server
+        .put(&format!("{path}/drawing"))
+        .with_session(sessions::REP)
+        .json(&json!({ "doc": doc("Ubatuba") }))
+        .await
+        .assert_status_ok();
+    let events = || {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, i32, String, Option<String>, Option<String>)>(
+                "SELECT title, calendar_id, CAST(status AS CHAR), location, notes FROM events
+                  WHERE quote_id = ? AND unscheduled <> 0 AND deleted_date IS NULL ORDER BY id",
+            )
+            .bind(id)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // Nothing ticked: nothing added.
+    server
+        .post(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .json(&json!({ "option": 0 }))
+        .await
+        .assert_status_ok();
+    assert!(events().await.is_empty());
+    server
+        .delete(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let ticked = json!({
+        "option": 0,
+        "extra_events": [
+            { "template_id": electric },
+            { "template_id": plumbing, "notes": " Shut-off under the sink " },
+            { "template_id": 999_999 },
+        ],
+    });
+    for _ in 0..2 {
+        server
+            .post(&format!("{path}/sale"))
+            .with_session(sessions::REP)
+            .json(&ticked)
+            .await
+            .assert_status_ok();
+    }
+    // Once per quote, however often it is sold; in the templates' order; an
+    // unknown template is skipped.
+    let address = Some("5 Oak Ave".to_string());
+    assert_eq!(
+        events().await,
+        [
+            (
+                "Ostrom Kitchen - Plumbing".to_string(),
+                plumbers,
+                "not_ready".to_string(),
+                address.clone(),
+                Some("Shut-off under the sink".to_string()),
+            ),
+            (
+                "Erin Builder - Electrical".to_string(),
+                electricians,
+                "not_ready".to_string(),
+                address.clone(),
+                None,
+            ),
+        ]
+    );
+    // Undo sale deletes them; selling again adds them anew, without a
+    // deleted template's event.
+    server
+        .delete(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(events().await.is_empty());
+    server
+        .delete(&format!("/v1/quote-sale-events/{electric}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .post(&format!("{path}/sale"))
+        .with_session(sessions::REP)
+        .json(&ticked)
+        .await
+        .assert_status_ok();
+    let titles: Vec<String> = events().await.into_iter().map(|e| e.0).collect();
+    assert_eq!(titles, ["Ostrom Kitchen - Plumbing"]);
 }

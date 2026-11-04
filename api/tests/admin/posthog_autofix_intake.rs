@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// The cutover, aligned to every poll and storm window.
+/// The cutover, aligned to every poll window.
 fn t0() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 21, 0, 0, 0).unwrap()
 }
@@ -334,10 +334,13 @@ impl IssueSource for FakeSource {
     }
 }
 
+/// `(run id, issue id, event id, bug id)` of a dispatch attempt.
+type Attempt = (u64, String, Option<String>, Option<String>);
+
 #[derive(Default)]
 struct FakeDispatcher {
-    /// `(run id, issue id, event id)` of every dispatch attempt.
-    attempts: Mutex<Vec<(u64, String, Option<String>)>>,
+    /// Every dispatch attempt.
+    attempts: Mutex<Vec<Attempt>>,
     fail: AtomicBool,
 }
 
@@ -347,7 +350,7 @@ impl FakeDispatcher {
             .lock()
             .unwrap()
             .iter()
-            .map(|(run, _, _)| *run)
+            .map(|(run, ..)| *run)
             .collect()
     }
 }
@@ -358,6 +361,7 @@ impl Dispatcher for FakeDispatcher {
             dispatch.run_id,
             dispatch.issue_id.to_string(),
             dispatch.event_id.map(Into::into),
+            dispatch.bug_id.map(Into::into),
         ));
         if self.fail.load(Ordering::SeqCst) {
             return Err(DispatchError("GitHub dispatch failed: 500 boom".into()));
@@ -589,29 +593,6 @@ async fn without_the_exclusions_one_error_split_110_ways_is_one_run(pool: MySqlP
 }
 
 #[test_db::test]
-async fn a_storm_across_a_window_boundary_sends_one_digest(pool: MySqlPool) {
-    let config = live();
-    let world = World::default();
-    for n in 0..25 {
-        let at = minutes(20) + Duration::seconds(i64::from(n));
-        world.source.event(n, at, &numbered_bug(n));
-    }
-
-    // 00:29 is in window 00:00, 00:31 in window 00:30: the same 25 bugs.
-    assert!(world.tick(&pool, &config, minutes(29)).await.storm_digest);
-    assert!(!world.tick(&pool, &config, minutes(31)).await.storm_digest);
-    assert_eq!(world.mailer.subjects().len(), 1);
-
-    // A new storm more than a storm window after the first digest is a new digest.
-    for n in 100..125 {
-        let at = minutes(100) + Duration::seconds(i64::from(n));
-        world.source.event(n, at, &numbered_bug(n));
-    }
-    assert!(world.tick(&pool, &config, minutes(105)).await.storm_digest);
-    assert_eq!(world.mailer.subjects().len(), 2);
-}
-
-#[test_db::test]
 async fn a_catch_all_issue_titled_401_holds_a_500_that_gets_its_own_run(pool: MySqlPool) {
     let config = live();
     let world = World::default();
@@ -790,6 +771,68 @@ async fn a_web_500_waits_for_its_api_error_to_be_judged(pool: MySqlPool) {
     assert_ne!(status, "skipped");
 }
 
+const IMAGE_ERROR: &str = "The image could not be downloaded from storage. Try uploading it again.";
+
+fn image_error() -> Bug {
+    Bug {
+        frame: Some(("re", "app/components/molecules/StoneImageCropInput.tsx")),
+        ..web("Error", IMAGE_ERROR)
+    }
+}
+
+fn toast(message: &str) -> Bug {
+    Bug {
+        frame: Some(("h", "app/hooks/use-toast.ts")),
+        error_source: Some("toast"),
+        ..web("ErrorToast", message)
+    }
+}
+
+/// Oct 28: one click reported the error and the toast that showed it, a
+/// millisecond apart; PostHog made two issues and the pipeline two PRs.
+#[test_db::test]
+async fn an_error_and_the_toast_that_shows_it_are_one_run(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let at = minutes(1);
+    world.source.event(1, at, &image_error());
+    world.source.event(
+        2,
+        at + Duration::milliseconds(1),
+        &toast(&format!("Could not open editor: {IMAGE_ERROR}")),
+    );
+    world.tick(&pool, &config, minutes(5)).await;
+    world.drain(&pool, &config, 40).await;
+
+    let (error, _, _) = row_of(&pool, IMAGE_ERROR).await;
+    assert_eq!(world.dispatcher.attempts(), [error]);
+    assert_eq!(
+        count(
+            &pool,
+            &format!("issue_name = 'ErrorToast' AND status = 'duplicate' AND duplicate_of_run_id = {error}")
+        )
+        .await,
+        1
+    );
+}
+
+#[test_db::test]
+async fn a_toast_with_its_own_failure_gets_its_own_run(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    world.source.event(1, minutes(1), &image_error());
+    world.source.event(
+        2,
+        minutes(1),
+        &toast("Could not save the quote: undefined is not a function"),
+    );
+    world.tick(&pool, &config, minutes(5)).await;
+    world.drain(&pool, &config, 40).await;
+
+    assert_eq!(world.dispatcher.attempts().len(), 2);
+    assert_eq!(count(&pool, "status = 'duplicate'").await, 0);
+}
+
 #[test_db::test]
 async fn a_full_batch_of_browser_500s_never_holds_up_their_api_errors(pool: MySqlPool) {
     let config = live();
@@ -960,6 +1003,11 @@ async fn a_dispatch_names_the_latest_event_of_the_bug(pool: MySqlPool) {
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].1, issue_id(2));
     assert_eq!(attempts[0].2.as_deref(), Some(latest.as_str()));
+    let signature: String = sqlx::query_scalar("SELECT signature FROM posthog_autofix_runs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts[0].3.as_deref(), Some(&signature[..12]));
 }
 
 #[test_db::test]
@@ -1027,7 +1075,7 @@ async fn retry_at(pool: &MySqlPool) -> DateTime<Utc> {
 }
 
 #[test_db::test]
-async fn a_refused_dispatch_backs_off_then_fails_with_one_email(pool: MySqlPool) {
+async fn a_refused_dispatch_backs_off_then_fails_without_an_email(pool: MySqlPool) {
     let config = live();
     let world = World::default();
     world.dispatcher.fail.store(true, Ordering::SeqCst);
@@ -1053,10 +1101,10 @@ async fn a_refused_dispatch_backs_off_then_fails_with_one_email(pool: MySqlPool)
         count(&pool, "status = 'failed' AND attempts = 3 AND last_error LIKE '%500 boom%' AND finished_at IS NOT NULL").await,
         1
     );
-    assert_eq!(world.mailer.subjects().len(), 1);
     world.tick(&pool, &config, minutes(600)).await;
     assert_eq!(world.dispatcher.attempts().len(), 3);
-    assert_eq!(world.mailer.subjects().len(), 1);
+    // Only a pull request is emailed.
+    assert!(world.mailer.subjects().is_empty());
 }
 
 #[test_db::test]
@@ -1067,12 +1115,15 @@ async fn emails_go_out_after_the_tick_releases_its_lock(pool: MySqlPool) {
     insert_run(
         &pool,
         1,
-        "status, attempts, dispatched_at",
-        "'dispatched', 1, '2026-10-20 21:00:00'",
+        "status, outcome, finished_at, last_issue_status",
+        "'succeeded', 'fixed_with_test', '2026-10-20 00:00:00', 'resolved'",
     )
     .await;
+    world
+        .source
+        .issue(1, t0() - Duration::days(2), &field_state_bug());
     let report = world.tick(&pool, &config, minutes(10)).await;
-    assert_eq!(report.timed_out, 1);
+    assert_eq!(report.regressions, 1);
     assert_eq!(*world.mailer.lock_free.lock().unwrap(), [true]);
 }
 
@@ -1109,9 +1160,8 @@ async fn the_watchdog_times_out_a_run_that_never_reported(pool: MySqlPool) {
         count(&pool, &format!("id = {recent} AND status = 'dispatched'")).await,
         1
     );
-    assert_eq!(world.mailer.subjects().len(), 1);
-    world.tick(&pool, &config, minutes(20)).await;
-    assert_eq!(world.mailer.subjects().len(), 1);
+    // Only a pull request is emailed.
+    assert!(world.mailer.subjects().is_empty());
 }
 
 #[test_db::test]

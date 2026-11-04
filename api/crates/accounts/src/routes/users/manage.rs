@@ -21,6 +21,7 @@ use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::auth::{SentInvite, send_invite};
 use crate::routes::company::queries::company_features;
 use crate::routes::sms::provider::phone10;
+use crate::routes::users::texting_history;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -634,21 +635,6 @@ fn digits_only(value: Option<&str>, label: &str, min: usize) -> ApiResult<Option
     Ok(Some(value.to_string()))
 }
 
-/// The `RingCentral` extension holding `phone` (`resolveRingCentralExtension`):
-/// a failed or empty lookup keeps the stored one, no number clears it.
-async fn ringcentral_extension(
-    state: &AppState,
-    company_id: i32,
-    user_id: i32,
-    phone: Option<&str>,
-) -> Result<Option<String>, sqlx::Error> {
-    Ok(
-        resolve_ringcentral_extension(state, company_id, user_id, phone)
-            .await?
-            .extension_id,
-    )
-}
-
 /// A user's `RingCentral` line, resolved from their number.
 pub struct ExtensionLink {
     /// The extension to store.
@@ -658,7 +644,8 @@ pub struct ExtensionLink {
     pub matched: bool,
 }
 
-/// [`ringcentral_extension`], also telling whether the number was found.
+/// The `RingCentral` extension holding `phone` (`resolveRingCentralExtension`):
+/// a failed or empty lookup keeps the stored one, no number clears it.
 pub async fn resolve_ringcentral_extension(
     state: &AppState,
     company_id: i32,
@@ -856,8 +843,23 @@ pub async fn update(
             ));
         }
     }
-    let extension =
-        ringcentral_extension(&state, existing_company, id, ringcentral_phone.as_deref()).await?;
+    let before: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT cloudtalk_agent_id, cloudtalk_phone_number, ringcentral_extension_id,
+                ringcentral_phone_number
+           FROM users WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    let link =
+        resolve_ringcentral_extension(&state, existing_company, id, ringcentral_phone.as_deref())
+            .await?;
+    let extension = link.extension_id;
 
     let dedupe = |list: Vec<i32>| {
         let mut seen = HashSet::new();
@@ -930,6 +932,27 @@ pub async fn update(
         .await?;
     }
     tx.commit().await?;
+    let line10 = |phone: Option<String>| phone.map(|p| phone10(&p)).filter(|p| p.len() == 10);
+    let (agent_before, phone_before, extension_before, ringcentral_before) = before;
+    texting_history::follow(
+        &state,
+        existing_company,
+        id,
+        &texting_history::Line {
+            cloudtalk_agent: agent_before,
+            cloudtalk_phone: line10(phone_before),
+            ringcentral_extension: extension_before,
+            ringcentral_phone: line10(ringcentral_before),
+        },
+        &texting_history::Line {
+            cloudtalk_agent,
+            cloudtalk_phone,
+            ringcentral_extension: extension,
+            ringcentral_phone,
+        },
+        link.matched,
+    )
+    .await;
     crate::phone::revoke::revoke_if_lost_access(&state, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

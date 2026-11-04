@@ -26,4 +26,5 @@ pub use api_quotes::*;
 pub mod call_notes;
 pub mod chat;
 pub mod kitchen_design;
+pub mod promises;
 pub mod routes;

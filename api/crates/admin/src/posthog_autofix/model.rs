@@ -110,7 +110,8 @@ pub enum SkipReason {
     HintToast,
     /// A browser's generic copy of an API 500 that the api reports itself.
     Symptom,
-    /// An API 4xx that enforced a business rule (`{"error":"<sentence>"}`).
+    /// An API 4xx that enforced a business rule (`{"error":"<sentence>"}`); a
+    /// 403 is never one.
     BusinessRule4xx,
 }
 
@@ -330,11 +331,36 @@ pub struct AgentResult {
     pub outcome: Outcome,
     /// The repository it changed, if any.
     pub target_repo: Option<TargetRepo>,
-    /// One line: what went wrong.
+    /// One short sentence: what goes wrong and on which route (the title when
+    /// there is no `pr_title`, and the Issue line of an older report).
     pub summary: String,
+    /// The bug report's Given: the state the bug needs, e.g. `a company with
+    /// calling turned off`. Empty from a workflow older than these fields.
+    #[serde(default)]
+    pub given: String,
+    /// When: the user's action, with the page and the API route.
+    #[serde(default)]
+    pub when: String,
+    /// Then: what the system does at that point, e.g. `the API answers 403
+    /// calling_disabled`.
+    #[serde(default)]
+    pub then: String,
+    /// What goes wrong now.
+    #[serde(default)]
+    pub actual: String,
+    /// What should happen instead.
+    #[serde(default)]
+    pub expected: String,
+    /// What users notice, in one sentence; the email adds the counts.
+    #[serde(default)]
+    pub impact: String,
+    /// How a developer sees the fix by hand, in one line; empty without a fix.
+    #[serde(default)]
+    pub check: String,
     /// Why it happened, in a few sentences.
     pub root_cause: String,
-    /// What changed and why that fixes it; empty without a fix.
+    /// One or two short sentences: what the fix changes, naming the function
+    /// and file (the Fix line); empty without a fix.
     pub fix_summary: String,
     /// What the fix could break, and how likely.
     pub risk: String,

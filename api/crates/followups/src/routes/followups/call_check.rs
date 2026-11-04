@@ -16,7 +16,7 @@ use crate::openapi::ToSchema;
 use crate::routes::calls::recording::{CallTranscriptError, transcribe_call};
 use crate::routes::sms::provider::SmsProvider;
 use crate::state::AppState;
-use crate::transcribe::{Transcript, Utterance};
+use crate::transcribe::Transcript;
 use axum::Json;
 use axum::extract::State;
 use lambda_http::tracing;
@@ -313,6 +313,7 @@ pub async fn check_call(state: &AppState, check: &CallCheck) -> sqlx::Result<Cal
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transcribe::Utterance;
 
     fn turns(turns: &[(&str, &str)]) -> Transcript {
         Transcript {

@@ -2,6 +2,7 @@
 //!
 //! - `GET /v1/me`           → effective session user (no extra query beyond auth)
 //! - `GET`/`PUT /v1/me/account` → My Account (see [`account`])
+//! - `/v1/me/ringcentral` → my own RingCentral sign-in (see [`ringcentral`])
 //! - `GET /v1/me/positions` → position ids in the company the request acts in
 //! - `GET /v1/me/sales-goal` → monthly sales goal; `PUT` sets it
 //! - `POST /v1/me/telegram/leads|notifications` → link a bot (Telegram login widget)
@@ -9,12 +10,14 @@
 //! - `GET`/`PUT /v1/me/notification-preferences` → Telegram alert settings
 //! - `POST /v1/me/onboarding-feedback` → rate the guided tours (once)
 //! - `PUT /v1/me/sidebar-pin` → keep the desktop sidebar open
+//! - `PUT /v1/me/ai-assistant` → switch my AI personal assistant on or off
 //! - `GET /v1/me/marketing-companies` → companies the user markets for
 //! - `/v1/me/todos`, `/v1/me/todo-order` → the to-do list (see [`todos`])
 
 pub mod account;
 pub mod handlers;
 pub mod queries;
+pub mod ringcentral;
 pub mod schemas;
 mod todos;
 
@@ -25,12 +28,16 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::me))
         .routes(routes!(account::account, account::update_account))
+        .routes(routes!(account::set_recording_voice))
+        .routes(routes!(ringcentral::start))
+        .routes(routes!(ringcentral::finish, ringcentral::disconnect))
         .routes(routes!(handlers::positions))
         .routes(routes!(handlers::sales_goal, handlers::set_sales_goal))
         .routes(routes!(handlers::telegram))
         .routes(routes!(handlers::link_leads_telegram))
         .routes(routes!(handlers::link_notifications_telegram))
         .routes(routes!(handlers::set_sidebar_pin))
+        .routes(routes!(handlers::set_ai_assistant))
         .routes(routes!(handlers::onboarding_feedback))
         .routes(routes!(
             handlers::notification_preferences,

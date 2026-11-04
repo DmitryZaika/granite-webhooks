@@ -168,6 +168,25 @@ fn with_query(base: &str, pairs: &[(&str, &str)]) -> String {
     format!("{base}?{}", query.join("&"))
 }
 
+/// What Google makes of a street address; see [`Maps::street_address`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreetCheck {
+    /// Found: Google's full address.
+    Found(String),
+    /// No such house number on a street Google knows.
+    NotFound,
+    /// No key, or Google failed.
+    Unknown,
+}
+
+/// The digits `text` starts with (`"123A Main St"` → `"123"`).
+fn leading_digits(text: &str) -> &str {
+    let end = text
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len());
+    &text[..end]
+}
+
 /// Seconds of a Google duration like `"754s"`.
 fn seconds(duration: &Value) -> Option<f64> {
     duration.as_str()?.strip_suffix('s')?.parse().ok()
@@ -473,6 +492,68 @@ impl Maps {
             .json()
             .await
             .ok()
+    }
+
+    /// Whether Google finds `address` as a house on a street: its first
+    /// result has a street and the typed house number.
+    pub async fn street_address(&self, address: &str) -> StreetCheck {
+        let Some(key) = self.key.as_ref() else {
+            return StreetCheck::Unknown;
+        };
+        let address = address.trim();
+        let number = leading_digits(address);
+        if number.is_empty() {
+            return StreetCheck::NotFound;
+        }
+        let body: Option<Value> = async {
+            self.http
+                .get(with_query(
+                    &format!("{}/geocode/json", self.api_base),
+                    &[
+                        ("address", address),
+                        ("components", "country:US"),
+                        ("key", key),
+                    ],
+                ))
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()
+        }
+        .await;
+        let Some(body) = body else {
+            return StreetCheck::Unknown;
+        };
+        if body["status"] == "ZERO_RESULTS" {
+            return StreetCheck::NotFound;
+        }
+        if body["status"] != "OK" {
+            return StreetCheck::Unknown;
+        }
+        let result = &body["results"][0];
+        let part = |kind: &str| {
+            result["address_components"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|component| {
+                    component["types"]
+                        .as_array()
+                        .is_some_and(|types| types.iter().any(|t| t == kind))
+                })
+                .and_then(|component| component["long_name"].as_str())
+        };
+        let same_house = part("street_number").is_some_and(|found| leading_digits(found) == number);
+        match result["formatted_address"].as_str() {
+            Some(formatted) if same_house && part("route").is_some() => {
+                StreetCheck::Found(formatted.to_string())
+            }
+            _ => StreetCheck::NotFound,
+        }
     }
 
     /// The US ZIP code Google geocodes an address to.

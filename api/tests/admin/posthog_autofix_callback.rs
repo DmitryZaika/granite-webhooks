@@ -97,7 +97,11 @@ fn completed() -> Value {
         "conclusion": "completed",
         "agent": {
             "outcome": "fixed_with_test", "target_repo": "granite-webhooks",
-            "summary": "Crash", "root_cause": "A null", "fix_summary": "Guard it",
+            "summary": "Crash", "given": "a deal without a customer",
+            "when": "a user opens /employee/deals/7", "then": "GET /v1/deals/7 answers 500",
+            "actual": "the page shows an error", "expected": "the deal opens",
+            "impact": "The deal cannot be opened.", "check": "Repeat Given/When: it opens.",
+            "root_cause": "A null", "fix_summary": "Guard it",
             "risk": "Low",
             "test": { "status": "written", "files": ["api/tests/x.rs"],
                       "command": "cargo test -p api --test x" },
@@ -218,11 +222,15 @@ async fn a_completed_result_succeeds_and_emails_once(pool: MySqlPool) {
         let emails = sent.lock().unwrap();
         assert_eq!(emails.len(), 1);
         assert_eq!(emails[0].to, ["dev@example.com"]);
-        assert_eq!(
-            emails[0].subject,
-            "[AI fix] Fixed with a test: TypeError: x is null"
-        );
-        assert!(emails[0].body.contains("&lt;b&gt;foo&lt;/b&gt;"));
+        assert_eq!(emails[0].subject, "[AI fix] Crash");
+        let body = &emails[0].body;
+        assert!(body.contains("<strong>Given</strong> a deal without a customer<br>"));
+        assert!(body.contains("<strong>Then</strong> GET /v1/deals/7 answers 500</p>"));
+        assert!(body.contains("<strong>Expected:</strong> the deal opens<br>"));
+        assert!(body.contains("<strong>Fix:</strong> Guard it<br>"));
+        assert!(body.contains("<strong>Test:</strong> Repeat Given/When: it opens.</p>"));
+        assert!(emails[0].body.contains(PR_URL));
+        assert!(!emails[0].body.contains("<b>foo</b>"));
     }
     assert_eq!(call().await.json::<Value>(), json!({ "changed": false }));
     assert_eq!(sent.lock().unwrap().len(), 1);
@@ -255,7 +263,7 @@ async fn a_usage_limit_requeues_with_a_pause_and_no_email(pool: MySqlPool) {
 }
 
 #[test_db::test]
-async fn a_usage_limit_without_attempts_left_fails_and_emails(pool: MySqlPool) {
+async fn a_usage_limit_without_attempts_left_fails_without_an_email(pool: MySqlPool) {
     let id = insert_run(&pool, "running", 3).await;
     let (server, sent) = server(&pool).await;
     server
@@ -267,9 +275,8 @@ async fn a_usage_limit_without_attempts_left_fails_and_emails(pool: MySqlPool) {
     let now = row(&pool, id).await;
     assert_eq!(now["status"], "failed");
     assert_eq!(now["last_error"], "usage limit, out of attempts");
-    let emails = sent.lock().unwrap();
-    assert_eq!(emails.len(), 1);
-    assert!(emails[0].subject.starts_with("[AI fix] Failed: "));
+    assert_eq!(now["notified"], false);
+    assert!(sent.lock().unwrap().is_empty());
 }
 
 #[test_db::test]
@@ -287,7 +294,7 @@ async fn a_late_result_after_a_timeout_is_recorded_and_emailed(pool: MySqlPool) 
 }
 
 #[test_db::test]
-async fn a_failed_result_records_the_notes_and_emails(pool: MySqlPool) {
+async fn a_failed_result_records_the_notes_and_sends_no_email(pool: MySqlPool) {
     let id = insert_run(&pool, "running", 1).await;
     let (server, sent) = server(&pool).await;
     server
@@ -300,7 +307,37 @@ async fn a_failed_result_records_the_notes_and_emails(pool: MySqlPool) {
     assert_eq!(now["status"], "failed");
     assert_eq!(now["last_error"], "push rejected");
     assert_eq!(now["finished"], true);
-    assert_eq!(sent.lock().unwrap().len(), 1);
+    assert_eq!(now["notified"], false);
+    assert!(sent.lock().unwrap().is_empty());
+}
+
+#[test_db::test]
+async fn a_result_without_a_pull_request_is_recorded_and_sends_no_email(pool: MySqlPool) {
+    for outcome in [
+        "not_a_code_bug",
+        "duplicate",
+        "needs_human",
+        "not_reproducible",
+    ] {
+        let id = insert_run(&pool, "running", 1).await;
+        let (server, sent) = server(&pool).await;
+        let mut body = completed();
+        body["agent"]["outcome"] = json!(outcome);
+        body["agent"]["test"] = json!({ "status": "not_applicable" });
+        body["pr_url"] = Value::Null;
+        body["verification"] = json!("not_applicable");
+        server
+            .post(&url(id, "result"))
+            .add_header("Authorization", AUTH)
+            .json(&body)
+            .await
+            .assert_status_ok();
+        let now = row(&pool, id).await;
+        assert_eq!(now["status"], "succeeded", "{outcome}");
+        assert_eq!(now["outcome"], outcome);
+        assert_eq!(now["notified"], false, "{outcome}");
+        assert!(sent.lock().unwrap().is_empty(), "{outcome}");
+    }
 }
 
 #[test_db::test]

@@ -116,13 +116,19 @@ def open_pr(
     if not contract.publishable:
         raise PublishError("refusing to push: " + "; ".join(contract.errors or ["no commits"]))
     verification, notes = _rechecked(report, contract.errors)
-    branch = pr_body.branch_name(run.issue_id, run.run_id)
+    branch = pr_body.branch_name(run.issue_id, run.run_id, run.bug_id)
     url = push_url or f"https://github.com/{OWNER}/{chosen.target_repo}.git"
     push(git, head, branch, url, token)
     draft = verification == "unverified"
     body = pr_body.render(
         pr_body.BodyInputs(
-            run.issue_id, agent.result, verification, notes, run.github_run_url, agent.cost_usd
+            run.issue_id,
+            agent.result,
+            verification,
+            notes,
+            run.github_run_url,
+            agent.cost_usd,
+            run.bug_id,
         )
     )
     pull = github.open_pull_request(

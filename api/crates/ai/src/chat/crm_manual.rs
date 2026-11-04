@@ -552,6 +552,77 @@ pub fn feature_choice<'a>(reply: &str, choices: &'a [Feature]) -> Option<&'a Fea
     }
 }
 
+// ---------- an answer found nothing: ask which topic ----------
+
+/// The question that follows an answer that found nothing.
+pub const DEAD_END_QUESTION: &str = "Do you mean one of these?";
+
+/// A section as a choice: its title cut to its name, "Texting registration
+/// (10DLC)" of "Texting registration (10DLC): the carriers' form for
+/// business SMS", "Admin Automations" of a long "Admin Automations (…)".
+fn choice_label(id: &str) -> Option<String> {
+    let heading = section(id)?.lines().find(|l| l.starts_with('#'))?;
+    let title = heading.trim_start_matches('#').replace(['*', '`'], "");
+    let title = re!(r"\(/[^)]*\)").replace_all(&title, "");
+    let mut label = title.split(": ").next().unwrap_or_default();
+    if label.chars().count() > 40 {
+        label = label.split(" (").next().unwrap_or_default();
+    }
+    let label = label.replace(['[', ']', '|', '=', ','], " ");
+    let label = trim(&re!(r"\s+").replace_all(&label, " ")).to_string();
+    (!label.is_empty() && label.len() <= 60).then_some(label)
+}
+
+/// The question back for an answer that found nothing: up to three of the
+/// manual's topics closest to `question` (the topic table's with their
+/// related sections, then the manual's own words that stand out), not the
+/// sections it was answered from (`tried`). `None` under two: the browser
+/// shows choices from two.
+pub fn closest_topics(question: &str, tried: &[String]) -> Option<Clarification> {
+    let search = corrected(&normalize(question));
+    let ranked = ranked(&search);
+    let best = ranked.first().map_or(0.0, |(_, score)| *score);
+    let mut ids: Vec<&str> = Vec::new();
+    for topic in matched_topics(&search) {
+        ids.push(&topic.id);
+        ids.extend(topic.related.iter().map(String::as_str));
+    }
+    ids.extend(
+        ranked
+            .iter()
+            .filter(|(_, score)| *score >= 3.0 && *score >= best * 0.5)
+            .map(|(id, _)| *id),
+    );
+    let mut choices: Vec<Feature> = Vec::new();
+    for id in ids {
+        if choices.len() == 3 {
+            break;
+        }
+        if !known_section(id)
+            || id == "document-scope"
+            || MANUAL.fallback.iter().any(|f| f == id)
+            || tried.iter().any(|t| t == id)
+            || choices.iter().any(|c| c.sections.iter().any(|s| s == id))
+        {
+            continue;
+        }
+        let Some(label) = choice_label(id) else {
+            continue;
+        };
+        if choices
+            .iter()
+            .all(|c| normalize(&c.label) != normalize(&label))
+        {
+            choices.push(feature(&label, vec![id.to_string()]));
+        }
+    }
+    (choices.len() >= 2).then(|| Clarification {
+        question: DEAD_END_QUESTION.to_string(),
+        choices,
+        with_company: None,
+    })
+}
+
 // ---------- the model picks the sections ----------
 
 /// The manual's table of contents: each section's id, title and headings.
@@ -577,9 +648,10 @@ static CONTENTS: LazyLock<String> = LazyLock::new(|| {
 const PICK_RULES: &str = r#"You find where the Granite Manager user manual answers a question. Granite Manager is a CRM for countertop and stone shops: customers, deals, quotes with a drawing tool, stone inventory, emails, SMS, calls, schedule, admin settings.
 
 Reply with a JSON object only, in one of these forms:
-1. {"sections": ["id", "id"]}: the 1 to 3 sections whose text answers the question, best first. Prefer the section of the page or screen where the task is done.
+1. {"sections": ["id", "id"]}: the 1 to 3 sections whose text answers the question, best first. Prefer the section of the page or screen where the task is done; when both an employee page and an admin page do it, the one the asker can open.
 2. {"clarify": {"question": "...", "choices": [{"label": "...", "sections": ["id"]}]}}: rarely; only when the question fits two or more different features of the app about equally well, their steps differ, and nothing in the question or the earlier questions says which ("how do I add a template": an email, SMS or quote email template). Never ask about parts of one tool, or when one meaning is the usual one in a countertop shop. The question is one short sentence that names the choices; 2 to 5 choices, each label a few words naming the feature as the app names it, with the sections that answer it.
 3. {"sections": []}: the question is not about using Granite Manager (the company's own prices, policies or process, or small talk).
+4. {"records": true}: the question asks about the company's own records, not how to use the app: a customer, deal, quote or message by name, or counts and lists of them ("find John Smith", "how many deals did we win this month", "which quotes did Rita send"), or asks the chat to do something with them ("draft a follow-up to John"). How to do something in the app is never this, even when it names records ("mark deal won", "add a customer that is a company", "filter customers by sales rep").
 
 Users type fast: read typos and run-together words as the closest app words ("specail" is special, "aquote" is a quote, "deal bord" is the deal board). A follow-up ("and how do I undo it?") is about the same feature as the earlier questions.
 
@@ -593,6 +665,8 @@ pub enum Picked {
     Sections(Vec<String>),
     /// It fits several features: ask which.
     Ask(Clarification),
+    /// It asks about the company's records (the assistant's), not the app.
+    Records,
 }
 
 fn known_section(id: &str) -> bool {
@@ -620,6 +694,9 @@ fn section_list(value: &Value, most: usize) -> Vec<String> {
 /// back only with 2 to 6 choices that each have a label and a section.
 pub fn parse_pick(reply: &str) -> Option<Picked> {
     let value: Value = serde_json::from_str(trim(reply)).ok()?;
+    if value.get("records").and_then(Value::as_bool) == Some(true) {
+        return Some(Picked::Records);
+    }
     if let Some(clarify) = value.get("clarify").filter(|c| c.is_object()) {
         let question = clarify["question"].as_str().map(trim).unwrap_or_default();
         let choices: Vec<Feature> = clarify["choices"]
@@ -649,13 +726,27 @@ pub fn parse_pick(reply: &str) -> Option<Picked> {
         .map(|sections| Picked::Sections(section_list(sections, 3)))
 }
 
+/// Who asks, as [`pick`] reads it: an admin page answers an admin, the
+/// employee one an employee.
+pub const fn asker(is_employee: bool, is_admin: bool, is_superuser: bool) -> &'static str {
+    match (is_superuser, is_admin, is_employee) {
+        (true, _, _) => "a platform superuser",
+        (false, true, true) => "an admin with Employee access",
+        (false, true, false) => "an admin (no Employee access)",
+        (false, false, true) => "an employee such as a sales rep (no Admin access)",
+        (false, false, false) => "a user with no Employee or Admin access",
+    }
+}
+
 /// The model's pick of the sections that answer `question` (`earlier`: the
-/// user's questions before it, newest last), or `None` when it fails.
+/// user's questions before it, newest last; `asker`: [`asker`]), or `None`
+/// when it fails.
 pub async fn pick(
     state: &AppState,
     caller: Caller<'_>,
     question: &str,
     earlier: &[String],
+    asker: &str,
 ) -> Option<Picked> {
     let earlier: Vec<String> = earlier
         .iter()
@@ -665,10 +756,10 @@ pub async fn pick(
         .map(|q| format!("- {}", trim(q)))
         .collect();
     let asked = if earlier.is_empty() {
-        format!("Question: {}", trim(question))
+        format!("Asked by {asker}.\n\nQuestion: {}", trim(question))
     } else {
         format!(
-            "Earlier questions:\n{}\n\nQuestion: {}",
+            "Asked by {asker}.\n\nEarlier questions:\n{}\n\nQuestion: {}",
             earlier.join("\n"),
             trim(question)
         )
@@ -698,13 +789,16 @@ pub async fn pick(
 /// model's pick (or question back, for a feature the topic table doesn't
 /// name) with the best section of the manual's own words in case it missed
 /// one, else the manual's own words alone. `None`: the model finds the
-/// question is not about using the app.
+/// question is not about using the app. `picked`: the model's pick when it
+/// was already asked.
 pub async fn sections_for(
     state: &AppState,
     caller: Caller<'_>,
     question: &str,
     earlier: &[String],
+    asker: &str,
     search: &str,
+    picked: Option<Picked>,
 ) -> Result<Option<Vec<String>>, Clarification> {
     match features(question) {
         Some(Features::Ask(clarification)) => return Err(clarification),
@@ -719,7 +813,11 @@ pub async fn sections_for(
             .cloned()
             .collect()
     };
-    match pick(state, caller, question, earlier).await {
+    let picked = match picked {
+        Some(picked) => Some(picked),
+        None => pick(state, caller, question, earlier, asker).await,
+    };
+    match picked {
         // A feature the topic table names is not one to ask about ("how to
         // make a layout" is the quote's slab layout): the manual's own words.
         Some(Picked::Ask(_)) if matches_topic(question) => Ok(Some(own_words())),
@@ -734,7 +832,7 @@ pub async fn sections_for(
             Ok(Some(ids))
         }
         // The model finds it is not about using the app.
-        Some(Picked::Sections(_)) => Ok(None),
+        Some(Picked::Sections(_) | Picked::Records) => Ok(None),
         None => Ok(Some(own_words())),
     }
 }
@@ -846,6 +944,8 @@ pub fn asks_how_to(query: &str) -> bool {
         re!(r"\bno longer\b"),
         re!(r"\b(?:turn|switch) (?:on|off)\b"),
         re!(r"\b(?:stop|disable|enable|mute|unmute)\b"),
+        // "How" and "where" in Spanish, Russian and Polish.
+        re!(r"\b(?:cómo|como|dónde|donde|как|где|jak|gdzie)\b"),
     ]
     .iter()
     .any(|p| p.is_match(&normalized))
@@ -973,13 +1073,15 @@ pub const CLARIFY_CHOICES: [Choice; 2] = [
 
 /// Whether to ask before answering: a question asking for help that the
 /// how-to rules leave to the company instructions, while a specific manual
-/// topic covers it too and so does one of the company's instructions.
+/// topic covers it too and so does one of the company's instructions. Not
+/// where a page is ("where is my schedule"): only the app has pages.
 pub fn should_clarify(query: &str, how_to: bool, company_instruction: bool) -> bool {
     let normalized = normalize(query);
     !how_to
         && company_instruction
         && !is_price_query(&normalized)
         && is_help_seeking(&normalized)
+        && !re!(r"^where (?:is|are) (?:my|the)\b").is_match(&normalized)
         && matches_topic(query)
 }
 
@@ -1020,6 +1122,8 @@ pub fn asks_cloudtalk_phone(normalized: &str) -> bool {
         && ["phone", "number", "line", "sms sender", "outbound"]
             .iter()
             .any(|w| normalized.contains(w))
+        // Suppliers' numbers sync to CloudTalk contacts: the manual's.
+        && !["supplier", "contact"].iter().any(|w| normalized.contains(w))
 }
 
 fn can_edit_admin_users(access: Option<&Access>) -> bool {
@@ -1152,13 +1256,30 @@ fn asks_inventory_link(normalized: &str) -> bool {
             r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:live )?(?:inventory|stones)\b"
         )
         .is_match(normalized)
+        || re!(r"\b(?:customer (?:inventory|stones?)|showroom) page\b").is_match(normalized)
 }
 
-/// Asks for the company's customer quote link ("customer quote link", "link to the online quote").
+/// Asks for the company's customer quote page ("customer quote link", "link to the online quote"),
+/// not for one quote's link (only its email has it), how to text a quote or why the link
+/// stopped working: the manual's. "Customer" may be misspelled ("cusotmer", "costumer"), and
+/// "so a customer can create a quote" asks for the same page.
 fn asks_quote_link(normalized: &str) -> bool {
-    re!(r"\bquote(?: page)? (?:link|url)\b").is_match(normalized)
-        || re!(r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:customer |online )?quote\b")
+    let link = re!(r"\b(?:c[ou]s\w*m\w*rs?|online|our) quote(?: page)? (?:link|url)\b")
+        .is_match(normalized)
+        // "a link ofr a cusotmer quote": any few words between.
+        || re!(r"\b(?:link|url)\b(?: \w+){0,3} (?:c[ou]s\w*m\w*rs?|online) quote\b")
             .is_match(normalized)
+        // Not a bare "quote page": that is also the quote page inside the app.
+        || re!(r"\b(?:c[ou]s\w*m\w*rs?|online) quote page\b").is_match(normalized)
+        // Not "the customer got the quote": one quote, by email.
+        || re!(
+            r"\b(?:c[ou]s\w*m\w*rs?|clients?) (?:can |could |to |will |would )?(?:create|make|build|draw|design|start)s? (?:a |an |their |his |her )?(?:own )?(?:online )?quotes?\b"
+        )
+        .is_match(normalized);
+    link && !re!(
+        r"\b(?:text|texting|sms|e-?mail|emailed|no longer|not working|doesn'?t work|expired?|(?:de)?activated?)\b|\bto (?:a |the |this )?(?:deal|job|project)\b"
+    )
+    .is_match(normalized)
 }
 
 /// Asks for the inventory or the customer quote link.
@@ -1202,6 +1323,43 @@ pub fn customer_link_answer(
 pub fn quick_answer(question: &str, access: Option<&Access>) -> Option<String> {
     cloudtalk_phone_answer(question, access)
         .or_else(|| cloudtalk_credentials_answer(question, access))
+        .or_else(|| verified_answer(question).map(String::from))
+}
+
+#[derive(Deserialize)]
+struct Verified {
+    questions: Vec<String>,
+    answer: String,
+}
+
+/// A question's words as compared with the verified ones: typos corrected,
+/// punctuation dropped ("How do I pin a note?" is "how do i pin a note").
+fn verified_key(question: &str) -> String {
+    words(&corrected(&normalize(question)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `crm_manual_verified.json`: answers written from the manual and checked
+/// for questions the chat got wrong in the eval, by each wording asked.
+static VERIFIED: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+    let verified: Vec<Verified> =
+        serde_json::from_str(include_str!("crm_manual_verified.json")).expect("valid answers");
+    verified
+        .into_iter()
+        .flat_map(|v| {
+            let answer = v.answer;
+            v.questions
+                .into_iter()
+                .map(move |q| (verified_key(&q), answer.clone()))
+        })
+        .collect()
+});
+
+/// The checked answer to a question asked as one of the verified ones: no
+/// model call.
+pub fn verified_answer(question: &str) -> Option<&'static str> {
+    VERIFIED.get(&verified_key(question)).map(String::as_str)
 }
 
 #[cfg(test)]
@@ -1246,6 +1404,34 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_that_found_nothing_offers_the_closest_topics() {
+        let asked = closest_topics("What about the DLC form?", &[]).expect("topics");
+        assert_eq!(asked.question, DEAD_END_QUESTION);
+        let offered: Vec<(&str, &[String])> = asked
+            .choices
+            .iter()
+            .map(|c| (c.label.as_str(), c.sections.as_slice()))
+            .collect();
+        assert_eq!(offered[0].0, "Texting registration (10DLC)");
+        assert_eq!(offered[0].1, ["texting-registration-10dlc"]);
+        assert_eq!(offered[1].0, "Granite Phone (Telnyx)");
+        assert_eq!(offered[1].1, ["admin-phone-telnyx"]);
+        assert!(offered.len() <= 3);
+        // Not the sections the dead end was answered from.
+        let again = closest_topics(
+            "What about the DLC form?",
+            &["texting-registration-10dlc".to_string()],
+        );
+        assert!(again.is_none_or(|a| {
+            a.choices
+                .iter()
+                .all(|c| c.sections != ["texting-registration-10dlc"])
+        }));
+        // Nothing close: no question back.
+        assert!(closest_topics("what is that?", &[]).is_none());
+    }
+
+    #[test]
     fn asks_when_the_app_and_the_company_both_cover_a_question() {
         let both = "how do I make a special order?";
         assert!(!looks_like_how_to(both));
@@ -1260,6 +1446,8 @@ mod tests {
         // A how-to by the rules goes to the manual.
         let app = "how to make a special order in quote";
         assert!(!should_clarify(app, looks_like_how_to(app), true));
+        // Where a page is: only the app has pages.
+        assert!(!should_clarify("where is my schedule", false, true));
     }
 
     #[test]
@@ -1316,6 +1504,23 @@ mod tests {
         assert!(manual.contains("Change a person's name") && manual.contains("→ **Edit**"));
     }
 
+    /// "The form for SMS" is the carriers' texting registration, not a template.
+    #[test]
+    fn sms_form_is_the_texting_registration() {
+        for question in [
+            "How to fill out a form for SMS",
+            "how do I fill out the 10DLC form",
+            "where is the sms registration",
+            "how do we register for texting",
+        ] {
+            let ids = section_ids_for(question);
+            assert!(
+                ids.iter().any(|id| id == "texting-registration-10dlc"),
+                "{question}: {ids:?}"
+            );
+        }
+    }
+
     #[test]
     fn articles_do_not_break_phrases() {
         for (question, id) in [
@@ -1364,6 +1569,8 @@ mod tests {
             "What is our inventory link?",
             "send me the link to our inventory",
             "stones page url",
+            "what's the customer inventory page",
+            "customer stones page?",
         ] {
             let answer = customer_link_answer(asked, 7, domain).expect(asked);
             assert!(
@@ -1374,7 +1581,12 @@ mod tests {
         for asked in [
             "customer quote link?",
             "Link to the online quote please",
-            "what's the quote url",
+            "what's the customer quote page",
+            "send me the online quote page",
+            "give me a link ofr a cusotmer quote",
+            "No, so a customer can create a quote.",
+            "link where customers can make their own quote",
+            "costumer quote link",
         ] {
             let answer = customer_link_answer(asked, 7, domain).expect(asked);
             assert!(
@@ -1389,6 +1601,15 @@ mod tests {
             "how do I create a quote",
             "how do I link a quote to a deal",
             "how many stones are in inventory",
+            "how do I open the quote page",
+            // One quote's link: only its email has it.
+            "what's the quote url",
+            "what does the customer see when i send them the quote link",
+            "how to text the quote link",
+            "customer says the quote link is no longer active",
+            "how do I link a customer quote to a deal",
+            "how do I create a quote for a customer",
+            "did the customer get the quote",
         ] {
             assert_eq!(customer_link_answer(other, 7, domain), None, "{other}");
         }
@@ -1557,6 +1778,20 @@ mod tests {
     }
 
     #[test]
+    fn verified_answers_match_their_wordings() {
+        let seam = verified_answer("How to move a SEAM?").expect("seam");
+        assert!(seam.contains("Define Seams"));
+        assert_eq!(verified_answer("how to move a seam in the kitchen"), None);
+        // A quick answer too: no model call.
+        assert!(quick_answer("how to move a seam", None).is_some());
+        // No wording is listed twice.
+        let listed: Vec<Verified> =
+            serde_json::from_str(include_str!("crm_manual_verified.json")).unwrap();
+        let wordings: usize = listed.iter().map(|v| v.questions.len()).sum();
+        assert_eq!(VERIFIED.len(), wordings);
+    }
+
+    #[test]
     fn the_model_s_pick_is_checked() {
         assert_eq!(
             parse_pick(
@@ -1590,6 +1825,8 @@ mod tests {
             Some(Picked::Sections(vec!["invoices".into()]))
         );
         assert_eq!(parse_pick("Open the quote."), None);
+        // About the company's records: the assistant's.
+        assert_eq!(parse_pick(r#"{"records": true}"#), Some(Picked::Records));
     }
 
     #[test]

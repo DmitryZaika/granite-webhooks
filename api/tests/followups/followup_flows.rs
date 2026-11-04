@@ -26,8 +26,7 @@ use std::sync::{Arc, Mutex};
 // rep of Paula (9600, 317-555-0177, paula@example.com). Flows are Rita's:
 // 9700 a template step then one a day later, 9701 a text then an email
 // with no delay, 9702 a step with a variable only the rep can fill, 9703 an
-// AI step, 9704 a first step a day out, 9705 an AI follow-up Rita approved
-// (two texts, two days apart).
+// AI step, 9704 a first step a day out.
 
 const FIXTURE: &str = "
 UPDATE company SET cloudtalk_access_key = 'ct-key', cloudtalk_access_secret = 'ct-secret' WHERE id = 100;
@@ -42,8 +41,7 @@ INSERT INTO sms_flows (id, company_id, user_id, name, created_at) VALUES
   (9701, 100, 100, 'Text then email', '2026-09-01 00:00:00'),
   (9702, 100, 100, 'Gate code', '2026-09-01 00:00:00'),
   (9703, 100, 100, 'Generated with AI', '2026-09-01 00:00:00'),
-  (9704, 100, 100, 'Tomorrow', '2026-09-01 00:00:00'),
-  (9705, 100, 100, 'Generated with AI', '2026-09-01 00:00:00');
+  (9704, 100, 100, 'Tomorrow', '2026-09-01 00:00:00');
 INSERT INTO sms_flow_steps (flow_id, position, channel, template_id, custom_text, subject, delay_minutes) VALUES
   (9700, 1, 'sms', NULL, 'Hi {{customer.first_name}}, any questions about the quote?', NULL, 0),
   (9700, 2, 'sms', NULL, 'Second', NULL, 1440),
@@ -51,9 +49,7 @@ INSERT INTO sms_flow_steps (flow_id, position, channel, template_id, custom_text
   (9701, 2, 'email', NULL, 'Two', 'Your quote', 0),
   (9702, 1, 'sms', NULL, 'The gate code is {{gate code}}', NULL, 0),
   (9703, 1, 'sms', NULL, '__GR_AI_FOLLOWUP__', NULL, 0),
-  (9704, 1, 'sms', NULL, 'Tomorrow', NULL, 1440),
-  (9705, 1, 'sms', NULL, 'Want me to resend your quote so it is easy to find?', NULL, 0),
-  (9705, 2, 'sms', NULL, 'Is the project still on for this fall?', NULL, 2880);
+  (9704, 1, 'sms', NULL, 'Tomorrow', NULL, 1440);
 ";
 
 /// Wednesday noon in the store's time zone: both send windows are open.
@@ -70,8 +66,6 @@ struct Fakes {
     text_error: Arc<Mutex<Option<&'static str>>>,
     calls: Arc<Mutex<Vec<Value>>>,
     replies: Arc<Mutex<VecDeque<Value>>>,
-    /// What the model was asked.
-    prompts: Arc<Mutex<Vec<Value>>>,
 }
 
 async fn send_text(
@@ -113,8 +107,7 @@ async fn list_calls(State(fakes): State<Fakes>) -> Json<Value> {
     Json(json!({ "responseData": { "data": calls } }))
 }
 
-async fn complete(State(fakes): State<Fakes>, Json(request): Json<Value>) -> Json<Value> {
-    fakes.prompts.lock().unwrap().push(request);
+async fn complete(State(fakes): State<Fakes>) -> Json<Value> {
     let content = fakes
         .replies
         .lock()
@@ -807,220 +800,6 @@ async fn send_now_makes_the_next_step_due(pool: MySqlPool) {
     }
 }
 
-/// Rita texts Paula herself (not a flow, not an automation).
-async fn rep_text(pool: &MySqlPool, at: &str) {
-    sqlx::query(
-        "INSERT INTO cloudtalk_sms (sender, recipient, text, direction, status, agent, sender_user_id, company_id,
-                                    created_date, recipient10, phone_digits, is_automated)
-         VALUES ('3175550000', '3175550177', 'Sent you the layout', 'outbound', 'sent', '5001', 100, 100,
-                 ?, '3175550177', '3175550177', 0)",
-    )
-    .bind(at)
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
-#[test_db::test(seed)]
-async fn a_text_from_the_rep_during_the_wait_restarts_it(pool: MySqlPool) {
-    let setup = setup(&pool).await;
-    // On the second of the two texts, a day after yesterday's send.
-    let id = sqlx::query(
-        "INSERT INTO sms_flow_enrollments (flow_id, company_id, customer_phone_digits, customer_email, customer_id,
-                                           user_id, status, current_step_position, started_at, anchor_at, next_send_at)
-         VALUES (9700, 100, '3175550177', 'paula@example.com', 9600, 100, 'active', 2,
-                 '2026-10-12 16:00:00', '2026-10-13 16:00:00', '2026-10-01 12:00:00')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap()
-    .last_insert_id();
-    let id = i32::try_from(id).unwrap();
-    // Rita texted Paula herself this morning (10 AM in the store).
-    rep_text(&pool, "2026-10-14 14:00:00").await;
-
-    let run = setup.run_at(noon()).await;
-    assert_eq!((run.processed, run.sent), (1, 0));
-    assert!(setup.texts().is_empty());
-    let after = setup.enrollment(id).await;
-    assert_eq!(
-        (after.status.as_str(), after.current_step_position),
-        ("active", 2)
-    );
-    // A day from her text, not from the flow's.
-    assert_eq!(after.next_send_at, Some(naive("2026-10-15 14:00:00")));
-
-    let run = setup
-        .run_at(parse_iso("2026-10-15T14:05:00Z").unwrap())
-        .await;
-    assert_eq!(run.sent, 1);
-    assert_eq!(setup.texts()[0].text, "Second");
-}
-
-#[test_db::test(seed)]
-async fn an_approved_ai_follow_up_goes_out_as_approved_when_nothing_changed(pool: MySqlPool) {
-    let setup = setup(&pool).await;
-    let id = setup.enroll(9705, Some(9600)).await;
-
-    let run = setup.run_at(noon()).await;
-    assert_eq!(run.sent, 1);
-    assert_eq!(
-        setup.texts()[0].text,
-        "Want me to resend your quote so it is easy to find?"
-    );
-    assert!(setup.fakes.prompts.lock().unwrap().is_empty());
-    assert_eq!(setup.enrollment(id).await.current_step_position, 2);
-}
-
-#[test_db::test(seed)]
-async fn an_approved_ai_follow_up_is_written_again_when_the_conversation_changed(pool: MySqlPool) {
-    let setup = setup(&pool).await;
-    let id = setup.enroll(9705, Some(9600)).await;
-    // Rita texted Paula after she approved the follow-up.
-    rep_text(&pool, "2026-10-05 15:00:00").await;
-    sqlx::query("UPDATE users SET followup_sms_signature = 'Rita\nAcme Stone' WHERE id = 100")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let rewritten = json!({ "skip": false, "messages": [{
-        "skip": false, "subject": "", "body": "Does Thursday or Friday work for a quick call?", "delayMinutes": 0
-    }] });
-    // A second copy in case the checks ask for a repair.
-    setup
-        .fakes
-        .replies
-        .lock()
-        .unwrap()
-        .extend([rewritten.clone(), rewritten]);
-
-    let run = setup.run_at(noon()).await;
-    assert_eq!(run.sent, 1);
-    assert_eq!(
-        setup.texts()[0].text,
-        "Does Thursday or Friday work for a quick call?\n\nRita\nAcme Stone"
-    );
-    // The preview's writer, told what the approved draft was for.
-    let prompts = setup.fakes.prompts.lock().unwrap().clone();
-    let system = prompts[0]["messages"][0]["content"].as_str().unwrap();
-    assert!(
-        system.starts_with("# AI Follow-Up Instructions"),
-        "{system}"
-    );
-    let user = prompts[0]["messages"][1]["content"].as_str().unwrap();
-    assert!(user.contains("SEND-TIME REWRITE"), "{user}");
-    assert!(
-        user.contains("Want me to resend your quote so it is easy to find?"),
-        "{user}"
-    );
-    assert_eq!(setup.enrollment(id).await.current_step_position, 2);
-}
-
-#[test_db::test(seed)]
-async fn a_changed_offer_rewrites_and_a_skip_completes_the_run(pool: MySqlPool) {
-    let setup = setup(&pool).await;
-    let id = setup.enroll(9705, Some(9600)).await;
-    // The offer changed after Rita approved the follow-up.
-    sqlx::query(
-        "INSERT INTO ai_followup_offers (company_id, offer, ends_on, updated_by, updated_at)
-         VALUES (100, 'Free sink with any kitchen', NULL, 101, '2026-10-06 09:00:00')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    setup
-        .fakes
-        .replies
-        .lock()
-        .unwrap()
-        .push_back(json!({ "skip": true, "reason": "nothing new to say" }));
-
-    let run = setup.run_at(noon()).await;
-    assert_eq!(run.sent, 0);
-    assert!(setup.texts().is_empty());
-    let user = setup.fakes.prompts.lock().unwrap()[0]["messages"][1]["content"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(
-        user.contains("CURRENT OFFER\nFree sink with any kitchen"),
-        "{user}"
-    );
-    assert_eq!(setup.enrollment(id).await.status, "completed");
-}
-
-#[test_db::test(seed)]
-async fn a_deal_note_after_the_approval_rewrites_the_follow_up(pool: MySqlPool) {
-    let setup = setup(&pool).await;
-    sqlx::raw_sql(
-        "INSERT INTO deals (id, customer_id, title, list_id, position, user_id, created_at, updated_at)
-           VALUES (9650, 9600, 'Paula kitchen', 100, 9, 100, '2026-09-01 08:00:00', '2026-09-01 08:00:00');
-         INSERT INTO deal_notes (deal_id, company_id, content, created_at, created_by)
-           VALUES (9650, 100, 'Old note before the follow-up', '2026-09-20 10:00:00', 'Rita')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let id = setup.enroll(9705, Some(9600)).await;
-    // Nothing new since the approval: the approved copy goes out.
-    assert_eq!(setup.run_at(noon()).await.sent, 1);
-    assert_eq!(
-        setup.texts()[0].text,
-        "Want me to resend your quote so it is easy to find?"
-    );
-
-    sqlx::query(
-        "INSERT INTO deal_notes (deal_id, company_id, content, created_at, created_by)
-         VALUES (9650, 100, 'Paula picked Calacatta Gold, wants the quote updated', '2026-10-15 10:00:00', 'Rita')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let rewritten = json!({ "skip": false, "messages": [{
-        "skip": false, "subject": "", "body": "Want the updated quote by text or email?", "delayMinutes": 0
-    }] });
-    setup
-        .fakes
-        .replies
-        .lock()
-        .unwrap()
-        .extend([rewritten.clone(), rewritten]);
-    setup.make_due(id).await;
-    let run = setup
-        .run_at(parse_iso("2026-10-16T16:00:00Z").unwrap())
-        .await;
-    assert_eq!(run.sent, 1);
-    assert_eq!(
-        setup.texts()[1].text,
-        "Want the updated quote by text or email?"
-    );
-}
-
-#[test_db::test(seed)]
-async fn a_rep_without_a_texting_number_cannot_start_a_text_flow(pool: MySqlPool) {
-    let setup = setup(&pool).await;
-    sqlx::query("UPDATE users SET cloudtalk_phone_number = NULL WHERE id = 100")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let path = "/v1/customers/9600/flow";
-
-    let res = post_flow(
-        &setup,
-        sessions::REP,
-        path,
-        json!({ "intent": "start", "flow_id": 9704 }),
-    )
-    .await;
-    res.assert_status(StatusCode::BAD_REQUEST);
-    assert_eq!(res.json::<Value>()["error"], "agent_not_linked");
-    let started: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM sms_flow_enrollments WHERE customer_id = 9600")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(started, 0);
-}
-
 #[test_db::test(seed)]
 async fn a_cloudtalk_rep_starts_a_text_flow_where_ringcentral_is_connected_too(pool: MySqlPool) {
     let setup = setup(&pool).await;
@@ -1044,119 +823,27 @@ async fn a_cloudtalk_rep_starts_a_text_flow_where_ringcentral_is_connected_too(p
     assert_eq!(res.json::<Value>()["active_flow"]["status"], "active");
 }
 
-/// Paula's open deal with Rita (list 101), from the start of last month.
-async fn paula_deal(pool: &MySqlPool) {
-    sqlx::query(
-        "INSERT INTO deals (id, customer_id, title, list_id, position, user_id, created_at, updated_at)
-         VALUES (9650, 9600, 'Paula kitchen', 101, 9, 100, '2026-09-01 08:00:00', '2026-09-01 08:00:00')",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
-async fn end_run(pool: &MySqlPool, id: i32, status: &str, error: Option<&str>) {
-    sqlx::query(
-        "UPDATE sms_flow_enrollments SET status = ?, error_message = ?, next_send_at = NULL,
-                updated_at = UTC_TIMESTAMP() WHERE id = ?",
-    )
-    .bind(status)
-    .bind(error)
-    .bind(id)
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
-async fn notifications(pool: &MySqlPool) -> Vec<(i32, Option<i64>, String, Option<String>)> {
-    sqlx::query_as(
-        "SELECT user_id, CAST(deal_id AS SIGNED), message, notification_type FROM notifications
-          WHERE notification_type LIKE 'followup_%' ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap()
-}
-
 #[test_db::test(seed)]
-async fn a_reply_to_a_follow_up_alerts_the_rep_once(pool: MySqlPool) {
+async fn a_rep_without_a_texting_number_cannot_start_a_text_flow(pool: MySqlPool) {
     let setup = setup(&pool).await;
-    paula_deal(&pool).await;
-    let id = setup.enroll(9700, Some(9600)).await;
-    sqlx::query(
-        "INSERT INTO cloudtalk_sms (sender, recipient, text, direction, status, company_id, created_date,
-                                    phone_digits, sender10, is_echo)
-         VALUES ('3175550177', '3175550000', 'Not now,\n maybe in May', 'inbound', 'received', 100,
-                 '2026-10-02 09:00:00', '3175550177', '3175550177', 0)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    end_run(&pool, id, "stopped_by_reply", None).await;
-
-    let alerted = api::followups::alerts::alert_ended_followups(&setup.state)
-        .await
-        .unwrap();
-    assert_eq!(alerted, 1);
-    assert_eq!(
-        notifications(&pool).await,
-        vec![(
-            100,
-            Some(9650),
-            "Replied to your follow-up: “Not now, maybe in May”".to_string(),
-            Some("followup_replied".to_string())
-        )]
-    );
-    let emails = setup.emails();
-    assert_eq!(emails.len(), 1);
-    assert_eq!(
-        emails[0].subject,
-        "Paula Prospect replied to your follow-up"
-    );
-    assert!(
-        emails[0].body.contains("/employee/deals/edit/9650/project"),
-        "{}",
-        emails[0].body
-    );
-    // Told once.
-    assert_eq!(
-        api::followups::alerts::alert_ended_followups(&setup.state)
-            .await
-            .unwrap(),
-        0
-    );
-    assert_eq!(setup.emails().len(), 1);
-}
-
-#[test_db::test(seed)]
-async fn a_failed_follow_up_tells_the_rep_why_and_old_ends_stay_quiet(pool: MySqlPool) {
-    let setup = setup(&pool).await;
-    paula_deal(&pool).await;
-    let id = setup.enroll(9700, Some(9600)).await;
-    end_run(&pool, id, "failed", Some("agent_not_linked")).await;
-    // Ended before alerts existed: counted as told.
-    let old = setup.enroll(9701, Some(9600)).await;
-    end_run(&pool, old, "stopped_by_reply", None).await;
-    sqlx::query("UPDATE sms_flow_enrollments SET ended_alert_at = UTC_TIMESTAMP() WHERE id = ?")
-        .bind(old)
+    sqlx::query("UPDATE users SET cloudtalk_phone_number = NULL WHERE id = 100")
         .execute(&pool)
         .await
         .unwrap();
 
-    let alerted = api::followups::alerts::alert_ended_followups(&setup.state)
-        .await
-        .unwrap();
-    assert_eq!(alerted, 1);
-    let rows = notifications(&pool).await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].3.as_deref(), Some("followup_failed"));
-    assert_eq!(
-        rows[0].2,
-        "Follow-up stopped because your texting line isn't linked to your account. Fix it, then start it again."
-    );
-    assert_eq!(
-        setup.emails()[0].subject,
-        "Follow-up for Paula Prospect stopped"
-    );
+    let res = post_flow(
+        &setup,
+        sessions::REP,
+        "/v1/customers/9600/flow",
+        json!({ "intent": "start", "flow_id": 9704 }),
+    )
+    .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(res.json::<Value>()["error"], "agent_not_linked");
+    let started: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sms_flow_enrollments WHERE customer_id = 9600")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(started, 0);
 }
-

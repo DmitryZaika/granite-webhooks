@@ -46,7 +46,7 @@ fn apns(data: &BTreeMap<String, String>) -> Value {
         ),
         Some("text") => ("New text", None),
         Some("email") => ("New email", None),
-        Some("notification") => ("CRM notification", None),
+        Some("notification") => (field("heading").unwrap_or("New update in Granite"), None),
         Some("lead") => (
             match field("kind") {
                 Some("repeat") => "Repeated lead",
@@ -627,6 +627,10 @@ zVwmY+zvp0zIX68RsO90kuxb
             data
         };
         assert_eq!(alert(&with("text", &[])), json!({ "title": "New text" }));
+        assert_eq!(
+            alert(&with("notification", &[("heading", "Activity Reminder")])),
+            json!({ "title": "Activity Reminder" })
+        );
         assert_eq!(
             alert(&with("lead", &[("kind", "assigned")])),
             json!({ "title": "Lead assigned to you" })

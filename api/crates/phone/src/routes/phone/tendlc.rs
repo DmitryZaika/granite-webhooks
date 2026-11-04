@@ -23,6 +23,7 @@
 //! statuses and counts only). Telnyx's reasons come back with phone numbers
 //! masked.
 
+use crate::ai::Caller;
 use crate::auth::session::SessionUser;
 use crate::auth::{CompanyManager, CurrentUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -34,20 +35,30 @@ use crate::phone::tendlc::{
     self as form, Row, TenDlcDraft, TenDlcFeedback, TenDlcProblem, TenDlcStatus, UseCase, audit,
     locked_fields_changed, move_status,
 };
+use crate::phone::tendlc_chat::{self as chat, Asker, ChatRole, ChatTurn};
 use crate::phone::tendlc_check::{self as ai_check, TenDlcAiCheck};
 use crate::phone::tendlc_registry::{self as registry, APPEAL_CHARS, RegistryError};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::HeaderValue;
+use axum::response::sse::{self, Sse};
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
+use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::convert::Infallible;
+use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_tendlc_registration, save_tendlc_registration))
         .routes(routes!(mark_tendlc_registration_ready))
+        .routes(routes!(send_tendlc_registration_anyway))
         .routes(routes!(list_tendlc_registrations))
         .routes(routes!(get_company_tendlc, save_company_tendlc))
         .routes(routes!(get_company_tendlc_cost))
@@ -55,6 +66,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(resend_company_tendlc))
         .routes(routes!(refresh_company_tendlc))
         .routes(routes!(assign_company_tendlc_numbers))
+        .routes(routes!(ask_tendlc_helper))
+        .routes(routes!(ask_company_tendlc_helper))
 }
 
 /// What the company's Managers may do with the registration now.
@@ -68,6 +81,10 @@ pub struct TenDlcActions {
     /// one Telnyx refused once it is fixed (`problems` must be empty); not
     /// while its AI check waits or runs.
     pub mark_ready: bool,
+    /// Send it to the superusers although the AI check asked for changes
+    /// (`POST .../send-anyway`; the AI can be wrong): a complete form whose
+    /// check's result is `changes`.
+    pub send_anyway: bool,
 }
 
 /// A company's 10DLC texting registration.
@@ -159,11 +176,15 @@ fn registration_view(row: Option<&Row>, suggestion: TenDlcDraft) -> TenDlcRegist
             actions: TenDlcActions {
                 edit: true,
                 mark_ready: false,
+                send_anyway: false,
             },
         };
     };
     let draft = row.draft();
     let problems = form::problems(&draft);
+    let waiting = matches!(row.status, TenDlcStatus::Draft | TenDlcStatus::Rejected);
+    let send_anyway =
+        waiting && problems.is_empty() && row.ai_check_status.as_deref() == Some("changes");
     TenDlcRegistration {
         saved: true,
         status: row.status,
@@ -185,8 +206,8 @@ fn registration_view(row: Option<&Row>, suggestion: TenDlcDraft) -> TenDlcRegist
         ai_check: ai_check::view(row),
         actions: TenDlcActions {
             edit: row.status.editable(),
-            mark_ready: matches!(row.status, TenDlcStatus::Draft | TenDlcStatus::Rejected)
-                && !ai_check::checking(row),
+            mark_ready: waiting && !ai_check::checking(row),
+            send_anyway,
         },
         draft,
     }
@@ -251,7 +272,7 @@ async fn save(
         .as_ref()
         .is_some_and(|before| before.draft() != draft);
     if row.status == TenDlcStatus::Ready
-        && (!problems.is_empty() || (by_manager && changed && state.ai.is_enabled()))
+        && (!problems.is_empty() || (by_manager && changed && state.claude.is_enabled()))
     {
         move_status(pool, row.id, TenDlcStatus::Ready, TenDlcStatus::Draft, None).await?;
     }
@@ -386,7 +407,7 @@ pub async fn mark_tendlc_registration_ready(
             ));
         }
         registry::complete(&row.draft()).map_err(api_error)?;
-        if state.ai.is_enabled() {
+        if state.claude.is_enabled() {
             // The job checks it (`tendlc_check`) and moves it on.
             if ai_check::request(pool, row.id, user.id).await? {
                 audit(
@@ -418,6 +439,63 @@ pub async fn mark_tendlc_registration_ready(
             .await?;
         }
     }
+    let row = form::load(pool, user.company_id).await?;
+    Ok(Json(registration_view(
+        row.as_ref(),
+        TenDlcDraft::default(),
+    )))
+}
+
+/// Send the texting registration (10DLC) on despite the AI check
+///
+/// When the AI check asked for changes (`aiCheck.status` `changes`) and the
+/// Manager is sure the AI is wrong: the registration becomes ready as it
+/// is, the AI check's status `overridden`, and the superusers are told
+/// (bell and email) with the changes the AI asked for; one of them decides
+/// and sends it to Telnyx. 400 when nothing is saved, it is not complete,
+/// or the AI check did not ask for changes; 409 once it is with Telnyx.
+/// Audited. The company's Managers only.
+#[crate::openapi::path(
+    post,
+    path = "/v1/phone/admin/tendlc/send-anyway",
+    operation_id = "send_tendlc_registration_anyway",
+    tag = "phone",
+    responses(
+        (status = 200, description = "The registration, ready", body = TenDlcRegistration),
+        (status = 400, description = "Nothing saved, not complete, or no changes asked for", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a Manager of the company", body = ErrorBody),
+        (status = 409, description = "It is with Telnyx already", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn send_tendlc_registration_anyway(
+    State(state): State<AppState>,
+    CompanyManager(user): CompanyManager,
+) -> ApiResult<Json<TenDlcRegistration>> {
+    let pool = &state.pool;
+    let row = form::load(pool, user.company_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest("Save the registration first.".into()))?;
+    if !row.status.editable() {
+        return Err(ApiError::Conflict(
+            "The registration is with Telnyx already.".into(),
+        ));
+    }
+    if row.status == TenDlcStatus::Ready || row.ai_check_status.as_deref() != Some("changes") {
+        return Err(ApiError::BadRequest(
+            "Only a registration the AI check asked to change can be sent anyway.".into(),
+        ));
+    }
+    registry::complete(&row.draft()).map_err(api_error)?;
+    let by = user
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(user.email.as_str());
+    ai_check::send_anyway(&state, &row, user.id, by).await?;
     let row = form::load(pool, user.company_id).await?;
     Ok(Json(registration_view(
         row.as_ref(),
@@ -876,12 +954,16 @@ pub async fn get_company_tendlc_cost(
 /// brand: a send whose answer never came looks the brand up on Telnyx
 /// first. The form must be complete (the company's Managers usually mark it
 /// ready first) and the company needs its Telnyx setup (Telnyx reports to
-/// its webhooks). Returns the review: `sent` while the brand registers,
-/// `campaign_pending`, or `rejected` with Telnyx's reasons. 400 when not
-/// complete, without a Telnyx setup, or when Telnyx refused the brand
-/// (nothing was made); 409 when sent already (use `.../resend`) or another
-/// send runs; 502 when Telnyx did not answer about the brand; 503 when
-/// Telnyx is not set up on the server. Audited. Superusers only.
+/// its webhooks). With an AI on the server, its check must have passed this
+/// form within the last 24 hours (pages change): an older check, or none,
+/// is asked for again and the send answers 409 until it passes (the
+/// superusers are told, in minutes). Returns the review: `sent` while the
+/// brand registers, `campaign_pending`, or `rejected` with Telnyx's reasons.
+/// 400 when not complete, without a Telnyx setup, or when Telnyx refused
+/// the brand (nothing was made); 409 when sent already (use `.../resend`),
+/// another send runs, or the AI check has not passed this form within a
+/// day; 502 when Telnyx did not answer about the brand; 503 when Telnyx is
+/// not set up on the server. Audited. Superusers only.
 #[crate::openapi::path(
     post,
     path = "/v1/superuser/companies/{id}/tendlc/send",
@@ -894,7 +976,7 @@ pub async fn get_company_tendlc_cost(
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "No such company", body = ErrorBody),
-        (status = 409, description = "Sent already, or another send runs", body = ErrorBody),
+        (status = 409, description = "Sent already, another send runs, or the AI check has not passed this form within a day (it runs again)", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 502, description = "Telnyx did not answer", body = ErrorBody),
         (status = 503, description = "Telnyx is not set up on the server", body = ErrorBody),
@@ -932,10 +1014,13 @@ pub struct TenDlcResendInput {
 /// Telnyx takes on a registered campaign; it reviews it again), and the
 /// appeal when `appealReason` is written (for a fix outside the form); a
 /// new campaign when TCR refused the first one or Telnyx refused to create
-/// it. Returns the review. 400 when not complete, nothing changed and no
-/// appeal is written, or Telnyx refused the first change; 409 when it was
-/// never sent or Telnyx is reviewing it; 502 when Telnyx did not answer;
-/// 503 when Telnyx is not set up on the server. Audited. Superusers only.
+/// it. As for the first send, the AI check must have passed this form
+/// within a day (else it runs again first). Returns the review. 400 when
+/// not complete, nothing changed and no appeal is written, or Telnyx
+/// refused the first change; 409 when it was never sent, Telnyx is
+/// reviewing it, or the AI check has not passed this form within a day;
+/// 502 when Telnyx did not answer; 503 when Telnyx is not set up on the
+/// server. Audited. Superusers only.
 #[crate::openapi::path(
     post,
     path = "/v1/superuser/companies/{id}/tendlc/resend",
@@ -949,7 +1034,7 @@ pub struct TenDlcResendInput {
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "No such company", body = ErrorBody),
-        (status = 409, description = "Never sent, Telnyx is reviewing it, or another send runs", body = ErrorBody),
+        (status = 409, description = "Never sent, Telnyx is reviewing it, another send runs, or the AI check has not passed this form within a day (it runs again)", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 502, description = "Telnyx did not answer", body = ErrorBody),
         (status = 503, description = "Telnyx is not set up on the server", body = ErrorBody),
@@ -1083,4 +1168,140 @@ pub async fn assign_company_tendlc_numbers(
         skipped: run.skipped,
         review: review(&state, id).await?,
     }))
+}
+
+/// A question to the AI helper beside the form.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TenDlcChatInput {
+    /// The conversation so far, oldest first, ending with the question
+    /// (the latest [`chat::MAX_TURNS`] are read).
+    pub messages: Vec<ChatTurn>,
+    /// The form as it is on screen, unsaved edits included.
+    pub draft: TenDlcDraft,
+    /// The step on screen: `business`, `texting` or `review`.
+    #[serde(default)]
+    pub step: String,
+}
+
+/// The helper's answer as server-sent events: unnamed `message` pieces of
+/// the answer, then `done`, or `failure` with what to tell the user.
+async fn chat_answer(
+    state: AppState,
+    company_id: i32,
+    user_id: i32,
+    asker: Asker,
+    input: TenDlcChatInput,
+) -> ApiResult<Response> {
+    let asked = input
+        .messages
+        .last()
+        .is_some_and(|turn| turn.role == ChatRole::User && !turn.content.trim().is_empty());
+    if !asked {
+        return Err(ApiError::BadRequest("Ask a question".into()));
+    }
+    let messages = chat::messages(
+        &state.pool,
+        company_id,
+        asker,
+        &input.draft,
+        &input.step,
+        &input.messages,
+    )
+    .await?;
+    let (tx, rx) = mpsc::unbounded_channel::<sse::Event>();
+    tokio::spawn(async move {
+        let caller = Caller {
+            feature: "tendlc_chat",
+            user_id: Some(user_id),
+            company_id: Some(company_id),
+        };
+        let pieces = tx.clone();
+        let result = chat::answer(&state, caller, messages, |text| {
+            let _ = pieces.send(sse::Event::default().data(text.replace('\r', "")));
+        })
+        .await;
+        let end = match result {
+            Ok(_) => sse::Event::default().event("done").data("1"),
+            Err(err) => {
+                tracing::error!(error = %err, company = company_id, "10DLC helper did not answer");
+                sse::Event::default()
+                    .event("failure")
+                    .data("The AI could not answer. Try again.")
+            }
+        };
+        let _ = tx.send(end);
+    });
+    let stream = UnboundedReceiverStream::new(rx).map(Ok::<_, Infallible>);
+    let mut response = Sse::new(stream).into_response();
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    Ok(response)
+}
+
+/// Ask the texting registration (10DLC) helper
+///
+/// The AI helper beside the form answers a question about filling it in,
+/// streamed as server-sent events (unnamed `message` pieces, then `done`,
+/// or `failure` with what to tell the user). It reads the form as sent
+/// (what is on screen, unsaved edits included) and its step, what blocks
+/// marking it ready, the company (name, address, website, numbers), where
+/// the registration is (the carriers' reasons, the AI check's changes) and
+/// the carriers' rules. The conversation is the browser's; nothing is
+/// saved. 400 when the last message is not a question. The company's
+/// Managers only.
+#[crate::openapi::path(
+    post,
+    path = "/v1/phone/admin/tendlc/chat",
+    operation_id = "ask_tendlc_helper",
+    tag = "phone",
+    request_body = TenDlcChatInput,
+    responses(
+        (status = 200, description = "The answer as server-sent events", content_type = "text/event-stream", body = String),
+        (status = 400, description = "No question", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a Manager of the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn ask_tendlc_helper(
+    State(state): State<AppState>,
+    CompanyManager(user): CompanyManager,
+    JsonBody(input): JsonBody<TenDlcChatInput>,
+) -> ApiResult<Response> {
+    chat_answer(state, user.company_id, user.id, Asker::Manager, input).await
+}
+
+/// Ask the texting registration (10DLC) helper about a company's form
+///
+/// As `POST /v1/phone/admin/tendlc/chat`, for a superuser reviewing the
+/// company's registration. Superusers only.
+#[crate::openapi::path(
+    post,
+    path = "/v1/superuser/companies/{id}/tendlc/chat",
+    operation_id = "ask_company_tendlc_helper",
+    tag = "phone",
+    params(("id" = i32, Path, description = "Company id")),
+    request_body = TenDlcChatInput,
+    responses(
+        (status = 200, description = "The answer as server-sent events", content_type = "text/event-stream", body = String),
+        (status = 400, description = "No question", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a superuser", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn ask_company_tendlc_helper(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<TenDlcChatInput>,
+) -> ApiResult<Response> {
+    superuser(&user)?;
+    company_exists(&state, id).await?;
+    chat_answer(state, id, user.id, Asker::Superuser, input).await
 }

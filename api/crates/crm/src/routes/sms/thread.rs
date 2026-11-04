@@ -1,7 +1,7 @@
 //! One conversation, and its read marker.
 
 use super::provider::{
-    Param, SAMPLE_PHONES, SmsProvider, fetch_all, phone_variants, valid_thread_phone,
+    COPY_KEY, Param, SAMPLE_PHONES, SmsProvider, fetch_all, phone_variants, valid_thread_phone,
 };
 use super::rollup::{MANUAL_UNREAD_AT, manual_unread};
 use super::schemas::{
@@ -33,6 +33,9 @@ struct MessageRow {
     status: String,
     agent: Option<String>,
     conversation_at: DateTime<Utc>,
+    /// The original a copy names (`moves`).
+    #[sqlx(default)]
+    copy_of: Option<String>,
 }
 
 /// The thread's rows (`s`) visible to the caller, before `before_id`.
@@ -55,8 +58,8 @@ fn thread_params(
     before_id: Option<i64>,
 ) -> Vec<Param> {
     let mut params: Vec<Param> = vec![company_id.into(), phone.into()];
-    if let Some((_, value)) = &access.clause {
-        params.push(value.clone());
+    if let Some((_, values)) = &access.clause {
+        params.extend(values.iter().cloned());
     }
     if let Some(id) = before_id {
         params.push(id.into());
@@ -148,8 +151,12 @@ async fn message_rows(
         )
     } else {
         let order = provider.order_column();
+        let copy_of = format!(
+            ", IF(COALESCE(s.idempotency_key, '') REGEXP '{COPY_KEY}', s.idempotency_key, NULL)
+                    AS copy_of"
+        );
         format!(
-            "SELECT {columns}, s.created_date AS conversation_at FROM {table} s
+            "SELECT {columns}, s.created_date AS conversation_at{copy_of} FROM {table} s
               WHERE {filter}
               ORDER BY s.created_date DESC, s.{order} DESC, s.id DESC
               LIMIT ?"
@@ -269,8 +276,8 @@ pub(super) async fn thread_unread(
         user.company_id.into(),
         phone.into(),
     ];
-    if let Some((_, value)) = &access.clause {
-        params.push(value.clone());
+    if let Some((_, values)) = &access.clause {
+        params.extend(values.iter().cloned());
     }
     params.push(phone.into());
     let manual = manual_unread("r.last_read_at");
@@ -465,6 +472,7 @@ async fn to_messages(
                 },
                 text: row.text,
                 agent: row.agent,
+                copy_of: row.copy_of,
                 agent_id,
                 agent_name,
                 created_at: row.conversation_at,
@@ -583,7 +591,7 @@ pub async fn get_thread(
 
 /// Sets the caller's read marker on a thread they can see; silently nothing
 /// otherwise, so the answer never tells which phones exist.
-async fn set_marker(
+pub(super) async fn set_marker(
     state: &AppState,
     user: &SessionUser,
     provider: SmsProvider,

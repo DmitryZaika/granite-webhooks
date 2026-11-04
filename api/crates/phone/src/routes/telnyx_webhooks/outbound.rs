@@ -675,11 +675,17 @@ async fn approve(
         tracing::warn!(call_id = id, error = %err, "event not linked to its call");
     }
     let record = plan.emergency.is_none() && records_outbound(config);
+    // The user turned the recording voice off (My Account): recorded from the
+    // answer with no notice.
+    let voice = match &plan.user {
+        Some(user) if record => settings::says_recording_notice(pool, user.id, config.company_id).await,
+        _ => true,
+    };
     // A transfer plays only an audio file to the customer before bridging.
     // Without the company's notice recording the call is bridged unrecorded,
     // and `answered` says the notice to both sides, then starts recording.
-    let notice_url = config.recording_notice_url.clone().filter(|_| record);
-    let record_from_answer = notice_url.is_some();
+    let notice_url = config.recording_notice_url.clone().filter(|_| record && voice);
+    let record_from_answer = notice_url.is_some() || (record && !voice);
     let transfer = Transfer {
         to: plan.to.clone(),
         from: plan.caller.as_ref().map(|caller| caller.e164.clone()),

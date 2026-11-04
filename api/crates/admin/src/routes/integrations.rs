@@ -3,7 +3,8 @@
 //!
 //! - `GET  /v1/company/settings`                  → name, address, logo, sales tax, integrations
 //! - `PUT  /v1/company/settings`                  → save them
-//! - `POST /v1/company/api-token-email`           → email the docs API bearer token (managers)
+//! - `PUT  /v1/company/auto-sale`                 → sale form on a won deal or sold quote
+//! - `POST /v1/company/api-token-email`          → email the docs API bearer token (managers)
 //! - `GET  /v1/quickbooks/connection`             → can the company connect, is it connected
 //! - `POST /v1/quickbooks/connection/start`       → Intuit's consent link
 //! - `POST /v1/quickbooks/connection`             → finish: the code Intuit returned
@@ -41,6 +42,10 @@ use serde::{Deserialize, Serialize};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_settings, save_settings))
+        .routes(routes!(save_auto_sale))
+        .routes(routes!(save_auto_unscheduled_jobs))
+        .routes(routes!(save_auto_invoice))
+        .routes(routes!(save_quote_invoice_sync))
         .routes(routes!(email_api_token))
         .routes(routes!(
             quickbooks_status,
@@ -67,7 +72,7 @@ pub struct TargetCompany {
     pub company_id: Option<i32>,
 }
 
-const fn target(user: &crate::auth::session::SessionUser, query: &TargetCompany) -> i32 {
+pub(crate) const fn target(user: &crate::auth::session::SessionUser, query: &TargetCompany) -> i32 {
     match query.company_id {
         Some(id) if user.is_superuser => id,
         _ => user.company_id,
@@ -318,6 +323,215 @@ pub async fn save_settings(
     .bind(company_id)
     .execute(&state.pool)
     .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Body of `PUT /v1/company/auto-sale`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AutoSaleInput {
+    /// On: marking a deal won or a quote sold opens the sale form.
+    pub enabled: bool,
+}
+
+/// Switch the sale form on a win
+///
+/// Admin › Quotes › Automation. When on, marking a deal won or a quote sold opens
+/// the sale form, filled from the quote (`auto_sale` in
+/// `GET /v1/company/features`).
+#[crate::openapi::path(
+    put,
+    path = "/v1/company/auto-sale",
+    operation_id = "save_company_auto_sale",
+    tag = "company",
+    params(TargetCompany),
+    request_body = AutoSaleInput,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller does not manage the company", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn save_auto_sale(
+    State(state): State<AppState>,
+    UserManager(user): UserManager,
+    Query(query): Query<TargetCompany>,
+    JsonBody(input): JsonBody<AutoSaleInput>,
+) -> ApiResult<StatusCode> {
+    let company_id = target(&user, &query);
+    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM company WHERE id = ?")
+        .bind(company_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(ApiError::NotFound);
+    }
+    sqlx::query("UPDATE company SET auto_sale = ? WHERE id = ?")
+        .bind(input.enabled)
+        .bind(company_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Body of `PUT /v1/company/auto-unscheduled-jobs`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AutoUnscheduledJobsInput {
+    /// On: marking a quote sold adds its template and installation to
+    /// Unscheduled.
+    pub enabled: bool,
+}
+
+/// Switch a sold quote's jobs in Unscheduled
+///
+/// Admin › Quotes › Automation. When on, marking a quote sold adds a template and an
+/// installation event to the schedule's Unscheduled list
+/// (`auto_unscheduled_jobs` in `GET /v1/company/features`).
+#[crate::openapi::path(
+    put,
+    path = "/v1/company/auto-unscheduled-jobs",
+    operation_id = "save_company_auto_unscheduled_jobs",
+    tag = "company",
+    params(TargetCompany),
+    request_body = AutoUnscheduledJobsInput,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller does not manage the company", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn save_auto_unscheduled_jobs(
+    State(state): State<AppState>,
+    UserManager(user): UserManager,
+    Query(query): Query<TargetCompany>,
+    JsonBody(input): JsonBody<AutoUnscheduledJobsInput>,
+) -> ApiResult<StatusCode> {
+    let company_id = target(&user, &query);
+    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM company WHERE id = ?")
+        .bind(company_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(ApiError::NotFound);
+    }
+    sqlx::query("UPDATE company SET auto_unscheduled_jobs = ? WHERE id = ?")
+        .bind(input.enabled)
+        .bind(company_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Body of `PUT /v1/company/auto-invoice`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AutoInvoiceInput {
+    /// On: marking a quote sold opens its QuickBooks invoice to confirm.
+    pub enabled: bool,
+}
+
+/// Switch the invoice on a sold quote
+///
+/// Admin › Quotes › Automation "Create invoice from quote". When on, marking
+/// a quote sold opens its QuickBooks invoice, filled from the sold option;
+/// confirming it creates the invoice in QuickBooks (`auto_invoice` in
+/// `GET /v1/company/features`).
+#[crate::openapi::path(
+    put,
+    path = "/v1/company/auto-invoice",
+    operation_id = "save_company_auto_invoice",
+    tag = "company",
+    params(TargetCompany),
+    request_body = AutoInvoiceInput,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller does not manage the company", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn save_auto_invoice(
+    State(state): State<AppState>,
+    UserManager(user): UserManager,
+    Query(query): Query<TargetCompany>,
+    JsonBody(input): JsonBody<AutoInvoiceInput>,
+) -> ApiResult<StatusCode> {
+    let company_id = target(&user, &query);
+    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM company WHERE id = ?")
+        .bind(company_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(ApiError::NotFound);
+    }
+    sqlx::query("UPDATE company SET auto_invoice = ? WHERE id = ?")
+        .bind(input.enabled)
+        .bind(company_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Body of `PUT /v1/company/quote-invoice-sync`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuoteInvoiceSyncInput {
+    /// On: a new invoice from a quote starts with "Keep in sync with the
+    /// quote" ticked.
+    pub enabled: bool,
+}
+
+/// Switch keeping invoices in sync with their quote
+///
+/// Admin › Quotes › Automation "Automatically synchronize quote with
+/// invoices". When on, an invoice created from a quote starts with "Keep in
+/// sync with the quote" ticked: when the quote changes, the invoice is
+/// rebuilt from it (`quote_invoice_sync` in `GET /v1/company/features`,
+/// `PUT /v1/quotes/{id}/invoice-sync`).
+#[crate::openapi::path(
+    put,
+    path = "/v1/company/quote-invoice-sync",
+    operation_id = "save_company_quote_invoice_sync",
+    tag = "company",
+    params(TargetCompany),
+    request_body = QuoteInvoiceSyncInput,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller does not manage the company", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn save_quote_invoice_sync(
+    State(state): State<AppState>,
+    UserManager(user): UserManager,
+    Query(query): Query<TargetCompany>,
+    JsonBody(input): JsonBody<QuoteInvoiceSyncInput>,
+) -> ApiResult<StatusCode> {
+    let company_id = target(&user, &query);
+    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM company WHERE id = ?")
+        .bind(company_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(ApiError::NotFound);
+    }
+    sqlx::query("UPDATE company SET quote_invoice_sync = ? WHERE id = ?")
+        .bind(input.enabled)
+        .bind(company_id)
+        .execute(&state.pool)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

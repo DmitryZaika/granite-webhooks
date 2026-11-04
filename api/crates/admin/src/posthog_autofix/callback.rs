@@ -1,7 +1,8 @@
 //! The workflow's callbacks: a run started, a run finished.
 //!
 //! Both are idempotent. A repeated callback finds the row already moved and
-//! changes nothing; only the call that moved the row sends the email.
+//! changes nothing; only the call that moved the row can send the email, and
+//! only a result with a pull request is emailed.
 
 use super::config::Config;
 use super::emails;
@@ -101,7 +102,8 @@ fn started_verdict(run: &RunView, github_run_url: &str) -> Result<Option<Applied
     }
 }
 
-/// Closes the run with its result and emails the developers.
+/// Closes the run with its result and, when it opened a pull request, emails
+/// the developers.
 pub async fn record_result(
     pool: &MySqlPool,
     mailer: &impl Mailer,
@@ -225,7 +227,9 @@ async fn close(
     .rows_affected())
 }
 
-/// Emails the developers; a failed email never fails the callback.
+/// Emails the developers about the pull request; a result without one sends
+/// nothing and leaves `notified_at` empty. A failed email never fails the
+/// callback.
 async fn notify(
     pool: &MySqlPool,
     mailer: &impl Mailer,
@@ -234,7 +238,10 @@ async fn notify(
     report: &RunReport,
     now: DateTime<Utc>,
 ) {
-    let email = emails::run_finished(run, report, config);
+    let Some(pr_url) = report.pr_url.as_deref() else {
+        return;
+    };
+    let email = emails::pull_request_opened(run, report, pr_url, config);
     if !deliver(mailer, &config.recipients, &email).await {
         return;
     }

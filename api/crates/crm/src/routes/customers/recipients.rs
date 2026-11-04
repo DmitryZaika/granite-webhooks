@@ -112,24 +112,50 @@ pub fn matches_email_fuzzy(email: &str, term: &str) -> bool {
     }
 }
 
+/// Whether `text` or one of its words starts with `term` (lowercase).
+fn word_starts_with(text: &str, term: &str) -> bool {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| word.starts_with(term))
+}
+
+/// Lower is better: a name word or the address starting with what was typed
+/// beats a match in the middle of a word.
 fn rank(recipient: &Recipient, term: &str) -> u8 {
     let term = term.to_lowercase();
     let email = recipient.email.to_lowercase();
-    if email.starts_with(&term) || local_part(&email).starts_with(&term) {
+    if word_starts_with(&recipient.name, &term)
+        || email.starts_with(&term)
+        || local_part(&email).starts_with(&term)
+    {
         0
-    } else if matches_email_fuzzy(&recipient.email, &term) {
+    } else if recipient
+        .company_name
+        .as_deref()
+        .is_some_and(|c| word_starts_with(c, &term))
+    {
         1
-    } else if recipient.name.to_lowercase().contains(&term) {
+    } else if matches_email_fuzzy(&recipient.email, &term) {
         2
+    } else if recipient.name.to_lowercase().contains(&term) {
+        3
     } else if recipient
         .company_name
         .as_deref()
         .is_some_and(|c| c.to_lowercase().contains(&term))
     {
-        3
-    } else {
         4
+    } else {
+        5
     }
+}
+
+fn sort_by_rank(list: &mut [Recipient], term: &str) {
+    list.sort_by(|a, b| {
+        rank(a, term)
+            .cmp(&rank(b, term))
+            .then_with(|| a.name.cmp(&b.name))
+    });
 }
 
 fn dedupe(list: Vec<Recipient>) -> Vec<Recipient> {
@@ -196,7 +222,11 @@ pub async fn recipients(
     let pool = &state.pool;
     let term = query.term.trim().to_string();
     let users = if query.include_users {
-        dedupe(users(pool, user.company_id, &term).await?)
+        let mut users = dedupe(users(pool, user.company_id, &term).await?);
+        if !term.is_empty() {
+            sort_by_rank(&mut users, &term);
+        }
+        users
     } else {
         Vec::new()
     };
@@ -211,7 +241,8 @@ pub async fn recipients(
     let mut customers: Vec<Recipient> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "{CUSTOMER_ADDRESSES}
            AND (c.name LIKE ? OR ce.email LIKE ? OR (c.company_name IS NOT NULL AND c.company_name LIKE ?))
-         ORDER BY CASE WHEN ce.email LIKE ? THEN 0 WHEN c.name LIKE ? THEN 1
+         ORDER BY c.sales_rep <=> ? DESC,
+                  CASE WHEN ce.email LIKE ? THEN 0 WHEN c.name LIKE ? THEN 1
                        WHEN c.company_name LIKE ? THEN 2 ELSE 3 END, c.name
          LIMIT 15"
     )))
@@ -219,6 +250,7 @@ pub async fn recipients(
     .bind(&like)
     .bind(&like)
     .bind(&like)
+    .bind(user.id)
     .bind(&prefix)
     .bind(&prefix)
     .bind(&prefix)
@@ -261,11 +293,7 @@ pub async fn recipients(
                 || matches_email_fuzzy(&c.email, &term)
         })
         .collect();
-    customers.sort_by(|a, b| {
-        rank(a, &term)
-            .cmp(&rank(b, &term))
-            .then_with(|| a.name.cmp(&b.name))
-    });
+    sort_by_rank(&mut customers, &term);
     customers.truncate(15);
     Ok(Json(Recipients { customers, users }))
 }
@@ -285,5 +313,26 @@ mod tests {
         assert!(!matches_email_fuzzy("alice@example.com", "alise@other.com"));
         assert!(!matches_email_fuzzy("alice@example.com", "bob"));
         assert_eq!(levenshtein("kitten", "sitting"), 3);
+    }
+
+    fn recipient(name: &str, email: &str) -> Recipient {
+        Recipient {
+            id: 0,
+            name: name.into(),
+            email: email.into(),
+            company_name: None,
+        }
+    }
+
+    #[test]
+    fn word_start_beats_middle_of_word() {
+        let mut list = vec![
+            recipient("Check-in", "gdindianapolis@check-in.com"),
+            recipient("Polly", "polly@granitedepotindy.com"),
+            recipient("Beverly Pollis", "bevpollis@gmail.com"),
+        ];
+        sort_by_rank(&mut list, "pol");
+        let names: Vec<&str> = list.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["Polly", "Beverly Pollis", "Check-in"]);
     }
 }

@@ -18,6 +18,8 @@ pub const MINI_FALLBACK_MODEL: &str = "gpt-5.4-mini-2026-03-17";
 /// use the customer's details (the AI Reply button; the follow-up writer's
 /// `AI_FOLLOWUP_MODEL`). It rejects `reasoning_effort: none`.
 pub const LARGE_MODEL: &str = "gpt-6.1-sol";
+/// When the key may not use [`LARGE_MODEL`] (the 10DLC check and its chat).
+pub const LARGE_FALLBACK_MODEL: &str = "gpt-6.1-terra";
 /// AI Design's kitchen pictures (`OPENAI_IMAGE_MODEL`).
 pub const IMAGE_MODEL: &str = "gpt-image-2.5-sunburst";
 
@@ -79,60 +81,22 @@ impl<'a> Chat<'a> {
     }
 }
 
-/// Sending an OpenAI request, once more when the connection failed before any answer.
-///
-/// The Lambda is frozen between invocations; a pooled connection the server
-/// closed meanwhile fails the next request at once ("error sending request").
-/// A request that timed out is not sent again.
+/// Sending an OpenAI request, once more when the connection failed before any
+/// answer ([`common::http::send_retrying`]).
 trait SendRetrying {
     async fn send_retrying(self) -> Result<reqwest::Response, AiError>;
 }
 
 impl SendRetrying for reqwest::RequestBuilder {
     async fn send_retrying(self) -> Result<reqwest::Response, AiError> {
-        let again = self.try_clone();
-        match self.send().await {
-            Ok(response) => Ok(response),
-            Err(err) if err.is_timeout() => Err(request_failed(err)),
-            Err(err) => {
-                let error = request_failed_text(&err);
-                tracing::warn!(%error, "OpenAI request failed; sending it once more");
-                match again {
-                    Some(request) => request.send().await.map_err(request_failed),
-                    None => Err(request_failed(err)),
-                }
-            }
-        }
+        common::http::send_retrying(self)
+            .await
+            .map_err(request_failed)
     }
-}
-
-/// reqwest's error with its causes, without the URL: "error sending request:
-/// connection reset by peer", "timed out", "error decoding response body: ...".
-fn request_failed_text(err: &reqwest::Error) -> String {
-    let mut text = if err.is_timeout() {
-        "timed out"
-    } else if err.is_decode() {
-        "error decoding response body"
-    } else if err.is_body() {
-        "error reading response body"
-    } else {
-        "error sending request"
-    }
-    .to_string();
-    let mut source = std::error::Error::source(err);
-    while let Some(cause) = source {
-        let cause_text = cause.to_string();
-        if !text.contains(&cause_text) {
-            text.push_str(": ");
-            text.push_str(&cause_text);
-        }
-        source = cause.source();
-    }
-    text
 }
 
 fn request_failed(err: reqwest::Error) -> AiError {
-    AiError::Request(request_failed_text(&err))
+    AiError::Request(common::http::error_text(&err))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -676,6 +640,26 @@ async fn log_image(
     if let Err(err) = result {
         tracing::warn!(error = %err, feature = caller.feature, "AI image usage not logged");
     }
+}
+
+/// A `chat` row of `ai_usage_log` for another provider (Claude): `tokens`
+/// are (all input, the input read from cache, output).
+pub async fn log_chat(
+    pool: &MySqlPool,
+    caller: Caller<'_>,
+    model: &str,
+    tokens: Option<(u32, u32, u32)>,
+    error: Option<&str>,
+    duration_ms: u32,
+) {
+    let usage = tokens.map(|(input, cached, output)| Usage {
+        prompt_tokens: input,
+        completion_tokens: output,
+        prompt_tokens_details: Some(CachedTokens {
+            cached_tokens: Some(cached),
+        }),
+    });
+    log(pool, caller, model, usage, error, duration_ms).await;
 }
 
 /// One `ai_usage_log` row; a failure to log is only traced.

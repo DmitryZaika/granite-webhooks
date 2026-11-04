@@ -172,6 +172,10 @@ pub struct Message {
     pub text: String,
     /// Agent id stored on the row.
     pub agent: Option<String>,
+    /// A copy made when its rep changed provider: the original it names,
+    /// `cloudtalk:<id>` (`moves`).
+    #[serde(skip)]
+    pub copy_of: Option<String>,
     /// The rep who sent it, or whose number received it.
     pub agent_id: Option<String>,
     /// That rep's name.

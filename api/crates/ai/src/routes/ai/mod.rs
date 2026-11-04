@@ -4,6 +4,9 @@
 //! - `POST /v1/ai/call-note` → a CRM note from a call transcript
 //! - `POST /v1/ai/call-activities` → follow-up activities from a call transcript
 //! - `POST /v1/ai/email-template` → an email template from a description
+//! - `POST /v1/ai/port-details-check` → what looks wrong in a port's business details
+//! - `POST /v1/ai/port-ask` → the answer to a question about a port's step
+//! - `POST /v1/ai/port-bill-read` → a port's business details read off the carrier's bill
 //! - `POST /v1/ai/invoice-edit` → a QuickBooks invoice edit from an instruction
 //! - `POST /v1/ai/signature-fields` → what each blank of a contract PDF is for
 //! - `POST /v1/ai/agentic-questions`, `GET .../{id}` → questions for the agent,
@@ -17,6 +20,8 @@
 //! - `POST /v1/ai/first-contact-email` → the first email to a new lead
 //! - `POST /v1/ai/chat` → the AI chat's answer, streamed (server-sent events)
 //! - `POST /v1/ai/crm-manual-feedback` → a thumbs-down on a CRM manual answer
+//! - `GET /v1/ai/promises`, `PATCH /v1/ai/promises/{id}` → what the rep
+//!   promised customers, and closing a promise
 //!
 //! Replaces the Remix `api.aiImprove.email` and `api.aiSummarize.callNote` routes.
 
@@ -26,6 +31,7 @@ pub mod call_activity_rules;
 pub mod call_note;
 pub mod chat;
 pub mod compose;
+pub mod compose_catalog;
 pub mod conversation_reply;
 pub mod design;
 pub mod design_render;
@@ -34,11 +40,16 @@ pub mod first_contact;
 pub mod improve;
 pub mod invoice_edit;
 pub mod manual_feedback;
+pub mod port_ask;
+pub mod port_bill;
+pub mod port_check;
+pub mod promises;
 pub mod reply_context;
 pub mod signature_fields;
 
 use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
+use axum::extract::DefaultBodyLimit;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -46,6 +57,14 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(call_note::call_note))
         .routes(routes!(call_activity::call_activities))
         .routes(routes!(email_template::email_template))
+        .routes(routes!(port_check::port_details_check))
+        .routes(routes!(port_ask::port_ask))
+        .merge(
+            // A 4 MB bill in base64 is more than axum's default 2 MB.
+            OpenApiRouter::new()
+                .routes(routes!(port_bill::read_port_bill))
+                .layer(DefaultBodyLimit::max(port_bill::MAX_BILL_BODY_BYTES)),
+        )
         .routes(routes!(invoice_edit::invoice_edit))
         .routes(routes!(signature_fields::detect))
         .routes(routes!(agentic::ask))
@@ -54,12 +73,26 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(design::pictures))
         .routes(routes!(design::deals))
         .routes(routes!(design_render::stones))
-        .routes(routes!(design_render::design))
+        .merge(
+            // A kitchen photo is more than axum's default 2 MB.
+            OpenApiRouter::new()
+                .routes(routes!(design_render::design))
+                .layer(DefaultBodyLimit::max(
+                    crate::kitchen_design::MAX_DESIGN_BODY_BYTES,
+                )),
+        )
         .routes(routes!(compose::inventory_url))
         .routes(routes!(compose::autocomplete))
         .routes(routes!(compose::learn))
         .routes(routes!(first_contact::first_contact_email))
         .routes(routes!(conversation_reply::conversation_reply))
-        .routes(routes!(chat::ask))
+        .merge(
+            // A question with pictures is more than axum's default 2 MB.
+            OpenApiRouter::new()
+                .routes(routes!(chat::ask))
+                .layer(DefaultBodyLimit::max(chat::MAX_CHAT_BODY_BYTES)),
+        )
         .routes(routes!(manual_feedback::feedback))
+        .routes(routes!(promises::list))
+        .routes(routes!(promises::update))
 }

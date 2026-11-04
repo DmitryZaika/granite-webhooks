@@ -134,54 +134,95 @@ pub async fn inbox_lines(
         .collect())
 }
 
+/// SQL over `telnyx_sms s`: a text of `rep`'s, on any line: tagged with
+/// their user id (theirs, or copied for them when they moved to Telnyx,
+/// `crate::routes::sms::moves`) or sent by them. Binds the rep's user id as
+/// text, then as a number.
+const REP_ROWS: &str = "(s.agent = ? OR s.sender_user_id = ?)";
+
 /// The customer phones (thread keys) that texted or were texted from
-/// `lines`.
+/// `lines`, and those of `rep`'s own texts ([`REP_ROWS`]).
 pub async fn line_threads(
     pool: &MySqlPool,
     company_id: i32,
     lines: &[String],
+    rep: Option<i32>,
 ) -> sqlx::Result<Vec<String>> {
-    if lines.is_empty() {
+    let mut parts = Vec::new();
+    if !lines.is_empty() {
+        let marks = vec!["?"; lines.len()].join(", ");
+        // idx_sms_inbound_recipient and idx_sms_outbound_sender: index only.
+        parts.push(format!(
+            "SELECT s.phone_digits FROM telnyx_sms s
+              WHERE s.company_id = ? AND s.direction = 'inbound' AND s.recipient10 IN ({marks})
+                AND s.phone_digits IS NOT NULL
+             UNION
+             SELECT s.phone_digits FROM telnyx_sms s
+              WHERE s.company_id = ? AND s.direction = 'outbound' AND s.sender10 IN ({marks})
+                AND s.phone_digits IS NOT NULL"
+        ));
+    }
+    if rep.is_some() {
+        // idx_sms_agent_threads and idx_telnyx_sms_sender_user.
+        parts.push(
+            "SELECT s.phone_digits FROM telnyx_sms s
+              WHERE s.company_id = ? AND s.agent = ? AND s.phone_digits IS NOT NULL
+             UNION
+             SELECT s.phone_digits FROM telnyx_sms s
+              WHERE s.sender_user_id = ? AND s.company_id = ? AND s.phone_digits IS NOT NULL"
+                .to_string(),
+        );
+    }
+    if parts.is_empty() {
         return Ok(Vec::new());
     }
-    let marks = vec!["?"; lines.len()].join(", ");
-    // idx_sms_inbound_recipient and idx_sms_outbound_sender: index only.
-    let sql = format!(
-        "SELECT s.phone_digits FROM telnyx_sms s
-          WHERE s.company_id = ? AND s.direction = 'inbound' AND s.recipient10 IN ({marks})
-            AND s.phone_digits IS NOT NULL
-         UNION
-         SELECT s.phone_digits FROM telnyx_sms s
-          WHERE s.company_id = ? AND s.direction = 'outbound' AND s.sender10 IN ({marks})
-            AND s.phone_digits IS NOT NULL"
-    );
-    let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
-    for _ in 0..2 {
-        query = query.bind(company_id);
-        for line in lines {
-            query = query.bind(line);
+    let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(parts.join(" UNION ")));
+    if !lines.is_empty() {
+        for _ in 0..2 {
+            query = query.bind(company_id);
+            for line in lines {
+                query = query.bind(line);
+            }
         }
+    }
+    if let Some(rep) = rep {
+        query = query
+            .bind(company_id)
+            .bind(rep.to_string())
+            .bind(rep)
+            .bind(company_id);
     }
     query.fetch_all(pool).await
 }
 
-/// The thread `phone` has a row on one of `lines`.
+/// The thread `phone` has a row on one of `lines`, or one of `rep`'s own
+/// texts ([`REP_ROWS`]).
 pub async fn thread_on_lines(
     pool: &MySqlPool,
     company_id: i32,
     lines: &[String],
+    rep: Option<i32>,
     phone: &str,
 ) -> sqlx::Result<bool> {
-    if lines.is_empty() {
+    let mut parts = Vec::new();
+    if !lines.is_empty() {
+        let marks = vec!["?"; lines.len()].join(", ");
+        parts.push(format!(
+            "(s.direction = 'inbound' AND s.recipient10 IN ({marks}))
+              OR (s.direction = 'outbound' AND s.sender10 IN ({marks}))"
+        ));
+    }
+    if rep.is_some() {
+        parts.push(REP_ROWS.to_string());
+    }
+    if parts.is_empty() {
         return Ok(false);
     }
-    let marks = vec!["?"; lines.len()].join(", ");
     let sql = format!(
         "SELECT 1 FROM telnyx_sms s
-          WHERE s.company_id = ? AND s.phone_digits = ?
-            AND ((s.direction = 'inbound' AND s.recipient10 IN ({marks}))
-              OR (s.direction = 'outbound' AND s.sender10 IN ({marks})))
-          LIMIT 1"
+          WHERE s.company_id = ? AND s.phone_digits = ? AND ({})
+          LIMIT 1",
+        parts.join(" OR ")
     );
     let mut query = sqlx::query_scalar::<_, i32>(sqlx::AssertSqlSafe(sql))
         .bind(company_id)
@@ -190,6 +231,9 @@ pub async fn thread_on_lines(
         for line in lines {
             query = query.bind(line);
         }
+    }
+    if let Some(rep) = rep {
+        query = query.bind(rep.to_string()).bind(rep);
     }
     Ok(query.fetch_optional(pool).await?.is_some())
 }
@@ -785,6 +829,20 @@ fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         .ok()
 }
 
+/// An inbound file as it is stored: a picture compressed as the CRM
+/// compresses uploads (`compress_for_storage`), with its new type; anything
+/// else, or a picture that already fits, as it came.
+pub async fn stored_file(bytes: Vec<u8>, content_type: String) -> (Vec<u8>, String) {
+    if crate::images::sniff(&bytes).is_none() {
+        return (bytes, content_type);
+    }
+    let source = bytes.clone();
+    match tokio::task::spawn_blocking(move || crate::images::compress_for_storage(&source)).await {
+        Ok(Some(stored)) => (stored.bytes, stored.content_type.to_string()),
+        _ => (bytes, content_type),
+    }
+}
+
 /// Copies an inbound MMS's files from Telnyx (their links expire) into our
 /// bucket (`sms-attachments/<company>/tx-<row>/`), as the row's attachments.
 /// A file already copied (a redelivered webhook) is kept as it is; a file
@@ -830,6 +888,7 @@ pub async fn copy_inbound_media(
             .filter(|kind| !kind.is_empty())
             .or(served_type)
             .unwrap_or_else(|| "application/octet-stream".into());
+        let (bytes, content_type) = stored_file(bytes, content_type).await;
         let is_image = content_type.starts_with("image/");
         let (width, height) = if is_image {
             dimensions(&bytes).map_or((None, None), |(w, h)| (Some(w), Some(h)))
@@ -1116,6 +1175,51 @@ pub async fn record_status(
         }
     }
     Ok(true)
+}
+
+/// Texts asked about in one run of [`recheck_statuses`].
+const RECHECK_BATCH: i64 = 20;
+
+/// Asks Telnyx again about the texts we sent that have no final status yet
+/// (their report may never have come), so a text that did not go out shows
+/// as failed. A text is asked about 5 minutes after it was sent, then every
+/// 15 minutes, for 3 days; none after `deadline`. How many Telnyx answered.
+pub async fn recheck_statuses(
+    state: &AppState,
+    deadline: std::time::Instant,
+) -> sqlx::Result<usize> {
+    if !state.telnyx.is_enabled() {
+        return Ok(0);
+    }
+    let due: Vec<(i32, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT company_id, telnyx_id FROM telnyx_sms
+          WHERE direction = 'outbound' AND telnyx_id IS NOT NULL AND company_id IS NOT NULL
+            AND status <> 'failed'
+            AND (delivery_status IS NULL OR delivery_status IN ('queued', 'sending', 'sent'))
+            AND created_date > CURRENT_TIMESTAMP - INTERVAL 3 DAY
+            AND TIMESTAMPDIFF(MINUTE, created_date, CURRENT_TIMESTAMP) >= 5
+            AND MOD(TIMESTAMPDIFF(MINUTE, created_date, CURRENT_TIMESTAMP), 15) = 5
+          ORDER BY id LIMIT {RECHECK_BATCH}"
+    )))
+    .fetch_all(&state.pool)
+    .await?;
+    let mut answered = 0;
+    for (company_id, telnyx_id) in due {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        let mut payload = match state.telnyx.get_message(&telnyx_id).await {
+            Ok(payload) => payload,
+            Err(err) => {
+                tracing::warn!(company_id, error = %err, "Telnyx text status not read");
+                continue;
+            }
+        };
+        payload.id = Some(telnyx_id);
+        record_status(&state.pool, company_id, "message.sent", &payload, None).await?;
+        answered += 1;
+    }
+    Ok(answered)
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 //! AI helpers: the chat, writing and replying, design, call coaching,
-//! instructions, agent tokens (api-ai).
+//! instructions, agent tokens, promises (api-ai).
 //!
 //! One file's tests: `cargo test -p api --test ai <file>::`.
 
@@ -23,3 +23,4 @@ mod crm_manual_eval;
 mod crm_manual_feedback;
 mod instructions;
 mod manual_feedback_reviews;
+mod promises;

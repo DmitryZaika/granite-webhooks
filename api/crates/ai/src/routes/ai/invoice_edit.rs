@@ -177,7 +177,6 @@ pub fn merge(current: &EditableInvoice, proposed: EditableInvoice) -> EditableIn
         let unit_price = line.unit_price.unwrap_or(0.0);
         lines.push(Line {
             id: Some(id.to_string()),
-            line_num: None,
             detail_type: "SalesItemLineDetail".into(),
             description: Some(
                 line.description
@@ -191,6 +190,7 @@ pub fn merge(current: &EditableInvoice, proposed: EditableInvoice) -> EditableIn
             item_ref_value: Some(item.to_string()),
             item_ref_name: item_name,
             editable: true,
+            ..Line::default()
         });
     }
     EditableInvoice {

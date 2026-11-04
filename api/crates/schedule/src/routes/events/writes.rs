@@ -2,12 +2,12 @@
 
 use super::history::{History, record};
 use super::reminders;
-use crate::auth::EmployeeUser;
+use crate::auth::ShopOrEmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
-use crate::routes::schedule::notifications;
+use crate::routes::schedule::{board, notifications};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -78,6 +78,16 @@ pub struct EventInput {
     #[serde(default, deserialize_with = "crate::serde_helpers::double_option")]
     #[schema(value_type = Option<i32>)]
     pub customer_id: Option<Option<i32>>,
+    /// Phone for this event only (a spouse, a homeowner on a contractor's
+    /// account), up to 50 characters; empty or null uses the customer's,
+    /// leave out to keep it. Never changes the customer.
+    #[serde(default, deserialize_with = "crate::serde_helpers::double_option")]
+    #[schema(value_type = Option<String>)]
+    pub contact_phone: Option<Option<String>>,
+    /// Email for this event only, up to 255 characters; like `contact_phone`.
+    #[serde(default, deserialize_with = "crate::serde_helpers::double_option")]
+    #[schema(value_type = Option<String>)]
+    pub contact_email: Option<Option<String>>,
     /// Link or unlink the QuickBooks invoice; leave out to keep it.
     #[serde(default)]
     pub qbo_invoice: Option<EventInvoice>,
@@ -143,13 +153,16 @@ pub struct Checked<'a> {
     pub recurrence_until: Option<NaiveDateTime>,
     pub start: NaiveDateTime,
     pub end: NaiveDateTime,
+    /// `None` keeps the saved value; `Some(None)` clears it.
+    pub contact_phone: Option<Option<&'a str>>,
+    pub contact_email: Option<Option<&'a str>>,
 }
 
 fn bad(message: &str) -> ApiError {
     ApiError::BadRequest(message.into())
 }
 
-pub fn check(input: &EventInput) -> ApiResult<Checked<'_>> {
+pub fn check<'a>(input: &'a EventInput) -> ApiResult<Checked<'a>> {
     let length = |text: &str| text.chars().count();
     if input.title.is_empty() {
         return Err(bad("Title is required"));
@@ -168,6 +181,28 @@ pub fn check(input: &EventInput) -> ApiResult<Checked<'_>> {
     let location = non_empty(input.location.as_ref());
     if location.is_some_and(|location| length(location) > 500) {
         return Err(bad("Location must be 500 characters or less"));
+    }
+    let contact = |value: &'a Option<Option<String>>| {
+        value.as_ref().map(|value| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+    };
+    let contact_phone = contact(&input.contact_phone);
+    if contact_phone
+        .flatten()
+        .is_some_and(|phone| length(phone) > 50)
+    {
+        return Err(bad("Phone must be 50 characters or less"));
+    }
+    let contact_email = contact(&input.contact_email);
+    if contact_email
+        .flatten()
+        .is_some_and(|email| length(email) > 255)
+    {
+        return Err(bad("Email must be 255 characters or less"));
     }
     let calendar_id = input
         .calendar_id
@@ -211,6 +246,8 @@ pub fn check(input: &EventInput) -> ApiResult<Checked<'_>> {
         recurrence_until,
         start,
         end,
+        contact_phone,
+        contact_email,
     })
 }
 
@@ -438,14 +475,14 @@ const fn not_found() -> ApiError {
         (status = 201, description = "Added", body = CreatedEvent),
         (status = 400, description = "Invalid field, or unknown calendar or customer", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn create(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     JsonBody(input): JsonBody<EventInput>,
 ) -> ApiResult<(StatusCode, Json<CreatedEvent>)> {
     let pool = &state.pool;
@@ -464,11 +501,16 @@ pub async fn create(
         }
         None => None,
     };
+    let assignee = match input.assigned_user_id.filter(|id| *id > 0) {
+        Some(id) => Some(id),
+        None => board::sole_template_maker(pool, event.calendar_id).await?,
+    };
     let id = sqlx::query(
         "INSERT INTO events (title, description, location, start_date, end_date, all_day,
             unscheduled, color, status, notes, created_user_id, assigned_user_id, sale_id,
-            customer_id, calendar_id, rrule, recurrence_until, project_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            customer_id, calendar_id, rrule, recurrence_until, contact_phone, contact_email,
+            project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(event.title)
     .bind(event.description)
@@ -481,12 +523,14 @@ pub async fn create(
     .bind(event.status)
     .bind(event.notes)
     .bind(user.id)
-    .bind(input.assigned_user_id.filter(|id| *id > 0))
+    .bind(assignee)
     .bind(input.sale_id.filter(|id| *id > 0))
     .bind(customer.flatten())
     .bind(event.calendar_id)
     .bind(event.rrule)
     .bind(event.recurrence_until)
+    .bind(event.contact_phone.flatten())
+    .bind(event.contact_email.flatten())
     .bind(project)
     .execute(pool)
     .await?
@@ -575,7 +619,7 @@ fn change_messages(
         (status = 204, description = "Saved"),
         (status = 400, description = "Invalid field, or unknown calendar or customer", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -583,7 +627,7 @@ fn change_messages(
 )]
 pub async fn update(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<EventInput>,
 ) -> ApiResult<StatusCode> {
@@ -598,7 +642,8 @@ pub async fn update(
         "UPDATE events SET title = ?, description = ?, location = ?, start_date = ?, end_date = ?,
             all_day = ?, unscheduled = ?, color = ?, status = ?, notes = ?, assigned_user_id = ?,
             sale_id = ?, customer_id = IF(?, ?, customer_id), calendar_id = ?, rrule = ?,
-            recurrence_until = ?, updated_date = CURRENT_TIMESTAMP
+            recurrence_until = ?, contact_phone = IF(?, ?, contact_phone),
+            contact_email = IF(?, ?, contact_email), updated_date = CURRENT_TIMESTAMP
           WHERE id = ?",
     )
     .bind(event.title)
@@ -618,6 +663,10 @@ pub async fn update(
     .bind(event.calendar_id)
     .bind(event.rrule)
     .bind(event.recurrence_until)
+    .bind(event.contact_phone.is_some())
+    .bind(event.contact_phone.flatten())
+    .bind(event.contact_email.is_some())
+    .bind(event.contact_email.flatten())
     .bind(id)
     .execute(pool)
     .await?;
@@ -655,6 +704,13 @@ pub async fn update(
         )
         .await;
     }
+    // The crew's On my way, Arrived and Completed belong to the job's day.
+    if input.unscheduled
+        || super::crew::job_days(event.start, event.end, input.all_day).0
+            != super::crew::job_days(existing.start_date, existing.end_date, existing.all_day).0
+    {
+        super::crew::clear(pool, id).await?;
+    }
     if input.unscheduled {
         reminders::cancel(pool, id).await?;
     } else if moved {
@@ -682,7 +738,7 @@ pub async fn update(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -690,7 +746,7 @@ pub async fn update(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     let pool = &state.pool;

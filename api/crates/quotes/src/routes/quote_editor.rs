@@ -12,6 +12,7 @@
 //! - `POST   /v1/quotes/{id}/emails`          → email the customer a link to the quote
 //! - `PATCH  /v1/quotes/{id}/emails/{email_id}` → switch an email's link off or on
 //! - `POST   /v1/quotes/{id}/portal-token`    → the customer link
+//! - `GET    /v1/quotes/{id}/view-link`       → that page to look at, for the app
 //! - `POST   /v1/quotes/{id}/prints`          → record a print
 //! - `GET|POST /v1/me/quote-email-templates`, `PUT|DELETE .../{id}` → the Email dialog's templates
 //!
@@ -29,11 +30,13 @@ use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
-    self, load_company_quote, mark_quote_sold, pricing_for_quote, quote_for_contract_file,
-    with_current_sink_models,
+    self, ExtraEventPick, SaleDeal, SaleJobs, load_company_quote, mark_quote_sold,
+    pricing_for_quote, quote_for_contract_file, with_current_sink_models,
 };
 use crate::routes::created::CreatedId;
 use crate::routes::customers::service::IMPORT_PLACEHOLDER;
+use crate::routes::emails::attachment_token;
+use crate::routes::emails::schemas::SendAttachment;
 use crate::routes::emails::thread::sending_address;
 use crate::routes::quote_extras::load_catalog;
 use crate::routes::quote_forms;
@@ -42,7 +45,7 @@ use crate::routes::quote_price_lists::{default_id, find as find_price_list, list
 use crate::routes::templates::order;
 use crate::routes::templates::schemas::{OrderingMode, OrderingType};
 use crate::state::AppState;
-use crate::webhooks_client::OutgoingEmail;
+use crate::webhooks_client::{OutgoingAttachment, OutgoingEmail};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -65,6 +68,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(email_quote))
         .routes(routes!(set_email_link))
         .routes(routes!(portal_token))
+        .routes(routes!(view_link))
         .routes(routes!(record_print))
         .routes(routes!(my_email_templates, create_my_email_template))
         .routes(routes!(update_my_email_template, delete_my_email_template))
@@ -1862,6 +1866,45 @@ pub async fn update_prices(
 pub struct Sale {
     /// Index of the color option sold.
     pub option: i32,
+    /// The customer's deal to mark won (none: the quote's own deal, else the
+    /// customer's latest open one; never a won or lost one).
+    #[serde(default)]
+    pub deal_id: Option<i64>,
+    /// Make a new won deal instead of using an existing one.
+    #[serde(default)]
+    pub new_deal: bool,
+    /// Status of the template job it adds to Unscheduled: `ready` (default) or
+    /// `not_ready`. The installation job is always `not_ready`.
+    #[serde(default)]
+    pub job_status: Option<String>,
+    /// Notes on the template job it adds to Unscheduled.
+    #[serde(default)]
+    pub template_notes: Option<String>,
+    /// Notes on the installation job it adds to Unscheduled.
+    #[serde(default)]
+    pub install_notes: Option<String>,
+    /// Full Height Backsplash (higher than 15"): also adds a "FH Backsplash"
+    /// template and installation job, both `not_ready`.
+    #[serde(default)]
+    pub full_height_backsplash: bool,
+    /// Extra events to add (Mark as Sold › Extra events): the event templates
+    /// ticked (`GET /v1/quote-sale-events`), each with optional notes. Each
+    /// adds one unscheduled, `not_ready` event on its template's calendar,
+    /// whether or not the company adds template and installation jobs. Left
+    /// out or empty: none. Unknown template ids are skipped.
+    #[serde(default)]
+    pub extra_events: Vec<SaleExtraEvent>,
+}
+
+/// An extra event ticked in Mark as Sold.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SaleExtraEvent {
+    /// The event template (`GET /v1/quote-sale-events`).
+    pub template_id: i32,
+    /// Notes on the event (trimmed; blank: none).
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// What selling did.
@@ -1874,7 +1917,10 @@ pub struct SaleResult {
 /// Mark a quote sold
 ///
 /// The quote keeps the option sold and its deal is won with that option's
-/// total (a won deal is made when the customer has none).
+/// total (a won deal is made when the customer has none). With the company's
+/// Jobs to Unscheduled switch on, it adds the template and installation jobs
+/// to the schedule's Unscheduled list; each of `extra_events` adds one more
+/// event there. Selling a quote again adds no events.
 #[crate::openapi::path(
     post,
     path = "/v1/quotes/{id}/sale",
@@ -1903,12 +1949,40 @@ pub async fn mark_sold(
             "Pick the option that was sold.".into(),
         ));
     }
+    let template_ready = match input.job_status.as_deref() {
+        None | Some("ready") => true,
+        Some("not_ready") => false,
+        Some(_) => {
+            return Err(ApiError::BadRequest(
+                "Pick Ready or Not ready for the template.".into(),
+            ));
+        }
+    };
     let sold = mark_quote_sold(
         &state.pool,
         id,
         user.company_id,
         Some(input.option),
         Some(user.id),
+        match (input.new_deal, input.deal_id) {
+            (true, _) => SaleDeal::New,
+            (false, Some(deal)) => SaleDeal::Existing(deal),
+            (false, None) => SaleDeal::Auto,
+        },
+        &SaleJobs {
+            template_ready,
+            template_notes: input.template_notes,
+            install_notes: input.install_notes,
+            full_height_backsplash: input.full_height_backsplash,
+            extra_events: input
+                .extra_events
+                .into_iter()
+                .map(|extra| ExtraEventPick {
+                    template_id: extra.template_id,
+                    notes: extra.notes,
+                })
+                .collect(),
+        },
     )
     .await?
     .ok_or(ApiError::NotFound)?;
@@ -1919,7 +1993,9 @@ pub async fn mark_sold(
 
 /// Undo a sale
 ///
-/// The quote is active again (no option, no signature) and its deal reopens.
+/// The quote is active again (no option, no signature), its deal reopens and
+/// the template and installation jobs and extra events the sale added are
+/// deleted.
 #[crate::openapi::path(
     delete,
     path = "/v1/quotes/{id}/sale",
@@ -1950,6 +2026,7 @@ pub async fn undo_sale(
     .bind(user.company_id)
     .execute(&state.pool)
     .await?;
+    quote_pricing::remove_waiting_jobs(&state.pool, id, user.company_id).await?;
     if let Some(deal) = row.deal_id {
         sqlx::query(
             "UPDATE deals SET is_won = NULL, lost_reason = NULL, updated_at = CURRENT_TIMESTAMP
@@ -2157,6 +2234,47 @@ pub async fn portal_token(
     }))
 }
 
+/// The quote's page to look at, for the app.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QuoteViewLink {
+    /// The customer's page with `?staff=1`: no Accept & Sign, not counted as a view.
+    pub url: String,
+}
+
+/// Get a link to look at the quote
+///
+/// The page the customer gets, without Accept & Sign. A `GET` so the app's
+/// device token may ask; the customer link is made the first time, as the
+/// `POST` does.
+#[crate::openapi::path(
+    get,
+    path = "/v1/quotes/{id}/view-link",
+    operation_id = "quote_view_link",
+    tag = "quotes",
+    params(("id" = i32, Path, description = "Quote id")),
+    responses(
+        (status = 200, description = "The link", body = QuoteViewLink),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such quote", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn view_link(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<Json<QuoteViewLink>> {
+    let quote = quote_or_404(&state, id, user.company_id).await?;
+    let token = ensure_portal_token(&state.pool, &quote).await?;
+    let subdomain = company_subdomain(&state.pool, user.company_id).await?;
+    let origin = app_origin(&state.app_url, subdomain.as_deref());
+    Ok(Json(QuoteViewLink {
+        url: format!("{origin}/quote-portal/{token}?staff=1"),
+    }))
+}
+
 /// `moveQuoteCustomerToGetAQuote`: after a quote is emailed or printed, its
 /// deal moves to "Got a Quote" when still Not Contacted Yet or Contacted.
 async fn move_deal_to_got_a_quote(pool: &MySqlPool, quote: &QuoteRow) -> ApiResult<()> {
@@ -2248,6 +2366,10 @@ pub struct QuoteEmail {
     /// The template used (counts toward the default).
     #[serde(default)]
     pub template_id: Option<i32>,
+    /// Files sent with the email, each uploaded by the caller
+    /// (`POST /v1/uploads`, folder `emails`, with its `token`).
+    #[serde(default)]
+    pub attachments: Vec<SendAttachment>,
 }
 
 fn escape(text: &str) -> String {
@@ -2306,6 +2428,29 @@ pub async fn email_quote(
             "Recipient and subject are required.".into(),
         ));
     }
+    if input.attachments.len() > 20 {
+        return Err(ApiError::BadRequest(
+            "At most 20 attachments per email.".into(),
+        ));
+    }
+    // Only files the caller uploaded: any other URL could be another company's.
+    if let Some(attachment) = input.attachments.iter().find(|a| {
+        !attachment_token::verify(&state.session_secret, &a.url, user.id, a.token.as_deref())
+    }) {
+        return Err(ApiError::BadRequest(format!(
+            "Attachment is not available: {}",
+            attachment.filename
+        )));
+    }
+    let attachments: Vec<OutgoingAttachment> = input
+        .attachments
+        .iter()
+        .map(|a| OutgoingAttachment {
+            filename: a.filename.clone(),
+            content_type: a.content_type.trim().to_lowercase(),
+            url: a.url.clone(),
+        })
+        .collect();
     // The link exists before filling so `{{quote.link}}` can use it.
     let portal = ensure_portal_token(&state.pool, &quote).await?;
     let email_token = token()?;
@@ -2429,7 +2574,7 @@ pub async fn email_quote(
         reply_to: vec![user.email.clone()],
         in_reply_to: None,
         references: Vec::new(),
-        attachments: Vec::new(),
+        attachments,
         transactional: true,
     };
     if let Err(error) = state.webhooks.send_email(&email).await {

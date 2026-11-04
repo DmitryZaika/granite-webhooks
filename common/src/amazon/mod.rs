@@ -1,9 +1,11 @@
 //! The AWS calls the apps make, signed with [`sigv4`] and sent with
-//! `reqwest`: SES ([`email`]) and S3 objects ([`s3`]).
+//! `reqwest`: SES ([`email`]), S3 objects ([`s3`]) and the Lambdas' keys in
+//! Secrets Manager ([`secrets`]).
 
 pub mod credentials;
 pub mod email;
 pub mod s3;
+pub mod secrets;
 pub mod sigv4;
 
 use std::sync::LazyLock;

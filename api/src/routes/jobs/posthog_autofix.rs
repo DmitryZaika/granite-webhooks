@@ -20,9 +20,9 @@ use chrono::Utc;
 /// poll window, `POSTHOG_AUTOFIX_POLL_MINUTES`) reads the PostHog
 /// `$exception` events since the last read (never before the cutover) and
 /// records them as bugs, one per signature whatever issue they are in;
-/// emails one digest when new bugs arrive in a storm; judges bugs that have
-/// settled (skipped as noise, a browser 5xx folded into the API error of the
-/// same route, or queued); emails when a fixed issue is reopened; and (with
+/// judges bugs that have settled (skipped as noise, a browser 5xx folded into
+/// the API error of the same route, a toast folded into the web error it
+/// repeats, or queued); emails when a fixed issue is reopened; and (with
 /// `POSTHOG_AUTOFIX_WRITE_KEY` and `_ASSIGNEE` set) assigns the issues of
 /// opened fixes in PostHog. Last, in live mode, it starts queued fix runs
 /// (bugs seen in the last day first, then the most widespread) within the

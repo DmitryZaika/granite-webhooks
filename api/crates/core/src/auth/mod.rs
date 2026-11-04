@@ -20,14 +20,15 @@
 //! installers' and template makers' own schedule), on [`DEVICE_READ_ROUTES`]
 //! with `GET` (what the phone's composers, schedule, Text tab and More
 //! screens read: calendars, deals and their stages, customers, stones,
-//! suppliers, sales, images, documents, email and text templates, my texts
-//! over every provider, a pushed CRM notification), on
+//! suppliers, sales, quotes, images, documents, email and text templates, my texts
+//! over every provider, a pushed CRM notification, the shop's maintenance), on
 //! `/v1/sms/{provider}/messages` with `POST`
 //! (sending those texts), on [`DEVICE_ACTIONS`] with `POST` (an
 //! attachment upload, Improve message, AI reply, the typing suggestion and
 //! what it learns, filling a template) and on
 //! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes and
-//! files; not deleting a deal or the board setup) the
+//! files; not deleting a deal or the board setup), and a customer's sales
+//! rep (`customer_write`: the contact card's and the lead inbox's Assign) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -37,11 +38,18 @@
 //! Without a session cookie, every extractor also takes an agent token
 //! (`Authorization: Bearer agt_...`): the agent then acts as the person who
 //! asked it, read-only, in one company (see [`agent`]).
+//!
+//! Every extractor above also applies position access ([`sections`]): when a
+//! company limits the tabs of someone's positions, they are refused the data
+//! only their closed tabs use. With limited tabs they pass `EmployeeUser` and
+//! `ShopOrEmployeeUser`, and on an admin tab's routes they act as a company
+//! admin (`is_admin`, so `AdminUser` and the handlers' own checks agree).
 
 pub mod agent;
 pub mod cookie;
 pub mod device;
 pub mod job;
+pub mod sections;
 pub mod session;
 
 use crate::error::ApiError;
@@ -51,23 +59,77 @@ use axum::http::Method;
 use axum::http::header::COOKIE;
 use axum::http::request::Parts;
 use cookie::{SESSION_COOKIE_NAME, cookie_values, decode_session};
+use sections::Access;
 use session::{SessionUser, effective_user, find_session_user, user_positions};
 
 async fn authenticate(parts: &Parts, state: &AppState) -> Result<SessionUser, ApiError> {
-    authenticate_with_positions(parts, state)
+    authenticate_with_access(parts, state)
         .await
-        .map(|(user, _)| user)
+        .map(|(user, _, _)| user)
+}
+
+async fn authenticate_with_positions(
+    parts: &Parts,
+    state: &AppState,
+) -> Result<(SessionUser, Vec<session::UserPositionRow>), ApiError> {
+    authenticate_with_access(parts, state)
+        .await
+        .map(|(user, positions, _)| (user, positions))
+}
+
+/// Who is asking and what their positions open. A request outside the tabs
+/// of their positions is refused here, before any handler; on an admin tab
+/// of theirs they act as a company admin.
+async fn authenticate_with_access(
+    parts: &Parts,
+    state: &AppState,
+) -> Result<(SessionUser, Vec<session::UserPositionRow>, Access), ApiError> {
+    let (mut user, positions) = identify(parts, state).await?;
+    let access = sections::user_access(&state.pool, &user, &positions).await?;
+    let path = parts.uri.path();
+    if !access.allows(path) {
+        return Err(sections::outside_sections());
+    }
+    if access.allows_admin(path) {
+        user.is_admin = true;
+    }
+    Ok((user, positions, access))
+}
+
+/// [`authenticate_with_access`]'s section check for the phone app's device
+/// token (`device::DeviceUser`, `device::PhoneCaller`).
+async fn check_sections(
+    parts: &Parts,
+    state: &AppState,
+    user: &SessionUser,
+) -> Result<(), ApiError> {
+    let positions = user_positions(&state.pool, user.id).await?;
+    if sections::user_access(&state.pool, user, &positions)
+        .await?
+        .allows(parts.uri.path())
+    {
+        Ok(())
+    } else {
+        Err(sections::outside_sections())
+    }
 }
 
 /// The CRM routes the Granite Phone app also calls with its device token.
 ///
 /// These prefixes and everything under them. `/v1/me/schedule` is the
-/// schedule-only app of installers and template makers (their web portal).
-pub const DEVICE_ROUTES: [&str; 4] = [
+/// schedule-only app of installers and template makers (their web portal);
+/// `/v1/delayed` is the caller's own scheduled texts and emails (list, edit,
+/// send now, cancel), as the composers' Send later list has them on the web;
+/// `/v1/me/todos` and `/v1/me/todo-order` are the caller's own to-do list
+/// (the app's To do tab).
+pub const DEVICE_ROUTES: [&str; 7] = [
     "/v1/emails",
     "/v1/schedule",
     "/v1/events",
     "/v1/me/schedule",
+    "/v1/delayed",
+    "/v1/me/todos",
+    "/v1/me/todo-order",
 ];
 
 /// CRM routes the app reads with its device token, `GET` only (my texts
@@ -75,12 +137,15 @@ pub const DEVICE_ROUTES: [&str; 4] = [
 /// email and text composers' From Stones, From Images, From Documents and
 /// Use Template lists, the suggestions under an email's To, Cc and Bcc, the
 /// schedule's calendars, and the More screens: Deals, Customers, Stones,
-/// Suppliers, Images (with its folders) and Transactions; and the CRM
-/// notification a push names).
+/// Suppliers, Images (with its folders), Transactions and Quotes; the CRM
+/// notification a push names; the shop's maintenance checks a push says are
+/// due; the customer stones page the typing
+/// suggestion offers to link; and the sales reps that Assign a sales rep lists).
 /// These prefixes and everything under them; writes there still need the CRM
 /// session.
-pub const DEVICE_READ_ROUTES: [&str; 15] = [
+pub const DEVICE_READ_ROUTES: [&str; 19] = [
     "/v1/sms/mine",
+    "/v1/ai/compose/inventory-url",
     "/v1/calendars",
     "/v1/stones",
     "/v1/images",
@@ -94,7 +159,10 @@ pub const DEVICE_READ_ROUTES: [&str; 15] = [
     "/v1/deal-lists",
     "/v1/suppliers",
     "/v1/transactions",
+    "/v1/quotes",
     "/v1/notifications",
+    "/v1/shop/maintenance",
+    "/v1/users/sales-reps",
 ];
 
 /// CRM actions the app's composer calls with its device token: exactly these
@@ -178,6 +246,18 @@ fn deal_write(method: &Method, path: &str) -> bool {
     }
 }
 
+/// The customer changes the app makes with its device token, exactly these:
+/// a customer's sales rep (`PUT /v1/customers/{id}/sales-rep`), from the
+/// contact card's Assign and the lead inbox. Editing or deleting a customer
+/// stays with the CRM session.
+fn customer_write(method: &Method, path: &str) -> bool {
+    method == Method::PUT
+        && path
+            .strip_prefix("/v1/customers/")
+            .and_then(|rest| rest.strip_suffix("/sales-rep"))
+            .is_some_and(is_id)
+}
+
 /// The text and email templates the app's Use Template list adds, edits and
 /// deletes with its device token: `POST /v1/sms-templates` and
 /// `/v1/email-templates`, `PUT|DELETE` on `/{id}` of either (the caller's own,
@@ -199,16 +279,18 @@ fn template_write(method: &Method, path: &str) -> bool {
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
-/// ([`deal_write`]) and the templates' ([`template_write`]).
+/// ([`deal_write`]), a customer's sales rep ([`customer_write`]) and the
+/// templates' ([`template_write`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
         || (method == Method::POST && (DEVICE_ACTIONS.contains(&path) || sms_send(path)))
         || deal_write(method, path)
+        || customer_write(method, path)
         || template_write(method, path)
 }
 
-async fn authenticate_with_positions(
+async fn identify(
     parts: &Parts,
     state: &AppState,
 ) -> Result<(SessionUser, Vec<session::UserPositionRow>), ApiError> {
@@ -256,8 +338,8 @@ impl FromRequestParts<AppState> for EmployeeUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let user = authenticate(parts, state).await?;
-        if user.is_employee || user.is_admin || user.is_superuser {
+        let (user, _, access) = authenticate_with_access(parts, state).await?;
+        if user.is_employee || user.is_admin || user.is_superuser || access != Access::Full {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)
@@ -276,11 +358,12 @@ impl FromRequestParts<AppState> for ShopOrEmployeeUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        let (user, positions, access) = authenticate_with_access(parts, state).await?;
         let shop = positions.iter().any(|row| {
             row.company_id == user.company_id && SHOP_POSITIONS.contains(&row.position_id)
         });
-        if user.is_employee || user.is_admin || user.is_superuser || shop {
+        let sectioned = access != Access::Full;
+        if user.is_employee || user.is_admin || user.is_superuser || shop || sectioned {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)
@@ -316,8 +399,8 @@ impl FromRequestParts<AppState> for AdminUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        let user = authenticate(parts, state).await?;
-        if user.is_admin || user.is_superuser {
+        let (user, _, access) = authenticate_with_access(parts, state).await?;
+        if user.is_admin || user.is_superuser || access.allows_admin(parts.uri.path()) {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)
@@ -420,9 +503,24 @@ mod tests {
             "/v1/schedule/events",
             "/v1/events/7/details",
             "/v1/me/schedule",
+            "/v1/delayed/sms",
+            "/v1/delayed/emails",
+            "/v1/delayed/sms/7/send-now",
+            "/v1/me/todos",
+            "/v1/me/todos/done",
+            "/v1/me/todo-order",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
             assert!(device_route(&Method::POST, path), "{path}");
+        }
+        for path in [
+            "/v1/delayed/sms/7",
+            "/v1/delayed/emails/7",
+            "/v1/me/todos/7",
+            "/v1/me/todos/7/done",
+        ] {
+            assert!(device_route(&Method::PUT, path), "{path}");
+            assert!(device_route(&Method::DELETE, path), "{path}");
         }
         for path in [
             "/v1/emailsx",
@@ -430,7 +528,8 @@ mod tests {
             "/v1/me/devices",
             "/v1/me",
             "/v1/me/schedulex",
-            "/v1/me/todos",
+            "/v1/delayedx",
+            "/v1/me/todosx",
             "/emails",
             "",
         ] {
@@ -456,7 +555,11 @@ mod tests {
             "/v1/suppliers/directory",
             "/v1/transactions",
             "/v1/transactions/7",
+            "/v1/quotes",
             "/v1/notifications/7",
+            "/v1/shop/maintenance",
+            "/v1/shop/maintenance/checks",
+            "/v1/ai/compose/inventory-url",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
             for method in [Method::POST, Method::PUT, Method::DELETE] {
@@ -473,6 +576,9 @@ mod tests {
             "/v1/customersx",
             "/v1/dealsx",
             "/v1/transactionsx/1",
+            "/v1/quotesx",
+            "/v1/shop/maintenancex",
+            "/v1/shop",
         ] {
             assert!(!device_route(&Method::GET, path), "{path}");
         }
@@ -518,6 +624,27 @@ mod tests {
             (Method::DELETE, "/v1/deal-stages/2"),
             (Method::POST, "/v1/dealsx"),
             (Method::DELETE, "/v1/deal-activities/suggestions"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn the_phone_assigns_a_sales_rep() {
+        assert!(device_route(&Method::GET, "/v1/users/sales-reps"));
+        assert!(device_route(&Method::PUT, "/v1/customers/7/sales-rep"));
+        for (method, path) in [
+            (Method::POST, "/v1/users/sales-reps"),
+            (Method::GET, "/v1/users/employees"),
+            (Method::GET, "/v1/users/sales-repsx"),
+            (Method::POST, "/v1/customers/7/sales-rep"),
+            (Method::PUT, "/v1/customers/x/sales-rep"),
+            (Method::PUT, "/v1/customers//sales-rep"),
+            (Method::PUT, "/v1/customers/7/8/sales-rep"),
+            (Method::PUT, "/v1/customers/7/temperature"),
+            (Method::PUT, "/v1/customers/7/invalid"),
+            (Method::PUT, "/v1/customers/7"),
+            (Method::DELETE, "/v1/customers/7"),
         ] {
             assert!(!device_route(&method, path), "{method} {path}");
         }

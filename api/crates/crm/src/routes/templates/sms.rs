@@ -17,7 +17,9 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::company::queries::company_features;
+use crate::routes::sms::send::{SmsFile, check_files, stored_files};
 use crate::state::AppState;
+use crate::storage::Storage;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -42,6 +44,7 @@ struct Row {
     minute_delay: i32,
     customer_sources: Option<String>,
     sales_rep_ids: Option<String>,
+    attachments: Option<String>,
     position: i32,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
@@ -49,7 +52,8 @@ struct Row {
 
 const COLUMNS: &str = "id, user_id, name, body, lead_list_id, hour_delay, minute_delay, \
      CAST(customer_sources AS CHAR) AS customer_sources, \
-     CAST(sales_rep_ids AS CHAR) AS sales_rep_ids, position, created_at, updated_at";
+     CAST(sales_rep_ids AS CHAR) AS sales_rep_ids, \
+     CAST(attachments AS CHAR) AS attachments, position, created_at, updated_at";
 
 /// An SMS template.
 #[derive(Debug, Serialize, ToSchema)]
@@ -79,6 +83,25 @@ pub struct SmsTemplate {
     pub customer_sources: Vec<String>,
     /// Company drip: sales reps whose deals get it; empty: every rep's.
     pub sales_rep_ids: Vec<i32>,
+    /// Files sent with the text (and by its drip and flows).
+    pub attachments: Vec<SmsTemplateFile>,
+}
+
+/// A file sent with an SMS template.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SmsTemplateFile {
+    /// Its key, under `sms-attachments/<company id>/`.
+    pub s3_key: String,
+    /// Its public link.
+    pub url: String,
+    /// Its type (JPEG, PNG, GIF, PDF, Office, text or CSV).
+    pub content_type: String,
+    /// The name it was uploaded with.
+    pub filename: String,
+    /// Pixel width of an image.
+    pub width: Option<i32>,
+    /// Pixel height of an image.
+    pub height: Option<i32>,
 }
 
 /// A deal list a drip can start from.
@@ -181,6 +204,9 @@ pub struct NewSmsTemplate {
     pub scope: TemplateScope,
     /// Company templates only.
     pub drip: Option<Drip>,
+    /// Up to ten files (`POST /v1/sms/attachments`) sent with the text.
+    #[serde(default)]
+    pub attachments: Vec<SmsFile>,
 }
 
 /// Body of `PUT /v1/sms-templates/{id}`.
@@ -192,14 +218,32 @@ pub struct SmsTemplateUpdate {
     pub body: String,
     /// Company templates only; left out keeps the drip.
     pub drip: Option<Drip>,
+    /// Up to ten files sent with the text; left out keeps the template's.
+    pub attachments: Option<Vec<SmsFile>>,
 }
 
 const fn is_admin(user: &SessionUser) -> bool {
     user.is_admin || user.is_superuser
 }
 
-fn to_template(row: Row, user: &SessionUser, company_editable: bool) -> SmsTemplate {
+fn to_template(
+    row: Row,
+    user: &SessionUser,
+    company_editable: bool,
+    storage: &Storage,
+) -> SmsTemplate {
     let company = row.user_id.is_none();
+    let attachments = stored_files(row.attachments.as_deref())
+        .into_iter()
+        .map(|file| SmsTemplateFile {
+            url: storage.public_url(&file.s3_key).unwrap_or_default(),
+            s3_key: file.s3_key,
+            content_type: file.content_type,
+            filename: file.filename,
+            width: file.width,
+            height: file.height,
+        })
+        .collect();
     SmsTemplate {
         id: row.id,
         name: row.name,
@@ -222,6 +266,21 @@ fn to_template(row: Row, user: &SessionUser, company_editable: bool) -> SmsTempl
         minute_delay: row.minute_delay,
         customer_sources: sources_of(row.customer_sources.as_deref()),
         sales_rep_ids: super::reps::ids_of(row.sales_rep_ids.as_deref()),
+        attachments,
+    }
+}
+
+/// The files as stored: checked, JSON; `None` when there are none.
+fn checked_files(company_id: i32, files: &[SmsFile]) -> ApiResult<Option<String>> {
+    match check_files(company_id, files) {
+        Err("too_many_images") => Err(ApiError::BadRequest(
+            "A template can have at most 10 attachments".into(),
+        )),
+        Err(_) => Err(ApiError::BadRequest(
+            "This attachment cannot be sent by text".into(),
+        )),
+        Ok(()) if files.is_empty() => Ok(None),
+        Ok(()) => Ok(Some(serde_json::to_string(files).unwrap_or_default())),
     }
 }
 
@@ -336,8 +395,7 @@ async fn drip_taken(
         .any(|other| super::reps::overlap(&drip.reps, &super::reps::ids_of(other.as_deref())))
     {
         return Err(ApiError::BadRequest(
-            "Another SMS template already uses this list and delay for the same sales reps."
-                .into(),
+            "Another SMS template already uses this list and delay for the same sales reps.".into(),
         ));
     }
     Ok(())
@@ -435,7 +493,7 @@ pub async fn list(
         return Ok(Json(SmsTemplates {
             templates: rows
                 .into_iter()
-                .map(|row| to_template(row, &user, true))
+                .map(|row| to_template(row, &user, true, &state.storage))
                 .collect(),
             deal_lists,
         }));
@@ -464,7 +522,7 @@ pub async fn list(
     Ok(Json(SmsTemplates {
         templates: rows
             .into_iter()
-            .map(|row| to_template(row, &user, false))
+            .map(|row| to_template(row, &user, false, &state.storage))
             .collect(),
         deal_lists: Vec::new(),
     }))
@@ -507,6 +565,7 @@ pub async fn create(
         _ => StoredDrip::NONE,
     };
     drip_taken(pool, user.company_id, &drip, None).await?;
+    let files = checked_files(user.company_id, &input.attachments)?;
     let owner = (!company).then_some(user.id);
     let position: Option<i32> = sqlx::query_scalar(
         "SELECT MAX(position) FROM cloudtalk_sms_templates
@@ -519,8 +578,8 @@ pub async fn create(
     let id = sqlx::query(
         "INSERT INTO cloudtalk_sms_templates
            (company_id, user_id, name, body, lead_list_id, hour_delay, minute_delay,
-            customer_sources, sales_rep_ids, position, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            customer_sources, sales_rep_ids, attachments, position, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user.company_id)
     .bind(owner)
@@ -531,6 +590,7 @@ pub async fn create(
     .bind(drip.minutes)
     .bind(&drip.sources)
     .bind(super::reps::to_json(&drip.reps))
+    .bind(&files)
     .bind(position.map_or(0, |max| max + 1))
     .bind(user.id)
     .execute(pool)
@@ -540,7 +600,10 @@ pub async fn create(
     let row = accessible(pool, &user, id).await?;
     let after = automation_notice::sms_template(pool, user.company_id, id).await;
     automation_notice::notify(&state, &user, &Snapshot::Template(None), &after).await;
-    Ok((StatusCode::CREATED, Json(to_template(row, &user, company))))
+    Ok((
+        StatusCode::CREATED,
+        Json(to_template(row, &user, company, &state.storage)),
+    ))
 }
 
 /// Edit an SMS template
@@ -584,11 +647,15 @@ pub async fn update(
     if company {
         drip_taken(pool, user.company_id, &drip, Some(id)).await?;
     }
+    let files = match &input.attachments {
+        Some(files) => checked_files(user.company_id, files)?,
+        None => existing.attachments.clone(),
+    };
     let before = automation_notice::sms_template(pool, user.company_id, id).await;
     sqlx::query(
         "UPDATE cloudtalk_sms_templates
             SET name = ?, body = ?, lead_list_id = ?, hour_delay = ?, minute_delay = ?,
-                customer_sources = ?, sales_rep_ids = ?, updated_at = NOW()
+                customer_sources = ?, sales_rep_ids = ?, attachments = ?, updated_at = NOW()
           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(&name)
@@ -598,6 +665,7 @@ pub async fn update(
     .bind(drip.minutes)
     .bind(&drip.sources)
     .bind(super::reps::to_json(&drip.reps))
+    .bind(&files)
     .bind(id)
     .bind(user.company_id)
     .execute(pool)
@@ -605,13 +673,12 @@ pub async fn update(
     if company && (drip.list.is_none() || drip.hours.is_none()) {
         cancel_scheduled(pool, id, "Template deleted").await?;
     } else if company {
-        super::reps::cancel_for_other_reps(pool, super::reps::Queue::Sms, id, &drip.reps)
-            .await?;
+        super::reps::cancel_for_other_reps(pool, super::reps::Queue::Sms, id, &drip.reps).await?;
     }
     let after = automation_notice::sms_template(pool, user.company_id, id).await;
     automation_notice::notify(&state, &user, &before, &after).await;
     let row = accessible(pool, &user, id).await?;
-    Ok(Json(to_template(row, &user, company)))
+    Ok(Json(to_template(row, &user, company, &state.storage)))
 }
 
 /// Delete an SMS template

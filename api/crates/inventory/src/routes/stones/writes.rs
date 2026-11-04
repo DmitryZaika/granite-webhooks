@@ -122,9 +122,9 @@ async fn validate(
     if input.level.is_some_and(|level| !(1..=7).contains(&level)) {
         return Err(ApiError::BadRequest("level must be 1 to 7".into()));
     }
-    for (name, value) in [("length", input.length), ("width", input.width)] {
+    for value in [input.length, input.width] {
         if value.is_some_and(|v| !v.is_finite() || v < 0.0) {
-            return Err(ApiError::BadRequest(format!("Enter a number of 0 or more")));
+            return Err(ApiError::BadRequest("Enter a number of 0 or more".into()));
         }
     }
     if let Some(date) = non_empty(input.delivery_date.as_ref())

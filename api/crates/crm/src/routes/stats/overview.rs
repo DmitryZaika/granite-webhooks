@@ -647,11 +647,14 @@ async fn emails_per_month(
     sql.build_query_as().fetch_all(pool).await
 }
 
+/// `copies`: count the texts copied to `provider` when their rep moved to
+/// it (`moves`); left out when their originals are counted too.
 async fn sms_per_month_of(
     pool: &MySqlPool,
     company: i32,
     provider: SmsProvider,
     f: &Filters,
+    copies: bool,
 ) -> sqlx::Result<Vec<MonthCount>> {
     // A Telnyx text's agent is its sender's user id.
     let table = provider.sms_table();
@@ -667,6 +670,9 @@ async fn sms_per_month_of(
     ));
     sql.push_bind(company)
         .push(" AND cs.direction = 'outbound' AND cs.status = 'sent'");
+    if !copies {
+        sql.push(format!(" AND {}", crate::sms_provider::not_a_copy("cs")));
+    }
     f.days(&mut sql, "cs.created_date");
     if let Some(rep) = &f.rep {
         sql.push(" AND (u.name = ")
@@ -732,13 +738,14 @@ pub async fn overview(
     .fetch_all(pool)
     .await?;
     let mut sms_per_month = match features.sms_provider() {
-        Some(provider) => Some(sms_per_month_of(pool, company, provider, &f).await?),
+        Some(provider) => Some(sms_per_month_of(pool, company, provider, &f, true).await?),
         None => None,
     };
     // Texts through Telnyx count too, month by month.
     if features.telnyx_sms {
+        let copies = sms_per_month.is_none();
         let mut months = sms_per_month.take().unwrap_or_default();
-        for telnyx in sms_per_month_of(pool, company, SmsProvider::Telnyx, &f).await? {
+        for telnyx in sms_per_month_of(pool, company, SmsProvider::Telnyx, &f, copies).await? {
             match months.iter_mut().find(|month| month.month == telnyx.month) {
                 Some(month) => month.count += telnyx.count,
                 None => months.push(telnyx),

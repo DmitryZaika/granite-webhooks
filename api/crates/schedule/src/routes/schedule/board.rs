@@ -10,7 +10,7 @@
 //! loaders and actions. Repeating events come back once, with their `rrule`:
 //! the page expands them over the range.
 
-use crate::auth::{AdminUser, CurrentUser, EmployeeUser};
+use crate::auth::{AdminUser, CurrentUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::openapi::{IntoParams, ToSchema};
@@ -99,6 +99,32 @@ pub struct ScheduleEvent {
     pub customer_id: Option<i32>,
     /// That customer's name.
     pub customer_name: Option<String>,
+    /// Phone for this event only; null uses the customer's.
+    #[sqlx(default)]
+    pub contact_phone: Option<String>,
+    /// Email for this event only; null uses the customer's.
+    #[sqlx(default)]
+    pub contact_email: Option<String>,
+    /// The crew's progress: `on_my_way`, `arrived` or `completed`.
+    #[sqlx(default)]
+    pub crew_status: Option<String>,
+    /// When the crew set off (UTC, ISO 8601).
+    #[sqlx(default)]
+    pub on_my_way_at: Option<String>,
+    /// When the crew's phone reached the address (UTC, ISO 8601).
+    #[sqlx(default)]
+    pub arrived_at: Option<String>,
+    /// When the crew tapped Completed (UTC, ISO 8601).
+    #[sqlx(default)]
+    pub completed_at: Option<String>,
+    /// The customer got the On my way message.
+    #[sqlx(default)]
+    pub customer_told: bool,
+    /// Added by the CRM on its own when a quote was sold (Mark as Sold's
+    /// jobs and extra events), not by a person: show it as made by the
+    /// system. `created_user_id` is then whoever sold it.
+    #[sqlx(default)]
+    pub automated: bool,
     /// Its QuickBooks invoice (only when QuickBooks is connected).
     #[sqlx(skip)]
     pub qbo_invoice: Option<EventInvoice>,
@@ -130,14 +156,14 @@ pub struct ScheduleEvents {
         (status = 200, description = "Events", body = ScheduleEvents),
         (status = 400, description = "Missing or invalid range", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn events(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     MultiQuery(query): MultiQuery<EventsQuery>,
 ) -> ApiResult<Json<ScheduleEvents>> {
     let own = super::own_events_only(&state.pool, &user).await?;
@@ -182,7 +208,13 @@ async fn load_events(
                 DATE_FORMAT(e.recurrence_until, '%Y-%m-%dT%H:%i:%sZ') AS recurrence_until,
                 NULLIF(TRIM(e.recurrence_exdates), '') AS recurrence_exdates,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
-                c.name AS customer_name, u.name AS created_user_name
+                c.name AS customer_name, u.name AS created_user_name,
+                e.quote_id IS NOT NULL AS automated,
+                e.contact_phone, e.contact_email, e.crew_status,
+                DATE_FORMAT(e.on_my_way_at, '%Y-%m-%dT%H:%i:%sZ') AS on_my_way_at,
+                DATE_FORMAT(e.arrived_at, '%Y-%m-%dT%H:%i:%sZ') AS arrived_at,
+                DATE_FORMAT(e.completed_at, '%Y-%m-%dT%H:%i:%sZ') AS completed_at,
+                e.on_my_way_sent_at IS NOT NULL AS customer_told
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c
@@ -260,14 +292,14 @@ async fn load_events(
     responses(
         (status = 200, description = "Events", body = Vec<ScheduleEvent>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn unscheduled(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
 ) -> ApiResult<Json<Vec<ScheduleEvent>>> {
     let own = super::own_events_only(&state.pool, &user).await?;
     let events = sqlx::query_as(
@@ -277,7 +309,9 @@ pub async fn unscheduled(
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
                 e.calendar_id, NULL AS rrule, NULL AS recurrence_until,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
-                c.name AS customer_name, u.name AS created_user_name
+                c.name AS customer_name, u.name AS created_user_name,
+                e.quote_id IS NOT NULL AS automated,
+                e.contact_phone, e.contact_email
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c
@@ -402,14 +436,14 @@ fn default_color(user_id: i32) -> &'static str {
     responses(
         (status = 200, description = "People", body = Vec<SchedulePerson>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn people(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
 ) -> ApiResult<Json<Vec<SchedulePerson>>> {
     let rows: Vec<(i32, Option<String>, i32, Option<String>)> = sqlx::query_as(
         "SELECT u.id, u.name, up.position_id, sc.color
@@ -446,6 +480,27 @@ pub async fn people(
         })
         .collect();
     Ok(Json(people))
+}
+
+/// The template maker a new event on a templates calendar goes to when no
+/// one is picked: the company's only template maker, else none.
+pub async fn sole_template_maker(
+    pool: &sqlx::MySqlPool,
+    calendar_id: i32,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT MIN(u.id)
+           FROM calendars cal
+           JOIN users_positions up ON up.company_id = cal.company_id AND up.position_id = ?
+           JOIN users u ON u.id = up.user_id AND u.is_deleted = 0
+          WHERE cal.id = ? AND cal.slug = 'templates'
+         HAVING COUNT(DISTINCT u.id) = 1",
+    )
+    .bind(TEMPLATE)
+    .bind(calendar_id)
+    .fetch_optional(pool)
+    .await
+    .map(Option::flatten)
 }
 
 /// Body of `PUT /v1/schedule/people/{user_id}/color`.

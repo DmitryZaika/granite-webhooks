@@ -10,6 +10,7 @@ use axum_test::TestServer;
 use common::{ALLOWED_ORIGIN, SECRET, WithSession, sessions};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
+use std::collections::HashMap;
 
 async fn server(pool: MySqlPool) -> TestServer {
     let router = Router::new()
@@ -22,6 +23,32 @@ async fn server(pool: MySqlPool) -> TestServer {
                     { "placePrediction": { "placeId": "p2", "text": { "text": "9 Elm St, Fishers, IN, USA" } } },
                 ] }))
             }),
+        )
+        .route(
+            "/geocode/json",
+            get(
+                |axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>| async move {
+                    let street = |number: &str| json!({ "status": "OK", "results": [{
+                        "formatted_address": format!("{number} Main St, Carmel, IN 46032, USA"),
+                        "address_components": [
+                            { "long_name": number, "types": ["street_number"] },
+                            { "long_name": "Main Street", "types": ["route"] },
+                        ],
+                    }] });
+                    Json(match q["address"].as_str() {
+                        "1 Main St, Carmel" => street("1"),
+                        // Google moved it to another house.
+                        "7 Main St, Carmel" => street("9"),
+                        // Only the ZIP's area.
+                        "1 Nowhere Rd, 46112" => json!({ "status": "OK", "results": [{
+                            "formatted_address": "Brownsburg, IN 46112, USA",
+                            "address_components": [{ "long_name": "46112", "types": ["postal_code"] }],
+                        }] }),
+                        "2 Error Rd, Carmel" => json!({ "status": "REQUEST_DENIED" }),
+                        _ => json!({ "status": "ZERO_RESULTS", "results": [] }),
+                    })
+                },
+            ),
         )
         .route(
             "/places/{id}",
@@ -87,4 +114,29 @@ async fn suggestions_come_with_their_zip(pool: MySqlPool) {
             "zip_code": "46038", "city": "Fishers", "state": "IN", "country": "US",
         })
     );
+}
+
+#[test_db::test(seed)]
+async fn an_address_is_found_only_at_its_house_on_a_street(pool: MySqlPool) {
+    let server = server(pool).await;
+    let check = async |address: &str| -> Value {
+        server
+            .get("/v1/places/check")
+            .add_query_param("address", address)
+            .with_session(sessions::REP)
+            .await
+            .json()
+    };
+    assert_eq!(
+        check("1 Main St, Carmel").await,
+        json!({ "status": "found", "formatted_address": "1 Main St, Carmel, IN 46032, USA" })
+    );
+    for address in ["7 Main St, Carmel", "1 Nowhere Rd, 46112", "46112", "3 Fake Ln, Carmel"] {
+        assert_eq!(check(address).await["status"], "not_found", "{address}");
+    }
+    assert_eq!(check("2 Error Rd, Carmel").await["status"], "unknown");
+    server
+        .get("/v1/places/check?address=1")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 }

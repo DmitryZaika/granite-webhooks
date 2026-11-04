@@ -408,10 +408,10 @@ async fn coworkers_have_all_their_numbers(pool: MySqlPool) {
     assert_eq!(
         body["coworkers"],
         json!([
-            { "userId": 102, "name": "Ada Admin", "e164": "+13175550131", "label": "RingCentral",
+            { "userId": 102, "name": "Ada Admin", "e164": "+13175550131", "label": "Work",
               "phones": [
-                { "e164": "+13175550131", "label": "RingCentral" },
-                { "e164": "+13175550132", "label": "CloudTalk" },
+                { "e164": "+13175550131", "label": "Work" },
+                { "e164": "+13175550132", "label": "Office" },
               ] },
             { "userId": 107, "name": "Dina Dealer", "e164": "+13175550122", "label": null,
               "phones": [{ "e164": "+13175550122", "label": null }] },

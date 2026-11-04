@@ -273,3 +273,82 @@ async fn people_see_their_own_events_and_the_office_sees_all(pool: MySqlPool) {
     .unwrap();
     assert_eq!(june(sessions::MANAGER).await, [9790, 9791, 9792]);
 }
+
+#[test_db::test(seed)]
+async fn the_shop_sees_the_schedule(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let april = "/v1/schedule/events?start=2026-04-01T00:00:00Z&end=2026-04-30T23:59:59Z";
+    // Vic (104) is not an employee.
+    server
+        .get(april)
+        .with_session(sessions::VIEWER)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (104, 4, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    server
+        .get(april)
+        .with_session(sessions::VIEWER)
+        .await
+        .assert_status_ok();
+}
+
+#[test_db::test(seed)]
+async fn each_user_picks_their_own_week_start_and_clock(pool: MySqlPool) {
+    let server = server(pool);
+    let settings = |session: &'static str| {
+        let request = server.get("/v1/schedule/settings").with_session(session);
+        async move { request.await.json::<Value>() }
+    };
+    let rep = settings(sessions::REP).await;
+    assert_eq!(rep["week_starts_on"], "sunday");
+    assert_eq!(rep["time_24h"], false);
+    server
+        .put("/v1/schedule/settings/me")
+        .with_session(sessions::REP)
+        .json(&json!({ "week_starts_on": "friday" }))
+        .await
+        .assert_status_bad_request();
+    server
+        .put("/v1/schedule/settings/me")
+        .with_session(sessions::REP)
+        .json(&json!({ "week_starts_on": "monday", "time_24h": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let rep = settings(sessions::REP).await;
+    assert_eq!(rep["week_starts_on"], "monday");
+    assert_eq!(rep["company_week_starts_on"], "sunday");
+    assert_eq!(rep["time_24h"], true);
+    // The admin of the same company keeps the company's.
+    let admin = settings(sessions::ADMIN).await;
+    assert_eq!(admin["week_starts_on"], "sunday");
+    assert_eq!(admin["time_24h"], false);
+}
+
+#[test_db::test(seed)]
+async fn settings_name_the_color_a_user_adds_most(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let favorite = |session: &'static str| {
+        let request = server.get("/v1/schedule/settings").with_session(session);
+        async move { request.await.json::<Value>()["favorite_color"].clone() }
+    };
+    assert_eq!(favorite(sessions::REP).await, Value::Null);
+    sqlx::raw_sql(
+        "INSERT INTO events (id, title, start_date, end_date, created_user_id, color, created_date) VALUES
+           (9720, 'A', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 'green', NOW()),
+           (9721, 'B', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 'green', NOW()),
+           (9722, 'C', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 'red', NOW()),
+           (9723, 'Old', '2026-01-10 15:00:00', '2026-01-10 16:00:00', 100, 'red', NOW() - INTERVAL 200 DAY),
+           (9724, 'Old', '2026-01-10 15:00:00', '2026-01-10 16:00:00', 100, 'red', NOW() - INTERVAL 200 DAY),
+           (9725, 'Other', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 106, 'pink', NOW());",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Events of the last 90 days count; older ones and other users' do not.
+    assert_eq!(favorite(sessions::REP).await, "green");
+}

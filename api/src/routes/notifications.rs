@@ -204,6 +204,13 @@ pub async fn done(
     if !input.clear_all && input.items.is_empty() {
         return Err(ApiError::BadRequest("notification target required".into()));
     }
+    // Read before the transaction: the Lambda pool has one connection, which
+    // the transaction holds until it commits.
+    let listed = if input.hide_only && input.clear_all {
+        unread_email(&state, &user).await?
+    } else {
+        Vec::new()
+    };
     let mut tx = state.pool.begin().await?;
     if input.clear_all || !phone_calls.is_empty() {
         let mut builder = QueryBuilder::<MySql>::new(
@@ -250,9 +257,7 @@ pub async fn done(
         builder.build().execute(&mut *tx).await?;
     }
     if input.hide_only {
-        let listed;
         let threads: Vec<&str> = if input.clear_all {
-            listed = unread_email(&state, &user).await?;
             listed.iter().map(|item| item.id.as_str()).collect()
         } else {
             threads
@@ -329,6 +334,10 @@ pub struct NotificationItem {
     /// The deal an activity notification is about (the phone app opens it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deal_id: Option<i64>,
+    /// The customer an activity notification is about (the phone app opens
+    /// their card when there is no deal).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer_id: Option<i32>,
 }
 
 /// `GET /v1/notifications`.
@@ -358,6 +367,7 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "estimate_appointment_reminder" => "In-Home Estimate Reminder",
         "installation_appointment_reminder" => "Installation Reminder",
         "template_appointment_reminder" => "Template Appointment Reminder",
+        "installation_completed" => "Installation Completed",
         "note_added" => "Added a Note",
         "note_edited" => "Edited a Note",
         "note_deleted" => "Deleted a Note",
@@ -369,14 +379,24 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "quote_signed" => "Quote Signed",
         "delayed_message_sent" => "Scheduled Message Sent",
         "delayed_message_failed" => "Scheduled Message Failed",
-        crate::followups::alerts::FOLLOWUP_REPLIED => "Replied to Your Follow-up",
-        crate::followups::alerts::FOLLOWUP_FAILED => "Follow-up Stopped",
         "e911_alert" => "Emergency Call",
         TENDLC_READY | TENDLC_STATUS => "Texting Registration",
         PHONE_PORT => "Number Port",
+        PROMISE_DUE => "Promise Reminder",
+        PROMISE_DIGEST => "Morning List",
+        PROMISE_APPROVAL => "Approval Reminder",
         _ => return None,
     })
 }
+
+/// AI promises' notifications (`crate::promises`): a promise came due, the
+/// morning list, and an approval got no reply. They may name a customer but
+/// no deal, and open the rep's promise list.
+const PROMISE_DUE: &str = "ai_promise_due";
+const PROMISE_DIGEST: &str = "ai_promise_digest";
+/// Something sent for a customer's approval got no reply in a day.
+const PROMISE_APPROVAL: &str = "ai_promise_approval";
+const PROMISES_HREF: &str = "/employee/promises";
 
 /// `notifications.notification_type` of a 911 alert (`phone::alerts`): it
 /// names no deal or customer.
@@ -503,6 +523,7 @@ async fn unread_email(
                 type_title: None,
                 action_label: None,
                 deal_id: None,
+                customer_id: None,
             }
         })
         .collect())
@@ -530,10 +551,14 @@ async fn activity(
            LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, pr.customer_id, n.customer_id)
           WHERE n.user_id = ? AND n.is_done = 0 AND (? IS NULL OR n.id = ?)
             -- On a live deal or a project, except 911 alerts, the texting
-            -- registration's and number ports' (they name no deal).
+            -- registration's, number ports' and AI promises' (they name no
+            -- deal), and a finished installation of a customer without a deal.
             AND (((d.id IS NOT NULL OR pr.id IS NOT NULL) AND c.id IS NOT NULL)
+                 OR (n.notification_type = 'installation_completed' AND c.id IS NOT NULL
+                     AND c.deleted_at IS NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
-                                            'phone_port'))
+                                            'phone_port', 'ai_promise_due', 'ai_promise_digest',
+                                            'ai_promise_approval'))
             -- A project task's reminder shows while the task is open.
             AND (COALESCE(n.notification_type, '') <> 'project_task_reminder' OR EXISTS (
                   SELECT 1 FROM project_activities pa
@@ -566,9 +591,11 @@ async fn activity(
             let alert = kind == Some(E911_ALERT);
             let texting = matches!(kind, Some(TENDLC_READY | TENDLC_STATUS));
             let port = kind == Some(PHONE_PORT);
+            let promise = matches!(kind, Some(PROMISE_DUE | PROMISE_DIGEST | PROMISE_APPROVAL));
             let customer = row.customer_name.unwrap_or_default();
             let href = match (row.deal_id, row.customer_id) {
                 _ if alert => E911_ALERT_HREF.to_string(),
+                _ if promise => PROMISES_HREF.to_string(),
                 _ if kind == Some(TENDLC_READY) => TENDLC_READY_HREF.to_string(),
                 _ if texting || port => E911_ALERT_HREF.to_string(),
                 _ if row.project_id.is_some() => format!(
@@ -587,6 +614,10 @@ async fn activity(
                     "Texting registration".to_string()
                 } else if port {
                     "Number port".to_string()
+                } else if kind == Some(PROMISE_DIGEST) {
+                    "Morning list".to_string()
+                } else if promise && customer.is_empty() {
+                    "Promise".to_string()
                 } else {
                     customer.clone()
                 },
@@ -604,6 +635,7 @@ async fn activity(
                 customer_name: (!alert && !texting && !port).then_some(customer),
                 action_label: None,
                 deal_id: row.deal_id.filter(|_| !(alert || texting || port)),
+                customer_id: row.customer_id.filter(|_| !(alert || texting || port)),
             }
         })
         .collect())
@@ -682,6 +714,7 @@ async fn telnyx_calls(
                 }),
                 action_label: None,
                 deal_id: None,
+                customer_id: None,
             }
         })
         .collect())
@@ -712,6 +745,7 @@ async fn billing(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>
             type_title: None,
             action_label: Some(row.action_label),
             deal_id: None,
+            customer_id: None,
         })
         .collect())
 }
@@ -819,6 +853,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
         }),
         action_label: None,
         deal_id: None,
+        customer_id: None,
     }
 }
 
@@ -892,7 +927,8 @@ pub async fn list(
 /// Get one activity notification
 ///
 /// The caller's own due activity notification `notif-<id>`, as
-/// `GET /v1/notifications` lists it, with the deal it opens (`deal_id`).
+/// `GET /v1/notifications` lists it, with the deal it opens (`deal_id`),
+/// else its customer (`customer_id`).
 /// The phone app reads it for a `notification` push, which names only the
 /// id. 404 for another user's, a dismissed one, or one `GET
 /// /v1/notifications` would not list.

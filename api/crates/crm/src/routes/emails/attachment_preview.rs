@@ -147,7 +147,8 @@ pub async fn preview(
     }
     let storage = &state.storage;
     if query.icon {
-        let key = hashed_key("email-attachment-thumbnails", &url);
+        // `-v2`: thumbnails made before 2026-11-03 from our own JPEGs are green.
+        let key = hashed_key("email-attachment-thumbnails-v2", &url);
         let icon = match storage.get(&key).await? {
             Some(stored) if !stored.bytes.is_empty() => stored.bytes,
             _ => {

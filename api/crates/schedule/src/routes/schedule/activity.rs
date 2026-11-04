@@ -4,7 +4,7 @@
 //!   each with its last few history lines and comments
 
 use super::board::ScheduleEvent;
-use crate::auth::EmployeeUser;
+use crate::auth::ShopOrEmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
 use crate::openapi::{IntoParams, ToSchema};
@@ -113,14 +113,14 @@ const COMMENT_LINES: &str =
     responses(
         (status = 200, description = "Activity", body = ScheduleActivity),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn activity(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     MultiQuery(query): MultiQuery<ActivityQuery>,
 ) -> ApiResult<Json<ScheduleActivity>> {
     let pool = &state.pool;

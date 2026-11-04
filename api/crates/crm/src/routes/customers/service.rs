@@ -2,8 +2,11 @@
 //! reassignment audit trail and the open deal of an assigned customer.
 
 use crate::error::ApiError;
+use crate::phone::crm_push::{LeadKind, push_lead_logged};
 use crate::phone::numbers::last10;
 use crate::routes::deals::service::{enter_stage, sync_drip};
+use crate::state::AppState;
+use crate::telegram::Bot;
 use chrono::{DateTime, Utc};
 use lambda_http::tracing;
 use sqlx::{MySql, MySqlConnection, MySqlPool, Transaction};
@@ -369,6 +372,63 @@ pub async fn record_lead_manager_assignment(
         at,
     )
     .await
+}
+
+/// Tells sales rep `rep` that `actor` gave them customer `customer_id` (a
+/// lead) with open deal `deal_id`: a `lead` push (`assigned`) on their phones
+/// and the leads bot's "You were assigned a lead" in Telegram, both, as when a
+/// manager assigns the lead in Telegram (the app does not replace Telegram
+/// for leads). Nothing when the rep assigned themselves. Best effort: the
+/// assignment is saved already, so failures are logged.
+pub async fn notify_assigned_rep(
+    state: &AppState,
+    company_id: i32,
+    customer_id: i32,
+    rep: i32,
+    actor: i32,
+    deal_id: i64,
+) {
+    if rep == actor {
+        return;
+    }
+    push_lead_logged(
+        state,
+        company_id,
+        &[rep],
+        LeadKind::Assigned,
+        customer_id,
+        Some(deal_id),
+    )
+    .await;
+    let target: Result<Option<(Option<i64>, String)>, sqlx::Error> = sqlx::query_as(
+        "SELECT u.telegram_id, COALESCE(c.name, '') FROM users u
+           JOIN customers c ON c.id = ? AND c.company_id = u.company_id AND c.deleted_at IS NULL
+          WHERE u.id = ? AND u.company_id = ? AND u.is_deleted = 0",
+    )
+    .bind(customer_id)
+    .bind(rep)
+    .bind(company_id)
+    .fetch_optional(&state.pool)
+    .await;
+    let (chat_id, name) = match target {
+        Ok(Some((Some(chat_id), name))) => (chat_id, name),
+        Ok(_) => return,
+        Err(error) => {
+            tracing::warn!(?error, rep, customer_id, "assigned lead: rep not looked up");
+            return;
+        }
+    };
+    let name = name.trim();
+    let text = if name.is_empty() {
+        "You were assigned a lead.".to_string()
+    } else {
+        format!("You were assigned a lead: {name}.")
+    };
+    let url = format!("{}/employee/deals/edit/{deal_id}/project", state.app_url);
+    state
+        .telegram
+        .send_with_button(Bot::Leads, chat_id, &text, "Open the lead", &url)
+        .await;
 }
 
 /// `ensureOpenDealForCustomer`: the customer's deals move to `sales_rep`;

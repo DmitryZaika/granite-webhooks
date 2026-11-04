@@ -11,7 +11,6 @@ mod followup_flows;
 mod followup_gather;
 mod followup_generation;
 mod followup_instruction;
-mod followup_settings;
 mod followup_timeline;
 mod sms_flows;
 mod sms_followups_job;

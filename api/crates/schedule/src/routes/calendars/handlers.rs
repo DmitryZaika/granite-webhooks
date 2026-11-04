@@ -1,6 +1,6 @@
 use super::queries::{all_calendars, ensure_system_calendars, visible_calendars};
 use super::schemas::{Calendar, HiddenUser};
-use crate::auth::{AdminUser, EmployeeUser};
+use crate::auth::{AdminUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
 use crate::openapi::IntoParams;
@@ -34,14 +34,14 @@ pub struct ListQuery {
     responses(
         (status = 200, description = "Calendars", body = Vec<Calendar>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin (`all`: not an admin)", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker (`all`: not an admin)", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     MultiQuery(query): MultiQuery<ListQuery>,
 ) -> ApiResult<Json<Vec<Calendar>>> {
     ensure_system_calendars(&state.pool, user.company_id, user.id).await?;

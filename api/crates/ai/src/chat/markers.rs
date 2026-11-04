@@ -1022,3 +1022,58 @@ pub fn instruction_answer_needs_another_look(answer: &str) -> bool {
         .iter()
         .any(|p| lower.contains(p))
 }
+
+/// How an answer says it found nothing: the manual's and the instructions'
+/// rules have the model say it cannot confirm.
+const DEAD_END_PATTERNS: [&str; 11] = [
+    "i cannot confirm",
+    "i can't confirm",
+    "i can not confirm",
+    "i could not find",
+    "i couldn't find",
+    "i cannot find",
+    "i can't find",
+    "i was unable to find",
+    "i'm unable to find",
+    "i am unable to find",
+    "i don't have information",
+];
+
+/// Whether `answer` (markers stripped) found nothing: short, without steps,
+/// and it says it can't confirm or find it ("I can't confirm the **DLC
+/// form**…"). "You don't have access" is an answer.
+pub fn answer_is_dead_end(answer: &str) -> bool {
+    let lower = answer.to_lowercase().replace('\u{2019}', "'");
+    let lower = trim(&lower);
+    let steps = lower
+        .lines()
+        .any(|line| re!(r"^\s*(?:\d+[.)]|[-*•])\s").is_match(line));
+    !steps && !js_len_ge(lower, 301) && DEAD_END_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::answer_is_dead_end;
+
+    #[test]
+    fn an_answer_that_only_says_it_found_nothing_is_a_dead_end() {
+        assert!(answer_is_dead_end(
+            "I can't confirm the **DLC form** or how to fill it out in Granite Manager from the available details."
+        ));
+        assert!(answer_is_dead_end("I cannot confirm that feature exists."));
+        assert!(answer_is_dead_end("I can\u{2019}t confirm a bulk export."));
+        assert!(answer_is_dead_end("I couldn't find a setting for that."));
+        // Answers, not dead ends.
+        assert!(!answer_is_dead_end(
+            "You don't have access to delete users. Ask a Manager."
+        ));
+        assert!(!answer_is_dead_end(
+            "1. Open **CRM > SMS**.\n2. Click **Templates**.\nI can't confirm there is a limit."
+        ));
+        assert!(!answer_is_dead_end(&format!(
+            "{}I can't confirm the exact price.",
+            "Taxes are set for each quote on step 6. ".repeat(8)
+        )));
+        assert!(!answer_is_dead_end(""));
+    }
+}

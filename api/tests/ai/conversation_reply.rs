@@ -93,8 +93,11 @@ async fn a_fast_reply_reads_the_whole_conversation(pool: MySqlPool) {
         "{user}"
     );
     assert!(user.contains("REPLY MODE: Fast reply"));
-    assert!(user.contains("[2026-09-20 15:00] SMS Customer: Hi, we are still thinking about the white quartz. Can you send the price?"));
-    assert!(user.contains("[2026-09-10 10:00] EMAIL Customer: Subject: Kitchen quote"));
+    // Each time is followed by how long ago it was, which depends on today.
+    assert!(user.contains("[2026-09-20 15:00, "));
+    assert!(user.contains(" ago] SMS Customer: Hi, we are still thinking about the white quartz. Can you send the price?"));
+    assert!(user.contains("[2026-09-10 10:00, "));
+    assert!(user.contains(" ago] EMAIL Customer: Subject: Kitchen quote"));
     assert!(user.contains("COMPANY ADMINISTRATIVE INSTRUCTIONS / GUARDRAILS:\nTone\nBe friendly."));
     assert!(user.contains("GREETING: ") && user.contains("SIGNATURE: none"));
     assert!(user.contains("QUOTES"));

@@ -29,6 +29,7 @@ use super::tendlc::{
     self, BRAND_FAILED, Row, TenDlcDraft, TenDlcFeedback, TenDlcStatus, audit, brand_body,
     campaign_body, campaign_update_body, editable_fields_changed, move_status,
 };
+use super::tendlc_check as ai_check;
 use crate::auth::sha256_hex;
 use crate::state::AppState;
 use crate::telnyx::tendlc::{Brand, Campaign, TenDlcError};
@@ -538,6 +539,9 @@ pub async fn send(state: &AppState, company_id: i32, actor: i32) -> Result<Row, 
     }
     let draft = row.draft();
     complete(&draft)?;
+    if let Some(why) = ai_check::blocks_sending(state, &row, actor).await? {
+        return Err(RegistryError::Conflict(why));
+    }
     let config = setup(state, company_id).await?;
     if !lock(pool, row.id).await? {
         return Err(RegistryError::Conflict(
@@ -671,6 +675,9 @@ pub async fn resend(
     }
     let draft = row.draft();
     complete(&draft)?;
+    if let Some(why) = ai_check::blocks_sending(state, &row, actor).await? {
+        return Err(RegistryError::Conflict(why));
+    }
     let config = setup(state, company_id).await?;
     if !lock(pool, row.id).await? {
         return Err(RegistryError::Conflict(

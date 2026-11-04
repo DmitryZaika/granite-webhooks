@@ -14,6 +14,7 @@ mod manage_users;
 mod me;
 mod me_account;
 mod onboarding;
+mod position_sections;
 mod teach_mode;
 mod todos;
 mod user_call_activity;

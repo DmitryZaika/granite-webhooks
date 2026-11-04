@@ -29,5 +29,7 @@ sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
 utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"], optional = true }
 utoipa-axum = { version = "0.3.0", optional = true }
 serde_html_form = "0.4.1"
+tokio = { version = "1", features = ["rt", "sync"] }
+tokio-stream = "0.1"
 url = "2"
 uuid = { version = "1", features = ["v4"] }

@@ -202,15 +202,17 @@ pub async fn insert_email_attachment(
             content_type,
             content_subtype,
             filename,
-            url
+            url,
+            is_inline
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         "#,
         email_id,
         attachment.content_type,
         attachment.content_subtype,
         attachment.filename,
         attachment.url,
+        attachment.is_inline,
     )
     .execute(pool)
     .await

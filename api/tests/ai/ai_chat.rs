@@ -292,6 +292,8 @@ async fn the_assistant_looks_up_a_customer_and_drafts_an_email(pool: MySqlPool) 
     let (server, ai) = setup(
         &pool,
         vec![
+            // The model finds it asks about the records, not the app.
+            Reply::Text(json!({ "records": true }).to_string()),
             Reply::Tools(vec![("lookup_customer".into(), json!({ "query": "Alice" }))]),
             Reply::Tools(vec![
                 ("get_customer_deals".into(), json!({ "customer_id": 1000 })),
@@ -318,7 +320,9 @@ async fn the_assistant_looks_up_a_customer_and_drafts_an_email(pool: MySqlPool) 
     );
 
     let requests = ai.requests.lock().unwrap().clone();
-    let first = &requests[0];
+    let pick = requests[0]["messages"][0]["content"].as_str().unwrap();
+    assert!(pick.starts_with("You find where the Granite Manager user manual answers"));
+    let first = &requests[1];
     assert_eq!(first["reasoning_effort"], "none");
     let system = first["messages"][0]["content"].as_str().unwrap();
     assert!(system.starts_with("You are the AI assistant inside Granite Manager"));
@@ -344,11 +348,11 @@ async fn the_assistant_looks_up_a_customer_and_drafts_an_email(pool: MySqlPool) 
     );
     // The skills' results went back to the model.
     let lookup: Value =
-        serde_json::from_str(requests[1]["messages"][3]["content"].as_str().unwrap()).unwrap();
+        serde_json::from_str(requests[2]["messages"][3]["content"].as_str().unwrap()).unwrap();
     assert_eq!(lookup["selected"]["name"], "Alice Lead");
     assert_eq!(lookup["selected"]["assigned_to_you"], true);
     let deals: Value =
-        serde_json::from_str(requests[2]["messages"][5]["content"].as_str().unwrap()).unwrap();
+        serde_json::from_str(requests[3]["messages"][5]["content"].as_str().unwrap()).unwrap();
     assert_eq!(deals["customer_id"], 1000);
     assert!(
         deals["deals"]
@@ -667,8 +671,8 @@ async fn the_model_picks_the_manual_s_sections_for_the_answer(pool: MySqlPool) {
     assert!(!manual.contains("## Employee portal (`/employee`) — feature map"));
     // Short steps, with room to write them: reasoning took the 1024 tokens.
     let answering = &requests[1];
-    assert_eq!(answering["reasoning_effort"], "low");
-    assert_eq!(answering["max_completion_tokens"], 2000);
+    assert_eq!(answering["reasoning_effort"], "medium");
+    assert_eq!(answering["max_completion_tokens"], 4000);
     assert!(contents(answering).last().unwrap().starts_with(
         "Answer how to do this in Granite Manager from the CRM user manual: short numbered steps"
     ));
@@ -795,6 +799,65 @@ async fn the_model_asks_back_when_a_question_fits_several_features(pool: MySqlPo
     assert!(sent.contains("(I mean SMS templates in Granite Manager.)"));
 }
 
+/// An answer that found nothing ends with a question back: the manual's
+/// closest topics, a click away; the click is answered from its section.
+#[test_db::test(seed)]
+async fn an_answer_that_found_nothing_asks_which_topic(pool: MySqlPool) {
+    let dead_end = "I can't confirm the **DLC form** or how to fill it out in Granite Manager.";
+    let reply = "Open **Admin > Company settings > Phone** and click **Texting registration**.";
+    let (server, ai) = setup(
+        &pool,
+        vec![Reply::Text(dead_end.into()), Reply::Text(reply.into())],
+    )
+    .await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "What about the DLC form?", "isNew": true }),
+    )
+    .await;
+    assert_eq!(
+        answer(&events),
+        format!("{dead_end}\n\nDo you mean one of these?")
+    );
+    let choices: Value = serde_json::from_str(named(&events, "clarify")[0]).unwrap();
+    let labels: Vec<&str> = choices
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            assert_eq!(c["source"], "manual");
+            c["label"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        labels[..2],
+        ["Texting registration (10DLC)", "Granite Phone (Telnyx)"]
+    );
+    assert!(named(&events, "crmManual").is_empty());
+    let saved = history(&pool).await;
+    let asked = saved.last().unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        asked.contains("Do you mean one of these?\n\n[[CLARIFY:What about the DLC form?|Texting registration (10DLC)=texting-registration-10dlc|Granite Phone (Telnyx)=admin-phone-telnyx"),
+        "{asked}"
+    );
+
+    let events = ask(
+        &server,
+        json!({ "query": "Texting registration (10DLC)", "isNew": false }),
+    )
+    .await;
+    assert_eq!(answer(&events), reply);
+    assert_eq!(named(&events, "crmManual"), ["true"]);
+    let requests = ai.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2, "no pick: the choice has its section");
+    let sent = contents(&requests[1]).join("\n");
+    assert!(sent.contains("(I mean Texting registration (10DLC) in Granite Manager.)"));
+}
+
 /// A feature the topic table names is answered, even when the model would
 /// ask back: "layout" in this app is the quote's slab layout.
 #[test_db::test(seed)]
@@ -854,6 +917,22 @@ async fn a_how_to_about_records_is_answered_from_the_manual(pool: MySqlPool) {
         contents(&requests[1])
             .iter()
             .any(|c| c.contains("### Deleting a deal"))
+    );
+    // Kept for good, as asked, in chat_log.
+    let logged: (i32, Option<i32>, String, String, bool) =
+        sqlx::query_as("SELECT user_id, company_id, question, answer, from_manual FROM chat_log")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        logged,
+        (
+            100,
+            Some(100),
+            "can i delete a deal?".into(),
+            reply.into(),
+            true
+        )
     );
 }
 

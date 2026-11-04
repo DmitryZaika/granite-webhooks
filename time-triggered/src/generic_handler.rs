@@ -2,21 +2,21 @@ use crate::posthog::{report_failure, reported};
 use crate::schemas::{EventBridgeEvent, OutgoingMessage};
 use common::amazon::email::{assigned_sender_from, send_message_from};
 use common::crud::notifications::{
-    DueActivityDeadlineReminder, get_due_activity_deadline_reminders,
-    mark_deadline_reminder_telegram_sent, unmark_deadline_reminder_telegram_sent,
+    get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
+    unmark_deadline_reminder_telegram_sent, DueActivityDeadlineReminder,
 };
-use common::crud::outbound_email::{OutboundScheduledEmail, record_outbound_scheduled_email};
+use common::crud::outbound_email::{record_outbound_scheduled_email, OutboundScheduledEmail};
 use common::crud::phone_app::has_app;
 use common::crud::scheduled_emails::{
-    ScheduledEmail, cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
+    cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
-    mark_scheduled_email_failed_with_reason,
+    mark_scheduled_email_failed_with_reason, ScheduledEmail,
 };
 use common::crud::template::fetch_template_variable_data;
 use common::telegram::bot::{Bot, ChatId, InlineKeyboardButton, InlineKeyboardMarkup};
 use common::utils::email_send_window::automated_email_send_window_is_open_now;
 use common::utils::template::replace_template_variables;
-use lambda_runtime::{Error, LambdaEvent, tracing};
+use lambda_runtime::{tracing, Error, LambdaEvent};
 use sqlx::MySqlPool;
 
 fn activity_reminder_needs_telegram(
@@ -336,6 +336,12 @@ async fn start_tendlc_checks_job() {
     start_api_job("tendlc-checks", "10DLC AI checks").await;
 }
 
+/// Starts the AI promises job without waiting for it: it transcribes calls
+/// and writes messages, which takes longer than a tick waits.
+async fn start_promises_job() {
+    start_api_job("promises", "AI promises").await;
+}
+
 /// Starts a long API job (`POST <API_URL>/v1/jobs/<job>`) without waiting
 /// for it. Sent to the long-running deployment (`API_STREAM_URL`) when there
 /// is one.
@@ -539,6 +545,7 @@ pub(crate) async fn function_handler(
     .await;
     start_supplier_files_job().await;
     start_tendlc_checks_job().await;
+    start_promises_job().await;
     let call_points_count = match report_job("call-points", process_call_points().await).await {
         Ok(count) => count,
         Err(error) => {

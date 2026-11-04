@@ -18,6 +18,8 @@ use crate::phone::numbers::{is_nanp, last10, to_e164};
 use crate::phone::revoke::{RevokeReason, revoke_device_session};
 use crate::phone::routing::{NoAnswerAction, PHONE_USER};
 use crate::routes::device_sessions::DevicePlatform;
+use crate::routes::sms::moves::{self, Kind};
+use crate::routes::sms::provider::SmsProvider;
 use crate::serde_helpers::{js_date, js_date_required};
 use crate::state::AppState;
 use axum::Json;
@@ -505,10 +507,40 @@ pub async fn update_admin_number(
     )
     .await?;
     tx.commit().await?;
+    follow_number(pool, user.company_id, &before, &checked.assignments).await;
     let saved = company_number(pool, user.company_id, id)
         .await?
         .ok_or(ApiError::NotFound)?;
     Ok(Json(saved))
+}
+
+/// After a number's users changed: those who could call from a direct line
+/// keep it as a line of theirs, so their texts on it follow them, and those who may
+/// call from it now get their texts from other providers copied to Telnyx
+/// (`crate::routes::sms::moves`). Failures are logged; the save stands.
+async fn follow_number(
+    pool: &MySqlPool,
+    company_id: i32,
+    before: &AdminNumber,
+    after: &[NumberAssignment],
+) {
+    // A shared or main line is not one person's: its texts stay with it.
+    let own = before.kind == NumberKind::Direct;
+    for assignment in before
+        .assignments
+        .iter()
+        .filter(|assignment| own && assignment.can_call_from)
+    {
+        let ids = [(SmsProvider::Telnyx, Kind::Line, Some(before.e164.as_str()))];
+        if let Err(error) = moves::remember(pool, company_id, assignment.user_id, &ids).await {
+            tracing::error!(company_id, %error, "remembering a texting line failed");
+        }
+    }
+    for assignment in after.iter().filter(|assignment| assignment.can_call_from) {
+        if let Err(error) = moves::carry(pool, company_id, assignment.user_id).await {
+            tracing::error!(company_id, %error, "copying texts to Telnyx failed");
+        }
+    }
 }
 
 /// Import the company's numbers from Telnyx

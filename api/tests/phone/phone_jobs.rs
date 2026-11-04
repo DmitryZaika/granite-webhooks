@@ -891,7 +891,7 @@ async fn telnyx_deletes_that_failed_are_retried_with_backoff(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn the_job_closes_calls_left_open_and_ends_expired_sign_ins(pool: MySqlPool) {
+async fn the_job_closes_calls_left_open_and_ends_signed_out_browser_phones(pool: MySqlPool) {
     enable_calling(&pool, 100, "").await;
     // Telnyx never reported their end: an answered incoming call and a
     // ringing one 7 hours old, an outgoing one, a voicemail left open, and a
@@ -947,17 +947,19 @@ async fn the_job_closes_calls_left_open_and_ends_expired_sign_ins(pool: MySqlPoo
     .await;
     add_call(&pool, 981_405, 100, Some(100), "inbound", "in_progress", "+13175550142", "2026-10-10 10:00:00",
         "started_at = UTC_TIMESTAMP() - INTERVAL 1 HOUR, answered_at = UTC_TIMESTAMP() - INTERVAL 1 HOUR").await;
-    // Sign-ins: one idle 31 days, one past its 12 months, one fine.
+    // Phones: one idle 31 days and one past its 12 months stay signed in; a
+    // browser phone whose CRM sign-in was signed out is ended.
     add_phone(&pool, 141, 100, 100).await;
     add_phone(&pool, 142, 100, 100).await;
     add_phone(&pool, 143, 100, 100).await;
     sql(&pool, "UPDATE device_sessions SET last_seen_at = UTC_TIMESTAMP() - INTERVAL 31 DAY WHERE id = 950141").await;
     sql(&pool, "UPDATE device_sessions SET expires_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE WHERE id = 950142").await;
+    sql(&pool, "UPDATE device_sessions SET platform = 'web', web_session_id = 'bbbbbbbb-0000-4000-8000-0000000d0100' WHERE id = 950143").await;
     let (server, stubs, _storage) = server(&pool).await;
     let run = run_job(&server).await;
     assert_eq!(
         (&run["calls_closed"], &run["sessions_expired"]),
-        (&json!(4), &json!(2))
+        (&json!(4), &json!(1))
     );
     let calls: Vec<(String, bool, Option<i32>)> = sqlx::query_as(
         "SELECT CAST(status AS CHAR), ended_at IS NOT NULL, duration_secs FROM phone_calls
@@ -985,22 +987,16 @@ async fn the_job_closes_calls_left_open_and_ends_expired_sign_ins(pool: MySqlPoo
     assert_eq!(
         sessions,
         [
-            (950_141, Some("expired".into())),
-            (950_142, Some("expired".into())),
-            (950_143, None)
+            (950_141, None),
+            (950_142, None),
+            (950_143, Some("expired".into()))
         ]
     );
-    // Their credentials are deleted and push tokens dropped.
+    // Its credential is deleted and push token dropped.
     let paths = stubs.telnyx_paths();
-    assert_eq!(
-        paths,
-        [
-            "DELETE /telephony_credentials/cred-141",
-            "DELETE /telephony_credentials/cred-142"
-        ]
-    );
+    assert_eq!(paths, ["DELETE /telephony_credentials/cred-143"]);
     let tokens: i64 = sqlx::query_scalar(
-        "SELECT CAST(COUNT(*) AS SIGNED) FROM phone_devices WHERE id IN (960141, 960142) AND push_token IS NOT NULL",
+        "SELECT CAST(COUNT(*) AS SIGNED) FROM phone_devices WHERE id = 960143 AND push_token IS NOT NULL",
     )
     .fetch_one(&pool)
     .await

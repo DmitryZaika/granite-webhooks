@@ -62,6 +62,19 @@ pub struct Request {
     pub mode: Option<String>,
     pub is_new: bool,
     pub special_order: Option<SpecialOrderOffer>,
+    /// Pictures the user added to the question (`data:image/…` URLs): the
+    /// model sees them, the saved history does not keep them.
+    pub images: Vec<String>,
+    /// The page the user is on, when they share it with the question.
+    pub page: Option<Page>,
+}
+
+/// The page the user is looking at: its address, title and visible text.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Page {
+    pub path: String,
+    pub title: String,
+    pub text: String,
 }
 
 /// One saved message of the conversation.
@@ -220,6 +233,7 @@ async fn save(
     mut messages: Vec<Message>,
     answer: &str,
 ) {
+    log_answer(pool, user_id, &messages, answer).await;
     messages.push(Message::new("assistant", answer));
     let history = serde_json::to_string(&messages).unwrap_or_else(|_| "[]".into());
     let result = match id {
@@ -241,6 +255,28 @@ async fn save(
     };
     if let Err(err) = result {
         tracing::error!(error = %err, user = user_id, "chat history not saved");
+    }
+}
+
+/// Keeps the question (the last user message, as typed) and its answer in
+/// `chat_log` for good: a new chat overwrites `chat_history`.
+async fn log_answer(pool: &MySqlPool, user_id: i32, messages: &[Message], answer: &str) {
+    let Some(asked) = messages.iter().rev().find(|m| m.role == "user") else {
+        return;
+    };
+    let result = sqlx::query(
+        "INSERT INTO chat_log (user_id, company_id, question, answer, from_manual)
+         SELECT ?, company_id, ?, ?, ? FROM users WHERE id = ?",
+    )
+    .bind(user_id)
+    .bind(prompts::asked_question(&asked.content))
+    .bind(answer)
+    .bind(prompts::is_manual_question(&asked.content))
+    .bind(user_id)
+    .execute(pool)
+    .await;
+    if let Err(err) = result {
+        tracing::error!(error = %err, user = user_id, "chat log not saved");
     }
 }
 
@@ -417,6 +453,41 @@ fn request_messages(messages: &[Message]) -> Vec<Value> {
         .collect()
 }
 
+/// The model's messages with what the user added to the last question: the
+/// page they are on and their pictures.
+fn with_attachments(mut messages: Vec<Value>, request: &Request) -> Vec<Value> {
+    if request.images.is_empty() && request.page.is_none() {
+        return messages;
+    }
+    let Some(last) = messages.iter_mut().rev().find(|m| m["role"] == "user") else {
+        return messages;
+    };
+    let mut text = last["content"].as_str().unwrap_or_default().to_string();
+    if let Some(page) = &request.page {
+        text.push_str(&format!(
+            "\n\nThe user shared the Granite Manager page they are looking at. Use it when the question is about what they see.\nAddress: {}\nTitle: {}\nWhat the page shows:\n{}",
+            page.path, page.title, page.text
+        ));
+    }
+    if request.images.is_empty() {
+        last["content"] = json!(text);
+    } else {
+        text.push_str(&format!(
+            "\n\nThe user added {} picture(s) to this question; look at them to answer.",
+            request.images.len()
+        ));
+        let mut parts = vec![json!({ "type": "text", "text": text })];
+        parts.extend(
+            request
+                .images
+                .iter()
+                .map(|url| json!({ "type": "image_url", "image_url": { "url": url } })),
+        );
+        last["content"] = Value::Array(parts);
+    }
+    messages
+}
+
 /// Whether the answer before the last question came from the CRM manual:
 /// that question went to the model as `prompts::manual_user_message`.
 fn last_answer_from_manual(messages: &[Message]) -> bool {
@@ -440,13 +511,15 @@ fn earlier_questions(messages: &[Message]) -> Vec<String> {
 
 /// `completeChatAnswer`: the answer streamed as it is written, holding back
 /// the last 64 characters so a marker is never shown half-written.
-/// `manual`: a how-to answered from the CRM manual, where the model's own
-/// reasoning used up the 1024 tokens and left step lists cut off or empty
-/// (the manual eval, `api/tests/crm_manual_eval.rs`).
+/// `manual`: a how-to answered from the CRM manual, with room and time to
+/// reason: on low effort its 1024 tokens left step lists cut off or empty,
+/// and it skipped steps and mixed up who may open a page (the manual eval,
+/// `api/tests/crm_manual_eval.rs`).
 async fn complete(
     state: &AppState,
     user: &SessionUser,
     messages: &[Message],
+    request: &Request,
     out: &Sender,
     manual: bool,
 ) -> Result<String, AiError> {
@@ -474,11 +547,11 @@ async fn complete(
         }
     };
     let run = async {
-        let mut chat = Chat::new(MINI_MODEL).max_tokens(Some(if manual { 2000 } else { 1024 }));
-        chat.messages = request_messages(messages);
+        let mut chat = Chat::new(MINI_MODEL).max_tokens(Some(if manual { 4000 } else { 1024 }));
+        chat.messages = with_attachments(request_messages(messages), request);
         chat.timeout = Duration::from_secs(120);
         if manual {
-            chat.reasoning_effort = Some("low");
+            chat.reasoning_effort = Some("medium");
         }
         let first = state.ai.chat_stream(&state.pool, caller, &chat, |t| {
             let _ = tx.send(t.to_string());
@@ -509,12 +582,28 @@ pub async fn answer(state: AppState, user: SessionUser, request: Request, tx: mp
         out.send(Event::Ping).await;
     }
     out.send(Event::Info("Connecting to AI...".into())).await;
-    let mode = mode_for(
+    let mut mode = mode_for(
         request.mode.as_deref(),
         &request.query,
         may_use_assistant(&user),
     );
-    if let Err(err) = run(&state, &user, &request, mode, &out).await {
+    // The rules send any question that names the company's records to the
+    // assistant; the model tells how to do it in the app ("mark deal won")
+    // from a question about the records ("which deals did we win", "did
+    // the customer open my quote?" is the app's). A typed email or phone
+    // number is the records'. A question with a verified answer is the app's.
+    let mut app_pick = None;
+    if mode == Mode::Assistant && request.mode.as_deref() != Some("assistant") {
+        if crm_manual::verified_answer(&request.query).is_some() {
+            mode = Mode::Instructions;
+        } else if !prompts::lookup_kind_is_contact(&request.query) {
+            app_pick = app_question(&state, &user, &request).await;
+            if app_pick.is_some() {
+                mode = Mode::Instructions;
+            }
+        }
+    }
+    if let Err(err) = run(&state, &user, &request, mode, app_pick, &out).await {
         tracing::error!(error = %err, ?mode, "AI chat request failed");
         let message = if err.is_model_permission() {
             "Chat is temporarily unavailable because the AI model is not enabled for this workspace. Please try again later.".to_string()
@@ -522,6 +611,35 @@ pub async fn answer(state: AppState, user: SessionUser, request: Request, tx: mp
             format!("Error: {err}")
         };
         out.send(Event::Text(message)).await;
+    }
+}
+
+/// The model's pick for a question the rules send to the assistant, when it
+/// finds the question is about using the app (its sections, or which
+/// feature to ask about): the manual answers it instead.
+async fn app_question(
+    state: &AppState,
+    user: &SessionUser,
+    request: &Request,
+) -> Option<crm_manual::Picked> {
+    let earlier = if request.is_new {
+        Vec::new()
+    } else {
+        continued(&state.pool, user.id, &request.query)
+            .await
+            .map(|(_, messages)| earlier_questions(&messages))
+            .unwrap_or_default()
+    };
+    let caller = Caller {
+        feature: "chat",
+        user_id: Some(user.id),
+        company_id: Some(user.company_id),
+    };
+    let asker = crm_manual::asker(user.is_employee, user.is_admin, user.is_superuser);
+    match crm_manual::pick(state, caller, &request.query, &earlier, asker).await? {
+        crm_manual::Picked::Sections(ids) if ids.is_empty() => None,
+        crm_manual::Picked::Records => None,
+        picked => Some(picked),
     }
 }
 
@@ -557,6 +675,8 @@ async fn run(
     user: &SessionUser,
     request: &Request,
     mode: Mode,
+    // The model's pick that took the question from the assistant.
+    app_pick: Option<crm_manual::Picked>,
     out: &Sender,
 ) -> Result<(), ChatError> {
     let pool = &state.pool;
@@ -718,6 +838,9 @@ async fn run(
         || follows_manual || crm_manual::looks_like_how_to(&question),
         |picked| picked == crm_manual::Source::Manual,
     );
+    // The manual's sections a how-to was answered from: a dead end doesn't
+    // offer them again.
+    let mut tried: Vec<String> = Vec::new();
     if mode == Mode::Instructions {
         // The app's how-to or the company's own process: ask, don't guess.
         if source.is_none()
@@ -755,16 +878,38 @@ async fn run(
                 .collect::<Vec<_>>()
                 .join(" ");
             let quick = crm_manual::quick_answer(&question, Some(&access));
+            // A verified answer is the manual's: its feedback, no model call.
+            if crm_manual::verified_answer(&question).is_some() {
+                how_to = true;
+            }
+            // Picked for the question asked, not for a reply to a question back.
+            let app_pick = app_pick.filter(|_| source.is_none());
             let ids = if let Some(feature) = &feature {
                 feature.sections.clone()
-            } else if quick.is_none() && (how_to || crm_manual::asks_how_to(&question)) {
+            } else if quick.is_none()
+                && (how_to || app_pick.is_some() || crm_manual::asks_how_to(&question))
+            {
                 let caller = Caller {
                     feature: "chat",
                     user_id: Some(user_id),
                     company_id: Some(company_id),
                 };
-                match crm_manual::sections_for(state, caller, &question, &earlier, &search).await {
-                    Ok(Some(ids)) => ids,
+                match crm_manual::sections_for(
+                    state,
+                    caller,
+                    &question,
+                    &earlier,
+                    crm_manual::asker(user.is_employee, user.is_admin, user.is_superuser),
+                    &search,
+                    app_pick,
+                )
+                .await
+                {
+                    // About using the app: short steps from the manual.
+                    Ok(Some(ids)) => {
+                        how_to = true;
+                        ids
+                    }
                     // Not about the app (the model says): a follow-up to the
                     // manual goes back to the company's instructions.
                     Ok(None) => {
@@ -792,6 +937,9 @@ async fn run(
             };
             let manual = crm_manual::content_with(pool, &ids).await;
             messages = with_crm_manual(messages, &manual, &crm_manual::access_block(&access));
+            if how_to {
+                tried = ids;
+            }
             if how_to {
                 // The browser offers the manual's feedback on this answer.
                 out.json("crmManual", &true).await;
@@ -838,7 +986,12 @@ async fn run(
     out.send(Event::Status("answering")).await;
 
     if mode == Mode::Assistant {
-        let result = assistant::run(state, ctx(user), request_messages(&messages)).await?;
+        let result = assistant::run(
+            state,
+            ctx(user),
+            with_attachments(request_messages(&messages), request),
+        )
+        .await?;
         out.text_answer(&result.answer).await;
         if !result.actions.is_empty() {
             out.json("actions", &result.actions).await;
@@ -859,7 +1012,7 @@ async fn run(
     }
 
     let manual = mode == Mode::Instructions && how_to;
-    let mut answer = complete(state, user, &messages, out, manual).await?;
+    let mut answer = complete(state, user, &messages, request, out, manual).await?;
 
     if mode == Mode::Instructions
         && !how_to
@@ -879,11 +1032,31 @@ async fn run(
             out.send(Event::Replace).await;
             messages = with_instruction_context(messages, &leftover, &question);
             selected = leftover;
-            answer = complete(state, user, &messages, out, false).await?;
+            answer = complete(state, user, &messages, request, out, false).await?;
         }
     }
 
     let mut clean = markers::strip_markers(&answer);
+    // An answer that found nothing ("I can't confirm…") ends with a question
+    // back: which of the manual's closest topics the user means, a click
+    // away. Not once a choice was picked, nor for the company's own process;
+    // after an answer from the instructions only when the question names a
+    // feature of the app and the answer cites no instruction (an answer from
+    // the company's instructions is not a dead end, whatever it hedges).
+    if mode == Mode::Instructions
+        && feature.is_none()
+        && source != Some(crm_manual::Source::Company)
+        && (how_to || crm_manual::matches_topic(&question))
+        && !matches!(markers::parse_instruction_indices(&answer), Some(Some(_)))
+        && markers::answer_is_dead_end(&clean)
+        && let Some(asked) = crm_manual::closest_topics(&question, &tried)
+    {
+        ask_after(
+            out, pool, user_id, history_id, messages, &clean, &question, &asked,
+        )
+        .await;
+        return Ok(());
+    }
     let in_price_lists = mode == Mode::PriceLists;
     let thickness = if in_price_lists {
         markers::infer_thickness_options_from_answer(&answer)
@@ -1075,6 +1248,34 @@ async fn ask_which_feature(
         .map(|c| (c.label.as_str(), c.sections.as_slice()))
         .collect();
     let asked = markers::with_clarify_choices_marker(&clarification.question, question, &choices);
+    save(pool, user_id, id, messages, &asked).await;
+}
+
+/// Ends `answer`, which found nothing, with a question back: the answer
+/// stays and the question follows it, saved with each choice's sections as
+/// [`ask_which_feature`] saves them.
+#[allow(clippy::too_many_arguments)]
+async fn ask_after(
+    out: &Sender,
+    pool: &MySqlPool,
+    user_id: i32,
+    id: Option<i32>,
+    messages: Vec<Message>,
+    answer: &str,
+    question: &str,
+    clarification: &crm_manual::Clarification,
+) {
+    out.text_answer(&format!("\n\n{}", clarification.question))
+        .await;
+    out.json("clarify", &clarification.choices).await;
+    out.send(Event::Done).await;
+    let choices: Vec<(&str, &[String])> = clarification
+        .choices
+        .iter()
+        .map(|c| (c.label.as_str(), c.sections.as_slice()))
+        .collect();
+    let text = format!("{answer}\n\n{}", clarification.question);
+    let asked = markers::with_clarify_choices_marker(&text, question, &choices);
     save(pool, user_id, id, messages, &asked).await;
 }
 

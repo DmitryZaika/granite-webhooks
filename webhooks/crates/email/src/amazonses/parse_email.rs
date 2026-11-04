@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use common::images::compress_for_storage;
 use email_reply_parser::EmailReplyParser;
 use mail_parser::{
     Address, HeaderName, HeaderValue, Host, Message, MessageParser, MessagePart, MimeHeaders,
@@ -53,16 +54,61 @@ pub fn attachment_object_key(message_id: &str, index: usize, original: &str) -> 
     format!("{hash}-{index}{ext}")
 }
 
+/// `filename` with the extension `ext` (`jpg` or `png`) of the picture stored
+/// for it; kept when it already names that type (`.jpeg` is a JPEG too).
+fn stored_filename(filename: &str, ext: &str) -> String {
+    let current = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase);
+    let same_type = match ext {
+        "jpg" => matches!(current.as_deref(), Some("jpg" | "jpeg")),
+        other => current.as_deref() == Some(other),
+    };
+    if same_type {
+        return filename.to_string();
+    }
+    Path::new(filename)
+        .with_extension(ext)
+        .to_string_lossy()
+        .into_owned()
+}
+
 pub struct Attachment {
     content_type: String,
     content_subtype: Option<String>,
     filename: String,
+    is_inline: bool,
     data: Bytes,
 }
 
 impl Attachment {
     pub fn filename(&self) -> &str {
         &self.filename
+    }
+
+    /// The attachment as it is stored: a picture compressed as the CRM
+    /// compresses uploads (`compress_for_storage`), renamed when its type
+    /// changes (`IMG_1.HEIC` → `IMG_1.jpg`). Anything else, a picture that
+    /// already fits, or one that can't be read is kept as it came.
+    pub async fn compressed(mut self) -> Self {
+        let data = self.data.clone();
+        let stored = tokio::task::spawn_blocking(move || compress_for_storage(&data))
+            .await
+            .ok()
+            .flatten();
+        let Some(stored) = stored else {
+            return self;
+        };
+        self.filename = stored_filename(&self.filename, stored.ext);
+        let (kind, subtype) = stored
+            .content_type
+            .split_once('/')
+            .unwrap_or(("image", stored.ext));
+        self.content_type = kind.to_string();
+        self.content_subtype = Some(subtype.to_string());
+        self.data = Bytes::from(stored.bytes);
+        self
     }
 
     pub async fn to_uploaded_attachment<C: S3Bucket>(
@@ -79,6 +125,7 @@ impl Attachment {
             content_subtype: self.content_subtype,
             filename: self.filename,
             url,
+            is_inline: self.is_inline,
         }
     }
 }
@@ -235,8 +282,19 @@ pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
         content_type: clean_content_type,
         content_subtype,
         filename,
+        is_inline: is_inline_part(part),
         data,
     })
+}
+
+/// `Content-Disposition: inline`, or no disposition but a `Content-ID`: the
+/// part is drawn inside the body (a signature logo), not sent as a file.
+/// Gmail gives real attachments a `Content-ID` too, but with `attachment`.
+fn is_inline_part(part: &MessagePart) -> bool {
+    match part.content_disposition() {
+        Some(disposition) => disposition.c_type.eq_ignore_ascii_case("inline"),
+        None => part.content_id().is_some(),
+    }
 }
 
 /// Matches a forward-preamble header line: a non-whitespace word followed
@@ -501,6 +559,33 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
 mod local_tests {
     use super::*;
     use crate::tests::utils::{read_file_as_bytes, replace_bytes};
+
+    #[test]
+    fn stored_pictures_are_renamed_only_when_their_type_changes() {
+        assert_eq!(stored_filename("IMG_2700.jpeg", "jpg"), "IMG_2700.jpeg");
+        assert_eq!(stored_filename("IMG_2700.JPG", "jpg"), "IMG_2700.JPG");
+        assert_eq!(stored_filename("IMG_2701.HEIC", "jpg"), "IMG_2701.jpg");
+        assert_eq!(stored_filename("scan.png", "jpg"), "scan.jpg");
+        assert_eq!(stored_filename("logo.png", "png"), "logo.png");
+        assert_eq!(stored_filename("photo", "jpg"), "photo.jpg");
+    }
+
+    #[tokio::test]
+    async fn other_files_are_stored_as_they_came() {
+        let pdf = Attachment {
+            content_type: "application".into(),
+            content_subtype: Some("pdf".into()),
+            filename: "quote.pdf".into(),
+            is_inline: false,
+            data: Bytes::from_static(b"%PDF-1.7"),
+        }
+        .compressed()
+        .await;
+        assert_eq!(
+            (pdf.filename.as_str(), pdf.data.as_ref()),
+            ("quote.pdf", b"%PDF-1.7".as_slice())
+        );
+    }
 
     #[test]
     fn attachment_key_is_stable_per_message_and_index() {

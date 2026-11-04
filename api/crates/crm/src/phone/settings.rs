@@ -10,6 +10,7 @@ use super::lines::CallerId;
 use super::wire_enum;
 use crate::openapi::ToSchema;
 use chrono::{DateTime, Utc};
+use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::{FromRow, MySql, MySqlPool, Transaction};
 
@@ -343,6 +344,51 @@ pub async fn has_pin(pool: &MySqlPool, user_id: i32, company_id: i32) -> sqlx::R
     .fetch_optional(pool)
     .await?;
     Ok(hash.flatten().is_some())
+}
+
+/// The user's calls say the recording notice to both sides when their
+/// recording starts (`recording_voice`; on without a row).
+pub async fn recording_voice(
+    pool: &MySqlPool,
+    user_id: i32,
+    company_id: i32,
+) -> sqlx::Result<bool> {
+    let on: Option<bool> = sqlx::query_scalar(
+        "SELECT recording_voice <> 0 FROM phone_user_settings WHERE user_id = ? AND company_id = ?",
+    )
+    .bind(user_id)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(on.unwrap_or(true))
+}
+
+/// The notice for the user's calls, as [`recording_voice`]; on (the law's
+/// safe side) when it cannot be read.
+pub async fn says_recording_notice(pool: &MySqlPool, user_id: i32, company_id: i32) -> bool {
+    recording_voice(pool, user_id, company_id)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(user_id, error = %err, "recording voice setting not read; saying the notice");
+            true
+        })
+}
+
+/// Turns the recording notice of the user's calls on or off.
+pub async fn set_recording_voice(
+    pool: &MySqlPool,
+    user_id: i32,
+    company_id: i32,
+    on: bool,
+) -> sqlx::Result<()> {
+    let mut tx = pool.begin().await?;
+    ensure_row(&mut tx, user_id, company_id).await?;
+    sqlx::query("UPDATE phone_user_settings SET recording_voice = ? WHERE user_id = ?")
+        .bind(on)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
 }
 
 /// The PIN `digits` is the user's (`hash` as stored).

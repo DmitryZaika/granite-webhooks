@@ -102,7 +102,8 @@ pub struct CoworkerPhone {
     /// The number, E.164.
     pub e164: String,
     /// What it is: a direct line's own label (null when it has none),
-    /// `RingCentral`, `CloudTalk` or `Mobile` (their own phone).
+    /// `Work` (their `RingCentral` number), `Office` (their `CloudTalk`
+    /// number) or `Mobile` (their own phone). The app never names the provider.
     pub label: Option<String>,
 }
 
@@ -418,8 +419,8 @@ pub async fn coworkers(
     for user in users {
         let mut found = direct.remove(&user.id).unwrap_or_default();
         let others = [
-            (user.ringcentral_phone_number, "RingCentral"),
-            (user.cloudtalk_phone_number, "CloudTalk"),
+            (user.ringcentral_phone_number, "Work"),
+            (user.cloudtalk_phone_number, "Office"),
             (user.phone_number, "Mobile"),
         ];
         for (number, label) in others {

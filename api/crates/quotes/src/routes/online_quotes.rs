@@ -68,6 +68,8 @@ const SALES_MANAGER: i32 = 2;
 const MAX_PIECES: usize = 8;
 const MAX_COLORS: usize = 10;
 const MAX_CUTOUTS: usize = 6;
+/// The longest notes the customer may add, in characters.
+const MAX_NOTES: usize = 2000;
 /// Online quotes one address may get a day, and a company may get an hour.
 const QUOTES_PER_EMAIL_PER_DAY: i64 = 3;
 const QUOTES_PER_COMPANY_PER_HOUR: i64 = 30;
@@ -338,6 +340,10 @@ pub struct OnlineQuoteInput {
     /// team's notice says so. Null: no preference.
     #[serde(default)]
     pub contact_by: Option<OnlineContactBy>,
+    /// Anything the customer wants to tell the team, up to 2000 characters;
+    /// saved as the quote's notes and put in the team's notice. Optional.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// The saved quote.
@@ -1295,6 +1301,8 @@ struct Notice<'a> {
     emailed: bool,
     /// How the customer asked to be contacted about the quote.
     contact_by: Option<OnlineContactBy>,
+    /// What the customer wrote at the end, if anything.
+    notes: Option<&'a str>,
 }
 
 impl Notice<'_> {
@@ -1323,6 +1331,11 @@ impl Notice<'_> {
                 text,
                 "\nContact: the customer asked for {how} about the quote."
             );
+        }
+        if let Some(notes) = self.notes {
+            // One row per line: the notes' own line breaks become spaces.
+            let flat = notes.split_whitespace().collect::<Vec<_>>().join(" ");
+            let _ = write!(text, "\nNotes: {flat}");
         }
         if !self.emailed {
             text.push_str(
@@ -1399,8 +1412,8 @@ async fn keep_lead_message(
 /// The sales managers get the lead in Telegram with a button per sales rep
 /// (this month's leads on it) to assign it, as the lead pipeline sends new
 /// leads, plus one to open the quote. Managers who could not be reached in
-/// Telegram are emailed when none was. Their phones get a `lead` push, and
-/// managers with the app get only that.
+/// Telegram are emailed when none was. Their phones get a `lead` push too:
+/// the app does not replace Telegram for leads.
 async fn notify_managers(
     state: &AppState,
     company_id: i32,
@@ -1451,13 +1464,11 @@ async fn notify_managers(
         None,
     )
     .await;
-    // Managers with the app get it there only.
+    // A manager with the app still gets the Telegram message: it carries the
+    // buttons that assign the lead. The app counts as reaching them.
     let with_app = users_with_app(&state.pool, company_id, &manager_ids).await;
     let mut reached = !with_app.is_empty();
     for manager in &managers {
-        if with_app.contains(&manager.id) {
-            continue;
-        }
         let Some(chat_id) = manager.telegram_id else {
             continue;
         };
@@ -1507,7 +1518,8 @@ async fn notify_managers(
 }
 
 /// The customer's sales rep gets the quote in Telegram (lead alerts), else
-/// by email, and a `lead` push on their phones (only that with the app).
+/// by email, and a `lead` push on their phones: leads go to the app and to
+/// Telegram both. A rep with the app and no Telegram gets no email.
 async fn notify_rep(
     state: &AppState,
     company_id: i32,
@@ -1526,13 +1538,9 @@ async fn notify_rep(
         None,
     )
     .await;
-    // A rep with the app gets it there only.
-    if users_with_app(&state.pool, company_id, &[rep.id])
+    let has_app = users_with_app(&state.pool, company_id, &[rep.id])
         .await
-        .contains(&rep.id)
-    {
-        return;
-    }
+        .contains(&rep.id);
     if let Some(chat_id) = rep.telegram_id {
         let text = format!("{title}.\n{}", notice.details());
         let rows = vec![vec![
@@ -1546,6 +1554,10 @@ async fn notify_rep(
             keep_lead_message(state, customer_id, company_id, chat_id, message_id).await;
             return;
         }
+    }
+    // Not in Telegram: the push reached a rep with the app; the others get an email.
+    if has_app {
+        return;
     }
     let Some(address) = rep.email() else {
         tracing::warn!(
@@ -1619,6 +1631,14 @@ pub async fn create(
         ));
     }
     let (name, email, phone) = contact(&input)?;
+    let notes = input
+        .notes
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    if notes.is_some_and(|n| n.chars().count() > MAX_NOTES) {
+        return Err(bad("Keep your notes under 2000 characters."));
+    }
     let company = company_of(&state.pool, company_id).await?;
     let (offer, colors, sinks) = ready_offer(&state.pool, company_id).await?;
     let extras = checked_extras(&state.pool, company_id, &input.extras).await?;
@@ -1670,8 +1690,8 @@ pub async fn create(
                              salesperson_id, created_by, price_list_id, price_list_revision_id,
                              expiration_date, deal_id, draft_drawing_json, status, updated_at,
                              phone, email, tax_pct, payment_terms_json, price_snapshot_json,
-                             portal_token, current_step, current_revision)
-         VALUES (?, ?, '', NOW(), ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 'active', NOW(), ?, ?, ?, ?, ?, ?, 1, 1)",
+                             portal_token, current_step, current_revision, notes)
+         VALUES (?, ?, '', NOW(), ?, ?, ?, NULL, ?, ?, ?, NULL, ?, 'active', NOW(), ?, ?, ?, ?, ?, ?, 1, 1, ?)",
     )
     .bind(customer_id)
     .bind(&quote_name)
@@ -1688,6 +1708,7 @@ pub async fn create(
     .bind(offer.terms.as_ref().map(|t| json!({ "terms": t }).to_string()))
     .bind(offer.prices.to_string())
     .bind(&portal)
+    .bind(notes)
     .execute(&mut *tx)
     .await?
     .last_insert_id();
@@ -1801,6 +1822,7 @@ pub async fn create(
         link: &link,
         emailed,
         contact_by: input.contact_by,
+        notes,
     };
     match (&known, &rep) {
         (None, _) => {

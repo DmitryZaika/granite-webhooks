@@ -121,6 +121,14 @@ class ValidateTest(unittest.TestCase):
             "missing field": {k: v for k, v in sample_result().items() if k != "risk"},
             "too long title": sample_result(pr_title="x" * 101),
             "empty summary": sample_result(summary=""),
+            "long summary": sample_result(summary="x" * 301),
+            "long fix summary": sample_result(fix_summary="x" * 1001),
+            "missing given": {k: v for k, v in sample_result().items() if k != "given"},
+            "missing check": {k: v for k, v in sample_result().items() if k != "check"},
+            "long given": sample_result(given="x" * 501),
+            "long when": sample_result(when="x" * 501),
+            "long impact": sample_result(impact="x" * 501),
+            "long check": sample_result(check="x" * 501),
             "wrong type": sample_result(root_cause=5),
             "test without command": sample_result(test={"command": None}),
             "files not a list": sample_result(test={"files": "a.rs"}),
@@ -130,6 +138,15 @@ class ValidateTest(unittest.TestCase):
         for name, data in cases.items():
             with self.subTest(case=name), self.assertRaises(ResultError):
                 validate_result(data)
+
+    def test_empty_or_wordy_report_fields_are_accepted(self) -> None:
+        data = sample_result(check="", given="", actual="")
+        result = validate_result(data)
+        self.assertEqual(result["check"], "")
+        self.assertEqual(result["given"], "")
+        # The prompt asks for 200 characters; a wordier line must not cost the fix.
+        wordy = "x" * 400
+        self.assertEqual(validate_result(sample_result(given=wordy))["given"], wordy)
 
     def test_no_fix_result(self) -> None:
         data = sample_result(

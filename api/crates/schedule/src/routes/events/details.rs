@@ -5,7 +5,7 @@
 //! `api.events.search`.
 
 use super::history::{History, record};
-use crate::auth::EmployeeUser;
+use crate::auth::ShopOrEmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -113,8 +113,12 @@ pub struct EventDetails {
     pub attachments: Vec<EventAttachment>,
     /// History, oldest first.
     pub history: Vec<EventHistoryItem>,
-    /// Who made the event.
+    /// Who made the event. For an `automated` event, whoever sold the quote.
     pub creator: EventPerson,
+    /// Added by the CRM on its own when a quote was sold (Mark as Sold's
+    /// jobs and extra events), not by a person: show it as made by the
+    /// system. Its history line "Added when the quote was sold" has no author.
+    pub automated: bool,
     /// Who it is assigned to.
     pub assignee: Option<EventPerson>,
     /// The caller's name (comments are theirs when the author matches).
@@ -130,11 +134,13 @@ struct EventPeople {
     creator_name: Option<String>,
     assigned_user_id: Option<i32>,
     assignee_name: Option<String>,
+    automated: bool,
 }
 
 async fn people(pool: &MySqlPool, company_id: i32, event_id: i32) -> ApiResult<EventPeople> {
     let found: Option<EventPeople> = sqlx::query_as(
-        "SELECT e.created_user_id, u.name AS creator_name, e.assigned_user_id, au.name AS assignee_name
+        "SELECT e.created_user_id, u.name AS creator_name, e.assigned_user_id, au.name AS assignee_name,
+                e.quote_id IS NOT NULL AS automated
            FROM events e JOIN users u ON e.created_user_id = u.id
            LEFT JOIN users au ON e.assigned_user_id = au.id
           WHERE e.id = ? AND u.company_id = ? AND e.deleted_date IS NULL",
@@ -163,7 +169,7 @@ fn last_segment(url: &str) -> &str {
     responses(
         (status = 200, description = "Details", body = EventDetails),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -171,7 +177,7 @@ fn last_segment(url: &str) -> &str {
 )]
 pub async fn details(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<EventDetails>> {
     let pool = &state.pool;
@@ -241,6 +247,7 @@ pub async fn details(
             name: event.creator_name.unwrap_or_default(),
         },
         assignee,
+        automated: event.automated,
         viewer_name: user.name,
     }))
 }
@@ -287,7 +294,7 @@ fn viewer(user: &SessionUser) -> &str {
         (status = 201, description = "Added"),
         (status = 400, description = "Empty or too long", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -295,7 +302,7 @@ fn viewer(user: &SessionUser) -> &str {
 )]
 pub async fn add_comment(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<CommentInput>,
 ) -> ApiResult<StatusCode> {
@@ -330,7 +337,7 @@ pub async fn add_comment(
         (status = 204, description = "Saved"),
         (status = 400, description = "Empty or too long", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "Not the caller's comment on this event", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -338,7 +345,7 @@ pub async fn add_comment(
 )]
 pub async fn edit_comment(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, comment_id)): Path<(i32, i32)>,
     JsonBody(input): JsonBody<CommentInput>,
 ) -> ApiResult<StatusCode> {
@@ -378,7 +385,7 @@ pub async fn edit_comment(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "Not the caller's comment on this event", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -386,7 +393,7 @@ pub async fn edit_comment(
 )]
 pub async fn delete_comment(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, comment_id)): Path<(i32, i32)>,
 ) -> ApiResult<StatusCode> {
     people(&state.pool, user.company_id, id).await?;
@@ -428,7 +435,7 @@ pub struct PhotosInput {
         (status = 201, description = "Posted"),
         (status = 400, description = "No files, or a URL that was not uploaded", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database or storage error", body = ErrorBody),
     ),
@@ -436,7 +443,7 @@ pub struct PhotosInput {
 )]
 pub async fn add_photos(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<PhotosInput>,
 ) -> ApiResult<StatusCode> {
@@ -494,7 +501,7 @@ async fn remove_if_unused(state: &AppState, company_id: i32, url: &str) -> Resul
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "Not the caller's file on this event", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -502,7 +509,7 @@ async fn remove_if_unused(state: &AppState, company_id: i32, url: &str) -> Resul
 )]
 pub async fn delete_photo(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, photo_id)): Path<(i32, i32)>,
 ) -> ApiResult<StatusCode> {
     people(&state.pool, user.company_id, id).await?;
@@ -568,7 +575,7 @@ fn attachment_kind(name: &str) -> Option<&'static str> {
         (status = 201, description = "Attached"),
         (status = 400, description = "No files, an unsupported type, or a URL that was not uploaded", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such event in the caller's company", body = ErrorBody),
         (status = 500, description = "Database or storage error", body = ErrorBody),
     ),
@@ -576,7 +583,7 @@ fn attachment_kind(name: &str) -> Option<&'static str> {
 )]
 pub async fn add_attachments(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<AttachmentsInput>,
 ) -> ApiResult<StatusCode> {
@@ -649,7 +656,7 @@ pub async fn add_attachments(
     responses(
         (status = 204, description = "Removed"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 404, description = "No such attachment on this event", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -657,7 +664,7 @@ pub async fn add_attachments(
 )]
 pub async fn delete_attachment(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path((id, attachment_id)): Path<(i32, i32)>,
 ) -> ApiResult<StatusCode> {
     people(&state.pool, user.company_id, id).await?;
@@ -689,16 +696,24 @@ pub async fn delete_attachment(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Words of a search used at most; the rest are left out.
+const MAX_SEARCH_WORDS: usize = 8;
+
 /// Query of `GET /v1/events/search`.
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct EventSearchQuery {
-    /// Part of the title, customer name, location, description or notes.
+    /// Words, each in the title, customer name, location, description or
+    /// notes (any of them, in any order).
     #[serde(default)]
     pub q: String,
     /// At most this many, 1 to 50 (default 25).
     #[serde(default)]
     pub limit: Option<i64>,
+    /// Only these calendars, comma-separated ids; empty means events with no
+    /// calendar. Left out: every calendar.
+    #[serde(default)]
+    pub calendar_ids: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -711,6 +726,7 @@ struct FoundRow {
     start_date: NaiveDateTime,
     end_date: NaiveDateTime,
     all_day: bool,
+    unscheduled: bool,
     color: Option<String>,
     status: Option<String>,
     calendar_id: Option<i32>,
@@ -721,6 +737,8 @@ struct FoundRow {
     sale_id: Option<i32>,
     customer_id: Option<i32>,
     customer_name: Option<String>,
+    contact_phone: Option<String>,
+    contact_email: Option<String>,
 }
 
 /// An event found by the search.
@@ -742,6 +760,8 @@ pub struct FoundEvent {
     pub end_date: DateTime<Utc>,
     /// All-day event.
     pub all_day: bool,
+    /// Not on the calendar yet; its dates are only when it was made.
+    pub unscheduled: bool,
     /// Label color.
     pub color: Option<String>,
     /// e.g. `scheduled`.
@@ -762,12 +782,21 @@ pub struct FoundEvent {
     pub customer_id: Option<i32>,
     /// That customer's name.
     pub customer_name: Option<String>,
+    /// Phone for this event only; null uses the customer's.
+    pub contact_phone: Option<String>,
+    /// Email for this event only; null uses the customer's.
+    pub contact_email: Option<String>,
 }
 
 /// Search events
 ///
-/// The company's events whose title, customer's name, location, description
-/// or notes contain `q`, newest first.
+/// The company's events where every word of `q` is in the title, customer's
+/// name, location, description or notes; with `calendar_ids`, only those
+/// calendars' events.
+///
+/// Smart order: the caller's own first (assigned to or made by them, or for
+/// their customer), then title or customer-name hits before hits only in the
+/// place or notes, then the nearest to now; unscheduled ones last.
 #[crate::openapi::path(
     get,
     path = "/v1/events/search",
@@ -777,14 +806,14 @@ pub struct FoundEvent {
     responses(
         (status = 200, description = "Events", body = [FoundEvent]),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or shop manager or worker", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn search(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Query(query): Query<EventSearchQuery>,
 ) -> ApiResult<Json<Vec<FoundEvent>>> {
     let q = query.q.trim();
@@ -792,35 +821,73 @@ pub async fn search(
         return Ok(Json(Vec::new()));
     }
     let limit = query.limit.unwrap_or(25).clamp(1, 50);
-    let like = format!("%{}%", escape_like(q));
     let own = crate::routes::schedule::own_events_only(&state.pool, &user).await?;
-    let rows: Vec<FoundRow> = sqlx::query_as(
+    // Each word anywhere in any of the fields, so "acadia court 9" finds
+    // "Acadia Court Apts / Brandon Ct - 9/1/26"
+    let likes: Vec<String> = q
+        .split_whitespace()
+        .take(MAX_SEARCH_WORDS)
+        .map(|word| format!("%{}%", escape_like(word)))
+        .collect();
+    let word_match = "(e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)";
+    let words_match = vec![word_match; likes.len()].join(" AND ");
+    // Every word in the title or customer's name ranks the event higher
+    let name_match = vec!["(e.title LIKE ? OR c.name LIKE ?)"; likes.len()].join(" AND ");
+    // The calendars as a clean id list for FIND_IN_SET
+    let calendars: Option<String> = query.calendar_ids.as_deref().map(|ids| {
+        ids.split(',')
+            .filter_map(|id| id.trim().parse::<i32>().ok())
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    });
+    let sql = format!(
         "SELECT e.id, e.title, e.description, e.location, e.notes, e.start_date, e.end_date,
-                COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.calendar_id, e.rrule,
+                COALESCE(e.all_day, 0) <> 0 AS all_day, e.unscheduled <> 0 AS unscheduled,
+                e.color, e.status, e.calendar_id, e.rrule,
                 e.recurrence_until, e.created_user_id, e.assigned_user_id, e.sale_id,
-                e.customer_id, c.name AS customer_name
+                e.customer_id, c.name AS customer_name, e.contact_phone, e.contact_email
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c ON c.id = e.customer_id
                 AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL
-            AND (e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)
+            AND {words_match}
+            AND (? IS NULL OR IF(? = '', e.calendar_id IS NULL, FIND_IN_SET(e.calendar_id, ?) > 0))
             AND (? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)
-          ORDER BY e.start_date DESC
-          LIMIT ?",
-    )
-    .bind(user.company_id)
-    .bind(&like)
-    .bind(&like)
-    .bind(&like)
-    .bind(&like)
-    .bind(&like)
-    .bind(own)
-    .bind(own)
-    .bind(own)
-    .bind(limit)
-    .fetch_all(&state.pool)
-    .await?;
+          ORDER BY CASE WHEN e.assigned_user_id = ? OR e.created_user_id = ? OR c.sales_rep = ?
+                          OR EXISTS (SELECT 1 FROM deals mine
+                                      WHERE mine.customer_id = e.customer_id AND mine.user_id = ?
+                                        AND mine.deleted_at IS NULL)
+                        THEN 0 ELSE 1 END,
+                   CASE WHEN {name_match} THEN 0 ELSE 1 END,
+                   COALESCE(e.unscheduled, 0) <> 0,
+                   ABS(TIMESTAMPDIFF(SECOND, e.start_date, UTC_TIMESTAMP())),
+                   e.id DESC
+          LIMIT ?"
+    );
+    // Only fixed "?" fragments are spliced in; every word is a bind.
+    let mut found = sqlx::query_as::<_, FoundRow>(sqlx::AssertSqlSafe(sql)).bind(user.company_id);
+    for like in &likes {
+        for _ in 0..5 {
+            found = found.bind(like);
+        }
+    }
+    found = found
+        .bind(&calendars)
+        .bind(&calendars)
+        .bind(&calendars)
+        .bind(own)
+        .bind(own)
+        .bind(own)
+        .bind(user.id)
+        .bind(user.id)
+        .bind(user.id)
+        .bind(user.id);
+    for like in &likes {
+        found = found.bind(like).bind(like);
+    }
+    let rows: Vec<FoundRow> = found.bind(limit).fetch_all(&state.pool).await?;
     Ok(Json(
         rows.into_iter()
             .map(|row| FoundEvent {
@@ -832,6 +899,7 @@ pub async fn search(
                 start_date: row.start_date.and_utc(),
                 end_date: row.end_date.and_utc(),
                 all_day: row.all_day,
+                unscheduled: row.unscheduled,
                 color: row.color,
                 status: row.status,
                 calendar_id: row.calendar_id,
@@ -842,6 +910,8 @@ pub async fn search(
                 sale_id: row.sale_id,
                 customer_id: row.customer_id,
                 customer_name: row.customer_name,
+                contact_phone: row.contact_phone,
+                contact_email: row.contact_email,
             })
             .collect(),
     ))

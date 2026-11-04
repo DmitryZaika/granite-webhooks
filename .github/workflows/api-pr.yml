@@ -150,7 +150,6 @@ jobs:
           followup_ai_cadence::
           followup_generation::
           followup_instruction::
-          followup_settings::
           sms_flows::
 
       - name: Manual chat tests

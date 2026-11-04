@@ -120,7 +120,7 @@ pub async fn stones(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesignInput {
-    /// The kitchen photo as a `data:image/...;base64,` URL (at most 15 MB).
+    /// The kitchen photo as a `data:image/...;base64,` URL (at most 4 MB).
     pub kitchen: String,
     /// The stones to show it in (one to three).
     pub stone_ids: Vec<i64>,
@@ -141,17 +141,13 @@ fn kitchen_bytes(data_url: &str) -> Result<Vec<u8>, ApiError> {
     if !mime.starts_with("image/") || !meta.ends_with(";base64") {
         return Err(ApiError::BadRequest("Only image files are allowed.".into()));
     }
-    // Base64 of 15 MB.
+    // Base64 of 4 MB.
     if data.len() > MAX_KITCHEN_BYTES / 3 * 4 + 4 {
-        return Err(ApiError::BadRequest(
-            "Image is too large (max 15MB).".into(),
-        ));
+        return Err(ApiError::BadRequest("Image is too large (max 4MB).".into()));
     }
     let bytes = STANDARD.decode(data.trim()).map_err(|_| invalid())?;
     if bytes.len() > MAX_KITCHEN_BYTES {
-        return Err(ApiError::BadRequest(
-            "Image is too large (max 15MB).".into(),
-        ));
+        return Err(ApiError::BadRequest("Image is too large (max 4MB).".into()));
     }
     Ok(bytes)
 }

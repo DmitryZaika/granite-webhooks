@@ -23,6 +23,7 @@ use crate::followups::js::{js_len, js_slice, trim};
 use crate::followups::prompt::FollowupTimelineMessage;
 use crate::followups::send_window::FollowupChannel;
 use crate::openapi::ToSchema;
+use crate::routes::ai::compose_catalog::load_catalog;
 use crate::routes::ai::conversation_reply::REPLY_FALLBACK_MODEL;
 use crate::routes::ai::reply_context;
 use crate::routes::sms::provider::valid_thread_phone;
@@ -66,6 +67,8 @@ Rules:
 - Return ONLY the text to append. Never repeat, rewrite, or restart the draft or its current sentence.
 - If the draft ends mid-word, finish THAT word first, keeping the letters already typed (no leading space). If it ends after a full word, start with a space.
 - Stay consistent with the conversation and the rep's tone. Never invent prices, dates, or facts not in the context.
+- Name a stone color or a price only when it is in this customer's QUOTES, CUSTOMER / PROJECT INFO, CONVERSATION or DRAFT, or in STONES for a stone named there or one the customer asked for. Never take one from the rep's messages to other customers or from general knowledge, never suggest other stones from STONES unasked, and never list price levels or tiers: stop and let the rep type them.
+- STONES has each displayed stone's material, colors, price per sq ft (and the price quotes charge when it differs), slab size in inches and what is in stock now. PRICE LIST has what a new quote charges for edges, cutouts, fabrication and installation. Use them exactly; a price in this customer's QUOTES wins over both. For a stone priced by the slab with no quote price let the rep type the price; never say we have a sold out stone.
 - When the rep is about to share the inventory / stones page, use the exact customer page URL from CUSTOMER / PROJECT INFO.
 - When the rep asks the customer for their measurements or sends them a link to send us their sizes, use the exact Customer quote URL from CUSTOMER / PROJECT INFO.
 - When the message needs the rep's name, the rep's phone number or the company address, use them from SALES REP and COMPANY.
@@ -75,7 +78,7 @@ Rules:
 - Stop once the point is made. Never tack on an extra offer, a promise to follow up or send something, or "let me know if you have any questions" unless the rep's own messages end that way: reps delete these more than anything else.
 - Sound like the rep's notes (HOW … WRITES) and RECENT MESSAGES BY THE REP: their length, wording, greeting, and the name they introduce themselves with (it can differ from SALES REP).
 - If the DRAFT is empty and the customer has not written to us yet, suggest the whole message (1–3 short sentences) built from CUSTOMER / PROJECT INFO: who the rep is and the company (unless already said on this channel), what the customer asked for, and one question that moves the project forward.
-- When the customer asked something, answer it with the facts in CUSTOMER / PROJECT INFO and QUOTES (the sink, color, edge, price, what is included). Only when a fact is not there may the rep say they'll check.
+- When the customer asked something, answer it with the facts in CUSTOMER / PROJECT INFO, QUOTES, STONES and PRICE LIST (the sink, color, edge, price, availability, slab size, what is included). Only when a fact is not there may the rep say they'll check.
 - If nothing useful fits, return an empty string.
 Examples (DRAFT → your output):
 "I'll be soo" → "n, see you Friday at 5:00."
@@ -104,6 +107,8 @@ pub struct ComposeContext {
     rep_voice: Vec<String>,
     /// The customer's quotes, formatted (empty: none).
     quotes: String,
+    /// The company's stones and price list, formatted (empty: none).
+    catalog: String,
 }
 
 /// Recently gathered threads (`warm` fills it).
@@ -208,6 +213,15 @@ pub fn format_rep_notes_block(
         rep_name.to_uppercase(),
         lines.join("\n")
     )
+}
+
+/// The system message: the rules, then the company's stones and price list.
+/// Both are the same for every thread of the company, so the model caches them.
+pub fn build_system_prompt(catalog: &str) -> String {
+    if trim(catalog).is_empty() {
+        return COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT.to_string();
+    }
+    format!("{COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT}\n\n{}", trim(catalog))
 }
 
 /// What the model is asked (`buildComposeAutocompleteUserPrompt`).
@@ -536,6 +550,7 @@ async fn load_context(
         }
         None => String::new(),
     };
+    let catalog = load_catalog(&state.pool, user.company_id).await;
     let context = ComposeContext {
         profile: format!("{}\n{quote_page}", gathered.profile),
         timeline: trim_timeline(&gathered.timeline, TIMELINE_MAX_CHARS),
@@ -548,6 +563,7 @@ async fn load_context(
             .unwrap_or_default(),
         rep_voice: gathered.rep_voice.examples,
         quotes,
+        catalog,
     };
     let contexts = state.extensions.get_or_default::<ComposeContexts>();
     let mut cache = contexts
@@ -674,23 +690,16 @@ pub async fn autocomplete(
     } else {
         MAX_OUTPUT_TOKENS
     };
-    let thread_key = thread
-        .customer_id
-        .map(|id| id.to_string())
-        .or_else(|| thread.customer_email.clone())
-        .or_else(|| thread.phone_digits.clone())
-        .unwrap_or_default();
+    let system = build_system_prompt(&context.catalog);
     let chat = |model| {
         let mut chat = Chat::new(model)
-            .message("system", COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT)
+            .message("system", &system)
             .message("user", &prompt)
             .max_tokens(Some(max_tokens));
         // Reasoning used up the cap and left the reply empty; none is needed.
         chat.reasoning_effort = Some("none");
-        chat.prompt_cache_key = Some(format!(
-            "compose-autocomplete:{}:{thread_key}",
-            user.company_id
-        ));
+        // One key per company, so every thread reuses the cached stone list.
+        chat.prompt_cache_key = Some(format!("compose-autocomplete:{}", user.company_id));
         chat
     };
     let raw = match state.ai.chat(&state.pool, caller, &chat(MINI_MODEL)).await {
@@ -1017,6 +1026,7 @@ mod tests {
             rep_notes: vec!["Opens with 'Hey'".into()],
             rep_voice: Vec::new(),
             quotes: String::new(),
+            catalog: String::new(),
         };
         let prompt = build_user_prompt(
             FollowupChannel::Sms,
@@ -1036,6 +1046,7 @@ mod tests {
                 rep_notes: Vec::new(),
                 rep_voice: Vec::new(),
                 quotes: String::new(),
+                catalog: String::new(),
                 ..context
             },
             "",
@@ -1058,6 +1069,7 @@ mod tests {
             rep_notes: Vec::new(),
             rep_voice: Vec::new(),
             quotes: String::new(),
+            catalog: String::new(),
         };
         let prompt = build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "x");
         assert!(prompt.contains("SALES REP: Dema\n"));
@@ -1094,6 +1106,7 @@ mod tests {
             rep_notes: Vec::new(),
             rep_voice: Vec::new(),
             quotes: String::new(),
+            catalog: String::new(),
         };
         let prompt = build_user_prompt(
             FollowupChannel::Email,
@@ -1160,6 +1173,7 @@ mod tests {
             company_name: None,
             company_address: None,
             quotes: String::new(),
+            catalog: String::new(),
             rep_notes: Vec::new(),
             rep_voice: vec!["Hey Simon, this is Dima with Granite Depot.".into()],
         };
@@ -1189,5 +1203,16 @@ mod tests {
             "Hey Edward! How would you like to pay the deposit: card or Zelle?"
         ));
         assert!(!is_edit_of("", "Hi"));
+    }
+
+    #[test]
+    fn the_catalog_follows_the_rules_in_the_system_message() {
+        assert_eq!(build_system_prompt(" "), COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT);
+        assert_eq!(
+            build_system_prompt("STONES (…):\n- Viraldi (quartz): $65/sq ft, sold out\n"),
+            format!(
+                "{COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT}\n\nSTONES (…):\n- Viraldi (quartz): $65/sq ft, sold out"
+            )
+        );
     }
 }

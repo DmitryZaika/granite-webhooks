@@ -62,6 +62,25 @@ class GitHub:
             return _pull_request(found[0])
         return None
 
+    def open_labelled(self, repo: str, label: str, limit: int) -> list[dict[str, object]]:
+        """The newest open pull requests carrying `label`, at most `limit`.
+
+        Read from the pulls API, which the token's pull request permission
+        covers (the issues API, which filters by label, needs another one).
+        """
+        found = self._call("GET", f"/repos/{OWNER}/{repo}/pulls?state=open&per_page=100")
+        if not isinstance(found, list):
+            raise HttpError(None, "GitHub returned no list of pull requests")
+        labelled = [item for item in found if isinstance(item, dict) and _has_label(item, label)]
+        return labelled[:limit]
+
+    def changed_files(self, repo: str, number: int, limit: int) -> list[str]:
+        found = self._call("GET", f"/repos/{OWNER}/{repo}/pulls/{number}/files?per_page={limit}")
+        if not isinstance(found, list):
+            raise HttpError(None, "GitHub returned no list of files")
+        names = (item.get("filename") for item in found if isinstance(item, dict))
+        return [name for name in names if isinstance(name, str)][:limit]
+
     def add_labels(self, repo: str, number: int, labels: list[str]) -> None:
         # Labels that do not exist yet are created by this call.
         self._call("POST", f"/repos/{OWNER}/{repo}/issues/{number}/labels", {"labels": labels})
@@ -71,3 +90,10 @@ def _pull_request(body: object) -> PullRequest:
     if not isinstance(body, dict) or not isinstance(body.get("html_url"), str):
         raise HttpError(None, "GitHub returned no pull request")
     return PullRequest(body["html_url"], int(body["number"]), bool(body.get("draft")))
+
+
+def _has_label(item: dict[str, object], label: str) -> bool:
+    labels = item.get("labels")
+    return isinstance(labels, list) and any(
+        isinstance(entry, dict) and entry.get("name") == label for entry in labels
+    )

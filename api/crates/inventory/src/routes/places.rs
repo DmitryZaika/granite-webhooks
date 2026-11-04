@@ -2,12 +2,14 @@
 //!
 //! - `GET /v1/places/autocomplete?q=` → US addresses matching typed text
 //! - `GET /v1/places/{place_id}` → a place's address parts
+//! - `GET /v1/places/check?address=` → whether Google Maps finds a street address
 //!
 //! Replaces the Remix `api.google.address-complete` and
 //! `api.google.place-details` routes.
 
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::maps::StreetCheck;
 use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
@@ -27,6 +29,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(autocomplete))
         .routes(routes!(place))
+        .routes(routes!(check))
 }
 
 /// Query of `GET /v1/places/autocomplete`.
@@ -285,6 +288,56 @@ pub async fn place(
         state: component(&place, "administrative_area_level_1", "shortText").map(str::to_string),
         country: component(&place, "country", "shortText").map(str::to_string),
     }))
+}
+
+/// Query of `GET /v1/places/check`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CheckQuery {
+    /// e.g. `123 Main St, Indianapolis` (state and ZIP optional).
+    #[serde(default)]
+    pub address: String,
+}
+
+/// `GET /v1/places/check`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AddressCheck {
+    /// `found`, `not_found`, or `unknown` (Google could not be asked).
+    pub status: &'static str,
+    /// Google's full address when found.
+    pub formatted_address: Option<String>,
+}
+
+/// Check a street address
+///
+/// Whether Google Maps finds the address as a house number on a street, so a
+/// quote is not printed or sent as a contract to an address that does not exist.
+#[crate::openapi::path(
+    get,
+    path = "/v1/places/check",
+    operation_id = "check_address",
+    tag = "places",
+    params(CheckQuery),
+    responses(
+        (status = 200, description = "Result", body = AddressCheck),
+        (status = 401, description = "No valid session", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn check(
+    State(state): State<AppState>,
+    _user: CurrentUser,
+    Query(query): Query<CheckQuery>,
+) -> Json<AddressCheck> {
+    let (status, formatted_address) = match state.maps.street_address(&query.address).await {
+        StreetCheck::Found(address) => ("found", Some(address)),
+        StreetCheck::NotFound => ("not_found", None),
+        StreetCheck::Unknown => ("unknown", None),
+    };
+    Json(AddressCheck {
+        status,
+        formatted_address,
+    })
 }
 
 #[cfg(test)]

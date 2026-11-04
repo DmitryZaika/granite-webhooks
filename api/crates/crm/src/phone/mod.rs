@@ -33,6 +33,9 @@
 //! - [`texts`]: the app's Texts tab (threads per line and other number)
 //! - [`tendlc`]: the 10DLC texting registration form (brand and campaign)
 //! - [`tendlc_registry`]: sending it to Telnyx and following it
+//! - [`tendlc_chat`]: the AI helper beside the form
+//! - [`tendlc_site`]: what code checks on the company's pages before the
+//!   AI check ([`tendlc_check`]) reads them
 
 pub mod alerts;
 pub mod availability;
@@ -58,9 +61,11 @@ pub mod revoke;
 pub mod routing;
 pub mod settings;
 pub mod tendlc;
+pub mod tendlc_chat;
 pub mod tendlc_check;
 pub mod tendlc_pages;
 pub mod tendlc_registry;
+pub mod tendlc_site;
 pub mod texting;
 pub mod texts;
 

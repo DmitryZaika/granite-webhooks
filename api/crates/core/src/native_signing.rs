@@ -15,7 +15,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::MySqlPool;
 
 /// `NATIVE_SIGNATURES_ENABLED=1`, `SIGNATURE_INVITATION_SECRET` (32 bytes,
 /// base64url) and `SIGNATURE_APP_ORIGIN` (the HTTPS origin of `/sign/...`).
@@ -166,10 +165,11 @@ impl NativeSigning {
     }
 
     /// The invitation as sent (for its sender and thread) and the signing
-    /// link, for reminders and notifications.
-    pub async fn lifecycle_mail(
+    /// link, for reminders and notifications. Takes the caller's transaction
+    /// when it holds one: the Lambda pool has a single connection.
+    pub async fn lifecycle_mail<'e>(
         &self,
-        pool: &MySqlPool,
+        db: impl sqlx::MySqlExecutor<'e>,
         request_id: i64,
         company_id: i64,
     ) -> Result<LifecycleMail, NativeSigningError> {
@@ -191,7 +191,7 @@ impl NativeSigning {
         )
         .bind(request_id)
         .bind(company_id)
-        .fetch_optional(pool)
+        .fetch_optional(db)
         .await?;
         let row = row.ok_or(NativeSigningError::MailUnavailable)?;
         let sealed = row

@@ -8,8 +8,8 @@
 //! In order:
 //! 1. signs out the phones of users who may no longer use Granite Phone
 //!    (deleted, moved to another company, no longer an employee or admin,
-//!    or their company deleted), and the sign-ins that expired (12 months)
-//!    or idled 30 days;
+//!    or their company deleted), and browser phones whose CRM sign-in
+//!    ended (no sign-in ends by time);
 //! 2. deletes the Telnyx credentials of signed-out phones that are still on
 //!    Telnyx (a delete that failed before; each failure waits longer before
 //!    the next try, up to a day);
@@ -46,7 +46,11 @@
 //! 10. port-in orders (`phone::porting::run_job`): sets up the numbers
 //!    of ported orders still to do, then reads open orders from Telnyx again
 //!    (a few a run; Telnyx's porting webhooks are the fast path);
-//! 11. last, 10DLC texting registrations (`phone::tendlc_registry::run_job`):
+//! 11. Telnyx texts with no final status yet (`phone::texting::recheck_statuses`):
+//!    asks Telnyx about each 5 minutes after it was sent, then every 15
+//!    minutes for 3 days, so a text that did not go out shows as failed
+//!    even when its report never came (the webhook is the fast path);
+//! 12. last, 10DLC texting registrations (`phone::tendlc_registry::run_job`):
 //!    reads sent ones from Telnyx again (a sent one whose brand is now
 //!    registered gets its campaign) and the number assignments still pending
 //!    (a few a run; Telnyx's 10DLC webhooks are the fast path).
@@ -126,8 +130,7 @@ pub struct PhoneJobRun {
     /// Phones signed out because their user may no longer use Granite
     /// Phone (or their company was deleted).
     pub phones_signed_out: usize,
-    /// Phones signed out because their sign-in expired (12 months) or went
-    /// unused for 30 days.
+    /// Browser phones signed out because their CRM sign-in ended.
     pub sessions_expired: usize,
     /// Telnyx credentials of signed-out phones deleted (left over from a
     /// failed delete).
@@ -167,6 +170,10 @@ pub struct PhoneJobRun {
     /// on Telnyx; left out when none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub port_orders_completed: usize,
+    /// Texts sent through Telnyx whose status was read again from Telnyx;
+    /// left out when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub text_statuses_checked: usize,
     /// 10DLC texting registrations read again from Telnyx
     /// (`phone::tendlc_registry`); left out when none.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -179,7 +186,7 @@ pub struct PhoneJobRun {
 /// Run Granite Phone's upkeep
 ///
 /// Signs out the phones of users who may no longer use Granite Phone (or
-/// whose company was deleted) and expired or idle sign-ins, deletes
+/// whose company was deleted) and browser phones whose CRM sign-in ended, deletes
 /// leftover Telnyx credentials of signed-out phones (backing off on
 /// failures), deletes Telnyx callbacks older than 30 days, closes calls
 /// Telnyx never reported the end of (after 6 hours), keeps the customer
@@ -190,7 +197,9 @@ pub struct PhoneJobRun {
 /// answered outbound calls their call points (provider `telnyx`), deletes
 /// Telnyx's copies of copied recordings whose delete failed, retries failed
 /// recording copies (5 attempts), brings port-in orders up to date from
-/// Telnyx (adding ported numbers to the company), and last reads sent 10DLC
+/// Telnyx (adding ported numbers to the company), asks Telnyx again about
+/// sent texts with no final status yet (so one that did not go out shows as
+/// failed), and last reads sent 10DLC
 /// texting registrations and pending number assignments again. Bounded work per run, and
 /// no new work after 20 seconds; the next run takes the rest. Returns what
 /// was done.
@@ -234,6 +243,10 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
         run.port_orders_completed = porting.completed;
     }
     if Instant::now() < deadline {
+        run.text_statuses_checked =
+            crate::phone::texting::recheck_statuses(&state, deadline).await?;
+    }
+    if Instant::now() < deadline {
         let tendlc = crate::phone::tendlc_registry::run_job(&state, deadline).await?;
         run.tendlc_refreshed = tendlc.refreshed;
         run.tendlc_numbers_refreshed = tendlc.numbers_refreshed;
@@ -251,6 +264,7 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
         + run.call_points
         + run.port_orders_refreshed
         + run.port_orders_completed
+        + run.text_statuses_checked
         + run.tendlc_refreshed
         + run.tendlc_numbers_refreshed;
     Ok(Json(run))
@@ -268,12 +282,12 @@ enum Sessions {
     /// Of users who may no longer use Granite Phone, or of a deleted
     /// company.
     LostAccess,
-    /// Expired (12 months) or unused for 30 days.
+    /// Browser phones whose CRM sign-in ended.
     Expired,
 }
 
 /// Step 1: the phones of users who may no longer use Granite Phone, and
-/// sign-ins that expired or idled (through `revoke_device_session`, so their
+/// browser phones whose CRM sign-in ended (through `revoke_device_session`, so their
 /// credentials and push tokens go too).
 async fn sign_out(state: &AppState, which: Sessions, deadline: Instant) -> sqlx::Result<usize> {
     let (sessions, reason) = match which {

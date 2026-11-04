@@ -100,7 +100,7 @@ async fn customer_phones_by_name(
     company_id: i32,
     term: &str,
 ) -> Result<BTreeSet<String>, sqlx::Error> {
-    let rows = find_by_name(pool, company_id, term, 100).await?;
+    let rows = find_by_name(pool, company_id, None, term, 100).await?;
     let matching: Vec<&NamedCustomer> = rows.iter().collect();
     let mut phones = BTreeSet::new();
     for customer in &matching {
@@ -229,7 +229,9 @@ pub fn rollup_sql(
     );
     let last_non_plain_key = max_when(
         &key,
-        Some("(s.direction = 'outbound' OR (s.direction = 'inbound' AND s.agent IS NOT NULL AND s.sender10 <> s.phone_digits))"),
+        Some(
+            "(s.direction = 'outbound' OR (s.direction = 'inbound' AND s.agent IS NOT NULL AND s.sender10 <> s.phone_digits))",
+        ),
     );
     let (index_hint, having) = if search.is_active() {
         ("", " HAVING message_count > 0")

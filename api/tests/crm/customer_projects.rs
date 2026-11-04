@@ -104,9 +104,39 @@ async fn a_customers_sales_list_their_sellers(pool: MySqlPool) {
     assert_eq!(sales[0]["id"], 7010);
     assert_eq!(sales[0]["price"], "4200.00");
     assert_eq!(sales[0]["seller_name"], "Rita Rep");
+    assert_eq!(sales[0]["cancelled"], false);
     server
         .get("/v1/customers/2000/sales")
         .with_session(sessions::REP)
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[test_db::test(seed)]
+async fn a_won_deal_is_one_project_with_its_sales(pool: MySqlPool) {
+    sqlx::query("UPDATE deals SET is_won = 1, title = 'Kitchen', amount = 900 WHERE id = 8601")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE sales SET deal_id = 8601 WHERE id = 7001")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let body: Value = projects(&pool, 1004, sessions::REP).await.json();
+    let erin = &body["customers"][0];
+    let projects = erin["projects"].as_array().unwrap();
+    // Won 8010 (no sale), won 8601 with sale 7001, and sale 7000 alone.
+    assert_eq!(projects.len(), 3);
+    let backsplash = projects.iter().find(|p| p["deal_id"] == 8010).unwrap();
+    assert_eq!(backsplash["title"], "Erin backsplash");
+    assert_eq!(backsplash["sale_ids"], json!([]));
+    let deal = projects.iter().find(|p| p["deal_id"] == 8601).unwrap();
+    assert_eq!(deal["title"], "Kitchen");
+    assert_eq!(deal["price"], "900.00");
+    assert_eq!(deal["sale_ids"], json!([7001]));
+    // Sale 7000 is not part of a deal: a project of its own.
+    let alone = projects.iter().find(|p| p["deal_id"].is_null()).unwrap();
+    assert_eq!(alone["sale_ids"], json!([7000]));
+    assert_eq!(alone["price"], "1000.50");
+    assert_eq!(erin["sales"][1]["deal_id"], 8601);
 }

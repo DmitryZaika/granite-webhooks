@@ -1,6 +1,8 @@
 pub mod amazon;
 pub mod crud;
 pub mod http;
+#[cfg(feature = "images")]
+pub mod images;
 pub mod release;
 pub mod sms;
 pub mod telegram;

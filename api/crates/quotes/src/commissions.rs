@@ -4,7 +4,7 @@
 //! an admin builds (Admin > Quotes > Commissions) applied to the option the
 //! customer took, the customer's `QuickBooks` invoice that says whether it
 //! was paid, and the paychecks (commissions, monthly goal bonuses, the
-//! weekly base) per payroll date.
+//! reps' base pay on its own schedule) per payroll date.
 
 use crate::openapi::ToSchema;
 use crate::quote_pricing::doc::QuoteDoc;
@@ -27,7 +27,8 @@ pub struct CommissionRule {
     pub id: i64,
     /// Name.
     pub name: String,
-    /// `material` (the stone per area), `quote` (the whole quote before
+    /// `material` (the stone of each room: a percent of everything in the
+    /// room, or dollars per sq ft of stone), `quote` (the whole quote before
     /// tax), `lines` (price lines matching `lineMatch`) or `monthly_goal`.
     pub applies: String,
     /// `percent` or `flat` (dollars per sq ft, unit, quote or goal).
@@ -192,7 +193,9 @@ pub fn quote_commission(
         let color = picked.map_or("", |p| p.color.trim());
         let level = level_of(price_list, product, color);
         let material: Vec<&PriceLine> = area.lines.iter().filter(|l| is_material_line(l)).collect();
-        let material_dollars = material.iter().fold(0.0, |s, l| s + l.total) * area.quantity;
+        // A stone rule's percent is of everything in the room: the room's
+        // stone sets the rate for all of its items.
+        let room_dollars = area.lines.iter().fold(0.0, |s, l| s + l.total) * area.quantity;
         let sq_ft = material.iter().fold(0.0, |s, l| s + line_quantity(l)) * area.quantity;
         let mut stopped = false;
         for rule in &ordered {
@@ -201,11 +204,7 @@ pub fn quote_commission(
                 {
                     continue;
                 }
-                let base = if percent(rule) {
-                    material_dollars
-                } else {
-                    sq_ft
-                };
+                let base = if percent(rule) { room_dollars } else { sq_ft };
                 let what: Vec<&str> = [product, color]
                     .into_iter()
                     .filter(|s| !s.is_empty())
@@ -214,12 +213,7 @@ pub fn quote_commission(
                     rule_id: rule.id,
                     rule: rule.name.clone(),
                     base: money(base),
-                    base_label: if percent(rule) {
-                        "$ of material"
-                    } else {
-                        "sq ft"
-                    }
-                    .into(),
+                    base_label: if percent(rule) { "$ of room" } else { "sq ft" }.into(),
                     amount: pay(rule, base),
                     note: format!("{}: {}", area.name, what.join(" "))
                         .trim()
@@ -297,6 +291,64 @@ pub fn quote_commission(
     }
 }
 
+/// Which extra a price line sells (the Statistics page's Feature sales).
+///
+/// The quote's own waterfall, miter and edge lines by their key, items from
+/// the price list or typed on the quote by their text ("Seam Phantom",
+/// "Support Corbel", "Faucet", "Karran Soap Dispenser"). A custom edge is an
+/// edge profile that costs money (Ogee, Dupont, …); faucet holes are not faucets.
+pub fn feature_of(line: &PriceLine) -> Option<&'static str> {
+    let key = line.key.to_lowercase();
+    let text = line.description.to_lowercase();
+    // Before the text checks: "Triple Waterfall" is an edge profile.
+    if key.contains("|edge:") {
+        return (line.total > 0.0).then_some("custom_edge");
+    }
+    let feature = if key.contains("|waterfall") || text.contains("waterfall") {
+        "waterfall"
+    } else if key.contains("|mitered edge material:")
+        || key.contains("|miter")
+        || text.contains("miter")
+    {
+        "miter"
+    } else if text.contains("phantom") {
+        "phantom_seam"
+    } else if text.contains("support") || text.contains("corbel") {
+        "support"
+    } else if text.contains("soap") {
+        "soap_dispenser"
+    } else if text.contains("faucet") && !text.contains("hole") && !key.contains("faucethole") {
+        "faucet"
+    } else {
+        return None;
+    };
+    Some(feature)
+}
+
+/// Dollars of each extra ([`feature_of`]) sold on one option.
+///
+/// Areas count times their quantity; extras not on the quote are left out.
+#[allow(clippy::suboptimal_flops)]
+pub fn feature_sales(price: &OptionPrice) -> BTreeMap<String, f64> {
+    let mut sold: BTreeMap<String, f64> = BTreeMap::new();
+    let areas = price
+        .areas
+        .iter()
+        .map(|a| (a, a.quantity))
+        .chain(std::iter::once((&price.other, 1.0)));
+    for (area, quantity) in areas {
+        for line in &area.lines {
+            if let Some(feature) = feature_of(line) {
+                *sold.entry(feature.into()).or_default() += line.total * quantity;
+            }
+        }
+    }
+    sold.into_iter()
+        .map(|(feature, dollars)| (feature, money(dollars)))
+        .filter(|(_, dollars)| dollars.abs() >= 0.005)
+        .collect()
+}
+
 /// `monthlyBonuses`: each monthly goal reached by the month's paid sales.
 pub fn monthly_bonus(rules: &[CommissionRule], paid_sales: f64) -> f64 {
     rules
@@ -305,6 +357,20 @@ pub fn monthly_bonus(rules: &[CommissionRule], paid_sales: f64) -> f64 {
             r.active && r.applies == "monthly_goal" && r.threshold.is_some_and(|t| paid_sales >= t)
         })
         .fold(0.0, |s, r| s + money(r.rate))
+}
+
+/// The payroll a job is paid with once an admin adds it to the salary: the
+/// payroll `weekday` of the week after the one it was paid and installed in
+/// (weeks start on Monday), or the next payroll from `today` when that one
+/// has gone by.
+pub fn next_week_payroll(done: NaiveDate, today: NaiveDate, weekday: u32) -> NaiveDate {
+    let monday = done - chrono::Duration::days(i64::from(done.weekday().num_days_from_monday()));
+    let payday = monday + chrono::Duration::days(7 + i64::from((weekday + 6) % 7));
+    if payday >= today {
+        return payday;
+    }
+    let ahead = (weekday + 7 - today.weekday().num_days_from_sunday()) % 7;
+    today + chrono::Duration::days(i64::from(ahead))
 }
 
 /// `payrollDateFor`: the payroll `weekday` (0 = Sunday) on or after a date.
@@ -366,7 +432,6 @@ pub fn status_of(invoice: Option<&InvoiceSummary>) -> &'static str {
 pub struct PaidRow {
     pub user_id: Option<i32>,
     pub rep: String,
-    pub status: String,
     pub quote_total: f64,
     pub commission: f64,
     pub paid_date: Option<String>,
@@ -385,7 +450,7 @@ pub struct PayrollRep {
     pub commission: f64,
     /// Monthly goal bonuses.
     pub bonus: f64,
-    /// The weekly base.
+    /// Base pay due that day.
     pub base: f64,
     /// All of it.
     pub total: f64,
@@ -401,14 +466,76 @@ pub struct PayrollWeek {
     pub reps: Vec<PayrollRep>,
 }
 
-/// `payrollWeeks`: per payroll date (newest first), every rep's paid
-/// commissions, monthly bonuses (paid with the first payroll after the
-/// month) and the weekly base.
+/// A rep's base pay (`commission_base_pay`): `amount` every week, two weeks
+/// or month from the first payday, until an optional last day.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BasePay {
+    /// Base pay id.
+    pub id: i64,
+    /// The rep.
+    pub user_id: i32,
+    /// Their name.
+    pub rep: String,
+    /// Paid each time.
+    pub amount: f64,
+    /// `weekly`, `biweekly` (every two weeks) or `monthly`.
+    pub frequency: String,
+    /// The first payday (YYYY-MM-DD); monthly pays on its day of the month.
+    pub start_date: String,
+    /// The last day it is paid (YYYY-MM-DD); none: no end.
+    pub end_date: Option<String>,
+}
+
+/// The days a base pay is paid: from the first payday every week, two weeks
+/// or month (monthly: on that day of the month, the month's last day when
+/// shorter), until the last day, and no further than the first payday after
+/// `today`.
+pub fn base_pay_dates(
+    start: NaiveDate,
+    frequency: &str,
+    end: Option<NaiveDate>,
+    today: NaiveDate,
+) -> Vec<NaiveDate> {
+    let mut dates = Vec::new();
+    // Ten years of weeks at most.
+    for i in 0..=520_u32 {
+        let date = match frequency {
+            "weekly" => start + chrono::Duration::days(7 * i64::from(i)),
+            "biweekly" => start + chrono::Duration::days(14 * i64::from(i)),
+            "monthly" => {
+                let months = start.year() * 12 + i32::try_from(start.month0() + i).unwrap_or(0);
+                let (year, month) = (months / 12, u32::try_from(months % 12).unwrap_or(0) + 1);
+                let Some(date) = (0..4).find_map(|back| {
+                    NaiveDate::from_ymd_opt(year, month, start.day().checked_sub(back)?)
+                }) else {
+                    break;
+                };
+                date
+            }
+            _ => break,
+        };
+        if end.is_some_and(|end| date > end) {
+            break;
+        }
+        dates.push(date);
+        if date > today {
+            break;
+        }
+    }
+    dates
+}
+
+/// `payrollWeeks`: per payroll date (newest first), every rep's commissions
+/// an admin added to the salary, monthly bonuses (paid with the first payroll
+/// after the month) and their base pay on its own days (through the next
+/// payday after `today`).
 pub fn payroll_weeks(
     rows: &[PaidRow],
     rules: &[CommissionRule],
-    base_weekly: f64,
+    base_pay: &[BasePay],
     weekday: u32,
+    today: NaiveDate,
 ) -> Vec<PayrollWeek> {
     // date → reps in the order first seen.
     let mut weeks: BTreeMap<String, Vec<PayrollRep>> = BTreeMap::new();
@@ -426,7 +553,7 @@ pub fn payroll_weeks(
             rep: rep.to_string(),
             commission: 0.0,
             bonus: 0.0,
-            base: base_weekly,
+            base: 0.0,
             total: 0.0,
         });
         reps.len() - 1
@@ -434,12 +561,11 @@ pub fn payroll_weeks(
     // (user, month) → sales, in the order first seen.
     let mut months: Vec<(Option<i32>, String, String, f64)> = Vec::new();
     for row in rows {
-        let (Some(payroll), Some(paid)) = (&row.payroll_date, &row.paid_date) else {
+        // Only what an admin added to the salary is paid.
+        let Some(payroll) = &row.payroll_date else {
             continue;
         };
-        if row.status != "paid" {
-            continue;
-        }
+        let paid = row.paid_date.as_ref().unwrap_or(payroll);
         let i = cell(&mut weeks, payroll, row.user_id, &row.rep);
         weeks.get_mut(payroll.as_str()).expect("cell")[i].commission += row.commission;
         let month = paid.get(..7).unwrap_or_default().to_string();
@@ -473,6 +599,18 @@ pub fn payroll_weeks(
         };
         let i = cell(&mut weeks, &date, user_id, &rep);
         weeks.get_mut(date.as_str()).expect("cell")[i].bonus += bonus;
+    }
+    for pay in base_pay {
+        let ymd = |s: &str| NaiveDate::parse_from_str(s.get(..10)?, "%Y-%m-%d").ok();
+        let Some(start) = ymd(&pay.start_date) else {
+            continue;
+        };
+        let end = pay.end_date.as_deref().and_then(ymd);
+        for date in base_pay_dates(start, &pay.frequency, end, today) {
+            let date = date.format("%Y-%m-%d").to_string();
+            let i = cell(&mut weeks, &date, Some(pay.user_id), &pay.rep);
+            weeks.get_mut(date.as_str()).expect("cell")[i].base += pay.amount;
+        }
     }
     weeks
         .into_iter()
@@ -513,6 +651,36 @@ mod tests {
     }
 
     #[test]
+    fn added_jobs_are_paid_the_week_after_paid_and_installed() {
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let today = d("2026-11-03");
+        // Done Monday or Friday of the week of 11/2: Friday of the next week.
+        assert_eq!(
+            next_week_payroll(d("2026-11-02"), today, 5),
+            d("2026-11-13")
+        );
+        assert_eq!(
+            next_week_payroll(d("2026-11-06"), today, 5),
+            d("2026-11-13")
+        );
+        // Sunday still ends that week.
+        assert_eq!(
+            next_week_payroll(d("2026-11-08"), today, 5),
+            d("2026-11-13")
+        );
+        // Done the week before: this Friday.
+        assert_eq!(
+            next_week_payroll(d("2026-10-28"), today, 5),
+            d("2026-11-06")
+        );
+        // Long ago: the next payroll from today, never one gone by.
+        assert_eq!(
+            next_week_payroll(d("2026-09-01"), today, 5),
+            d("2026-11-06")
+        );
+    }
+
+    #[test]
     fn invoices_match_by_total_then_date() {
         let invoices = vec![
             invoice("1", "2026-01-01", 100.0, 0.0),
@@ -530,6 +698,78 @@ mod tests {
         assert_eq!(status_of(Some(&invoices[1])), "unpaid");
         assert_eq!(status_of(Some(&invoices[2])), "partial");
         assert_eq!(status_of(None), "no_invoice");
+    }
+
+    #[test]
+    fn feature_sales_sum_each_extra_by_area_quantity() {
+        let line = |key: &str, description: &str, total: f64| PriceLine {
+            key: key.into(),
+            description: description.into(),
+            unit: None,
+            unit_price: None,
+            total,
+            flags: crate::quote_pricing::pricing::Flags {
+                hidden: false,
+                allow_discount: true,
+                editable: true,
+                taxable: false,
+            },
+            missing: false,
+            note: None,
+            flat_each: None,
+            typed: false,
+        };
+        let area =
+            |quantity: f64, lines: Vec<PriceLine>| crate::quote_pricing::pricing::AreaPrice {
+                area_id: Some("a".into()),
+                name: "Kitchen".into(),
+                quantity,
+                lines,
+                subtotal: 0.0,
+                missing: false,
+            };
+        let price = OptionPrice {
+            option_id: "o".into(),
+            areas: vec![area(
+                2.0,
+                vec![
+                    line("a|Waterfall:36", "12 sq ft - 36\" Waterfall", 600.0),
+                    line("a|waterfallInstall", "1 Waterfall Installation", 150.0),
+                    line("a|edge:0", "20 lin ft Finished Edge - Ogee", 200.0),
+                    line(
+                        "a|edge:1",
+                        "10 lin ft Finished Edge - Triple Waterfall",
+                        0.0,
+                    ),
+                    line("a|edge:2", "8 lin ft Finished Edge - Eased", 0.0),
+                    line("a|miterEach", "2 Mitered Edges", 100.0),
+                    line("a|faucetHole", "3 Faucet Holes", 0.0),
+                    line("a|material", "40 sq ft Quartz White", 2000.0),
+                ],
+            )],
+            other: area(
+                1.0,
+                vec![
+                    line("item:1", "2 - Support Corbel", 80.0),
+                    line("item:2", "Seam Phantom", 120.0),
+                    line("item:3", "Faucet - Chrome", 250.0),
+                    line("item:4", "Karran Soap Dispenser", 45.0),
+                ],
+            ),
+            discount: 0.0,
+            tax: 0.0,
+            total: 0.0,
+            missing: false,
+        };
+        let sold = feature_sales(&price);
+        assert_eq!(sold.get("waterfall"), Some(&1500.0));
+        assert_eq!(sold.get("custom_edge"), Some(&400.0));
+        assert_eq!(sold.get("miter"), Some(&200.0));
+        assert_eq!(sold.get("support"), Some(&80.0));
+        assert_eq!(sold.get("phantom_seam"), Some(&120.0));
+        assert_eq!(sold.get("faucet"), Some(&250.0));
+        assert_eq!(sold.get("soap_dispenser"), Some(&45.0));
+        assert_eq!(sold.len(), 7);
     }
 
     #[test]
@@ -553,11 +793,20 @@ mod tests {
         let row = |paid: &str, payroll: &str, total: f64| PaidRow {
             user_id: Some(100),
             rep: "Rita".into(),
-            status: "paid".into(),
             quote_total: total,
             commission: 50.0,
             paid_date: Some(paid.into()),
             payroll_date: Some(payroll.into()),
+        };
+        // $100 every Friday from 9/11 to 10/2: paid on weeks with no commission too.
+        let base = BasePay {
+            id: 1,
+            user_id: 100,
+            rep: "Rita".into(),
+            amount: 100.0,
+            frequency: "weekly".into(),
+            start_date: "2026-09-11".into(),
+            end_date: Some("2026-10-02".into()),
         };
         let weeks = payroll_weeks(
             &[
@@ -565,13 +814,89 @@ mod tests {
                 row("2026-09-20", "2026-09-25", 600.0),
             ],
             &[goal],
-            100.0,
+            &[base],
             5,
+            d("2026-10-20"),
         );
         let dates: Vec<&str> = weeks.iter().map(|w| w.payroll_date.as_str()).collect();
-        assert_eq!(dates, ["2026-10-02", "2026-09-25", "2026-09-11"]);
+        assert_eq!(
+            dates,
+            ["2026-10-02", "2026-09-25", "2026-09-18", "2026-09-11"]
+        );
         assert_eq!(weeks[0].reps[0].bonus, 250.0);
         assert_eq!(weeks[0].reps[0].total, 350.0);
         assert_eq!(weeks[1].reps[0].total, 150.0);
+        assert_eq!(weeks[2].reps[0].total, 100.0);
+    }
+
+    fn d(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn base_pay_runs_every_week_two_weeks_or_month_through_the_next_payday() {
+        let ymd = |dates: Vec<NaiveDate>| -> Vec<String> {
+            dates
+                .iter()
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .collect()
+        };
+        // Weekly: through the first payday after today (Wednesday 11/4).
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-10-16"),
+                "weekly",
+                None,
+                d("2026-11-04")
+            )),
+            ["2026-10-16", "2026-10-23", "2026-10-30", "2026-11-06"]
+        );
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-10-09"),
+                "biweekly",
+                None,
+                d("2026-11-04")
+            )),
+            ["2026-10-09", "2026-10-23", "2026-11-06"]
+        );
+        // Every 20th; a 31st falls back to the month's last day.
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-09-20"),
+                "monthly",
+                None,
+                d("2026-11-04")
+            )),
+            ["2026-09-20", "2026-10-20", "2026-11-20"]
+        );
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-12-31"),
+                "monthly",
+                None,
+                d("2027-03-01")
+            )),
+            ["2026-12-31", "2027-01-31", "2027-02-28", "2027-03-31"]
+        );
+        // Until a last day; not started yet: only the first payday.
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-10-16"),
+                "weekly",
+                Some(d("2026-10-29")),
+                d("2026-11-04")
+            )),
+            ["2026-10-16", "2026-10-23"]
+        );
+        assert_eq!(
+            ymd(base_pay_dates(
+                d("2026-12-04"),
+                "weekly",
+                None,
+                d("2026-11-04")
+            )),
+            ["2026-12-04"]
+        );
     }
 }

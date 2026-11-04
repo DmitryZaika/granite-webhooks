@@ -176,7 +176,7 @@ impl Address {
 }
 
 /// One line of an invoice.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct Line {
     /// `QuickBooks` line id; `new:<anything>` for a line the editor added.
     pub id: Option<String>,
@@ -198,6 +198,11 @@ pub struct Line {
     pub item_ref_name: Option<String>,
     /// Sales and description lines can be edited.
     pub editable: bool,
+    /// The sales line's own `QuickBooks` class (full name) on a company
+    /// that sets classes per line, e.g. cabinets apart from countertops;
+    /// none takes the invoice's class.
+    #[serde(default)]
+    pub class_name: Option<String>,
 }
 
 /// An invoice as the editor shows it.
@@ -238,6 +243,10 @@ pub struct EditableInvoice {
     /// BCC of the invoice email (set on a new invoice only).
     #[serde(default)]
     pub bill_email_bcc: Option<String>,
+    /// Whether `QuickBooks` emailed it: `EmailSent`, `NeedToSend` or
+    /// `NotSet` (read only).
+    #[serde(default)]
+    pub email_status: Option<String>,
 }
 
 pub(super) fn rows(value: &Value) -> Vec<Value> {
@@ -262,6 +271,7 @@ fn parse_line(value: &Value) -> Option<Line> {
         unit_price: number(&sales["UnitPrice"]),
         item_ref_value: text(&sales["ItemRef"]["value"]),
         item_ref_name: text(&sales["ItemRef"]["name"]),
+        class_name: text(&sales["ClassRef"]["name"]),
     })
 }
 
@@ -289,16 +299,40 @@ pub fn editable(value: &Value) -> Option<EditableInvoice> {
         class_name: text(&value["ClassRef"]["name"]),
         bill_email_cc: text(&value["BillEmailCc"]["Address"]),
         bill_email_bcc: text(&value["BillEmailBcc"]["Address"]),
+        email_status: text(&value["EmailStatus"]),
     })
 }
 
-fn sales_amount(edited: &Line) -> (f64, f64, f64) {
-    let qty = edited.qty.unwrap_or(1.0);
-    let unit_price = edited.unit_price.unwrap_or(0.0);
-    let amount = edited
-        .amount
-        .unwrap_or_else(|| (qty * unit_price * 100.0).round() / 100.0);
-    (qty, unit_price, amount)
+/// Qty, unit price and amount of a sales line. `QuickBooks` refuses an amount
+/// that is not qty × unit price, so a line with only an amount (as
+/// `QuickBooks` itself allows) keeps the amount alone, and a missing qty or
+/// price is worked out from the amount.
+fn sales_amount(edited: &Line) -> (Option<f64>, Option<f64>, f64) {
+    match (edited.qty, edited.unit_price, edited.amount) {
+        (Some(qty), None, Some(amount)) if qty != 0.0 => (Some(qty), Some(amount / qty), amount),
+        (None, Some(price), Some(amount)) if price != 0.0 => {
+            (Some(amount / price), Some(price), amount)
+        }
+        (_, None, Some(amount)) | (None, _, Some(amount)) => (None, None, amount),
+        (qty, unit_price, amount) => {
+            let qty = qty.unwrap_or(1.0);
+            let unit_price = unit_price.unwrap_or(0.0);
+            let amount = amount.unwrap_or_else(|| (qty * unit_price * 100.0).round() / 100.0);
+            (Some(qty), Some(unit_price), amount)
+        }
+    }
+}
+
+/// What a sales line charges.
+pub(super) fn line_amount(line: &Line) -> f64 {
+    sales_amount(line).2
+}
+
+fn set_or_remove(detail: &mut Map<String, Value>, key: &str, value: Option<f64>) {
+    match value {
+        Some(value) => detail.insert(key.into(), json!(value)),
+        None => detail.remove(key),
+    };
 }
 
 fn item_ref(edited: &Line, value: &str) -> Value {
@@ -327,10 +361,11 @@ fn new_sales_line(edited: &Line, item: &str) -> Map<String, Value> {
     if let Some(description) = &edited.description {
         line.insert("Description".into(), json!(description));
     }
-    line.insert(
-        "SalesItemLineDetail".into(),
-        json!({ "ItemRef": item_ref(edited, item), "Qty": qty, "UnitPrice": unit_price }),
-    );
+    let mut detail = Map::new();
+    detail.insert("ItemRef".into(), item_ref(edited, item));
+    set_or_remove(&mut detail, "Qty", qty);
+    set_or_remove(&mut detail, "UnitPrice", unit_price);
+    line.insert("SalesItemLineDetail".into(), Value::Object(detail));
     line
 }
 
@@ -375,8 +410,8 @@ fn updated_line(original: &Value, edited: &Line) -> Result<Value, String> {
                 .as_object()
                 .cloned()
                 .unwrap_or_default();
-            detail.insert("Qty".into(), json!(qty));
-            detail.insert("UnitPrice".into(), json!(unit_price));
+            set_or_remove(&mut detail, "Qty", qty);
+            set_or_remove(&mut detail, "UnitPrice", unit_price);
             detail.insert("ItemRef".into(), item_ref(edited, item));
             match &edited.description {
                 Some(description) => line.insert("Description".into(), json!(description)),
@@ -475,14 +510,39 @@ pub fn update_payload(current: &Value, edited: &EditableInvoice) -> Result<Value
     Ok(payload)
 }
 
-/// A new invoice for `customer` (its `QuickBooks` id) with the editor's
-/// lines and CC, in class `class` (a `QuickBooks` class id), emailed to
-/// `email` when `QuickBooks` sends it.
+/// The `QuickBooks` class ids a new invoice gets.
+#[derive(Debug, Default)]
+pub struct Classes {
+    /// The invoice's class.
+    pub invoice: Option<String>,
+    /// The company sets classes on each line rather than on the invoice.
+    pub per_line: bool,
+    /// Lines' own classes (`Line::class_name`) by full name.
+    pub by_name: HashMap<String, String>,
+}
+
+impl Classes {
+    /// The class of a priced line: its own, else the invoice's.
+    fn of(&self, line: &Line) -> Option<&str> {
+        line.class_name
+            .as_deref()
+            .map(str::trim)
+            .and_then(|name| self.by_name.get(name))
+            .or(self.invoice.as_ref())
+            .map(String::as_str)
+    }
+}
+
+/// A new invoice for `customer` (its `QuickBooks` id).
+///
+/// It has the editor's lines and CC, in `classes` (set on each priced line
+/// for a company that sets classes per line, where a line may have its
+/// own), and is emailed to `email` when `QuickBooks` sends it.
 pub fn create_payload(
     customer: &str,
     edited: &EditableInvoice,
     email: Option<&str>,
-    class: Option<&str>,
+    classes: &Classes,
 ) -> Result<Value, String> {
     let mut lines = Vec::new();
     for line in &edited.lines {
@@ -490,7 +550,16 @@ pub fn create_payload(
             "SalesItemLineDetail" if line.item_ref_value.is_none() => {
                 return Err("Sales line requires a QuickBooks item".into());
             }
-            "SalesItemLineDetail" | "DescriptionOnly" => lines.push(new_line(line)),
+            "SalesItemLineDetail" | "DescriptionOnly" => {
+                let mut built = new_line(line);
+                if classes.per_line
+                    && built["DetailType"] == "SalesItemLineDetail"
+                    && let Some(class) = classes.of(line)
+                {
+                    built["SalesItemLineDetail"]["ClassRef"] = json!({ "value": class });
+                }
+                lines.push(built);
+            }
             _ => {}
         }
     }
@@ -521,7 +590,9 @@ pub fn create_payload(
     {
         payload["BillEmailBcc"] = json!({ "Address": bcc });
     }
-    if let Some(class) = class {
+    if !classes.per_line
+        && let Some(class) = &classes.invoice
+    {
         payload["ClassRef"] = json!({ "value": class });
     }
     Ok(payload)
@@ -584,6 +655,7 @@ mod tests {
             item_ref_value: None,
             item_ref_name: None,
             editable: true,
+            class_name: None,
         });
         invoice.private_note = Some("call first".into());
         let payload = update_payload(&current(), &invoice).unwrap();
@@ -602,13 +674,45 @@ mod tests {
     }
 
     #[test]
+    fn an_amount_only_line_sends_no_qty_or_price() {
+        let mut current = current();
+        let detail = current["Line"][0]["SalesItemLineDetail"]
+            .as_object_mut()
+            .unwrap();
+        detail.remove("Qty");
+        detail.remove("UnitPrice");
+        current["Line"][0]["Amount"] = json!(4076);
+        let mut invoice = editable(&current).unwrap();
+        invoice.lines[1].id = Some("new:1".into());
+        invoice.lines[1].detail_type = "SalesItemLineDetail".into();
+        invoice.lines[1].item_ref_value = Some("9".into());
+        invoice.lines[1].qty = Some(2.0);
+        invoice.lines[1].amount = Some(300.0);
+        let payload = update_payload(&current, &invoice).unwrap();
+        let lines = payload["Line"].as_array().unwrap();
+        assert_eq!(lines[0]["Amount"], 4076.0);
+        assert!(lines[0]["SalesItemLineDetail"].get("Qty").is_none());
+        assert!(lines[0]["SalesItemLineDetail"].get("UnitPrice").is_none());
+        let added = lines
+            .iter()
+            .find(|line| line.get("Id").is_none() && line["DetailType"] == "SalesItemLineDetail")
+            .unwrap();
+        assert_eq!(added["SalesItemLineDetail"]["Qty"], 2.0);
+        assert_eq!(added["SalesItemLineDetail"]["UnitPrice"], 150.0);
+    }
+
+    #[test]
     fn a_new_invoice_takes_the_editable_lines_the_email_cc_and_class() {
         let mut invoice = editable(&current()).unwrap();
         invoice.lines[0].id = Some("new:a".into());
         invoice.lines[1].id = Some("new:b".into());
         invoice.bill_email_cc = Some(" rep@x.test ".into());
         invoice.bill_email_bcc = Some("office@x.test".into());
-        let payload = create_payload("42", &invoice, Some(" a@x.test "), Some("7")).unwrap();
+        let classes = Classes {
+            invoice: Some("7".into()),
+            ..Classes::default()
+        };
+        let payload = create_payload("42", &invoice, Some(" a@x.test "), &classes).unwrap();
         assert_eq!(payload["CustomerRef"]["value"], "42");
         let lines = payload["Line"].as_array().unwrap();
         assert_eq!(lines.len(), 2);
@@ -618,10 +722,36 @@ mod tests {
         assert_eq!(payload["BillEmailCc"]["Address"], "rep@x.test");
         assert_eq!(payload["BillEmailBcc"]["Address"], "office@x.test");
         assert!(payload.get("Id").is_none());
+        assert_eq!(payload["ClassRef"]["value"], "7");
+
+        // Classes per line: a line of its own class, the others the invoice's.
+        let mut cabinets = invoice.lines[0].clone();
+        cabinets.id = Some("new:c".into());
+        cabinets.class_name = Some("Cabinets".into());
+        invoice.lines.push(cabinets);
+        let classes = Classes {
+            invoice: Some("7".into()),
+            per_line: true,
+            by_name: HashMap::from([("Cabinets".to_string(), "8".to_string())]),
+        };
+        let payload = create_payload("42", &invoice, None, &classes).unwrap();
+        assert!(payload.get("ClassRef").is_none());
+        assert_eq!(
+            payload["Line"][0]["SalesItemLineDetail"]["ClassRef"]["value"],
+            "7"
+        );
+        assert!(payload["Line"][1]["SalesItemLineDetail"].is_null());
+        assert_eq!(
+            payload["Line"][2]["SalesItemLineDetail"]["ClassRef"]["value"],
+            "8"
+        );
 
         invoice.lines[0].item_ref_value = None;
-        assert!(create_payload("42", &invoice, None, None).is_err());
-        invoice.lines.remove(0);
-        assert!(create_payload("42", &invoice, None, None).is_err());
+        let none = Classes::default();
+        assert!(create_payload("42", &invoice, None, &none).is_err());
+        invoice
+            .lines
+            .retain(|line| line.detail_type != "SalesItemLineDetail");
+        assert!(create_payload("42", &invoice, None, &none).is_err());
     }
 }

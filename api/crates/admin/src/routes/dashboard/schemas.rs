@@ -30,6 +30,10 @@ pub enum DashboardWidget {
     EmailsPerMonth,
     /// Texts sent per month.
     SmsPerMonth,
+    /// The company's sales today: order, rep, stone, sinks, package, amount, deposit.
+    DailySales,
+    /// Stones with slabs not tied to a sale.
+    AvailableInventory,
 }
 
 impl DashboardWidget {
@@ -47,6 +51,8 @@ impl DashboardWidget {
             Self::TopSoldColors => "top-sold-colors",
             Self::EmailsPerMonth => "emails-per-month",
             Self::SmsPerMonth => "sms-per-month",
+            Self::DailySales => "daily-sales",
+            Self::AvailableInventory => "available-inventory",
         }
     }
 

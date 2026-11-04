@@ -32,7 +32,8 @@ async fn search_ranks_and_filters(pool: MySqlPool) {
         ("?name=regular", vec![3003]),
         ("?name=", vec![]),
         ("?name=%25", vec![]),
-        ("?name=a&limit=2", vec![3000, 3007]),
+        // Absolute starts with "a"; then A–Z: Calacatta before Linked Black.
+        ("?name=a&limit=2", vec![3000, 3001]),
     ] {
         assert_eq!(ids(&search(pool.clone(), query).await), expected, "{query}");
     }

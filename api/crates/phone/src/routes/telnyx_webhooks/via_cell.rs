@@ -12,7 +12,7 @@ use crate::extract::MultiQuery;
 use crate::openapi::IntoParams;
 use crate::phone::call_log::{self, CallFacts, End};
 use crate::phone::calls::{CallDirection, CallStatus};
-use crate::phone::outcomes;
+use crate::phone::{outcomes, settings};
 use crate::state::AppState;
 use crate::telnyx::{Response as Texml, Verb};
 use axum::body::Bytes;
@@ -177,8 +177,15 @@ async fn dial_customer(state: &AppState, hook: &Hook, call_id: i64) -> ApiResult
     };
     let base = &hook.base;
     let record = records_outbound(&hook.config);
+    // The user turned the recording voice off (My Account): recorded, no notice.
+    let voice = match call.user_id {
+        Some(user_id) if record => {
+            settings::says_recording_notice(&state.pool, user_id, call.company_id).await
+        }
+        _ => true,
+    };
     let mut customer = Verb::new("Number");
-    if record {
+    if record && voice {
         customer = customer.attr("url", format!("{base}/notice"));
     }
     let customer = customer

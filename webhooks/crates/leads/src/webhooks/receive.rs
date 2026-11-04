@@ -259,6 +259,143 @@ mod local_tests {
         assert_eq!(manager_chat_ids, vec![456, 789]);
     }
 
+    /// Signs `user_id` in to the Granite Phone app in `company_id`, with a push token.
+    async fn give_app(pool: &MySqlPool, company_id: i32, user_id: i32) {
+        let session = sqlx::query(
+            "INSERT INTO device_sessions
+               (user_id, company_id, token_hash, device_name, platform, app_version,
+                created_at, last_seen_at, expires_at)
+             VALUES (?, ?, SHA2(UUID(), 256), 'Test phone', 'android', '1.0.0',
+                     UTC_TIMESTAMP() - INTERVAL 1 DAY, UTC_TIMESTAMP() - INTERVAL 1 MINUTE,
+                     UTC_TIMESTAMP() + INTERVAL 11 MONTH)",
+        )
+        .bind(user_id)
+        .bind(company_id)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        sqlx::query(
+            "INSERT INTO phone_devices
+               (device_session_id, user_id, company_id, platform, device_name, push_token)
+             VALUES (?, ?, ?, 'android', 'Test phone', 'push-token')",
+        )
+        .bind(session)
+        .bind(user_id)
+        .bind(company_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        let with_app = common::crud::phone_app::users_with_app(pool, company_id, &[user_id]).await;
+        assert!(with_app.contains(&user_id), "user {user_id} has no app");
+    }
+
+    #[test_db::test]
+    async fn managers_with_the_app_still_get_new_leads_in_telegram(pool: MySqlPool) {
+        let company_id = 1;
+        let data = json!({ "name": "Test", "phone": "+13179995973" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        positioned_user(&pool, company_id, 1, 123).await;
+        let manager_with_app = positioned_user(&pool, company_id, 2, 456).await;
+        positioned_user(&pool, company_id, 2, 789).await;
+        give_app(&pool, company_id, manager_with_app).await;
+
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+        let mut manager_chat_ids: Vec<i64> = bot
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| message.1.ends_with("Choose a salesperson."))
+            .map(|message| message.0)
+            .collect();
+        manager_chat_ids.sort_unstable();
+        assert_eq!(manager_chat_ids, vec![456, 789]);
+    }
+
+    /// The rule the owner asked for: a new lead reaches every sales manager in
+    /// the app (the push for the managers) and in Telegram, even with one
+    /// manager's Telegram failing (a blocked bot) and one manager holding the
+    /// manager position twice.
+    #[test_db::test]
+    async fn a_new_lead_reaches_every_sales_manager_in_the_app_and_in_telegram(pool: MySqlPool) {
+        use crate::tests::stub_http::{StubServer, use_api};
+
+        let company_id = 1;
+        let api = StubServer::start(|_| Some(json!({ "pushed": 3 }))).await;
+        use_api(&api.base);
+        let bot = MockTelegram::new();
+        // 111 blocked the bot: Telegram refuses at once, the others answer later.
+        bot.fail_send_chat_ids.lock().unwrap().push(111);
+
+        positioned_user(&pool, company_id, 1, 123).await;
+        let with_app = positioned_user(&pool, company_id, 2, 456).await;
+        positioned_user(&pool, company_id, 2, 111).await;
+        let twice = positioned_user(&pool, company_id, 2, 789).await;
+        assigned_user_position(&pool, company_id, 2, twice)
+            .await
+            .unwrap();
+        give_app(&pool, company_id, with_app).await;
+
+        let lead: NewLeadForm =
+            serde_json::from_value(json!({ "name": "Test", "phone": "+13179995973" })).unwrap();
+        let response = new_lead_form_inner(company_id, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        // Telegram: every manager who can be reached, once each.
+        let mut chats: Vec<i64> = bot
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| message.1.ends_with("Choose a salesperson."))
+            .map(|message| message.0)
+            .collect();
+        chats.sort_unstable();
+        assert_eq!(chats, vec![456, 789]);
+
+        // The app: one push for the company's managers (the API finds their phones).
+        let pushes = api.requests();
+        assert_eq!(pushes.len(), 1, "{pushes:?}");
+        assert_eq!(pushes[0].path, "/v1/phone/pushes/lead");
+        let body: Value = serde_json::from_str(&pushes[0].body).unwrap();
+        assert_eq!(body["company_id"], company_id);
+        assert_eq!(body["kind"], "new");
+        assert!(body.get("user_id").is_none(), "{body}");
+    }
+
+    #[test_db::test]
+    async fn managers_with_the_app_still_get_repeat_leads_in_telegram(pool: MySqlPool) {
+        let company_id = 1;
+        let data = json!({ "name": "Test", "phone": "+13179995973" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        let manager_id = positioned_user(&pool, company_id, 2, 456).await;
+        give_app(&pool, company_id, manager_id).await;
+
+        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+        let customers = get_customers(&pool).await.unwrap();
+        create_deal(&pool, customers[0].id, 1, 0, sales_id)
+            .await
+            .unwrap();
+
+        let response = new_lead_form_inner(1, pool, lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+        let messages = bot.sent.lock().unwrap().clone();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.0 == 456 && message.1.starts_with("Repeat lead ")),
+            "{messages:?}"
+        );
+    }
+
     #[test_db::test]
     async fn duplicate_send_multiple_lead_notifies_manager(pool: MySqlPool) {
         let company_id = 1;

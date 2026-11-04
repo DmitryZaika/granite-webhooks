@@ -171,6 +171,9 @@ pub struct Attachment {
     pub filename: String,
     /// Stored URL.
     pub url: String,
+    /// Drawn inside the body (a signature logo) rather than attached; null
+    /// for files saved before this was recorded.
+    pub is_inline: Option<bool>,
     /// A link the browser can open, for private files (valid an hour).
     #[sqlx(skip)]
     pub signed_url: Option<String>,

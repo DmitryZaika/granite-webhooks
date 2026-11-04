@@ -50,8 +50,7 @@ pub async fn user(
 }
 
 /// Claims once-per-window work (`kind` at `window_start`): true for the one
-/// caller that created the notice row. The row is stamped `now`, the tick's
-/// clock, so [`notice_since`] works with injected time.
+/// caller that created the notice row, stamped `now` (the tick's clock).
 pub async fn claim_notice(
     db: impl MySqlExecutor<'_>,
     kind: &str,
@@ -69,22 +68,6 @@ pub async fn claim_notice(
     .await?
     .rows_affected();
     Ok(inserted == 1)
-}
-
-/// Whether a `kind` notice was claimed after `since`: a rule over a sliding
-/// span, which the aligned window of [`claim_notice`] cannot give.
-pub async fn notice_since(
-    db: impl MySqlExecutor<'_>,
-    kind: &str,
-    since: DateTime<Utc>,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM posthog_autofix_notices WHERE kind = ? AND created_at > ?)",
-    )
-    .bind(kind)
-    .bind(since.naive_utc())
-    .fetch_one(db)
-    .await
 }
 
 // Column widths, in characters (utf8mb4 VARCHARs count characters).
@@ -279,37 +262,6 @@ pub async fn lift_folded_users(db: impl MySqlExecutor<'_>, id: u64) -> Result<()
     .map(|_| ())
 }
 
-/// Bugs first seen at or after `since`.
-pub async fn count_created_since(
-    db: impl MySqlExecutor<'_>,
-    since: DateTime<Utc>,
-) -> Result<u32, sqlx::Error> {
-    let rows: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM posthog_autofix_runs WHERE issue_created_at >= ?")
-            .bind(since.naive_utc())
-            .fetch_one(db)
-            .await?;
-    Ok(count(rows))
-}
-
-/// The most common `name: description` (description cut to 80 characters)
-/// among bugs first seen at or after `since`, with their counts.
-pub async fn top_groups(
-    db: impl MySqlExecutor<'_>,
-    since: DateTime<Utc>,
-    limit: u32,
-) -> Result<Vec<(String, i64)>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT CONCAT(issue_name, ': ', LEFT(issue_description, 80)) AS label, COUNT(*) AS issues
-           FROM posthog_autofix_runs WHERE issue_created_at >= ?
-          GROUP BY label ORDER BY issues DESC, label LIMIT ?",
-    )
-    .bind(since.naive_utc())
-    .bind(limit)
-    .fetch_all(db)
-    .await
-}
-
 /// Runs dispatched or running since before `cutoff`.
 pub async fn stale_in_flight(
     db: impl MySqlExecutor<'_>,
@@ -372,10 +324,12 @@ impl SettledRow {
     }
 }
 
-/// Discovered rows first seen at or before `created_by`, server rows first.
+/// Discovered rows first seen at or before `created_by`: server rows first,
+/// web toasts last, then oldest first.
 ///
-/// Then oldest first. A browser 5xx waits for the API error of its route to
-/// be judged, so that error must never queue behind a full batch of them.
+/// A browser 5xx waits for the API error of its route to be judged, and a
+/// toast for the error it repeats, so neither error may queue behind a full
+/// batch of its copies.
 pub async fn settled(
     db: impl MySqlExecutor<'_>,
     created_by: DateTime<Utc>,
@@ -387,7 +341,8 @@ pub async fn settled(
                 error_source, first_seen_at, last_seen_at
            FROM posthog_autofix_runs
           WHERE status = 'discovered' AND issue_created_at <= ?
-          ORDER BY source = 'web', issue_created_at, id LIMIT ?",
+          ORDER BY source = 'web', (issue_name = 'ErrorToast' OR error_source <=> 'toast'),
+                   issue_created_at, id LIMIT ?",
     )
     .bind(created_by.naive_utc())
     .bind(limit)
@@ -406,6 +361,30 @@ pub async fn api_rows_seen_between(
     sqlx::query_as(
         "SELECT id, api_route, status = 'discovered' FROM posthog_autofix_runs
           WHERE source = 'granite-api' AND api_route IS NOT NULL
+            AND status NOT IN ('skipped', 'duplicate')
+            AND first_seen_at <= ? AND last_seen_at >= ?
+          ORDER BY id",
+    )
+    .bind(to.naive_utc())
+    .bind(from.naive_utc())
+    .fetch_all(db)
+    .await
+}
+
+/// The errors a toast seen in `[from, to]` may repeat.
+///
+/// Web rows other than toasts, not skipped or folded, whose events span
+/// reaches into `[from, to]`, with their messages and whether they still
+/// wait to be judged.
+pub async fn web_errors_seen_between(
+    db: impl MySqlExecutor<'_>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<(u64, String, bool)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, issue_description, status = 'discovered' FROM posthog_autofix_runs
+          WHERE source = 'web' AND issue_name <> 'ErrorToast'
+            AND NOT (error_source <=> 'toast')
             AND status NOT IN ('skipped', 'duplicate')
             AND first_seen_at <= ? AND last_seen_at >= ?
           ORDER BY id",

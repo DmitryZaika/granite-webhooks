@@ -240,16 +240,23 @@ fn sender(from: &str) -> (Option<String>, String) {
 /// blocked for a person to look at).
 async fn build_message(
     state: &AppState,
+    tx: &mut Transaction<'_, MySql>,
     signing: &NativeSigning,
     kind: &str,
     job_key: &str,
     row: &DocumentRow,
     settings: &FrozenSettings,
 ) -> Option<OutgoingEmail> {
-    let invitation = signing
-        .lifecycle_mail(&state.pool, row.request_id, row.company_id)
+    let invitation = match signing
+        .lifecycle_mail(&mut **tx, row.request_id, row.company_id)
         .await
-        .ok()?;
+    {
+        Ok(invitation) => invitation,
+        Err(err) => {
+            tracing::warn!(%err, request_id = row.request_id, "native signature invitation unavailable");
+            return None;
+        }
+    };
     let (from_name, from_address) = sender(&invitation.snapshot.from);
     let mut message = OutgoingEmail {
         from_name,
@@ -399,7 +406,8 @@ async fn dispatch(
         tx.commit().await?;
         return Ok(Outcome::Cancelled);
     }
-    let Some(message) = build_message(state, signing, &kind, &job_key, &row, &settings).await
+    let Some(message) =
+        build_message(state, &mut tx, signing, &kind, &job_key, &row, &settings).await
     else {
         set_state(&mut tx, job.id, "blocked").await?;
         tx.commit().await?;

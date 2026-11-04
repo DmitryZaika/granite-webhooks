@@ -11,10 +11,9 @@
 //! by password resets and changes, by the admin user delete and save (a
 //! user who lost phone access), by the superuser's company delete, and by
 //! the phone job, which also signs out the phones of users who left by any
-//! other way and the sign-ins that expired or idled.
+//! other way and browser phones whose CRM sign-in ended.
 
 use super::routing::PHONE_USER;
-use crate::auth::device::IDLE_DAYS;
 use crate::push::PushError;
 use crate::state::AppState;
 use lambda_http::tracing;
@@ -37,7 +36,7 @@ pub enum RevokeReason {
     UserRemoved,
     /// The company was deleted.
     CompanyDeleted,
-    /// The sign-in expired (12 months) or went unused for 30 days.
+    /// A browser phone's CRM sign-in ended (nothing ends by time).
     Expired,
 }
 
@@ -231,24 +230,24 @@ pub async fn lost_access_sessions(
     .await
 }
 
-/// Device sessions not signed out that expired (12 months) or went unused
-/// for 30 days, and browser phones whose web session (the CRM sign-in)
-/// ended: they no longer sign in, and their phones' credentials and push
-/// tokens are to go. At most `limit`, oldest first.
+/// Browser phones whose web session (the CRM sign-in) ended: they no longer
+/// sign in, and their phones' credentials and push tokens are to go. Nothing
+/// ends by time: app phones are signed out only on purpose or when their user
+/// loses access (`lost_access_sessions`). At most `limit`, oldest first.
 pub async fn expired_sessions(pool: &MySqlPool, limit: i64) -> sqlx::Result<Vec<i64>> {
-    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+    sqlx::query_scalar(
         "SELECT CAST(ds.id AS SIGNED) FROM device_sessions ds
-          WHERE ds.revoked_at IS NULL
-            AND (ds.expires_at <= UTC_TIMESTAMP()
-                 OR COALESCE(ds.last_seen_at, ds.created_at)
-                    <= UTC_TIMESTAMP() - INTERVAL {IDLE_DAYS} DAY
-                 OR (ds.web_session_id IS NOT NULL AND NOT EXISTS (
-                      SELECT 1 FROM sessions ws
-                       WHERE ws.id = ds.web_session_id AND ws.is_deleted = 0
-                         AND ws.expiration_date > CURRENT_TIMESTAMP)))
+          WHERE ds.revoked_at IS NULL AND ds.web_session_id IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM sessions ws
+                 WHERE ws.id = ds.web_session_id AND ws.is_deleted = 0
+                   AND (ws.expiration_date IS NULL
+                        OR (ws.expiration_date > CURRENT_TIMESTAMP
+                            AND (ws.expiration_date <= CURRENT_TIMESTAMP + INTERVAL 60 DAY
+                                 OR ws.created_date > CURRENT_TIMESTAMP - INTERVAL 2 MONTH))))
           ORDER BY ds.id
-          LIMIT ?"
-    )))
+          LIMIT ?",
+    )
     .bind(limit)
     .fetch_all(pool)
     .await

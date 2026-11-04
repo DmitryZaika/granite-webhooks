@@ -17,8 +17,11 @@ use std::time::Duration;
 
 /// Stones one request may compare.
 pub const MAX_STONES: usize = 3;
-/// Biggest kitchen photo taken.
-pub const MAX_KITCHEN_BYTES: usize = 15 * 1024 * 1024;
+/// Biggest kitchen photo taken: as base64 in the JSON body it stays under
+/// the 6 MB a Lambda request may have ([`MAX_DESIGN_BODY_BYTES`]).
+pub const MAX_KITCHEN_BYTES: usize = 4 * 1024 * 1024;
+/// Biggest `POST /v1/ai/design` body (axum takes 2 MB unless told).
+pub const MAX_DESIGN_BODY_BYTES: usize = 6 * 1024 * 1024;
 const MAX_REMOTE_BYTES: usize = 30 * 1024 * 1024;
 
 /// Where the stone goes.
