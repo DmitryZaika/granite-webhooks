@@ -140,24 +140,26 @@ pub async fn sms_contacts(
         }));
     }
     let digits: String = term.chars().filter(char::is_ascii_digit).collect();
-    let mut customers: Vec<SmsContact> = find_by_name(pool, user.company_id, &term, 15)
-        .await?
-        .into_iter()
-        .map(|c| SmsContact {
-            id: c.id,
-            name: c.name.unwrap_or_default(),
-            phone: c.phone.unwrap_or_default(),
-        })
-        .collect();
+    let mut customers: Vec<SmsContact> =
+        find_by_name(pool, user.company_id, Some(user.id), &term, 15)
+            .await?
+            .into_iter()
+            .map(|c| SmsContact {
+                id: c.id,
+                name: c.name.unwrap_or_default(),
+                phone: c.phone.unwrap_or_default(),
+            })
+            .collect();
     if !digits.is_empty() {
         let by_phone: Vec<SmsContact> = sqlx::query_as(
             "SELECT id, COALESCE(name, '') AS name, COALESCE(phone, '') AS phone FROM customers
               WHERE company_id = ? AND deleted_at IS NULL
                 AND REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '(', ''), ')', ''), '-', '') LIKE ?
-              ORDER BY name LIMIT 10",
+              ORDER BY sales_rep <=> ? DESC, name LIMIT 10",
         )
         .bind(user.company_id)
         .bind(format!("%{digits}%"))
+        .bind(user.id)
         .fetch_all(pool)
         .await?;
         for contact in by_phone {

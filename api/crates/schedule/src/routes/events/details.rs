@@ -780,8 +780,11 @@ pub struct FoundEvent {
 /// Search events
 ///
 /// The company's events whose title, customer's name, location, description
-/// or notes contain `q`, newest first; with `calendar_ids`, only those
-/// calendars' events.
+/// or notes contain `q`; with `calendar_ids`, only those calendars' events.
+///
+/// Smart order: the caller's own first (assigned to or made by them, or for
+/// their customer), then title or customer-name hits before hits only in the
+/// place or notes, then the nearest to now; unscheduled ones last.
 #[crate::openapi::path(
     get,
     path = "/v1/events/search",
@@ -828,7 +831,15 @@ pub async fn search(
           WHERE u.company_id = ? AND e.deleted_date IS NULL
             AND (e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)
             AND (? IS NULL OR IF(? = '', e.calendar_id IS NULL, FIND_IN_SET(e.calendar_id, ?) > 0))
-          ORDER BY e.start_date DESC
+          ORDER BY CASE WHEN e.assigned_user_id = ? OR e.created_user_id = ? OR c.sales_rep = ?
+                          OR EXISTS (SELECT 1 FROM deals mine
+                                      WHERE mine.customer_id = e.customer_id AND mine.user_id = ?
+                                        AND mine.deleted_at IS NULL)
+                        THEN 0 ELSE 1 END,
+                   CASE WHEN e.title LIKE ? OR c.name LIKE ? THEN 0 ELSE 1 END,
+                   COALESCE(e.unscheduled, 0) <> 0,
+                   ABS(TIMESTAMPDIFF(SECOND, e.start_date, UTC_TIMESTAMP())),
+                   e.id DESC
           LIMIT ?",
     )
     .bind(user.company_id)
@@ -840,6 +851,12 @@ pub async fn search(
     .bind(&calendars)
     .bind(&calendars)
     .bind(&calendars)
+    .bind(user.id)
+    .bind(user.id)
+    .bind(user.id)
+    .bind(user.id)
+    .bind(&like)
+    .bind(&like)
     .bind(limit)
     .fetch_all(&state.pool)
     .await?;
