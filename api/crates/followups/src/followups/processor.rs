@@ -266,6 +266,8 @@ struct Step {
     subject: Option<String>,
     template_body: Option<String>,
     template_subject: Option<String>,
+    /// The step's SMS template (its files go with the text).
+    sms_template_id: Option<i32>,
 }
 
 impl Step {
@@ -287,7 +289,8 @@ impl Step {
 async fn current_and_next(state: &AppState, due: &Due) -> Result<Vec<Step>, sqlx::Error> {
     sqlx::query_as(
         "SELECT s.position, s.delay_minutes, COALESCE(CAST(s.channel AS CHAR), 'sms') AS channel, s.custom_text, s.subject,
-                COALESCE(t.body, rt.body, et.template_body) AS template_body, et.template_subject
+                COALESCE(t.body, rt.body, et.template_body) AS template_body, et.template_subject,
+                t.id AS sms_template_id
            FROM sms_flow_steps s
            LEFT JOIN cloudtalk_sms_templates t ON t.id = s.template_id AND t.company_id = ? AND COALESCE(s.channel, 'sms') = 'sms'
            LEFT JOIN ringcentral_sms_templates rt ON rt.id = s.template_id AND rt.company_id = ? AND COALESCE(s.channel, 'sms') = 'sms'
@@ -639,7 +642,20 @@ async fn send_step(state: &AppState, due: &Due, now: Instant) -> Result<Outcome,
             let provider = rep_sms_provider(state, due.company_id, &rep)
                 .await?
                 .unwrap_or(company);
-            send_sms(state, due, &rep, provider, current.position, &body).await?
+            // The template's files go with its own text, not with AI copy.
+            let template = current
+                .sms_template_id
+                .filter(|_| !current.is_ai() && !replan && current.custom_text.is_none());
+            send_sms(
+                state,
+                due,
+                &rep,
+                provider,
+                current.position,
+                &body,
+                template,
+            )
+            .await?
         }
     };
     if let Err(outcome) = sent {
@@ -773,6 +789,7 @@ async fn send_sms(
     provider: SmsProvider,
     position: i32,
     body: &str,
+    template_id: Option<i32>,
 ) -> Result<Result<(), Outcome>, sqlx::Error> {
     let Some(seat) = crate::routes::sms::send::seat(&state.pool, provider, rep).await? else {
         return Ok(Err(if fail(state, due.id, "agent_not_linked").await? {
@@ -800,7 +817,10 @@ async fn send_sms(
         agent_id: seat.agent_id.clone(),
         phone_digits: phone.to_string(),
         text: body.trim().to_string(),
-        attachments: Vec::new(),
+        attachments: match template_id {
+            Some(id) => crate::routes::sms::send::template_files(state, due.company_id, id).await?,
+            None => Vec::new(),
+        },
         is_automated: true,
         idempotency_key: Some(format!("sms-flow-{}-{}", due.id, position)),
     };
