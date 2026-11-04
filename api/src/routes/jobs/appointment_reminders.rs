@@ -44,6 +44,12 @@ pub struct ReminderRun {
     pub rule_sent: usize,
     /// Notification-rule messages that failed.
     pub rule_failed: usize,
+    /// Scheduling-text replies the AI read.
+    pub answers_read: usize,
+    /// Jobs the AI marked Ready because the customer agreed.
+    pub marked_ready: usize,
+    /// Scheduling-text follow-ups sent to customers who had not replied.
+    pub followups_sent: usize,
 }
 
 #[derive(sqlx::FromRow)]
@@ -331,6 +337,10 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
     run.rule_processed = rules.processed;
     run.rule_sent = rules.sent;
     run.rule_failed = rules.failed;
+    let answers = notifications::check_answers(&state).await?;
+    run.answers_read = answers.read;
+    run.marked_ready = answers.ready;
+    run.followups_sent = answers.followups;
     Ok(Json(run))
 }
 

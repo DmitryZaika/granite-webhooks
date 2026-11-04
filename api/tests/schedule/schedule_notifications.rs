@@ -1,5 +1,6 @@
 use crate::common;
 
+use api::ai::Ai;
 use api::app;
 use api::state::AppState;
 use api::webhooks_client::{OutgoingEmail, OutgoingSms, WebhooksClient};
@@ -17,6 +18,8 @@ use std::sync::{Arc, Mutex};
 struct Sent {
     emails: Arc<Mutex<Vec<OutgoingEmail>>>,
     texts: Arc<Mutex<Vec<OutgoingSms>>>,
+    /// What the AI answers.
+    ai_reply: Arc<Mutex<String>>,
 }
 
 async fn server(pool: &MySqlPool) -> (TestServer, Sent) {
@@ -41,6 +44,16 @@ async fn server(pool: &MySqlPool) -> (TestServer, Sent) {
             ),
         )
         .route("/telegram/crm-notify", post(|| async { Json(json!({})) }))
+        .route(
+            "/chat",
+            post(|State(sent): State<Sent>| async move {
+                let content = sent.ai_reply.lock().unwrap().clone();
+                Json(json!({
+                    "choices": [{ "message": { "content": content } }],
+                    "usage": { "prompt_tokens": 100, "completion_tokens": 10 },
+                }))
+            }),
+        )
         .with_state(sent.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -50,6 +63,7 @@ async fn server(pool: &MySqlPool) -> (TestServer, Sent) {
             Some(&format!("http://{address}")),
             Some("key"),
         ))
+        .with_ai(Ai::new(Some("key"), &format!("http://{address}/chat")))
         .with_job_key("job-secret");
     (TestServer::new(app(state)), sent)
 }
@@ -372,7 +386,9 @@ async fn confirmations_stay_out_of_flows(pool: MySqlPool) {
     // Left out, the kind is kept; a confirmation made a reminder can go in a flow.
     body.as_object_mut().unwrap().remove("kind");
     server
-        .put(&format!("/v1/schedule/notifications/templates/{confirmation}"))
+        .put(&format!(
+            "/v1/schedule/notifications/templates/{confirmation}"
+        ))
         .with_session(sessions::ADMIN)
         .json(&body)
         .await
@@ -389,7 +405,9 @@ async fn confirmations_stay_out_of_flows(pool: MySqlPool) {
     assert_eq!(kind().await, "confirmation");
     body["kind"] = json!("reminder");
     server
-        .put(&format!("/v1/schedule/notifications/templates/{confirmation}"))
+        .put(&format!(
+            "/v1/schedule/notifications/templates/{confirmation}"
+        ))
         .with_session(sessions::ADMIN)
         .json(&body)
         .await
@@ -793,4 +811,179 @@ async fn a_confirmation_goes_out_right_away(pool: MySqlPool) {
     let emails = sent.emails.lock().unwrap().clone();
     assert_eq!(emails.len(), 2);
     assert_eq!(emails[1].to, ["wife@example.com"]);
+}
+
+/// The event's history lines.
+async fn history(pool: &MySqlPool, event: i32) -> Vec<String> {
+    sqlx::query_scalar("SELECT message FROM event_history WHERE event_id = ? ORDER BY id")
+        .bind(event)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[test_db::test(seed)]
+async fn scheduling_texts_follow_up_until_the_customer_agrees(pool: MySqlPool) {
+    sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
+    sqlx::raw_sql(TEXTING).execute(&pool).await.unwrap();
+    // Rita schedules the jobs.
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 13, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (server, sent) = server(&pool).await;
+    let template = |calendars: Value| {
+        json!({
+            "name": "Install date", "kind": "confirmation", "channel": "sms",
+            "body": "Hi {{customer.first_name}}, can we install {{appointment.date}}, {{appointment.time_range}}? Reply YES.",
+            "calendar_ids": calendars,
+            "followup": { "template_id": null, "after_hours": 2 },
+        })
+    };
+    // Another company's calendar is refused.
+    server
+        .post("/v1/schedule/notifications/templates")
+        .with_session(sessions::ADMIN)
+        .json(&template(json!([8832])))
+        .await
+        .assert_status_bad_request();
+    let created: Value = server
+        .post("/v1/schedule/notifications/templates")
+        .with_session(sessions::ADMIN)
+        .json(&template(json!([8830])))
+        .await
+        .json();
+    let id = created["id"].as_i64().unwrap();
+    server
+        .put("/v1/schedule/notifications/scheduling")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "ai_ready": true, "text_days": [], "text_start": "00:00", "text_end": "23:59" }))
+        .await
+        .assert_status_bad_request();
+    server
+        .put("/v1/schedule/notifications/scheduling")
+        .with_session(sessions::ADMIN)
+        .json(&json!({
+            "ai_ready": true, "text_days": [0, 1, 2, 3, 4, 5, 6],
+            "text_start": "00:00", "text_end": "23:59",
+        }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let list: Value = server
+        .get("/v1/schedule/notifications")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(list["templates"][0]["calendar_ids"], json!([8830]));
+    assert_eq!(
+        list["templates"][0]["followup"],
+        json!({ "template_id": null, "after_hours": 2 })
+    );
+    assert_eq!(list["scheduling"]["ai_ready"], true);
+
+    event(&pool, 8830, "1000", 72, false).await;
+    let install = last_event(&pool).await;
+    sqlx::query("UPDATE events SET status = 'not_ready' WHERE id = ?")
+        .bind(install)
+        .execute(&pool)
+        .await
+        .unwrap();
+    event(&pool, 8831, "1000", 72, false).await;
+    let estimate = last_event(&pool).await;
+    // Send SMS lists the installation's text, filled in; not on the estimate.
+    let texts: Value = server
+        .get(&format!("/v1/events/{install}/scheduling-texts"))
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(texts["problem"], Value::Null);
+    assert_eq!(texts["ai_ready"], true);
+    assert_eq!(texts["templates"][0]["id"], id);
+    assert!(
+        texts["templates"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Hi Alice, can we install ")
+    );
+    let other: Value = server
+        .get(&format!("/v1/events/{estimate}/scheduling-texts"))
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(other["templates"], json!([]));
+
+    server
+        .post(&format!("/v1/events/{install}/confirmation"))
+        .with_session(sessions::REP)
+        .json(&json!({ "template_id": id }))
+        .await
+        .assert_status_ok();
+    assert_eq!(sent.texts.lock().unwrap().len(), 1);
+    let run = || async {
+        server
+            .post("/v1/jobs/appointment-reminders")
+            .add_header("Authorization", "job-secret")
+            .await
+            .json::<Value>()
+    };
+    // No reply yet, and the follow-up isn't due.
+    assert_eq!(run().await["followups_sent"], 0);
+    sqlx::query(
+        "UPDATE schedule_text_answers SET followup_due_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(run().await["followups_sent"], 1);
+    let texts = sent.texts.lock().unwrap().clone();
+    assert_eq!(texts.len(), 2);
+    assert_eq!(texts[1].text, texts[0].text);
+    assert!(
+        history(&pool, install)
+            .await
+            .contains(&"Follow-up text sent (no reply): Install date".to_string())
+    );
+
+    // Alice answers; the AI is sure she agreed.
+    sqlx::query(
+        "INSERT INTO cloudtalk_sms (sender, recipient, text, direction, status, company_id, created_date, phone_digits)
+         VALUES ('3175550100', '3175550999', 'Yes that works', 'inbound', 'received', 100,
+                 UTC_TIMESTAMP() + INTERVAL 5 SECOND, '3175550100')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    *sent.ai_reply.lock().unwrap() =
+        json!({ "answer": "agreed", "evidence": "Yes that works" }).to_string();
+    let body = run().await;
+    assert_eq!(body["answers_read"], 1);
+    assert_eq!(body["marked_ready"], 1);
+    let status: String = sqlx::query_scalar("SELECT status FROM events WHERE id = ?")
+        .bind(install)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "ready");
+    assert!(history(&pool, install).await.contains(
+        &"Status changed to Ready by AI: the customer agreed: “Yes that works”".to_string()
+    ));
+    let told: Vec<(i32, String)> = sqlx::query_as(
+        "SELECT user_id, message FROM notifications WHERE notification_type = 'schedule_ai_ready'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        told,
+        [(
+            100,
+            "1000 is Ready: the customer agreed to the date (AI)".to_string()
+        )]
+    );
+    // Settled: nothing more is read or sent.
+    let body = run().await;
+    assert_eq!(body["answers_read"], 0);
+    assert_eq!(sent.texts.lock().unwrap().len(), 2);
 }
