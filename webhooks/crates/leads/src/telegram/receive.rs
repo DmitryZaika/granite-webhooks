@@ -16,7 +16,6 @@ use crate::telegram::utils::parse_code;
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
-use common::crud::phone_app::users_with_app;
 use common::crud::scheduled_emails::schedule_templates_for_deal_list;
 use common::telegram::bot::{CallbackQuery, ChatId, Message, Update};
 use lambda_http::tracing;
@@ -331,13 +330,8 @@ async fn handle_assign_lead<T: Telegram>(
         Audience::Rep(position.user_id),
     )
     .await;
-    // A rep with the app gets it there only.
-    if users_with_app(pool, position.company_id, &[position.user_id])
-        .await
-        .contains(&position.user_id)
-    {
-        return OK_RESPONSE;
-    }
+    // Leads go to the app and to Telegram both: the app does not replace
+    // Telegram for them.
     if let Some(telegram_id) = tg_info.telegram_id {
         let final_message = format!("You were assigned a lead. Click here: \n{lead_link}");
         return bot
@@ -925,6 +919,67 @@ mod local_tests {
         assert_eq!(edited_chats, vec![456, 789]);
         assert!(!edited_chats.contains(&123));
         assert!(!edited_chats.contains(&999));
+    }
+
+    #[test_db::test]
+    async fn a_rep_with_the_app_still_gets_the_assigned_lead_in_telegram(pool: MySqlPool) {
+        let sales_id = positioned_user(&pool, 1, 1, 123).await;
+        positioned_user(&pool, 1, 2, 789).await;
+        // The rep's phone has the Granite Phone app (it gets the push too).
+        let session = sqlx::query(
+            "INSERT INTO device_sessions
+               (user_id, company_id, token_hash, device_name, platform, app_version,
+                created_at, last_seen_at, expires_at)
+             VALUES (?, 1, SHA2(UUID(), 256), 'Test phone', 'android', '1.0.0',
+                     UTC_TIMESTAMP() - INTERVAL 1 DAY, UTC_TIMESTAMP() - INTERVAL 1 MINUTE,
+                     UTC_TIMESTAMP() + INTERVAL 11 MONTH)",
+        )
+        .bind(sales_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        sqlx::query(
+            "INSERT INTO phone_devices
+               (device_session_id, user_id, company_id, platform, device_name, push_token)
+             VALUES (?, ?, 1, 'android', 'Test phone', 'push-token')",
+        )
+        .bind(session)
+        .bind(sales_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (_, bot) = send_lead(&pool).await;
+
+        let sent_options = bot.clone().sent.lock().unwrap().clone()[0]
+            .clone()
+            .2
+            .unwrap();
+        let option = match sent_options.inline_keyboard[0][0].clone().kind {
+            InlineKeyboardButtonKind::CallbackData(data) => data,
+            InlineKeyboardButtonKind::Url(_) => unreachable!(),
+        };
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(456),
+            message: Some(generate_message(1, "hello")),
+            data: Some(option),
+        };
+        let res = handle_callback(cb, &pool, &bot).await;
+        assert_eq!(res.0, StatusCode::OK);
+        assert_eq!(get_all_deals(&pool).await[0].user_id, Some(sales_id));
+
+        // Leads go to the app and to Telegram both.
+        let to_rep: Vec<String> = bot
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.0 == 123)
+            .map(|entry| entry.1.clone())
+            .collect();
+        assert_eq!(to_rep.len(), 1, "{to_rep:?}");
+        assert!(to_rep[0].contains("You were assigned a lead"));
     }
 
     #[test_db::test]

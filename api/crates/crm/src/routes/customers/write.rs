@@ -4,9 +4,9 @@
 //! `api.customers.set-sales-rep` and `api.customers.set-temperature`.
 
 use super::service::{
-    SALES_REP_POSITION, audit_name, ensure_open_deal, record_lead_manager_assignment,
-    record_reassignment, refuse_import_placeholder, refuse_taken_phones, remind_new_rep,
-    source_allowed, sync_emails, user_name,
+    SALES_REP_POSITION, audit_name, ensure_open_deal, notify_assigned_rep,
+    record_lead_manager_assignment, record_reassignment, refuse_import_placeholder,
+    refuse_taken_phones, remind_new_rep, source_allowed, sync_emails, user_name,
 };
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -364,7 +364,8 @@ pub async fn update(
         let by = audit_name(user.name.as_deref());
         record_reassignment(pool, id, by.as_deref(), to.as_deref(), None).await?;
         if let Some(rep) = input.sales_rep {
-            ensure_open_deal(pool, id, user.company_id, rep).await?;
+            let deal = ensure_open_deal(pool, id, user.company_id, rep).await?;
+            notify_assigned_rep(&state, user.company_id, id, rep, user.id, deal).await;
         }
     }
     state.webhooks.sync_contacts(user.company_id, id).await;
@@ -375,7 +376,9 @@ pub async fn update(
 ///
 /// Records the change in the audit trail, stamps the first assignment
 /// date, gives the rep the open deal and two reminders (text within a
-/// day, check within three).
+/// day, check within three). A newly assigned rep (other than the caller)
+/// is told on their phones (a `lead` push) and in Telegram. The Granite
+/// Phone app may call this with its device token.
 #[crate::openapi::path(
     put,
     path = "/v1/customers/{id}/sales-rep",
@@ -429,8 +432,11 @@ pub async fn set_sales_rep(
         record_reassignment(pool, id, by.as_deref(), to.as_deref(), None).await?;
     }
     if let Some(rep) = body.sales_rep {
-        ensure_open_deal(pool, id, user.company_id, rep).await?;
+        let deal = ensure_open_deal(pool, id, user.company_id, rep).await?;
         remind_new_rep(pool, rep, id).await?;
+        if previous != body.sales_rep {
+            notify_assigned_rep(&state, user.company_id, id, rep, user.id, deal).await;
+        }
         state.webhooks.sync_contacts(user.company_id, id).await;
     }
     Ok(StatusCode::NO_CONTENT)

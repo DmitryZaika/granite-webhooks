@@ -188,3 +188,130 @@ async fn the_app_can_send_itself_test_pushes(pool: MySqlPool) {
         .await
         .assert_status_ok();
 }
+
+/// A Telegram that records each message: (bot path segment, body).
+async fn telegram_stub() -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+) {
+    use axum::extract::Path;
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use std::sync::{Arc, Mutex};
+    let chats: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let recorded = chats.clone();
+    let telegram = Router::new().route(
+        "/{bot}/sendMessage",
+        post(move |Path(bot): Path<String>, Json(body): Json<Value>| {
+            let recorded = recorded.clone();
+            async move {
+                let mut list = recorded.lock().unwrap();
+                list.push((bot, body));
+                Json(json!({ "ok": true, "result": { "message_id": 800 + list.len() } }))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, telegram).await.unwrap() });
+    (base, chats)
+}
+
+#[test_db::test(seed)]
+async fn a_lead_assigned_from_the_phone_reaches_the_rep_in_the_app_and_in_telegram(
+    pool: MySqlPool,
+) {
+    use api::telegram::TelegramBots;
+    let (telegram, chats) = telegram_stub().await;
+    let (server, stubs) = phone_common::phone_server_with(pool.clone(), |state| {
+        state.with_telegram(TelegramBots::new(
+            Some("111:leads"),
+            Some("222:notes"),
+            &telegram,
+        ))
+    })
+    .await;
+    add_phone(&pool, 1, 100, 100).await;
+    add_phone(&pool, 2, 101, 100).await;
+    // Rita has the app and Telegram's lead alerts.
+    sql(&pool, "UPDATE users SET telegram_id = 5551 WHERE id = 100").await;
+
+    // Mark's phone lists the sales reps (Assign a sales rep) ...
+    let res = server
+        .get("/v1/users/sales-reps")
+        .add_header(HEADER, token(2))
+        .await;
+    res.assert_status_ok();
+    let reps: Vec<Value> = res.json();
+    assert!(reps.iter().any(|rep| rep["id"] == 100), "{reps:?}");
+
+    // ... and gives Bob Unassigned (1001) to Rita.
+    server
+        .put("/v1/customers/1001/sales-rep")
+        .add_header(HEADER, token(2))
+        .json(&json!({ "sales_rep": 100 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let deal: i64 = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM deals
+          WHERE customer_id = 1001 AND deleted_at IS NULL AND user_id = 100 ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Rita hears of it on her phone and in Telegram, both.
+    assert_eq!(
+        pushes(&stubs, "lead"),
+        [(
+            "push-1".to_string(),
+            json!({ "granite": "1", "type": "lead", "kind": "assigned", "customerId": "1001",
+                    "dealId": deal.to_string() })
+        )]
+    );
+    let sent = chats.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].0, "bot111:leads");
+    assert_eq!(sent[0].1["chat_id"], 5551);
+    assert_eq!(
+        sent[0].1["text"],
+        "You were assigned a lead: Bob Unassigned."
+    );
+    assert_eq!(
+        sent[0].1["reply_markup"]["inline_keyboard"][0][0]["url"],
+        format!("https://crm.test/employee/deals/edit/{deal}/project")
+    );
+
+    // The same rep again tells nobody again.
+    server
+        .put("/v1/customers/1001/sales-rep")
+        .add_header(HEADER, token(2))
+        .json(&json!({ "sales_rep": 100 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(pushes(&stubs, "lead").len(), 1);
+    assert_eq!(chats.lock().unwrap().len(), 1);
+
+    // A rep who takes a lead themselves is not told.
+    server
+        .put("/v1/customers/1001/sales-rep")
+        .add_header(HEADER, token(2))
+        .json(&json!({ "sales_rep": null }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .put("/v1/customers/1001/sales-rep")
+        .add_header(HEADER, token(1))
+        .json(&json!({ "sales_rep": 100 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(pushes(&stubs, "lead").len(), 1);
+    assert_eq!(chats.lock().unwrap().len(), 1);
+
+    // The phone still may not edit or delete the customer.
+    server
+        .delete("/v1/customers/1001")
+        .add_header(HEADER, token(2))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
