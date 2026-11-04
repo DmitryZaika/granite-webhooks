@@ -210,6 +210,17 @@
       "usage_check": "send_later_used"
     },
     {
+      "id": "message-templates",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "compose-templates-list"
+      ],
+      "usage_check": "templates_used"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
