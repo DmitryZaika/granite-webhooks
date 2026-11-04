@@ -351,7 +351,7 @@ async fn lookup_customer(state: &AppState, ctx: Ctx, query: &str) -> sqlx::Resul
     };
     let pool = &state.pool;
     let ids: Vec<i64> = match kind {
-        "name" => fuzzy::find_by_name(pool, ctx.company_id, &trimmed, 20)
+        "name" => fuzzy::find_by_name(pool, ctx.company_id, Some(ctx.user_id), &trimmed, 20)
             .await?
             .into_iter()
             .map(|c| i64::from(c.id))

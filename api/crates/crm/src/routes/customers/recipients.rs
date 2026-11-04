@@ -211,7 +211,8 @@ pub async fn recipients(
     let mut customers: Vec<Recipient> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "{CUSTOMER_ADDRESSES}
            AND (c.name LIKE ? OR ce.email LIKE ? OR (c.company_name IS NOT NULL AND c.company_name LIKE ?))
-         ORDER BY CASE WHEN ce.email LIKE ? THEN 0 WHEN c.name LIKE ? THEN 1
+         ORDER BY c.sales_rep <=> ? DESC,
+                  CASE WHEN ce.email LIKE ? THEN 0 WHEN c.name LIKE ? THEN 1
                        WHEN c.company_name LIKE ? THEN 2 ELSE 3 END, c.name
          LIMIT 15"
     )))
@@ -219,6 +220,7 @@ pub async fn recipients(
     .bind(&like)
     .bind(&like)
     .bind(&like)
+    .bind(user.id)
     .bind(&prefix)
     .bind(&prefix)
     .bind(&prefix)

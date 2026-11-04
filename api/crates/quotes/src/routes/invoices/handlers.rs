@@ -100,7 +100,7 @@ pub async fn list(
                 .ok_or_else(|| ApiError::BadRequest("Unknown invoice status".into()))?,
         ),
     };
-    let invoices = list_invoices(&state.pool, user.company_id, &query, status).await?;
+    let invoices = list_invoices(&state.pool, user.company_id, user.id, &query, status).await?;
     let next_number = next_number(&state.pool, user.company_id).await?;
     Ok(Json(InvoiceList {
         invoices,

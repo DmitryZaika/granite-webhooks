@@ -586,3 +586,31 @@ async fn search_finds_titles_customers_and_places(pool: MySqlPool) {
     assert_eq!(in_calendars("1").await, json!([]));
     assert_eq!(in_calendars("").await, json!([]));
 }
+
+#[test_db::test(seed)]
+async fn search_puts_mine_then_title_hits_then_the_nearest_first(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO events (id, title, location, start_date, end_date, created_user_id, assigned_user_id, unscheduled) VALUES
+           (8970, 'Zork other', NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, NULL, 0),
+           (8971, 'Zork mine far', NULL, UTC_TIMESTAMP() + INTERVAL 300 DAY, UTC_TIMESTAMP() + INTERVAL 300 DAY, 101, 100, 0),
+           (8972, 'Zork mine near', NULL, UTC_TIMESTAMP() - INTERVAL 2 DAY, UTC_TIMESTAMP() - INTERVAL 2 DAY, 100, NULL, 0),
+           (8973, 'Mine by place', 'Zork Lane', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 100, 0),
+           (8974, 'Zork mine unscheduled', NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 100, NULL, 1);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let found: Value = server(pool)
+        .get("/v1/events/search")
+        .add_query_param("q", "zork")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    let ids: Vec<i64> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, [8972, 8971, 8974, 8973, 8970]);
+}

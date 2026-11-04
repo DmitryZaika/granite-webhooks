@@ -36758,7 +36758,7 @@
           "schedule"
         ],
         "summary": "Search events",
-        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`, newest first; with `calendar_ids`, only those\ncalendars' events.",
+        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`; with `calendar_ids`, only those calendars' events.\n\nSmart order: the caller's own first (assigned to or made by them, or for\ntheir customer), then title or customer-name hits before hits only in the\nplace or notes, then the nearest to now; unscheduled ones last.",
         "operationId": "search_events",
         "parameters": [
           {
@@ -54856,7 +54856,7 @@
           "phone"
         ],
         "summary": "List my text threads",
-        "description": "The conversations of the numbers I may call from, one per line and other\nnumber, newest activity first (page back with `before` = `nextBefore`),\noptionally only those with one other `number`. Each has our line, the\nother number, the customer with it, the newest text and my unread count;\n`unread` totals every thread. 403 `texting_disabled` unless the company\ntexts through Telnyx. Next: `GET /v1/phone/texts/threads/{key}/messages`.",
+        "description": "The conversations of the numbers I may call from, one per line and other\nnumber, newest activity first (page back with `before` = `nextBefore`),\noptionally only those with one other `number`, or only those with texts I\nhaven't read (`unread=true`, paged the same way). Each has our line, the\nother number, the customer with it, the newest text and my unread count;\n`unread` totals every thread. 403 `texting_disabled` unless the company\ntexts through Telnyx. Next: `GET /v1/phone/texts/threads/{key}/messages`.",
         "operationId": "list_phone_text_threads",
         "parameters": [
           {
@@ -54885,6 +54885,15 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "description": "`true`: only the threads with texts I haven't read (the Unread tab).\nDefault `false`, every thread.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
