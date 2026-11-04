@@ -67,6 +67,9 @@ pub struct MockTelegram {
     pub fail: bool,
     pub fail_delete: bool,
     pub fail_edit_chat_ids: Arc<Mutex<Vec<i64>>>,
+    /// Chats a repliable message fails to (a bot the user blocked). It fails
+    /// at once; the other chats answer a moment later, as Telegram does.
+    pub fail_send_chat_ids: Arc<Mutex<Vec<i64>>>,
     next_message_id: Arc<AtomicI32>,
 }
 
@@ -79,6 +82,7 @@ impl Default for MockTelegram {
             fail: false,
             fail_delete: false,
             fail_edit_chat_ids: Arc::new(Mutex::new(Vec::new())),
+            fail_send_chat_ids: Arc::new(Mutex::new(Vec::new())),
             next_message_id: Arc::new(AtomicI32::new(1)),
         }
     }
@@ -126,6 +130,16 @@ impl Telegram for MockTelegram {
     {
         let text = text.into();
         let chat_id = chat.0;
+        let failing = self.fail_send_chat_ids.lock().unwrap().clone();
+        if failing.contains(&chat_id) {
+            return Err(RequestError::Api {
+                code: 403,
+                description: "Forbidden: bot was blocked by the user".into(),
+            });
+        }
+        if !failing.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         self.sent
             .lock()
             .unwrap()
