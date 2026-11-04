@@ -3,7 +3,9 @@
 //! reminder templates in a sequence for one calendar ("1 day before:
 //! disconnect the sink; 1 hour before: see you soon; 1 day after: care and
 //! maintenance"). A step after the appointment counts from its end.
-//! Confirmation templates are in no flow: employees send them by hand.
+//! Scheduling texts (`confirmation`) and AI texts (`question`) are in no
+//! flow: employees send them by hand. Only an AI text waits for the
+//! customer's answer (AI reads it, follow-ups go out when there is none).
 //!
 //! - `GET /v1/schedule/notifications` → templates, flows, and whether texting is set up
 //! - `POST /v1/schedule/notifications/templates`, `PUT`/`DELETE …/templates/{id}`
@@ -96,8 +98,13 @@ pub enum TemplateKind {
     /// appointment.
     #[default]
     Reminder,
-    /// Sent by hand with `POST /v1/events/{id}/confirmation`; never in a flow.
+    /// A scheduling text: sent by hand with `POST /v1/events/{id}/confirmation`;
+    /// never in a flow. Nothing waits for the customer's answer.
     Confirmation,
+    /// An AI text: sent by hand like a scheduling text, then AI reads the
+    /// customer's replies (with the company's switch on) and its follow-up
+    /// goes out when there is none.
+    Question,
 }
 
 impl TemplateKind {
@@ -105,15 +112,21 @@ impl TemplateKind {
         match self {
             Self::Reminder => "reminder",
             Self::Confirmation => "confirmation",
+            Self::Question => "question",
         }
     }
 
     fn parse(text: &str) -> Self {
-        if text == "confirmation" {
-            Self::Confirmation
-        } else {
-            Self::Reminder
+        match text {
+            "confirmation" => Self::Confirmation,
+            "question" => Self::Question,
+            _ => Self::Reminder,
         }
+    }
+
+    /// Sent by hand from the event, never in a flow.
+    const fn by_hand(self) -> bool {
+        matches!(self, Self::Confirmation | Self::Question)
     }
 }
 
@@ -162,13 +175,17 @@ impl OffsetUnit {
     }
 }
 
-/// Whether a step goes out before the appointment starts or after it ends.
+/// Whether a step goes out before the appointment starts, after it ends, or
+/// the moment the crew taps Completed on it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Direction {
     #[default]
     Before,
     After,
+    /// Sent by `send_on_complete` when the installer or template maker taps
+    /// Completed; the offset is not used.
+    Completed,
 }
 
 impl Direction {
@@ -176,14 +193,15 @@ impl Direction {
         match self {
             Self::Before => "before",
             Self::After => "after",
+            Self::Completed => "completed",
         }
     }
 
     fn parse(text: &str) -> Self {
-        if text == "after" {
-            Self::After
-        } else {
-            Self::Before
+        match text {
+            "after" => Self::After,
+            "completed" => Self::Completed,
+            _ => Self::Before,
         }
     }
 }
@@ -195,7 +213,8 @@ pub struct NotificationTemplate {
     pub id: i32,
     /// What admins call it, e.g. "Disconnect the sink".
     pub name: String,
-    /// `reminder` (flows send it) or `confirmation` (sent by hand).
+    /// `reminder` (flows send it), `confirmation` (a scheduling text, sent by
+    /// hand) or `question` (an AI text, sent by hand; AI reads the answer).
     pub kind: TemplateKind,
     /// `sms` or `email`.
     pub channel: Channel,
@@ -205,19 +224,19 @@ pub struct NotificationTemplate {
     pub body: String,
     /// Place in the admin's order: lower first.
     pub position: i32,
-    /// Scheduling texts (`confirmation`): the calendars it is for; empty for
-    /// every calendar.
+    /// Scheduling and AI texts: the calendars it is for; empty for every
+    /// calendar.
     pub calendar_ids: Vec<i32>,
-    /// Scheduling texts: what the customer gets when they have not replied;
-    /// null for nothing.
+    /// AI texts: what the customer gets when they have not replied; null for
+    /// nothing.
     pub followup: Option<Followup>,
 }
 
-/// A scheduling text's follow-up: sent when the customer has not replied
+/// An AI text's follow-up: sent when the customer has not replied
 /// `after_hours` after it, within the company's texting hours.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 pub struct Followup {
-    /// Another scheduling text of the company; null sends the same text again.
+    /// Another AI text of the company; null sends the same text again.
     #[serde(default)]
     pub template_id: Option<i32>,
     /// 1 to 168 (7 days).
@@ -273,14 +292,14 @@ pub struct NotificationSettings {
     pub sms_enabled: bool,
     /// What the customer gets when the crew taps On my way.
     pub on_my_way: OnMyWayMessage,
-    /// The Scheduling texts tab's switch and texting hours.
+    /// The AI texts tab's switch and texting hours.
     pub scheduling: SchedulingSettings,
 }
 
-/// Admin > Schedule > Scheduling texts: what happens after a scheduling text.
+/// Admin > Schedule > AI texts: what happens after an AI text.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SchedulingSettings {
-    /// AI reads the customer's replies to a scheduling text and, when it is
+    /// AI reads the customer's replies to an AI text and, when it is
     /// certain they agreed to the date, marks the job Ready and tells the
     /// Scheduling Managers.
     pub ai_ready: bool,
@@ -312,7 +331,7 @@ const ON_MY_WAY_SUBJECT: &str = "On the way";
 pub struct NotificationTemplateInput {
     /// At most 100 characters.
     pub name: String,
-    /// `reminder` or `confirmation`. Left out: `reminder` for a new template,
+    /// `reminder`, `confirmation` or `question`. Left out: `reminder` for a new template,
     /// unchanged on edit. A template a flow uses stays a reminder.
     #[serde(default)]
     pub kind: Option<TemplateKind>,
@@ -323,7 +342,7 @@ pub struct NotificationTemplateInput {
     pub subject: Option<String>,
     /// Up to 1600 characters for a text.
     pub body: String,
-    /// Scheduling texts: the calendars it is for (empty for every calendar).
+    /// Scheduling and AI texts: the calendars it is for (empty for every calendar).
     /// Left out: every calendar for a new template, unchanged on edit.
     #[serde(default)]
     pub calendar_ids: Option<Vec<i32>>,
@@ -580,6 +599,8 @@ fn step_order(
         match direction {
             Direction::Before => -minutes,
             Direction::After => minutes,
+            // Completed goes out when the crew taps it: after the job, first.
+            Direction::Completed => 0,
         },
         send_time.unwrap_or("99:99").to_string(),
     )
@@ -661,8 +682,8 @@ struct CheckedExtras {
     followup: Option<Option<Followup>>,
 }
 
-/// Only a scheduling text has calendars, and only one sent by text a
-/// follow-up: for other templates both are cleared.
+/// Only a scheduling or AI text has calendars, and only an AI text sent by
+/// text a follow-up: for other templates they are cleared.
 async fn check_extras(
     pool: &MySqlPool,
     company_id: i32,
@@ -670,7 +691,7 @@ async fn check_extras(
     kind: TemplateKind,
     template_id: Option<i32>,
 ) -> ApiResult<CheckedExtras> {
-    if kind != TemplateKind::Confirmation {
+    if !kind.by_hand() {
         return Ok(CheckedExtras {
             calendar_ids: Some(Vec::new()),
             followup: Some(None),
@@ -700,7 +721,7 @@ async fn check_extras(
         }
     };
     let followup = match input.followup {
-        _ if input.channel != Channel::Sms => Some(None),
+        _ if kind != TemplateKind::Question || input.channel != Channel::Sms => Some(None),
         None | Some(None) => input.followup,
         Some(Some(followup)) => {
             if !(1..=MAX_FOLLOWUP_HOURS).contains(&followup.after_hours) {
@@ -711,14 +732,14 @@ async fn check_extras(
                 let found: Option<i32> = sqlx::query_scalar(
                     "SELECT id FROM schedule_notification_templates
                       WHERE id = ? AND company_id = ? AND deleted_at IS NULL
-                        AND kind = 'confirmation' AND channel = 'sms'",
+                        AND kind = 'question' AND channel = 'sms'",
                 )
                 .bind(other)
                 .bind(company_id)
                 .fetch_optional(pool)
                 .await?;
                 if found.is_none() {
-                    return Err(bad("The follow-up must be a scheduling text sent by text"));
+                    return Err(bad("The follow-up must be an AI text sent by text"));
                 }
             }
             Some(Some(Followup {
@@ -789,13 +810,17 @@ async fn check_step(
     let Some((channel, kind)) = template else {
         return Err(bad("Template not found"));
     };
-    if TemplateKind::parse(&kind) == TemplateKind::Confirmation {
+    if TemplateKind::parse(&kind).by_hand() {
         return Err(bad(
-            "A confirmation can't go in a flow; make the template a reminder first",
+            "A scheduling text can't go in a flow; make the template a reminder first",
         ));
     }
     if Channel::parse(&channel) == Channel::Sms && !sms_enabled {
         return Err(bad("Texting is not set up for this company"));
+    }
+    if input.direction == Direction::Completed {
+        // Sent the moment the crew taps Completed: no offset, no time of day.
+        return Ok(None);
     }
     if input.offset_value < 1 || input.offset_value > input.offset_unit.max() {
         return Err(bad("Send it between 1 minute and 30 days before or after"));
@@ -1279,11 +1304,11 @@ pub async fn update_template(
         }
     };
     let extras = check_extras(&state.pool, user.company_id, &input, kind, Some(id)).await?;
-    if input.kind == Some(TemplateKind::Confirmation) {
+    if input.kind.is_some_and(TemplateKind::by_hand) {
         let used_by = flows_using(&state.pool, id).await?;
         if !used_by.is_empty() {
             return Err(ApiError::BadRequest(format!(
-                "A confirmation can't go in a flow. Remove it from these flows first: {}",
+                "A scheduling text can't go in a flow. Remove it from these flows first: {}",
                 used_by.join(", ")
             )));
         }
@@ -1784,6 +1809,8 @@ pub fn send_at(
             store_time(end_day(start, end, all_day) + days, time)
         }
         (Direction::After, _, _) => Some(effective_end(start, end, all_day) + minutes),
+        // Sent by `send_on_complete`, not by the clock.
+        (Direction::Completed, _, _) => None,
     }
 }
 
@@ -2241,6 +2268,8 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
                 "e.end_date > UTC_TIMESTAMP() - INTERVAL ? MINUTE
                  AND e.start_date <= UTC_TIMESTAMP() + INTERVAL 1 DAY"
             }
+            // `send_on_complete` sends these when the crew taps Completed.
+            Direction::Completed => continue,
         };
         let events: Vec<Appointment> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT e.id, e.start_date, e.end_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
@@ -2336,6 +2365,70 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
         }
     }
     Ok(run)
+}
+
+/// The installer or template maker just tapped Completed on the event:
+/// sends its flows' `completed` steps right away, each once per
+/// appointment. Returns how many went out.
+pub async fn send_on_complete(state: &AppState, event_id: i32) -> Result<usize, sqlx::Error> {
+    let pool = &state.pool;
+    let rules: Vec<DueRule> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT r.id, r.company_id, CAST(m.channel AS CHAR) AS channel, r.offset_value,
+                CAST(r.offset_unit AS CHAR) AS offset_unit, CAST(r.direction AS CHAR) AS direction,
+                TIME_FORMAT(r.send_time, '%H:%i') AS send_time, m.subject, m.body, r.created_at
+           FROM schedule_notification_rules r
+           JOIN schedule_notification_flows f ON f.id = r.flow_id
+           JOIN events e ON e.id = ? AND {FLOW_APPLIES}
+           JOIN calendars cal ON cal.id = f.calendar_id AND cal.deleted_at IS NULL
+           JOIN schedule_notification_templates m ON m.id = r.template_id AND m.deleted_at IS NULL
+          WHERE r.deleted_at IS NULL AND r.direction = 'completed'
+            AND e.deleted_date IS NULL AND e.unscheduled = 0
+          ORDER BY r.id"
+    )))
+    .bind(event_id)
+    .fetch_all(pool)
+    .await?;
+    if rules.is_empty() {
+        return Ok(0);
+    }
+    let event = appointment(pool, event_id).await?;
+    let mut sent = 0;
+    for rule in rules {
+        if !claim(pool, rule.id, &event).await? {
+            continue;
+        }
+        let Some(customer_id) = event.customer_id else {
+            finish(pool, rule.id, &event, "skipped", Some("no_customer")).await?;
+            continue;
+        };
+        let message = Outgoing {
+            company_id: rule.company_id,
+            channel: Channel::parse(&rule.channel),
+            subject: rule.subject.as_deref(),
+            body: &rule.body,
+            idempotency_key: Some(format!(
+                "schedule-rule-{}-{}-{}",
+                rule.id,
+                event.id,
+                event.start_date.and_utc().timestamp()
+            )),
+        };
+        let outcome = match deliver(state, &message, &event, customer_id).await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                tracing::error!(error = %err, rule_id = rule.id, event_id = event.id, "completed-step notification failed");
+                Some("send_error")
+            }
+        };
+        match outcome {
+            None => {
+                finish(pool, rule.id, &event, "sent", None).await?;
+                sent += 1;
+            }
+            Some(code) => finish(pool, rule.id, &event, "failed", Some(code)).await?,
+        }
+    }
+    Ok(sent)
 }
 
 /// Body of `POST /v1/events/{id}/confirmation`.
@@ -2436,7 +2529,7 @@ pub async fn send_confirmation(
     )
     .await;
     if let Some(sent) = sent
-        && TemplateKind::parse(&template.kind) == TemplateKind::Confirmation
+        && TemplateKind::parse(&template.kind) == TemplateKind::Question
     {
         start_waiting(pool, user.company_id, &event, &template, &sent, user.id).await?;
     }
@@ -2478,7 +2571,7 @@ async fn appointment(pool: &MySqlPool, id: i32) -> Result<Appointment, sqlx::Err
     .await
 }
 
-/// A scheduling text went out: wait for the customer's answer when the
+/// An AI text went out: wait for the customer's answer when the
 /// company's AI reads it or the text has a follow-up. A newer text replaces
 /// the event's earlier wait.
 async fn start_waiting(
@@ -2570,6 +2663,8 @@ pub struct SchedulingTextPreview {
     pub problem: Option<String>,
     /// What happens when the customer doesn't reply.
     pub followup: Option<Followup>,
+    /// An AI text: AI reads the customer's answer.
+    pub ai: bool,
 }
 
 /// `GET /v1/events/{id}/scheduling-texts`.
@@ -2626,7 +2721,7 @@ pub async fn scheduling_texts(
         .await?
         .into_iter()
         .filter(|template| {
-            template.kind == TemplateKind::Confirmation
+            template.kind.by_hand()
                 && template.channel == Channel::Sms
                 && (template.calendar_ids.is_empty()
                     || calendar_id
@@ -2690,6 +2785,7 @@ pub async fn scheduling_texts(
             text,
             problem: problem.map(str::to_string),
             followup: template.followup,
+            ai: template.kind == TemplateKind::Question,
         });
     }
     Ok(Json(SchedulingTexts {
@@ -2985,7 +3081,7 @@ async fn send_followup(
         None => None,
     }
     .filter(|template| {
-        TemplateKind::parse(&template.kind) == TemplateKind::Confirmation
+        TemplateKind::parse(&template.kind) == TemplateKind::Question
             && Channel::parse(&template.channel) == Channel::Sms
     });
     let Some(next) = next else {
