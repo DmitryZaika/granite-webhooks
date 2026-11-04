@@ -139,6 +139,18 @@
       "usage_check": null
     },
     {
+      "id": "send-later",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "compose-send-later-panel",
+        "compose-send-later-cancel"
+      ],
+      "usage_check": "send_later_used"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
