@@ -935,6 +935,18 @@ async fn ai_texts_follow_up_until_the_customer_agrees(pool: MySqlPool) {
         .await
         .assert_status_ok();
     assert_eq!(sent.texts.lock().unwrap().len(), 1);
+    // Texting the customer turns the job Called.
+    let status: String = sqlx::query_scalar("SELECT status FROM events WHERE id = ?")
+        .bind(install)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "called");
+    assert!(
+        history(&pool, install)
+            .await
+            .contains(&"Status changed to Called: the customer was texted".to_string())
+    );
     let run = || async {
         server
             .post("/v1/jobs/appointment-reminders")
