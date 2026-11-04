@@ -15,8 +15,8 @@
 
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::commissions::{
-    BasePay, CommissionPart, CommissionRule, PaidRow, PayrollWeek, next_week_payroll,
-    payroll_weeks, pick_invoice, quote_commission, status_of,
+    BasePay, CommissionPart, CommissionRule, PaidRow, PayrollWeek, feature_sales,
+    next_week_payroll, payroll_weeks, pick_invoice, quote_commission, status_of,
 };
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -35,7 +35,7 @@ use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::MySqlPool;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -761,6 +761,10 @@ pub struct CommissionRow {
     pub adjusted: bool,
     /// How.
     pub parts: Vec<CommissionPart>,
+    /// Dollars of each extra sold on the quote (`waterfall`, `miter`,
+    /// `phantom_seam`, `custom_edge`, `support`, `faucet`,
+    /// `soap_dispenser`), as of its last sync; empty without a quote.
+    pub features: BTreeMap<String, f64>,
     /// `paid`, `partial`, `unpaid` or `no_invoice`.
     pub status: String,
     /// When the customer paid (YYYY-MM-DD).
@@ -789,6 +793,7 @@ struct CommissionDbRow {
     calculated_commission: f64,
     adjusted: i64,
     parts_json: Option<String>,
+    features_json: Option<String>,
     status: String,
     paid_date: Option<String>,
     installed_date: Option<String>,
@@ -813,7 +818,8 @@ async fn load_rows(
                 CAST(qc.commission_amount AS DOUBLE) AS calculated_commission,
                 CAST(qc.total_override IS NOT NULL OR qc.commission_override IS NOT NULL
                      AS SIGNED) AS adjusted,
-                CAST(qc.parts_json AS CHAR) AS parts_json, qc.status,
+                CAST(qc.parts_json AS CHAR) AS parts_json,
+                CAST(qc.features_json AS CHAR) AS features_json, qc.status,
                 DATE_FORMAT(qc.paid_date, '%Y-%m-%d') AS paid_date,
                 DATE_FORMAT(qc.installed_date, '%Y-%m-%d') AS installed_date,
                 DATE_FORMAT(qc.payroll_date, '%Y-%m-%d') AS payroll_date,
@@ -848,6 +854,10 @@ async fn load_rows(
             adjusted: r.adjusted != 0,
             parts: r
                 .parts_json
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or_default(),
+            features: r
+                .features_json
                 .and_then(|t| serde_json::from_str(&t).ok())
                 .unwrap_or_default(),
             status: r.status,
@@ -1054,6 +1064,7 @@ pub async fn sync_commissions(
                 .min(prices.len().saturating_sub(1));
             let total = prices.get(accepted).map_or(0.0, |p| p.total);
             let commission = quote_commission(&doc, &price_list, &rules, accepted, &prices);
+            let features = prices.get(accepted).map(feature_sales).unwrap_or_default();
             if let std::collections::hash_map::Entry::Vacant(slot) =
                 invoices_by_customer.entry(quote.customer_id)
             {
@@ -1110,13 +1121,14 @@ pub async fn sync_commissions(
             sqlx::query(
                 "INSERT INTO quote_commissions
                    (company_id, quote_id, user_id, customer_id, option_id, quote_total,
-                    commission_amount, parts_json, qbo_invoice_id, invoice_total,
+                    commission_amount, parts_json, features_json, qbo_invoice_id, invoice_total,
                     invoice_balance, status, paid_date, installed_date, signed_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                    user_id = VALUES(user_id), customer_id = VALUES(customer_id),
                    option_id = VALUES(option_id), quote_total = VALUES(quote_total),
                    commission_amount = VALUES(commission_amount), parts_json = VALUES(parts_json),
+                   features_json = VALUES(features_json),
                    qbo_invoice_id = VALUES(qbo_invoice_id), invoice_total = VALUES(invoice_total),
                    invoice_balance = VALUES(invoice_balance), status = VALUES(status),
                    paid_date = IF(VALUES(status) = 'paid', COALESCE(paid_date, VALUES(paid_date)), NULL),
@@ -1131,6 +1143,7 @@ pub async fn sync_commissions(
             .bind(total)
             .bind(commission.total)
             .bind(serde_json::to_string(&commission.parts).expect("parts serialize"))
+            .bind(serde_json::to_string(&features).expect("features serialize"))
             .bind(invoice.map(|i| i.id.clone()))
             .bind(invoice.and_then(|i| i.total_amt))
             .bind(invoice.and_then(|i| i.balance))

@@ -69892,6 +69892,7 @@
           "calculatedCommission",
           "adjusted",
           "parts",
+          "features",
           "status"
         ],
         "properties": {
@@ -69965,6 +69966,17 @@
               "$ref": "#/components/schemas/CommissionPart"
             },
             "description": "How."
+          },
+          "features": {
+            "type": "object",
+            "description": "Dollars of each extra sold on the quote (`waterfall`, `miter`,\n`phantom_seam`, `custom_edge`, `support`, `faucet`,\n`soap_dispenser`), as of its last sync; empty without a quote.",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "status": {
             "type": "string",
