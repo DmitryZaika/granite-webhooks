@@ -313,14 +313,20 @@ impl Access {
 /// The sectioned positions `user` holds in the company the request acts in,
 /// or none when they keep the whole app.
 pub fn sectioned_positions(user: &SessionUser, positions: &[UserPositionRow]) -> Vec<i32> {
-    if user.is_superuser {
-        return Vec::new();
-    }
     let here: Vec<i32> = positions
         .iter()
         .filter(|row| row.company_id == user.company_id)
         .map(|row| row.position_id)
         .collect();
+    sectioned_positions_held(user.is_superuser, &here)
+}
+
+/// [`sectioned_positions`] from the position ids someone holds in the company
+/// (`here`) and their super user flag.
+pub fn sectioned_positions_held(is_superuser: bool, here: &[i32]) -> Vec<i32> {
+    if is_superuser {
+        return Vec::new();
+    }
     if here
         .iter()
         .any(|position| FULL_ACCESS_POSITIONS.contains(position))
@@ -357,6 +363,26 @@ pub async fn company_sections(
         .collect())
 }
 
+/// What someone holding the sectioned positions `held` reaches.
+///
+/// `company` is the company's sections (see [`company_sections`]): the union
+/// of the held positions' sections, or the whole app when `held` is empty.
+pub fn access_for(held: &[i32], company: &[(i32, Vec<&'static str>, bool)]) -> Access {
+    if held.is_empty() {
+        return Access::Full;
+    }
+    let keys = SECTIONS
+        .iter()
+        .map(|section| section.key)
+        .filter(|key| {
+            company
+                .iter()
+                .any(|(position, sections, _)| held.contains(position) && sections.contains(key))
+        })
+        .collect();
+    Access::Sections(keys)
+}
+
 /// What `user` reaches in the company the request acts in: the union of
 /// their sectioned positions' sections there.
 pub async fn user_access(
@@ -369,16 +395,7 @@ pub async fn user_access(
         return Ok(Access::Full);
     }
     let company = company_sections(pool, user.company_id).await?;
-    let keys = SECTIONS
-        .iter()
-        .map(|section| section.key)
-        .filter(|key| {
-            company
-                .iter()
-                .any(|(position, sections, _)| held.contains(position) && sections.contains(key))
-        })
-        .collect();
-    Ok(Access::Sections(keys))
+    Ok(access_for(&held, &company))
 }
 
 /// The refusal for a request outside someone's sections.

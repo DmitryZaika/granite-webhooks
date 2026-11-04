@@ -4,7 +4,7 @@
 //! `onboardingStore.server.ts` and `onboardingEvents.server.ts`; their
 //! comments explain each rule.
 
-use super::manifest::{self, price_for};
+use super::manifest::{self, price_for_row};
 use crate::openapi::ToSchema;
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,29 @@ pub enum StepCompletion {
     Manual,
 }
 
+/// What started a tour (`task.position`'s `trigger`).
+///
+/// The app opened it by itself (`auto`), the user asked for it (`user`), or
+/// the user's own use of the feature opened it (`gesture`). Kept from the
+/// first event that says.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskTrigger {
+    Auto,
+    User,
+    Gesture,
+}
+
+impl TaskTrigger {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::User => "user",
+            Self::Gesture => "gesture",
+        }
+    }
+}
+
 /// One onboarding event (`OnboardingEvent` of the app). Replaying one is
 /// harmless; events dated before the user's last reset are dropped.
 #[derive(Debug, Clone, Deserialize)]
@@ -87,6 +110,11 @@ pub enum OnboardingEvent {
         task_id: String,
         version: i64,
         step_key: Option<String>,
+        /// A replay of a tour whose feature the user already uses: the tour
+        /// will pay no points. Never applied to a completed tour.
+        usage_skipped: Option<bool>,
+        /// What started the tour.
+        trigger: Option<TaskTrigger>,
     },
     #[serde(rename = "task.step_done", rename_all = "camelCase")]
     TaskStepDone {
@@ -257,6 +285,13 @@ pub struct TaskProgress {
     pub started_at: Option<String>,
     /// When it was last closed (UTC, ISO 8601): a skip, unless completed since.
     pub closed_at: Option<String>,
+    /// When the tour was replayed as a feature the user already uses (UTC,
+    /// ISO 8601), or when the server found they had used it well before the
+    /// tour's row was created. Such a tour pays 0 points. Null otherwise.
+    pub usage_skipped_at: Option<String>,
+    /// What started the tour: `auto`, `user` or `gesture` (the first event
+    /// that said). Null when no event said.
+    pub start_trigger: Option<String>,
 }
 
 /// A user's saved onboarding.
@@ -291,9 +326,16 @@ pub struct OnboardingRecord {
     pub completed_at: Option<String>,
     /// A journey row exists (an empty but dated one counts).
     pub has_row: bool,
+    /// Features the user already uses: usage check id -> when they first used
+    /// it (UTC, ISO 8601). Filled only by `GET /v1/me/onboarding`, and only
+    /// while the company's guided tours are on; empty elsewhere.
+    pub usage: BTreeMap<String, String>,
+    /// When the user's account was created (UTC, ISO 8601). Filled only by
+    /// `GET /v1/me/onboarding`; null elsewhere.
+    pub account_created_at: Option<String>,
 }
 
-const ISO: &str = "'%Y-%m-%dT%H:%i:%s.000Z'";
+pub(super) const ISO: &str = "'%Y-%m-%dT%H:%i:%s.000Z'";
 
 fn later(a: Option<String>, b: Option<String>) -> Option<String> {
     match (a, b) {
@@ -319,6 +361,8 @@ type TaskRow = (
     String,
     Option<String>,
     Option<Value>,
+    Option<String>,
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -439,7 +483,8 @@ async fn fill_tasks(
             "SELECT user_id, task_id, CAST(version AS SIGNED), status, step_key, done_steps,
                     DATE_FORMAT(started_at, {ISO}), DATE_FORMAT(completed_at, {ISO}),
                     DATE_FORMAT(last_active_at, {ISO}), DATE_FORMAT(updated_at, {ISO}),
-                    DATE_FORMAT(closed_at, {ISO})
+                    DATE_FORMAT(closed_at, {ISO}), DATE_FORMAT(usage_skipped_at, {ISO}),
+                    CAST(start_trigger AS CHAR)
                FROM user_feature_tasks"
         ),
         users,
@@ -460,6 +505,8 @@ async fn fill_tasks(
         active,
         updated,
         closed,
+        usage_skipped,
+        trigger,
     ) in tasks
     {
         let Some(record) = records.get_mut(&user) else {
@@ -491,6 +538,8 @@ async fn fill_tasks(
                 last_active_at: active,
                 started_at: started,
                 closed_at: closed,
+                usage_skipped_at: usage_skipped,
+                start_trigger: trigger,
             },
         );
         record.state.updated_at = later(record.state.updated_at.take(), updated);
@@ -577,6 +626,49 @@ pub enum Applied {
     Done { feature_tasks_enabled: bool },
 }
 
+/// A tour used the feature at least this long before its row was created:
+/// the user already knew the feature, so the tour pays nothing. Shorter, and
+/// the use may be this very tour's own walkthrough.
+const USAGE_GRACE_MINUTES: i64 = 10;
+
+/// What a task event writes beyond the row's progress columns.
+#[derive(Clone, Copy, Default)]
+struct TaskExtra<'a> {
+    /// What started the tour (`task.position` only).
+    trigger: Option<TaskTrigger>,
+    /// The user skipped the tour as already used (`task.position` only).
+    usage_skipped: bool,
+    /// The tour's usage check, to find out whether the user used the feature
+    /// before this event created the tour's row.
+    usage_check: Option<&'a str>,
+}
+
+/// The actor used the feature of `check_id` well before `at`: a cached
+/// positive past their fence, found before `at`, whose use is at least
+/// [`USAGE_GRACE_MINUTES`] older than `at`.
+async fn used_before(
+    conn: &mut MySqlConnection,
+    actor: Actor,
+    check_id: &str,
+    at: NaiveDateTime,
+) -> sqlx::Result<bool> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(
+           SELECT 1 FROM user_feature_usage f
+             LEFT JOIN user_onboarding uo ON uo.user_id = f.user_id AND uo.company_id = f.company_id
+            WHERE f.user_id = ? AND f.company_id = ? AND f.check_id = ?
+              AND f.detected_at < ? AND f.first_used_at <= ?
+              AND f.first_used_at > COALESCE(uo.feature_tasks_reset_at, '1000-01-01'))",
+    )
+    .bind(actor.user_id)
+    .bind(actor.company_id)
+    .bind(check_id)
+    .bind(at)
+    .bind(at - Duration::minutes(USAGE_GRACE_MINUTES))
+    .fetch_one(&mut *conn)
+    .await
+}
+
 #[allow(clippy::too_many_arguments)] // the row's columns, as the app's upsertTask
 async fn upsert_task(
     conn: &mut MySqlConnection,
@@ -587,13 +679,24 @@ async fn upsert_task(
     at: NaiveDateTime,
     closed: bool,
     set: &str,
+    extra: TaskExtra<'_>,
 ) -> sqlx::Result<()> {
     let (task_id, version, step_key) = task;
+    // The user row is locked for the whole write, so this cannot race another
+    // event creating the row. (`rows_affected` cannot tell a new row from an
+    // update that changed nothing.)
+    let existed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM user_feature_tasks WHERE user_id = ? AND task_id = ?)",
+    )
+    .bind(actor.user_id)
+    .bind(task_id)
+    .fetch_one(&mut *conn)
+    .await?;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO user_feature_tasks
            (user_id, company_id, task_id, version, status, step_key, done_steps,
-            started_at, closed_at, last_active_at)
-         VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, ?) AS new
+            started_at, closed_at, last_active_at, usage_skipped_at, start_trigger)
+         VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, ?, ?, ?) AS new
          ON DUPLICATE KEY UPDATE {set}"
     )))
     .bind(actor.user_id)
@@ -606,8 +709,29 @@ async fn upsert_task(
     .bind(at)
     .bind(closed.then_some(at))
     .bind(at)
+    .bind(extra.usage_skipped.then_some(at))
+    .bind(extra.trigger.map(TaskTrigger::as_str))
     .execute(&mut *conn)
     .await?;
+    // Backstop: a tour that starts for a feature the user has used for a
+    // while pays nothing, even if the app never asked to skip it. Only on the
+    // event that creates the row, and never on a completed one (a paid tour
+    // keeps its points).
+    if !existed
+        && let Some(check_id) = extra.usage_check
+        && used_before(conn, actor, check_id, at).await?
+    {
+        sqlx::query(
+            "UPDATE user_feature_tasks SET usage_skipped_at = ?
+              WHERE user_id = ? AND task_id = ? AND usage_skipped_at IS NULL
+                AND status <> 'completed'",
+        )
+        .bind(at)
+        .bind(actor.user_id)
+        .bind(task_id)
+        .execute(&mut *conn)
+        .await?;
+    }
     Ok(())
 }
 
@@ -617,8 +741,13 @@ async fn apply_one(
     actor: Actor,
     event: &OnboardingEvent,
     at: NaiveDateTime,
+    usage_check: Option<&str>,
 ) -> sqlx::Result<()> {
     let (user, company) = (actor.user_id, actor.company_id);
+    let extra = TaskExtra {
+        usage_check,
+        ..TaskExtra::default()
+    };
     let module_step =
         "INSERT INTO user_onboarding_modules (user_id, company_id, module_id, step_key)
                        VALUES (?, ?, ?, ?) AS new
@@ -742,9 +871,13 @@ async fn apply_one(
             task_id,
             version,
             step_key,
+            usage_skipped,
+            trigger,
             ..
         } => {
-            // status is assigned LAST: ON DUPLICATE KEY UPDATE assigns left to right.
+            // status is assigned LAST: ON DUPLICATE KEY UPDATE assigns left to right,
+            // and `usage_skipped_at` reads it. The first trigger sticks; a skip
+            // stamps once and never on a completed (paid) tour.
             upsert_task(
                 conn,
                 actor,
@@ -755,7 +888,16 @@ async fn apply_one(
                 false,
                 "version = new.version, step_key = new.step_key,
                  last_active_at = new.last_active_at,
+                 start_trigger = COALESCE(user_feature_tasks.start_trigger, new.start_trigger),
+                 usage_skipped_at = IF(user_feature_tasks.status = 'completed',
+                                       user_feature_tasks.usage_skipped_at,
+                                       COALESCE(user_feature_tasks.usage_skipped_at, new.usage_skipped_at)),
                  status = IF(user_feature_tasks.status = 'completed', 'completed', 'in_progress')",
+                TaskExtra {
+                    trigger: *trigger,
+                    usage_skipped: usage_skipped.unwrap_or(false),
+                    ..extra
+                },
             )
             .await?;
         }
@@ -777,6 +919,7 @@ async fn apply_one(
                 "version = new.version,
                  done_steps = JSON_MERGE_PATCH(user_feature_tasks.done_steps, new.done_steps),
                  last_active_at = new.last_active_at",
+                extra,
             )
             .await?;
         }
@@ -800,6 +943,7 @@ async fn apply_one(
                  step_key = IF(user_feature_tasks.status = 'completed', user_feature_tasks.step_key, new.step_key),
                  last_active_at = IF(user_feature_tasks.status = 'completed', user_feature_tasks.last_active_at, new.last_active_at),
                  status = IF(user_feature_tasks.status = 'completed', 'completed', 'closed')",
+                extra,
             )
             .await?;
         }
@@ -815,6 +959,7 @@ async fn apply_one(
                 at,
                 false,
                 "version = new.version",
+                extra,
             )
             .await?;
             let changed = sqlx::query(
@@ -833,8 +978,9 @@ async fn apply_one(
             if changed != 1 {
                 return Ok(());
             }
-            let row: Option<(Value, i64)> = sqlx::query_as(
-                "SELECT done_steps, CAST(version AS SIGNED) FROM user_feature_tasks
+            let row: Option<(Value, i64, bool)> = sqlx::query_as(
+                "SELECT done_steps, CAST(version AS SIGNED), usage_skipped_at IS NOT NULL
+                   FROM user_feature_tasks
                   WHERE user_id = ? AND company_id = ? AND task_id = ?",
             )
             .bind(user)
@@ -842,11 +988,12 @@ async fn apply_one(
             .bind(task_id)
             .fetch_optional(&mut *conn)
             .await?;
-            let (done, recorded) = row.map_or_else(
-                || (Map::new(), None),
-                |(done, version)| (done_steps(Some(&done)), Some(version)),
+            let (done, recorded, skipped) = row.map_or_else(
+                || (Map::new(), None, false),
+                |(done, version, skipped)| (done_steps(Some(&done)), Some(version), skipped),
             );
-            let price = price_for(task_id, &done, recorded);
+            // A tour of a feature the user already used pays nothing.
+            let price = price_for_row(task_id, &done, recorded, skipped);
             if price > 0 {
                 sqlx::query(
                     "INSERT INTO user_points_ledger (user_id, company_id, task_id, points, reason, awarded_at)
@@ -866,10 +1013,12 @@ async fn apply_one(
 }
 
 /// Keeps each completed task's ledger sum equal to its registry price (0 for
-/// a retired task) with a delta row, so the audit trail stays.
+/// a retired task and for a tour of a feature the user already used) with a
+/// delta row, so the audit trail stays.
 async fn reprice(conn: &mut MySqlConnection, actor: Actor, now: NaiveDateTime) -> sqlx::Result<()> {
-    let tasks: Vec<(String, Value, i64)> = sqlx::query_as(
-        "SELECT task_id, done_steps, CAST(version AS SIGNED) FROM user_feature_tasks
+    let tasks: Vec<(String, Value, i64, bool)> = sqlx::query_as(
+        "SELECT task_id, done_steps, CAST(version AS SIGNED), usage_skipped_at IS NOT NULL
+           FROM user_feature_tasks
           WHERE user_id = ? AND company_id = ? AND status = 'completed'",
     )
     .bind(actor.user_id)
@@ -885,13 +1034,13 @@ async fn reprice(conn: &mut MySqlConnection, actor: Actor, now: NaiveDateTime) -
     .fetch_all(&mut *conn)
     .await?;
     let ledger: HashMap<String, i64> = sums.into_iter().collect();
-    for (task_id, done, version) in tasks {
+    for (task_id, done, version, skipped) in tasks {
         let live = manifest::task(&task_id).is_some();
         if !live && !manifest::is_retired(&task_id) {
             continue;
         }
         let target = if live {
-            price_for(&task_id, &done_steps(Some(&done)), Some(version))
+            price_for_row(&task_id, &done_steps(Some(&done)), Some(version), skipped)
         } else {
             0
         };
@@ -926,6 +1075,24 @@ pub async fn apply_events(
     events: &[OnboardingEvent],
     server_checked: bool,
 ) -> sqlx::Result<Applied> {
+    apply_events_checked(pool, actor, events, server_checked, manifest_usage_check).await
+}
+
+/// The usage check the manifest names for a task.
+fn manifest_usage_check(task_id: &str) -> Option<String> {
+    manifest::task(task_id).and_then(|task| task.usage_check.clone())
+}
+
+/// [`apply_events`] with the task -> usage check lookup given, so a test can
+/// give a task a check the manifest does not.
+#[doc(hidden)]
+pub async fn apply_events_checked(
+    pool: &MySqlPool,
+    actor: Actor,
+    events: &[OnboardingEvent],
+    server_checked: bool,
+    usage_check_of: fn(&str) -> Option<String>,
+) -> sqlx::Result<Applied> {
     let tasks_enabled = crate::routes::company::queries::company_features(pool, actor.company_id)
         .await?
         .onboarding;
@@ -955,7 +1122,8 @@ pub async fn apply_events(
         if fence.is_some_and(|fence| at < fence) {
             continue;
         }
-        apply_one(&mut tx, actor, event, at).await?;
+        let usage_check = task.and_then(usage_check_of);
+        apply_one(&mut tx, actor, event, at, usage_check.as_deref()).await?;
     }
     if tasks_enabled {
         reprice(&mut tx, actor, now).await?;

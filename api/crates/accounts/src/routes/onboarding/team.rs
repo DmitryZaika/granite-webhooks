@@ -6,7 +6,9 @@
 //! capabilities, and the saved progress.
 
 use super::store::{self, OnboardingState};
+use super::{manifest, usage};
 use crate::auth::AdminUser;
+use crate::auth::sections::{access_for, company_sections, sectioned_positions_held};
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::routes::company::queries::company_features;
@@ -14,7 +16,7 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 const SHOP_MANAGER: i32 = 3;
 const SHOP_WORKER: i32 = 4;
@@ -35,6 +37,11 @@ pub struct TeamCapabilities {
     pub followup_tours: bool,
     /// The company's guided tours are on.
     pub onboarding: bool,
+    /// Inbound email is set up (the company has a mail domain): the Emails
+    /// inbox and message composer are offered.
+    pub inbound_email: bool,
+    /// The company has at least one sales questionnaire (not deleted).
+    pub questionnaires: bool,
 }
 
 /// One employee.
@@ -59,6 +66,27 @@ pub struct TeamMember {
     pub has_sms_line: bool,
     /// Saved progress (empty before any).
     pub progress: OnboardingState,
+    /// Features the member already uses: usage check id -> when they first
+    /// used it (UTC, ISO 8601). Only the checks the tours name.
+    pub usage: BTreeMap<String, String>,
+    /// The parts of the app the member's position opens in this company
+    /// (section keys, in the Company page's order); null when they have the
+    /// whole app.
+    pub sections: Option<Vec<String>>,
+    /// When the member's account was created (UTC, ISO 8601).
+    pub account_created_at: Option<String>,
+    /// The member has a phone line to call from: a `CloudTalk` agent and
+    /// number, a `RingCentral` extension and number, or a Telnyx number of
+    /// this company they may call from.
+    pub phone_line: bool,
+    /// The member can write messages to customers: the company has inbound
+    /// email, or the member has a texting line of their own (`CloudTalk` or
+    /// `RingCentral` line, or a Telnyx line when the company texts through
+    /// Telnyx).
+    pub message_composer: bool,
+    /// The member may use e-signatures (their own `is_signature_available`
+    /// flag; the company also needs a `SignWell` key).
+    pub signature_access: bool,
 }
 
 /// `GET /v1/onboarding/team`.
@@ -78,7 +106,10 @@ struct MemberRow {
     name: Option<String>,
     email: Option<String>,
     is_admin: bool,
+    is_superuser: bool,
     has_sms_line: bool,
+    signature_access: bool,
+    account_created_at: Option<String>,
 }
 
 fn env_on(name: &str) -> bool {
@@ -94,8 +125,10 @@ fn env_on(name: &str) -> bool {
 ///
 /// The employees of the company the request acts in, with the facts the
 /// tour registry reads (admin, manager and shop positions, a texting line),
-/// the company's capabilities and everyone's saved tours progress. While
-/// the company's guided tours are off, `enabled` is false and the list empty.
+/// the company's capabilities and everyone's saved tours progress, the
+/// features they already use, their sections and phone and message access.
+/// While the company's guided tours are off, `enabled` is false and the list
+/// empty.
 #[crate::openapi::path(
     get,
     path = "/v1/onboarding/team",
@@ -124,15 +157,19 @@ pub async fn team(
         }));
     }
     let capabilities = capabilities(pool, company).await?;
-    let rows: Vec<MemberRow> = sqlx::query_as(
+    let rows: Vec<MemberRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT id, name, email, COALESCE(is_admin, 0) <> 0 AS is_admin,
+                COALESCE(is_superuser, 0) <> 0 AS is_superuser,
                 (NULLIF(TRIM(cloudtalk_agent_id), '') IS NOT NULL
                    AND NULLIF(TRIM(cloudtalk_phone_number), '') IS NOT NULL)
                 OR (NULLIF(TRIM(ringcentral_extension_id), '') IS NOT NULL
-                   AND NULLIF(TRIM(ringcentral_phone_number), '') IS NOT NULL) AS has_sms_line
+                   AND NULLIF(TRIM(ringcentral_phone_number), '') IS NOT NULL) AS has_sms_line,
+                COALESCE(is_signature_available, 0) <> 0 AS signature_access,
+                DATE_FORMAT(created_date, {iso}) AS account_created_at
            FROM users WHERE company_id = ? AND is_deleted = 0
           ORDER BY name, id",
-    )
+        iso = store::ISO,
+    )))
     .bind(company)
     .fetch_all(pool)
     .await?;
@@ -144,11 +181,36 @@ pub async fn team(
     let positions: HashSet<(i32, i32)> = positions.into_iter().collect();
     let ids: Vec<i32> = rows.iter().map(|row| row.id).collect();
     let mut records = store::load_records(pool, &ids).await?;
+    let mut uses = usage::evaluate_team(pool, company, &ids, &manifest::usage_checks()).await?;
+    // The company's sections are read once; each member's follow from the
+    // sectioned positions they hold here.
+    let company_sections = company_sections(pool, company).await?;
+    // Members with a Telnyx number of the company they may call from (the
+    // same rule as `lines::caller_ids`), in one query.
+    let telnyx_users: Vec<i32> = sqlx::query_scalar(
+        "SELECT DISTINCT nu.user_id
+           FROM telnyx_number_users nu
+           JOIN telnyx_numbers n ON n.id = nu.number_id AND n.company_id = ? AND n.active <> 0
+           JOIN users u ON u.id = nu.user_id AND u.company_id = n.company_id AND u.is_deleted = 0
+          WHERE nu.can_call_from <> 0",
+    )
+    .bind(company)
+    .fetch_all(pool)
+    .await?;
+    let telnyx_users: HashSet<i32> = telnyx_users.into_iter().collect();
+    let features = company_features(pool, company).await?;
     let members = rows
         .into_iter()
         .map(|row| {
             let holds = |position: i32| positions.contains(&(row.id, position));
             let record = records.remove(&row.id).unwrap_or_default();
+            let here: Vec<i32> = positions
+                .iter()
+                .filter(|(user, _)| *user == row.id)
+                .map(|(_, position)| *position)
+                .collect();
+            let held = sectioned_positions_held(row.is_superuser, &here);
+            let telnyx_line = telnyx_users.contains(&row.id);
             TeamMember {
                 user_id: row.id,
                 name: row.name.unwrap_or_default(),
@@ -159,6 +221,14 @@ pub async fn team(
                 is_shop_manager: holds(SHOP_MANAGER),
                 has_sms_line: row.has_sms_line,
                 progress: record.state,
+                usage: uses.remove(&row.id).unwrap_or_default(),
+                sections: access_for(&held, &company_sections).keys(),
+                account_created_at: row.account_created_at,
+                phone_line: row.has_sms_line || telnyx_line,
+                message_composer: features.inbound_email
+                    || row.has_sms_line
+                    || (features.telnyx_sms && telnyx_line),
+                signature_access: row.signature_access,
             }
         })
         .collect();
@@ -190,6 +260,13 @@ pub async fn capabilities(pool: &sqlx::MySqlPool, company: i32) -> ApiResult<Tea
             .unwrap_or(false),
         None => false,
     };
+    let questionnaires: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sales_questionnaires
+                        WHERE company_id = ? AND deleted_at IS NULL)",
+    )
+    .bind(company)
+    .fetch_one(pool)
+    .await?;
     Ok(TeamCapabilities {
         cloudtalk: features.cloudtalk,
         quickbooks,
@@ -197,5 +274,7 @@ pub async fn capabilities(pool: &sqlx::MySqlPool, company: i32) -> ApiResult<Tea
         sms_provider: features.cloudtalk || features.ringcentral,
         followup_tours: env_on("FOLLOWUP_ONBOARDING_ENABLED"),
         onboarding: features.onboarding,
+        inbound_email: features.inbound_email,
+        questionnaires,
     })
 }

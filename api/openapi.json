@@ -42952,7 +42952,7 @@
           "me"
         ],
         "summary": "My onboarding progress",
-        "description": "The first-run journey, feature tours and points saved for the signed-in\nuser (their home company's journey). `has_row` is false before any.",
+        "description": "The first-run journey, feature tours and points saved for the signed-in\nuser (their home company's journey). `has_row` is false before any.\n`usage` lists the features the user already uses (check id -> first use):\nthe app never starts those tours by itself and offers them only as\n0-point replays. Data checks run here (positives are cached); it is empty\nwhile the company's guided tours are off. `account_created_at` dates the\naccount (new-user pacing of tours).",
         "operationId": "get_my_onboarding",
         "responses": {
           "200": {
@@ -43034,6 +43034,76 @@
           },
           "400": {
             "description": "Malformed events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an employee or shop user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/onboarding/usage": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Report a feature use",
+        "description": "Records that the signed-in user used a feature only the app can see (a\npanel opened in the browser), so its guided tour is treated as already\nused: the first report stamps the time, later ones change nothing. Ignored\n(still 204) while the home company's guided tours are off. Read the result\nin `usage` of `GET /v1/me/onboarding`.",
+        "operationId": "report_my_onboarding_usage",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded, or ignored while guided tours are off"
+          },
+          "400": {
+            "description": "Not a check the app reports itself",
             "content": {
               "application/json": {
                 "schema": {
@@ -43260,7 +43330,7 @@
           "onboarding"
         ],
         "summary": "The onboarding team",
-        "description": "The employees of the company the request acts in, with the facts the\ntour registry reads (admin, manager and shop positions, a texting line),\nthe company's capabilities and everyone's saved tours progress. While\nthe company's guided tours are off, `enabled` is false and the list empty.",
+        "description": "The employees of the company the request acts in, with the facts the\ntour registry reads (admin, manager and shop positions, a texting line),\nthe company's capabilities and everyone's saved tours progress, the\nfeatures they already use, their sections and phone and message access.\nWhile the company's guided tours are off, `enabled` is false and the list\nempty.",
         "operationId": "get_onboarding_team",
         "responses": {
           "200": {
@@ -77053,7 +77123,7 @@
             "items": {
               "type": "object"
             },
-            "description": "1 to 200 events, oldest first. Each has a `type` and an ISO 8601 `at`:\n`journey.position` (`moduleId`, `stepKey`), `journey.module_step`,\n`journey.module_completed`, `journey.module_reopened` (`moduleId`),\n`journey.dismissed`, `journey.resumed`, `journey.completed`,\n`journey.feedback_dismissed`, `task.position` and `task.closed`\n(`taskId`, `version`, `stepKey`), `task.step_done` (`taskId`,\n`version`, `steps`: step key → `action` | `manual`), `task.completed`\n(`taskId`, `version`)."
+            "description": "1 to 200 events, oldest first. Each has a `type` and an ISO 8601 `at`:\n`journey.position` (`moduleId`, `stepKey`), `journey.module_step`,\n`journey.module_completed`, `journey.module_reopened` (`moduleId`),\n`journey.dismissed`, `journey.resumed`, `journey.completed`,\n`journey.feedback_dismissed`, `task.position` (`taskId`, `version`,\n`stepKey`, optional `usageSkipped`: true when the tour is a replay of a\nfeature the user already uses, which then pays 0 points; optional\n`trigger`: `auto` | `user` | `gesture`, what started the tour) and\n`task.closed` (`taskId`, `version`, `stepKey`), `task.step_done` (`taskId`,\n`version`, `steps`: step key → `action` | `manual`), `task.completed`\n(`taskId`, `version`)."
           }
         }
       },
@@ -83031,6 +83101,13 @@
                 "type": "null"
               }
             ]
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsFile"
+            },
+            "description": "Up to ten files (`POST /v1/sms/attachments`) sent with the text."
           }
         }
       },
@@ -84001,7 +84078,8 @@
         "description": "A user's onboarding record.",
         "required": [
           "state",
-          "has_row"
+          "has_row",
+          "usage"
         ],
         "properties": {
           "state": {
@@ -84018,6 +84096,23 @@
           "has_row": {
             "type": "boolean",
             "description": "A journey row exists (an empty but dated one counts)."
+          },
+          "usage": {
+            "type": "object",
+            "description": "Features the user already uses: usage check id -> when they first used\nit (UTC, ISO 8601). Filled only by `GET /v1/me/onboarding`, and only\nwhile the company's guided tours are on; empty elsewhere.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "account_created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the user's account was created (UTC, ISO 8601). Filled only by\n`GET /v1/me/onboarding`; null elsewhere."
           }
         }
       },
@@ -95912,7 +96007,8 @@
           "can_edit",
           "minute_delay",
           "customer_sources",
-          "sales_rep_ids"
+          "sales_rep_ids",
+          "attachments"
         ],
         "properties": {
           "id": {
@@ -95991,6 +96087,57 @@
               "format": "int32"
             },
             "description": "Company drip: sales reps whose deals get it; empty: every rep's."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsTemplateFile"
+            },
+            "description": "Files sent with the text (and by its drip and flows)."
+          }
+        }
+      },
+      "SmsTemplateFile": {
+        "type": "object",
+        "description": "A file sent with an SMS template.",
+        "required": [
+          "s3_key",
+          "url",
+          "content_type",
+          "filename"
+        ],
+        "properties": {
+          "s3_key": {
+            "type": "string",
+            "description": "Its key, under `sms-attachments/<company id>/`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Its public link."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "Its type (JPEG, PNG, GIF, PDF, Office, text or CSV)."
+          },
+          "filename": {
+            "type": "string",
+            "description": "The name it was uploaded with."
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pixel width of an image."
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pixel height of an image."
           }
         }
       },
@@ -96020,6 +96167,16 @@
                 "type": "null"
               }
             ]
+          },
+          "attachments": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SmsFile"
+            },
+            "description": "Up to ten files sent with the text; left out keeps the template's."
           }
         }
       },
@@ -98298,6 +98455,20 @@
               "null"
             ],
             "description": "When it was last closed (UTC, ISO 8601): a skip, unless completed since."
+          },
+          "usage_skipped_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the tour was replayed as a feature the user already uses (UTC,\nISO 8601), or when the server found they had used it well before the\ntour's row was created. Such a tour pays 0 points. Null otherwise."
+          },
+          "start_trigger": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What started the tour: `auto`, `user` or `gesture` (the first event\nthat said). Null when no event said."
           }
         }
       },
@@ -98374,7 +98545,9 @@
           "verified_domain",
           "sms_provider",
           "followup_tours",
-          "onboarding"
+          "onboarding",
+          "inbound_email",
+          "questionnaires"
         ],
         "properties": {
           "cloudtalk": {
@@ -98400,6 +98573,14 @@
           "onboarding": {
             "type": "boolean",
             "description": "The company's guided tours are on."
+          },
+          "inbound_email": {
+            "type": "boolean",
+            "description": "Inbound email is set up (the company has a mail domain): the Emails\ninbox and message composer are offered."
+          },
+          "questionnaires": {
+            "type": "boolean",
+            "description": "The company has at least one sales questionnaire (not deleted)."
           }
         }
       },
@@ -98415,7 +98596,11 @@
           "is_shop_worker",
           "is_shop_manager",
           "has_sms_line",
-          "progress"
+          "progress",
+          "usage",
+          "phone_line",
+          "message_composer",
+          "signature_access"
         ],
         "properties": {
           "user_id": {
@@ -98454,6 +98639,45 @@
           "progress": {
             "$ref": "#/components/schemas/OnboardingState",
             "description": "Saved progress (empty before any)."
+          },
+          "usage": {
+            "type": "object",
+            "description": "Features the member already uses: usage check id -> when they first\nused it (UTC, ISO 8601). Only the checks the tours name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "sections": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The parts of the app the member's position opens in this company\n(section keys, in the Company page's order); null when they have the\nwhole app."
+          },
+          "account_created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the member's account was created (UTC, ISO 8601)."
+          },
+          "phone_line": {
+            "type": "boolean",
+            "description": "The member has a phone line to call from: a `CloudTalk` agent and\nnumber, a `RingCentral` extension and number, or a Telnyx number of\nthis company they may call from."
+          },
+          "message_composer": {
+            "type": "boolean",
+            "description": "The member can write messages to customers: the company has inbound\nemail, or the member has a texting line of their own (`CloudTalk` or\n`RingCentral` line, or a Telnyx line when the company texts through\nTelnyx)."
+          },
+          "signature_access": {
+            "type": "boolean",
+            "description": "The member may use e-signatures (their own `is_signature_available`\nflag; the company also needs a `SignWell` key)."
           }
         }
       },
@@ -101647,6 +101871,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "UsageInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/me/onboarding/usage`.",
+        "required": [
+          "check_id"
+        ],
+        "properties": {
+          "check_id": {
+            "type": "string",
+            "description": "The usage check the user just passed. Only checks the app reports\nitself are accepted (`quote_views_opened`, `unscheduled_planned`);\nchecks the server reads from its own data are refused."
+          }
+        }
       },
       "UsageOverview": {
         "type": "object",

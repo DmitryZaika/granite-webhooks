@@ -20,6 +20,10 @@ pub struct Task {
     pub required_steps: usize,
     /// Stored keys of the steps.
     pub base_keys: Vec<String>,
+    /// The usage check (`usage::check`) that tells the user already uses what
+    /// the tour teaches; none for most tours.
+    #[serde(default)]
+    pub usage_check: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +49,18 @@ pub fn is_module(id: &str) -> bool {
 
 pub fn task(id: &str) -> Option<&'static Task> {
     MANIFEST.tasks.iter().find(|task| task.id == id)
+}
+
+/// The distinct usage checks the tours name.
+pub fn usage_checks() -> Vec<&'static str> {
+    let mut checks: Vec<&'static str> = MANIFEST
+        .tasks
+        .iter()
+        .filter_map(|task| task.usage_check.as_deref())
+        .collect();
+    checks.sort_unstable();
+    checks.dedup();
+    checks
 }
 
 /// A retired task with no live definition: its events are ignored and its
@@ -97,6 +113,20 @@ pub fn price_for(
     task.points
 }
 
+/// [`price_for`], except a tour the user took though they already used the
+/// feature (`usage_skipped`) pays nothing.
+pub fn price_for_row(
+    task_id: &str,
+    done_steps: &serde_json::Map<String, Value>,
+    recorded_version: Option<i64>,
+    usage_skipped: bool,
+) -> i64 {
+    if usage_skipped {
+        return 0;
+    }
+    price_for(task_id, done_steps, recorded_version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +160,27 @@ mod tests {
             tour.points
         );
         assert_eq!(price_for("no-such-task", &all, None), 0);
+        // A usage-skipped tour pays nothing, however complete.
+        assert_eq!(
+            price_for_row(&tour.id, &all, Some(tour.version), false),
+            tour.points
+        );
+        assert_eq!(price_for_row(&tour.id, &all, Some(tour.version), true), 0);
+    }
+
+    #[test]
+    fn every_usage_check_is_known() {
+        for task in &manifest().tasks {
+            if let Some(id) = &task.usage_check {
+                assert!(
+                    super::super::usage::check(id).is_some(),
+                    "{}: unknown usage check {id}",
+                    task.id
+                );
+            }
+        }
+        for id in usage_checks() {
+            assert!(super::super::usage::check(id).is_some(), "{id}");
+        }
     }
 }

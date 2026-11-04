@@ -252,3 +252,321 @@ async fn admins_see_their_company_team_progress(pool: MySqlPool) {
     assert_eq!(ada["is_admin"], true);
     assert_eq!(ada["progress"]["tasks"], json!({}));
 }
+
+fn task_position(at: &str, extra: Value) -> Value {
+    let mut event = json!({
+        "type": "task.position", "at": at, "taskId": "dashboard-overview",
+        "version": 2, "stepKey": "employee-dashboard-title"
+    });
+    if let (Some(event), Some(extra)) = (event.as_object_mut(), extra.as_object()) {
+        event.extend(extra.clone());
+    }
+    event
+}
+
+fn finish_tour(at: &str) -> Value {
+    json!([
+        { "type": "task.step_done", "at": at, "taskId": "dashboard-overview", "version": 2,
+          "steps": { "employee-dashboard-title": "action", "employee-dashboard-edit": "action" } },
+        { "type": "task.completed", "at": at, "taskId": "dashboard-overview", "version": 2 }
+    ])
+}
+
+#[test_db::test(seed)]
+async fn a_usage_skipped_tour_pays_nothing_and_a_paid_one_keeps_its_points(pool: MySqlPool) {
+    let server = server(pool.clone());
+    tours_on(&pool).await;
+    let mut events = vec![
+        task_position(
+            "2026-05-01T10:00:00.000Z",
+            json!({ "usageSkipped": true, "trigger": "gesture" }),
+        ),
+        // The first trigger sticks; a second skip keeps the first stamp.
+        task_position(
+            "2026-05-01T10:00:30.000Z",
+            json!({ "usageSkipped": true, "trigger": "user" }),
+        ),
+    ];
+    events.extend(
+        finish_tour("2026-05-01T10:01:00.000Z")
+            .as_array()
+            .unwrap()
+            .clone(),
+    );
+    let done: Value = server
+        .post("/v1/me/onboarding/events")
+        .with_session(sessions::REP)
+        .json(&post_events(json!(events)))
+        .await
+        .json();
+    let tour = &done["state"]["tasks"]["dashboard-overview"];
+    assert_eq!(tour["status"], "completed");
+    assert_eq!(tour["points_awarded"], 0);
+    assert_eq!(tour["start_trigger"], "gesture");
+    assert_eq!(tour["usage_skipped_at"], "2026-05-01T10:00:00.000Z");
+    // Repricing on a later event keeps it at 0.
+    let later: Value = server
+        .post("/v1/me/onboarding/events")
+        .with_session(sessions::REP)
+        .json(&post_events(json!([
+            { "type": "task.closed", "at": "2026-05-01T11:00:00.000Z", "taskId": "dashboard-arrange", "version": 2, "stepKey": null }
+        ])))
+        .await
+        .json();
+    assert_eq!(later["state"]["points"], 0);
+
+    // A tour already completed and paid is not unpaid by a skip.
+    let mut paid = finish_tour("2026-05-01T10:00:00.000Z")
+        .as_array()
+        .unwrap()
+        .clone();
+    paid.push(task_position(
+        "2026-05-01T12:00:00.000Z",
+        json!({ "usageSkipped": true }),
+    ));
+    let kept: Value = server
+        .post("/v1/me/onboarding/events")
+        .with_session(sessions::MANAGER)
+        .json(&post_events(json!(paid)))
+        .await
+        .json();
+    let tour = &kept["state"]["tasks"]["dashboard-overview"];
+    assert_eq!(tour["status"], "completed");
+    assert_eq!(tour["points_awarded"], 5);
+    assert!(tour["usage_skipped_at"].is_null(), "{tour}");
+}
+
+fn dashboard_overview_checks_quotes(task: &str) -> Option<String> {
+    (task == "dashboard-overview").then(|| "quote_emailed".to_string())
+}
+
+async fn seed_usage(pool: &MySqlPool, user: i32, first_used: &str, detected: &str) {
+    sqlx::query(
+        "INSERT INTO user_feature_usage (user_id, company_id, check_id, first_used_at, source, detected_at)
+         VALUES (?, 100, 'quote_emailed', ?, 'data', ?)",
+    )
+    .bind(user)
+    .bind(first_used)
+    .bind(detected)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[test_db::test(seed)]
+async fn a_tour_created_after_old_use_is_stamped_used(pool: MySqlPool) {
+    use api::routes::onboarding::store::{Actor, Applied, OnboardingEvent, apply_events_checked};
+    tours_on(&pool).await;
+    // User 100 used it an hour before the tour opened; user 101 five minutes
+    // before (that may be the tour's own walkthrough).
+    seed_usage(&pool, 100, "2026-05-01 09:00:00", "2026-05-01 09:30:00").await;
+    seed_usage(&pool, 101, "2026-05-01 09:55:00", "2026-05-01 09:56:00").await;
+    for user in [100, 101] {
+        let mut events = vec![task_position("2026-05-01T10:00:00.000Z", json!({}))];
+        events.extend(
+            finish_tour("2026-05-01T10:01:00.000Z")
+                .as_array()
+                .unwrap()
+                .clone(),
+        );
+        let events: Vec<OnboardingEvent> = serde_json::from_value(json!(events)).unwrap();
+        let actor = Actor {
+            user_id: user,
+            company_id: 100,
+        };
+        let applied = apply_events_checked(
+            &pool,
+            actor,
+            &events,
+            false,
+            dashboard_overview_checks_quotes,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(applied, Applied::Done { .. }));
+    }
+    let server = server(pool);
+    let old: Value = server
+        .get("/v1/me/onboarding")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    let tour = &old["state"]["tasks"]["dashboard-overview"];
+    assert_eq!(tour["usage_skipped_at"], "2026-05-01T10:00:00.000Z");
+    assert_eq!(tour["points_awarded"], 0);
+    let recent: Value = server
+        .get("/v1/me/onboarding")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    let tour = &recent["state"]["tasks"]["dashboard-overview"];
+    assert!(tour["usage_skipped_at"].is_null(), "{tour}");
+    assert_eq!(tour["points_awarded"], 5);
+}
+
+#[test_db::test(seed)]
+async fn only_event_checks_can_be_reported(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let report = |check: &'static str| {
+        server
+            .post("/v1/me/onboarding/usage")
+            .with_session(sessions::REP)
+            .json(&json!({ "check_id": check }))
+    };
+    let stored = || async {
+        sqlx::query_as::<_, (String, chrono::NaiveDateTime)>(
+            "SELECT check_id, first_used_at FROM user_feature_usage WHERE user_id = 100",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    // Tours off: accepted and ignored.
+    report("quote_views_opened")
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(stored().await.is_empty());
+
+    tours_on(&pool).await;
+    report("quote_views_opened")
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let first = stored().await;
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].0, "quote_views_opened");
+    // Idempotent: a repeat keeps the first time.
+    report("quote_views_opened")
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(stored().await, first);
+    // Data checks are the server's to read; unknown ids are refused.
+    report("quote_emailed")
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    report("nope").await.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(stored().await.len(), 1);
+}
+
+#[test_db::test(seed)]
+async fn progress_reports_usage_and_the_account_date(pool: MySqlPool) {
+    let server = server(pool.clone());
+    seed_usage(&pool, 100, "2026-05-01 09:00:00", "2026-05-01 09:30:00").await;
+    sqlx::query(
+        "INSERT INTO user_feature_usage (user_id, company_id, check_id, first_used_at, source, detected_at)
+         VALUES (100, 100, 'retired_check', '2026-05-01 09:00:00', 'data', '2026-05-01 09:30:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let off: Value = server
+        .get("/v1/me/onboarding")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(off["usage"], json!({}));
+    assert!(off["account_created_at"].is_string(), "{off}");
+
+    tours_on(&pool).await;
+    let on: Value = server
+        .get("/v1/me/onboarding")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    // Retired checks are not served.
+    assert_eq!(
+        on["usage"],
+        json!({ "quote_emailed": "2026-05-01T09:00:00.000Z" })
+    );
+    // A feature-tasks reset after the use drops it.
+    sqlx::query(
+        "INSERT INTO user_onboarding (user_id, company_id, feature_tasks_reset_at)
+         VALUES (100, 100, '2026-05-02 00:00:00')
+         ON DUPLICATE KEY UPDATE feature_tasks_reset_at = VALUES(feature_tasks_reset_at)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let reset: Value = server
+        .get("/v1/me/onboarding")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(reset["usage"], json!({}));
+}
+
+#[test_db::test(seed)]
+async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
+    use api::routes::onboarding::store::Actor;
+    use api::routes::onboarding::usage::{evaluate, evaluate_team};
+    let all = [
+        "quote_emailed",
+        "schedule_event_created",
+        "send_later_used",
+        "templates_used",
+        "questionnaire_answered",
+        "call_coached",
+        "signature_sent",
+    ];
+    let rep = Actor {
+        user_id: 100,
+        company_id: 100,
+    };
+    // Every query runs, and nothing is positive yet.
+    assert!(evaluate(&pool, rep, &all).await.unwrap().is_empty());
+    assert!(
+        evaluate_team(&pool, 100, &[100, 101], &all)
+            .await
+            .unwrap()
+            .values()
+            .all(|uses| uses.is_empty())
+    );
+    sqlx::query(
+        "INSERT INTO call_coaching_analyses (company_id, call_id, user_id, status, created_at)
+         VALUES (100, 'c1', 100, 'ready', '2026-05-01 09:00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO delayed_emails (company_id, user_id, recipient_emails, send_at, baseline_at, payload_json, created_at)
+         VALUES (100, 101, 'a@b.c', '2026-05-02 09:00:00', '2026-05-01 09:00:00', '{}', '2026-05-01 08:00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let team = evaluate_team(&pool, 100, &[100, 101], &all).await.unwrap();
+    assert_eq!(team[&100]["call_coached"], "2026-05-01T09:00:00.000Z");
+    assert_eq!(team[&101]["send_later_used"], "2026-05-01T08:00:00.000Z");
+    assert!(!team[&100].contains_key("send_later_used"));
+    // One user's check finds the same, from the cache the team run filled.
+    let own = evaluate(&pool, rep, &all).await.unwrap();
+    assert_eq!(own.len(), 1);
+    // A reset after the use drops the cached positive, and the data no
+    // longer counts.
+    sqlx::query("INSERT INTO user_onboarding (user_id, company_id, feature_tasks_reset_at) VALUES (100, 100, '2026-05-02 00:00:00') ON DUPLICATE KEY UPDATE feature_tasks_reset_at = VALUES(feature_tasks_reset_at)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(evaluate(&pool, rep, &all).await.unwrap().is_empty());
+}
+
+#[test_db::test(seed)]
+async fn the_team_lists_usage_sections_and_access(pool: MySqlPool) {
+    let server = server(pool.clone());
+    tours_on(&pool).await;
+    let team: Value = server
+        .get("/v1/onboarding/team")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert!(team["capabilities"]["inbound_email"].is_boolean());
+    assert!(team["capabilities"]["questionnaires"].is_boolean());
+    for member in team["members"].as_array().unwrap() {
+        assert!(member["usage"].is_object(), "{member}");
+        assert!(member["account_created_at"].is_string(), "{member}");
+        for flag in ["phone_line", "message_composer", "signature_access"] {
+            assert!(member[flag].is_boolean(), "{flag}: {member}");
+        }
+        assert!(member["sections"].is_null() || member["sections"].is_array());
+    }
+}

@@ -45,7 +45,8 @@
       "base_keys": [
         "employee-dashboard-title",
         "employee-dashboard-edit"
-      ]
+      ],
+      "usage_check": null
     },
     {
       "id": "dashboard-arrange",
@@ -56,7 +57,8 @@
       "base_keys": [
         "employee-dashboard-widgets-edit",
         "employee-dashboard-add-widget"
-      ]
+      ],
+      "usage_check": null
     },
     {
       "id": "dashboard-add-widgets",
@@ -66,7 +68,8 @@
       "required_steps": 1,
       "base_keys": [
         "employee-dashboard-add-widget-dialog"
-      ]
+      ],
+      "usage_check": null
     },
     {
       "id": "dashboard-goal",
@@ -76,7 +79,8 @@
       "required_steps": 1,
       "base_keys": [
         "employee-dashboard-goal"
-      ]
+      ],
+      "usage_check": null
     },
     {
       "id": "followup-open",
@@ -87,7 +91,8 @@
       "base_keys": [
         "deals-card-project",
         "deal-automated-followup"
-      ]
+      ],
+      "usage_check": null
     },
     {
       "id": "followup-draft",
@@ -97,7 +102,8 @@
       "required_steps": 1,
       "base_keys": [
         "followup-ai-generate"
-      ]
+      ],
+      "usage_check": null
     },
     {
       "id": "followup-texting-line",
@@ -107,7 +113,8 @@
       "required_steps": 1,
       "base_keys": [
         "my-account-texting-line"
-      ]
+      ],
+      "usage_check": null
     },
     {
       "id": "improve-message",
@@ -117,7 +124,8 @@
       "required_steps": 1,
       "base_keys": [
         "compose-send"
-      ]
+      ],
+      "usage_check": null
     },
     {
       "id": "black-theme",
@@ -127,7 +135,8 @@
       "required_steps": 1,
       "base_keys": [
         "my-account-theme"
-      ]
+      ],
+      "usage_check": null
     },
     {
       "id": "setup-email-name",
@@ -135,7 +144,8 @@
       "points": 10,
       "checklist": true,
       "required_steps": 0,
-      "base_keys": []
+      "base_keys": [],
+      "usage_check": null
     },
     {
       "id": "setup-email-signature",
@@ -143,7 +153,8 @@
       "points": 10,
       "checklist": true,
       "required_steps": 0,
-      "base_keys": []
+      "base_keys": [],
+      "usage_check": null
     },
     {
       "id": "setup-telegram",
@@ -151,7 +162,8 @@
       "points": 10,
       "checklist": true,
       "required_steps": 0,
-      "base_keys": []
+      "base_keys": [],
+      "usage_check": null
     }
   ],
   "retired_task_ids": [
