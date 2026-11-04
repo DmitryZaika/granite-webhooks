@@ -76650,7 +76650,8 @@
           "photos",
           "attachments",
           "history",
-          "creator"
+          "creator",
+          "automated"
         ],
         "properties": {
           "comments": {
@@ -76683,7 +76684,11 @@
           },
           "creator": {
             "$ref": "#/components/schemas/EventPerson",
-            "description": "Who made the event."
+            "description": "Who made the event. For an `automated` event, whoever sold the quote."
+          },
+          "automated": {
+            "type": "boolean",
+            "description": "Added by the CRM on its own when a quote was sold (Mark as Sold's\njobs and extra events), not by a person: show it as made by the\nsystem. Its history line \"Added when the quote was sold\" has no author."
           },
           "assignee": {
             "oneOf": [
@@ -93488,7 +93493,8 @@
           "end_date",
           "all_day",
           "created_user_id",
-          "customer_told"
+          "customer_told",
+          "automated"
         ],
         "properties": {
           "id": {
@@ -93664,6 +93670,10 @@
           "customer_told": {
             "type": "boolean",
             "description": "The customer got the On my way message."
+          },
+          "automated": {
+            "type": "boolean",
+            "description": "Added by the CRM on its own when a quote was sold (Mark as Sold's\njobs and extra events), not by a person: show it as made by the\nsystem. `created_user_id` is then whoever sold it."
           },
           "qbo_invoice": {
             "oneOf": [
