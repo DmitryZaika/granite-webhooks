@@ -697,10 +697,9 @@ async fn a_quote_invoice_splits_into_several_the_company_way(pool: MySqlPool) {
         .json(&body)
         .await;
     refused.assert_status(StatusCode::BAD_REQUEST);
-    assert!(
-        refused
-            .text()
-            .contains("\"Cabinets - Shaker\" is split into $235.00, not its $300.00.")
+    assert_eq!(
+        refused.json::<Value>()["error"],
+        "\"Cabinets - Shaker\" is split into $235.00, not its $300.00."
     );
     assert_eq!(posted.lock().unwrap().len(), 3);
 }
