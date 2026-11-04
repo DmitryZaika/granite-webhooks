@@ -741,8 +741,12 @@ pub struct CommissionRow {
     pub quote_id: Option<i32>,
     /// Its name.
     pub quote_name: String,
-    /// The customer.
+    /// The customer: the CRM's, else the row's own name (a rep's sheet).
     pub customer_name: String,
+    /// The CRM customer (none: a row with only its own name).
+    pub customer_id: Option<i32>,
+    /// The row's own name for the job (a rep's sheet), e.g. "Smith (cabinets)".
+    pub label: Option<String>,
     /// The rep.
     pub user_id: Option<i32>,
     /// Their name ("Unassigned" when none).
@@ -784,6 +788,8 @@ struct CommissionDbRow {
     quote_id: Option<i32>,
     quote_name: Option<String>,
     customer_name: Option<String>,
+    customer_id: Option<i32>,
+    label: Option<String>,
     user_id: Option<i32>,
     rep: Option<String>,
     signed_at: Option<String>,
@@ -809,7 +815,9 @@ async fn load_rows(
 ) -> ApiResult<Vec<CommissionRow>> {
     let rows: Vec<CommissionDbRow> = sqlx::query_as(
         "SELECT qc.id, qc.quote_id, q.quote_name,
-                COALESCE(qc.customer_label, c.name) AS customer_name, qc.user_id,
+                TRIM(COALESCE(c.name, qc.customer_label)) AS customer_name,
+                c.id AS customer_id,
+                qc.customer_label AS label, qc.user_id,
                 u.name AS rep, DATE_FORMAT(qc.signed_at, '%Y-%m-%d') AS signed_at,
                 CAST(COALESCE(qc.total_override, qc.quote_total) AS DOUBLE) AS quote_total,
                 CAST(qc.quote_total AS DOUBLE) AS calculated_total,
@@ -844,6 +852,8 @@ async fn load_rows(
             quote_id: r.quote_id,
             quote_name: r.quote_name.unwrap_or_default(),
             customer_name: r.customer_name.unwrap_or_default(),
+            customer_id: r.customer_id,
+            label: r.label,
             user_id: r.user_id,
             rep: r.rep.unwrap_or_else(|| "Unassigned".into()),
             signed_at: r.signed_at,
@@ -1405,17 +1415,22 @@ pub async fn delete_commission(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Commissions to mark paid out.
+/// Commissions paid to the rep, or not after all.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Payout {
-    /// Commission row ids; only ones in the salary are marked.
+    /// Commission row ids.
     pub ids: Vec<i32>,
+    /// Paid to the rep (default), or false to take that back.
+    #[serde(default = "yes")]
+    pub paid: bool,
 }
 
-/// Mark commissions paid out
+/// Mark commissions paid to the rep
 ///
-/// Only commissions added to the salary (with a payroll date) are marked.
+/// Marks them paid out today; one not in the salary yet goes into today's
+/// paycheck. With `paid: false` they are not paid out any more (and keep
+/// their payroll date).
 #[crate::openapi::path(
     post,
     path = "/v1/commissions/payouts",
@@ -1438,11 +1453,21 @@ pub async fn pay_out(
     if input.ids.is_empty() {
         return Ok(StatusCode::NO_CONTENT);
     }
-    let mut sql = sqlx::QueryBuilder::new(
-        "UPDATE quote_commissions SET paid_out_at = NOW()
-          WHERE payroll_date IS NOT NULL AND paid_out_at IS NULL AND company_id = ",
-    );
-    sql.push_bind(user.company_id).push(" AND id IN (");
+    let today = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let mut sql = sqlx::QueryBuilder::new("UPDATE quote_commissions SET ");
+    if input.paid {
+        sql.push("paid_out_at = NOW(), payroll_date = COALESCE(payroll_date, ")
+            .push_bind(today)
+            .push(") WHERE paid_out_at IS NULL");
+    } else {
+        sql.push("paid_out_at = NULL WHERE paid_out_at IS NOT NULL");
+    }
+    sql.push(" AND company_id = ")
+        .push_bind(user.company_id)
+        .push(" AND id IN (");
     let mut ids = sql.separated(", ");
     for id in input.ids {
         ids.push_bind(id);

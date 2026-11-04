@@ -32202,8 +32202,8 @@
         "tags": [
           "commissions"
         ],
-        "summary": "Mark commissions paid out",
-        "description": "Only commissions added to the salary (with a payroll date) are marked.",
+        "summary": "Mark commissions paid to the rep",
+        "description": "Marks them paid out today; one not in the salary yet goes into today's\npaycheck. With `paid: false` they are not paid out any more (and keep\ntheir payroll date).",
         "operationId": "pay_out_commissions",
         "requestBody": {
           "content": {
@@ -69915,7 +69915,22 @@
           },
           "customerName": {
             "type": "string",
-            "description": "The customer."
+            "description": "The customer: the CRM's, else the row's own name (a rep's sheet)."
+          },
+          "customerId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The CRM customer (none: a row with only its own name)."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The row's own name for the job (a rep's sheet), e.g. \"Smith (cabinets)\"."
           },
           "userId": {
             "type": [
@@ -85384,7 +85399,7 @@
       },
       "Payout": {
         "type": "object",
-        "description": "Commissions to mark paid out.",
+        "description": "Commissions paid to the rep, or not after all.",
         "required": [
           "ids"
         ],
@@ -85395,7 +85410,11 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "Commission row ids; only ones in the salary are marked."
+            "description": "Commission row ids."
+          },
+          "paid": {
+            "type": "boolean",
+            "description": "Paid to the rep (default), or false to take that back."
           }
         },
         "additionalProperties": false

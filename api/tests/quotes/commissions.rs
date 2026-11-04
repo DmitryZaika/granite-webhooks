@@ -3,8 +3,8 @@
 use crate::common;
 
 use axum::http::StatusCode;
-use common::{WithSession, server, sessions};
-use serde_json::{Value, json};
+use common::{server, sessions, WithSession};
+use serde_json::{json, Value};
 use sqlx::MySqlPool;
 
 fn doc() -> Value {
@@ -237,7 +237,13 @@ async fn admins_add_paid_installed_jobs_to_the_salary_and_set_amounts(pool: MySq
         .clone();
     assert_eq!(quote_row["installedDate"], "2026-01-05");
     assert!(quote_row["payrollDate"].is_null());
+    // The CRM's customer; a sheet row goes by its own name.
+    assert_eq!(quote_row["customerName"], "Alice Lead");
+    assert_eq!(quote_row["customerId"], 1000);
+    assert!(quote_row["label"].is_null());
     assert_eq!(sheet_row["customerName"], "Old sale (sheet)");
+    assert_eq!(sheet_row["label"], "Old sale (sheet)");
+    assert!(sheet_row["customerId"].is_null());
     let quote_id = quote_row["id"].as_i64().unwrap();
     let sheet_id = sheet_row["id"].as_i64().unwrap();
 
@@ -247,19 +253,50 @@ async fn admins_add_paid_installed_jobs_to_the_salary_and_set_amounts(pool: MySq
         .with_session(sessions::ADMIN)
         .await;
     res.assert_status(StatusCode::BAD_REQUEST);
+
+    // Paid to the rep: out of the salary, it goes into today's paycheck;
+    // taking it back keeps that payday. Reps cannot mark it.
+    server
+        .post("/v1/commissions/payouts")
+        .with_session(sessions::REP)
+        .json(&json!({ "ids": [sheet_id] }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let paid_out = |pool: MySqlPool| async move {
+        sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT DATE_FORMAT(paid_out_at, '%Y'), DATE_FORMAT(payroll_date, '%Y-%m-%d')
+               FROM quote_commissions WHERE quote_id IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
     server
         .post("/v1/commissions/payouts")
         .with_session(sessions::ADMIN)
-        .json(&json!({ "ids": [quote_id] }))
+        .json(&json!({ "ids": [sheet_id] }))
         .await
         .assert_status(StatusCode::NO_CONTENT);
-    let paid_out: Option<String> = sqlx::query_scalar(
-        "SELECT DATE_FORMAT(paid_out_at, '%Y') FROM quote_commissions WHERE quote_id = 9701",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(paid_out.is_none());
+    let today = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let (out, payday) = paid_out(pool.clone()).await;
+    assert!(out.is_some());
+    assert_eq!(payday.as_deref(), Some(today.as_str()));
+    server
+        .post("/v1/commissions/payouts")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "ids": [sheet_id], "paid": false }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let (out, payday) = paid_out(pool.clone()).await;
+    assert!(out.is_none());
+    assert_eq!(payday.as_deref(), Some(today.as_str()));
+    sqlx::raw_sql("UPDATE quote_commissions SET payroll_date = NULL WHERE quote_id IS NULL;")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Paid long ago and installed: the next payroll Friday from today.
     sqlx::raw_sql("UPDATE quote_commissions SET status = 'paid', paid_date = '2026-01-07' WHERE quote_id = 9701;")
