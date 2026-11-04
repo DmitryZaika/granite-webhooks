@@ -139,6 +139,41 @@
       "usage_check": null
     },
     {
+      "id": "quote-email-open",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "quotes-list-open",
+        "quote-actions"
+      ],
+      "usage_check": "quote_emailed"
+    },
+    {
+      "id": "quote-email-compose",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "quote-actions-email",
+        "quote-email-dialog"
+      ],
+      "usage_check": "quote_emailed"
+    },
+    {
+      "id": "quote-email-views",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "quote-email-views"
+      ],
+      "usage_check": "quote_views_opened"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
