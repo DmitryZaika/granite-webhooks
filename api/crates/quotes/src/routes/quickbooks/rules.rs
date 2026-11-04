@@ -1116,6 +1116,7 @@ mod tests {
             item_ref_value: None,
             item_ref_name: None,
             editable: true,
+            class_name: None,
         }
     }
 

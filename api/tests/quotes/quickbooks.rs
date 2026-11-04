@@ -600,3 +600,107 @@ async fn a_rep_sees_their_class_sales_and_customers(pool: MySqlPool) {
         .json();
     assert_eq!(other["status"], "unavailable");
 }
+
+#[test_db::test(seed)]
+async fn a_quote_invoice_splits_into_several_the_company_way(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO quotes (id, customer_id, quote_name, quote_type, created_date, sales_rep,
+                             company_id, salesperson_id, created_by, status)
+         VALUES (9802, 1000, 'Kitchen', 'countertops', NOW(), 'Rep', 100, 100, 100, 'converted')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (server, posted) = server(&pool, 10).await;
+    let line = |id: &str, detail: &str, description: &str, amount: Value| {
+        json!({ "id": id, "line_num": null, "detail_type": detail, "description": description,
+                "amount": amount, "qty": if amount.is_null() { Value::Null } else { json!(1) },
+                "unit_price": amount, "item_ref_value": if amount.is_null() { Value::Null } else { json!("3") },
+                "item_ref_name": null, "editable": true })
+    };
+    let lines = json!([
+        line(
+            "new:0",
+            "SalesItemLineDetail",
+            "Kitchen countertops",
+            json!(500)
+        ),
+        line("new:1", "DescriptionOnly", "Flat edge", Value::Null),
+        line(
+            "new:2",
+            "SalesItemLineDetail",
+            "Cabinets - Shaker",
+            json!(300)
+        ),
+    ]);
+    let share = |id: &str, amount: f64| json!({ "line_id": id, "amount": amount });
+    let mut body = json!({
+        "quote_id": 9802,
+        "draft": lines,
+        "invoice": {
+            "id": "", "sync_token": "", "doc_number": null, "txn_date": "2026-11-03",
+            "due_date": null, "total_amt": 800, "balance": null, "currency": null,
+            "customer_memo": "Payment Terms", "private_note": "Quote: Kitchen", "bill_addr": null,
+            "ship_addr": null, "lines": lines, "class_name": "Rita",
+        },
+        "invoices": [
+            { "label": "Deposit", "shares": [share("new:0", 250.0), share("new:2", 150.0)] },
+            { "label": "Cabinet install", "shares": [share("new:2", 75.0)] },
+            { "label": null, "shares": [share("new:0", 250.0), share("new:2", 75.0)] },
+        ],
+        "parts": [{ "line_id": "new:0", "key": "stone" }, { "line_id": "new:2", "key": "area" }],
+    });
+    let made: Value = server
+        .post("/v1/customers/1000/qbo-invoices/split")
+        .with_session(sessions::REP)
+        .json(&body)
+        .await
+        .json();
+    assert_eq!(made["invoices"].as_array().unwrap().len(), 3);
+    {
+        let sent = posted.lock().unwrap();
+        assert_eq!(sent.len(), 3);
+        // Every invoice lists every line, charging its share of each.
+        assert_eq!(sent[0]["Line"][0]["Amount"], 250.0);
+        assert_eq!(sent[1]["Line"].as_array().unwrap().len(), 3);
+        assert_eq!(sent[1]["Line"][0]["Amount"], 0.0);
+        assert_eq!(sent[1]["Line"][2]["Amount"], 75.0);
+        assert_eq!(sent[0]["CustomerMemo"]["value"], "Deposit");
+        assert_eq!(sent[2]["CustomerMemo"]["value"], "Payment Terms");
+        assert_eq!(sent[2]["PrivateNote"], "Quote: Kitchen · Invoice 3 of 3");
+        assert_eq!(sent[0]["ClassRef"]["value"], "1");
+        assert_eq!(sent[0]["CustomerRef"]["value"], "42");
+    }
+    let linked: Option<String> =
+        sqlx::query_scalar("SELECT qbo_invoice_id FROM quotes WHERE id = 9802")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(linked.as_deref(), Some("9"));
+    // The next split of a quote with these parts starts the same way.
+    let usual: Value = server
+        .get("/v1/qbo/invoice-split?parts=stone,area")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(usual["invoices"][0]["label"], "Deposit");
+    assert_eq!(usual["invoices"][0]["shares"]["stone"], 50.0);
+    assert_eq!(usual["invoices"][1]["shares"]["stone"], 0.0);
+    assert_eq!(usual["invoices"][1]["shares"]["area"], 25.0);
+    assert_eq!(usual["invoices"][2]["label"], Value::Null);
+    assert_eq!(usual["classes"], json!({ "area": null, "stone": null }));
+    // Shares that do not add up make nothing.
+    body["invoices"][2]["shares"][1]["amount"] = json!(10.0);
+    let refused = server
+        .post("/v1/customers/1000/qbo-invoices/split")
+        .with_session(sessions::REP)
+        .json(&body)
+        .await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    assert!(
+        refused
+            .text()
+            .contains("\"Cabinets - Shaker\" is split into $235.00, not its $300.00.")
+    );
+    assert_eq!(posted.lock().unwrap().len(), 3);
+}

@@ -45287,6 +45287,193 @@
         ]
       }
     },
+    "/v1/customers/{id}/qbo-invoices/split": {
+      "post": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Split a quote's invoice into several in QuickBooks",
+        "description": "Creates one `QuickBooks` invoice per split invoice, in order, each with\nevery line of the editor's invoice and its share of each priced line\n(the shares of a line add up to it). The message of an invoice is its\nlabel. When `QuickBooks` refuses one, those already made are deleted.\nThe quote keeps the first invoice's id.",
+        "operationId": "create_customer_qbo_invoice_split",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The created invoices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SplitCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The shares do not add up, or QuickBooks refused an invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin, or the quote is another customer's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An invoice was made and could not be deleted after a later one failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/qbo/invoice-split": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "The company's usual invoice split",
+        "description": "How the company last split the invoice of a quote with these parts\n(else one with more parts, else any), as the percent each invoice\ncharged of each part, and the class the rep last gave each part's\nlines. A starting point: the editor changes anything.",
+        "operationId": "get_qbo_invoice_split",
+        "parameters": [
+          {
+            "name": "parts",
+            "in": "query",
+            "description": "The quote's parts, comma-separated (e.g. `stone,area`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The usual split",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SplitTemplate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/{id}/qbo-invoices/{invoice_id}": {
       "get": {
         "tags": [
@@ -77642,7 +77829,7 @@
       },
       "Followup": {
         "type": "object",
-        "description": "A scheduling text's follow-up: sent when the customer has not replied\n`after_hours` after it, within the company's texting hours.",
+        "description": "An AI text's follow-up: sent when the customer has not replied\n`after_hours` after it, within the company's texting hours.",
         "required": [
           "after_hours"
         ],
@@ -77653,7 +77840,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Another scheduling text of the company; null sends the same text again."
+            "description": "Another AI text of the company; null sends the same text again."
           },
           "after_hours": {
             "type": "integer",
@@ -79429,6 +79616,16 @@
               "$ref": "#/components/schemas/Line"
             },
             "description": "The lines the editor opened with: what the rep changed in them is\nkept for the next drafts to learn from."
+          },
+          "parts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "description": "Each line's part of the quote: the classes the rep gives them\nstart the rep's next invoices."
           }
         }
       },
@@ -79943,6 +80140,33 @@
           "password": {
             "type": "string",
             "description": "At least 8 characters."
+          }
+        }
+      },
+      "LayoutInvoice": {
+        "type": "object",
+        "description": "One invoice of the company's usual split.",
+        "required": [
+          "shares"
+        ],
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its message."
+          },
+          "shares": {
+            "type": "object",
+            "description": "The percent it charges of each part (`stone`, `area`, ...).",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -80704,6 +80928,13 @@
           "editable": {
             "type": "boolean",
             "description": "Sales and description lines can be edited."
+          },
+          "class_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sales line's own `QuickBooks` class (full name) on a company\nthat sets classes per line, e.g. cabinets apart from countertops;\nnone takes the invoice's class."
           }
         }
       },
@@ -83004,7 +83235,7 @@
           },
           "scheduling": {
             "$ref": "#/components/schemas/SchedulingSettings",
-            "description": "The Scheduling texts tab's switch and texting hours."
+            "description": "The AI texts tab's switch and texting hours."
           }
         }
       },
@@ -83032,7 +83263,7 @@
           },
           "kind": {
             "$ref": "#/components/schemas/TemplateKind",
-            "description": "`reminder` (flows send it) or `confirmation` (sent by hand)."
+            "description": "`reminder` (flows send it), `confirmation` (a scheduling text, sent by\nhand) or `question` (an AI text, sent by hand; AI reads the answer)."
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
@@ -83060,13 +83291,13 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "Scheduling texts (`confirmation`): the calendars it is for; empty for\nevery calendar."
+            "description": "Scheduling and AI texts: the calendars it is for; empty for every\ncalendar."
           },
           "followup": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Followup",
-                "description": "Scheduling texts: what the customer gets when they have not replied;\nnull for nothing."
+                "description": "AI texts: what the customer gets when they have not replied; null for\nnothing."
               },
               {
                 "type": "null"
@@ -83092,7 +83323,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/TemplateKind",
-                "description": "`reminder` or `confirmation`. Left out: `reminder` for a new template,\nunchanged on edit. A template a flow uses stays a reminder."
+                "description": "`reminder`, `confirmation` or `question`. Left out: `reminder` for a new template,\nunchanged on edit. A template a flow uses stays a reminder."
               },
               {
                 "type": "null"
@@ -83123,7 +83354,7 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "Scheduling texts: the calendars it is for (empty for every calendar).\nLeft out: every calendar for a new template, unchanged on edit."
+            "description": "Scheduling and AI texts: the calendars it is for (empty for every calendar).\nLeft out: every calendar for a new template, unchanged on edit."
           },
           "followup": {
             "oneOf": [
@@ -84631,6 +84862,24 @@
               "null"
             ],
             "description": "ZIP code (from the text, else looked up)."
+          }
+        }
+      },
+      "Part": {
+        "type": "object",
+        "description": "A line's part of the quote, which a split's shares and classes are\nkept by: `stone` (countertops), `area` (cabinets and other areas\nwithout stone), `other`, `discount`, or `added` (a line the rep added).",
+        "required": [
+          "line_id",
+          "key"
+        ],
+        "properties": {
+          "line_id": {
+            "type": "string",
+            "description": "The line's `id`."
+          },
+          "key": {
+            "type": "string",
+            "description": "Its part."
           }
         }
       },
@@ -88662,7 +88911,8 @@
         "description": "`GET /v1/qbo/items`.",
         "required": [
           "items",
-          "classes"
+          "classes",
+          "class_per_line"
         ],
         "properties": {
           "items": {
@@ -88678,6 +88928,10 @@
               "type": "string"
             },
             "description": "The active classes' full names, by name."
+          },
+          "class_per_line": {
+            "type": "boolean",
+            "description": "The company sets classes on each line, so a line can have its own."
           }
         }
       },
@@ -93153,7 +93407,7 @@
       },
       "SchedulingSettings": {
         "type": "object",
-        "description": "Admin > Schedule > Scheduling texts: what happens after a scheduling text.",
+        "description": "Admin > Schedule > AI texts: what happens after an AI text.",
         "required": [
           "ai_ready",
           "text_days",
@@ -93163,7 +93417,7 @@
         "properties": {
           "ai_ready": {
             "type": "boolean",
-            "description": "AI reads the customer's replies to a scheduling text and, when it is\ncertain they agreed to the date, marks the job Ready and tells the\nScheduling Managers."
+            "description": "AI reads the customer's replies to an AI text and, when it is\ncertain they agreed to the date, marks the job Ready and tells the\nScheduling Managers."
           },
           "text_days": {
             "type": "array",
@@ -93189,7 +93443,8 @@
         "description": "A scheduling text the event form's Send SMS lists.",
         "required": [
           "id",
-          "name"
+          "name",
+          "ai"
         ],
         "properties": {
           "id": {
@@ -93224,6 +93479,10 @@
                 "type": "null"
               }
             ]
+          },
+          "ai": {
+            "type": "boolean",
+            "description": "An AI text: AI reads the customer's answer."
           }
         }
       },
@@ -94048,6 +94307,25 @@
           "has_supplier_price_lists": {
             "type": "boolean",
             "description": "A supplier price list is processed."
+          }
+        }
+      },
+      "Share": {
+        "type": "object",
+        "description": "What one invoice of a split charges of one priced line.",
+        "required": [
+          "line_id",
+          "amount"
+        ],
+        "properties": {
+          "line_id": {
+            "type": "string",
+            "description": "The line's `id`."
+          },
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "The amount this invoice charges of it."
           }
         }
       },
@@ -95402,6 +95680,123 @@
             ],
             "format": "double",
             "description": "Slab width in inches, when known."
+          }
+        }
+      },
+      "SplitCreate": {
+        "type": "object",
+        "description": "Body of `POST /v1/customers/{id}/qbo-invoices/split`.",
+        "required": [
+          "invoice",
+          "invoices"
+        ],
+        "properties": {
+          "invoice": {
+            "$ref": "#/components/schemas/EditableInvoice",
+            "description": "The invoice as the editor left it, each priced line at its full\namount (`id` and `sync_token` unused)."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The quote it is made from, which keeps the first invoice's id."
+          },
+          "draft": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "description": "The lines the editor opened with, as for one invoice."
+          },
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SplitInvoice"
+            },
+            "description": "The invoices, in order; each priced line's shares add up to it."
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "description": "Each line's part of the quote."
+          }
+        }
+      },
+      "SplitCreated": {
+        "type": "object",
+        "description": "`POST /v1/customers/{id}/qbo-invoices/split`.",
+        "required": [
+          "invoices"
+        ],
+        "properties": {
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EditableInvoice"
+            },
+            "description": "The invoices as `QuickBooks` made them, in order."
+          }
+        }
+      },
+      "SplitInvoice": {
+        "type": "object",
+        "description": "One invoice of a split.",
+        "required": [
+          "shares"
+        ],
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its message to the customer (e.g. \"Deposit\"); none keeps the\ninvoice's message."
+          },
+          "shares": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Share"
+            },
+            "description": "What it charges of each priced line; a line it leaves out is $0."
+          }
+        }
+      },
+      "SplitTemplate": {
+        "type": "object",
+        "description": "`GET /v1/qbo/invoice-split`.",
+        "required": [
+          "classes"
+        ],
+        "properties": {
+          "invoices": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LayoutInvoice"
+            },
+            "description": "The company's newest split of a quote with these parts (else with\nmore, else any); none before its first split."
+          },
+          "classes": {
+            "type": "object",
+            "description": "The class the rep last gave each part's lines; null for the\ninvoice's class.",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -98064,7 +98459,8 @@
         "description": "What a template is for.",
         "enum": [
           "reminder",
-          "confirmation"
+          "confirmation",
+          "question"
         ]
       },
       "TemplateOrder": {
