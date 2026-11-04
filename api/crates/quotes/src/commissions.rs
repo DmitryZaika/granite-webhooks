@@ -291,6 +291,64 @@ pub fn quote_commission(
     }
 }
 
+/// Which extra a price line sells (the Statistics page's Feature sales).
+///
+/// The quote's own waterfall, miter and edge lines by their key, items from
+/// the price list or typed on the quote by their text ("Seam Phantom",
+/// "Support Corbel", "Faucet", "Karran Soap Dispenser"). A custom edge is an
+/// edge profile that costs money (Ogee, Dupont, …); faucet holes are not faucets.
+pub fn feature_of(line: &PriceLine) -> Option<&'static str> {
+    let key = line.key.to_lowercase();
+    let text = line.description.to_lowercase();
+    // Before the text checks: "Triple Waterfall" is an edge profile.
+    if key.contains("|edge:") {
+        return (line.total > 0.0).then_some("custom_edge");
+    }
+    let feature = if key.contains("|waterfall") || text.contains("waterfall") {
+        "waterfall"
+    } else if key.contains("|mitered edge material:")
+        || key.contains("|miter")
+        || text.contains("miter")
+    {
+        "miter"
+    } else if text.contains("phantom") {
+        "phantom_seam"
+    } else if text.contains("support") || text.contains("corbel") {
+        "support"
+    } else if text.contains("soap") {
+        "soap_dispenser"
+    } else if text.contains("faucet") && !text.contains("hole") && !key.contains("faucethole") {
+        "faucet"
+    } else {
+        return None;
+    };
+    Some(feature)
+}
+
+/// Dollars of each extra ([`feature_of`]) sold on one option.
+///
+/// Areas count times their quantity; extras not on the quote are left out.
+#[allow(clippy::suboptimal_flops)]
+pub fn feature_sales(price: &OptionPrice) -> BTreeMap<String, f64> {
+    let mut sold: BTreeMap<String, f64> = BTreeMap::new();
+    let areas = price
+        .areas
+        .iter()
+        .map(|a| (a, a.quantity))
+        .chain(std::iter::once((&price.other, 1.0)));
+    for (area, quantity) in areas {
+        for line in &area.lines {
+            if let Some(feature) = feature_of(line) {
+                *sold.entry(feature.into()).or_default() += line.total * quantity;
+            }
+        }
+    }
+    sold.into_iter()
+        .map(|(feature, dollars)| (feature, money(dollars)))
+        .filter(|(_, dollars)| dollars.abs() >= 0.005)
+        .collect()
+}
+
 /// `monthlyBonuses`: each monthly goal reached by the month's paid sales.
 pub fn monthly_bonus(rules: &[CommissionRule], paid_sales: f64) -> f64 {
     rules
@@ -640,6 +698,78 @@ mod tests {
         assert_eq!(status_of(Some(&invoices[1])), "unpaid");
         assert_eq!(status_of(Some(&invoices[2])), "partial");
         assert_eq!(status_of(None), "no_invoice");
+    }
+
+    #[test]
+    fn feature_sales_sum_each_extra_by_area_quantity() {
+        let line = |key: &str, description: &str, total: f64| PriceLine {
+            key: key.into(),
+            description: description.into(),
+            unit: None,
+            unit_price: None,
+            total,
+            flags: crate::quote_pricing::pricing::Flags {
+                hidden: false,
+                allow_discount: true,
+                editable: true,
+                taxable: false,
+            },
+            missing: false,
+            note: None,
+            flat_each: None,
+            typed: false,
+        };
+        let area =
+            |quantity: f64, lines: Vec<PriceLine>| crate::quote_pricing::pricing::AreaPrice {
+                area_id: Some("a".into()),
+                name: "Kitchen".into(),
+                quantity,
+                lines,
+                subtotal: 0.0,
+                missing: false,
+            };
+        let price = OptionPrice {
+            option_id: "o".into(),
+            areas: vec![area(
+                2.0,
+                vec![
+                    line("a|Waterfall:36", "12 sq ft - 36\" Waterfall", 600.0),
+                    line("a|waterfallInstall", "1 Waterfall Installation", 150.0),
+                    line("a|edge:0", "20 lin ft Finished Edge - Ogee", 200.0),
+                    line(
+                        "a|edge:1",
+                        "10 lin ft Finished Edge - Triple Waterfall",
+                        0.0,
+                    ),
+                    line("a|edge:2", "8 lin ft Finished Edge - Eased", 0.0),
+                    line("a|miterEach", "2 Mitered Edges", 100.0),
+                    line("a|faucetHole", "3 Faucet Holes", 0.0),
+                    line("a|material", "40 sq ft Quartz White", 2000.0),
+                ],
+            )],
+            other: area(
+                1.0,
+                vec![
+                    line("item:1", "2 - Support Corbel", 80.0),
+                    line("item:2", "Seam Phantom", 120.0),
+                    line("item:3", "Faucet - Chrome", 250.0),
+                    line("item:4", "Karran Soap Dispenser", 45.0),
+                ],
+            ),
+            discount: 0.0,
+            tax: 0.0,
+            total: 0.0,
+            missing: false,
+        };
+        let sold = feature_sales(&price);
+        assert_eq!(sold.get("waterfall"), Some(&1500.0));
+        assert_eq!(sold.get("custom_edge"), Some(&400.0));
+        assert_eq!(sold.get("miter"), Some(&200.0));
+        assert_eq!(sold.get("support"), Some(&80.0));
+        assert_eq!(sold.get("phantom_seam"), Some(&120.0));
+        assert_eq!(sold.get("faucet"), Some(&250.0));
+        assert_eq!(sold.get("soap_dispenser"), Some(&45.0));
+        assert_eq!(sold.len(), 7);
     }
 
     #[test]
