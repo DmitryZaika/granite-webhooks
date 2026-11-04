@@ -113,8 +113,12 @@ pub struct EventDetails {
     pub attachments: Vec<EventAttachment>,
     /// History, oldest first.
     pub history: Vec<EventHistoryItem>,
-    /// Who made the event.
+    /// Who made the event. For an `automated` event, whoever sold the quote.
     pub creator: EventPerson,
+    /// Added by the CRM on its own when a quote was sold (Mark as Sold's
+    /// jobs and extra events), not by a person: show it as made by the
+    /// system. Its history line "Added when the quote was sold" has no author.
+    pub automated: bool,
     /// Who it is assigned to.
     pub assignee: Option<EventPerson>,
     /// The caller's name (comments are theirs when the author matches).
@@ -130,11 +134,13 @@ struct EventPeople {
     creator_name: Option<String>,
     assigned_user_id: Option<i32>,
     assignee_name: Option<String>,
+    automated: bool,
 }
 
 async fn people(pool: &MySqlPool, company_id: i32, event_id: i32) -> ApiResult<EventPeople> {
     let found: Option<EventPeople> = sqlx::query_as(
-        "SELECT e.created_user_id, u.name AS creator_name, e.assigned_user_id, au.name AS assignee_name
+        "SELECT e.created_user_id, u.name AS creator_name, e.assigned_user_id, au.name AS assignee_name,
+                e.quote_id IS NOT NULL AS automated
            FROM events e JOIN users u ON e.created_user_id = u.id
            LEFT JOIN users au ON e.assigned_user_id = au.id
           WHERE e.id = ? AND u.company_id = ? AND e.deleted_date IS NULL",
@@ -241,6 +247,7 @@ pub async fn details(
             name: event.creator_name.unwrap_or_default(),
         },
         assignee,
+        automated: event.automated,
         viewer_name: user.name,
     }))
 }
