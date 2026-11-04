@@ -2755,31 +2755,24 @@ async fn texts_since(
     phone: &str,
     since: NaiveDateTime,
 ) -> Result<Vec<Reply>, sqlx::Error> {
-    let cleaned = |column: &str| {
-        format!(
-            "RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(CAST({column} AS CHAR), ' ', ''), '-', ''), '(', ''), ')', ''), '+', ''), 10)"
-        )
-    };
     let mut replies = Vec::new();
+    // `phone_digits`: the customer's side of the thread, whichever way it went.
     for table in ["cloudtalk_sms", "ringcentral_sms", "telnyx_sms"] {
-        let rows: Vec<(Option<String>, String, Option<NaiveDateTime>)> =
+        let rows: Vec<(Option<String>, String, Option<DateTime<Utc>>)> =
             sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "SELECT text, CAST(direction AS CHAR), created_date FROM {table}
-                  WHERE company_id = ? AND created_date > ? AND status IN ('received', 'sent')
-                    AND ({sender} = ? OR {recipient} = ?)
-                  ORDER BY created_date, id LIMIT 50",
-                sender = cleaned("sender"),
-                recipient = cleaned("recipient"),
+                  WHERE company_id = ? AND phone_digits = ? AND is_echo = 0
+                    AND created_date > ? AND status IN ('received', 'sent')
+                  ORDER BY created_date, id LIMIT 50"
             )))
             .bind(company_id)
-            .bind(since)
             .bind(phone)
-            .bind(phone)
+            .bind(since.and_utc())
             .fetch_all(pool)
             .await?;
         replies.extend(rows.into_iter().filter_map(|(text, direction, at)| {
             Some(Reply {
-                at: at?,
+                at: at?.naive_utc(),
                 inbound: direction == "inbound",
                 text: text.unwrap_or_default().trim().to_string(),
             })
