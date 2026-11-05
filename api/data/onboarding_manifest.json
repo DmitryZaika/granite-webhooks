@@ -1,0 +1,425 @@
+{
+  "module_ids": [
+    "stones",
+    "customers",
+    "deals",
+    "emails",
+    "cloudtalk",
+    "suppliers",
+    "instructions",
+    "teach-mode",
+    "special-order",
+    "checklists",
+    "transactions",
+    "chat",
+    "ai-design",
+    "todo",
+    "notifications",
+    "my-account",
+    "shop-transactions",
+    "shop-samples",
+    "shop-maintenance",
+    "shop-chat",
+    "shop-my-account",
+    "admin-statistics",
+    "admin-stones",
+    "admin-deals",
+    "admin-emails",
+    "admin-suppliers",
+    "admin-images",
+    "admin-instructions",
+    "admin-teach-mode",
+    "admin-transactions",
+    "admin-surveys",
+    "admin-user-activity",
+    "manager-users",
+    "manager-company"
+  ],
+  "tasks": [
+    {
+      "id": "dashboard-overview",
+      "version": 2,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "employee-dashboard-title",
+        "employee-dashboard-edit"
+      ],
+      "usage_check": null
+    },
+    {
+      "id": "dashboard-arrange",
+      "version": 2,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "employee-dashboard-widgets-edit",
+        "employee-dashboard-add-widget"
+      ],
+      "usage_check": null
+    },
+    {
+      "id": "dashboard-add-widgets",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "employee-dashboard-add-widget-dialog"
+      ],
+      "usage_check": null
+    },
+    {
+      "id": "dashboard-goal",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "employee-dashboard-goal"
+      ],
+      "usage_check": null
+    },
+    {
+      "id": "followup-open",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "deals-card-project",
+        "deal-automated-followup"
+      ],
+      "usage_check": null
+    },
+    {
+      "id": "followup-draft",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "followup-ai-generate"
+      ],
+      "usage_check": null
+    },
+    {
+      "id": "followup-texting-line",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "my-account-texting-line"
+      ],
+      "usage_check": null
+    },
+    {
+      "id": "improve-message",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "compose-send"
+      ],
+      "usage_check": null
+    },
+    {
+      "id": "black-theme",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "my-account-theme"
+      ],
+      "usage_check": null
+    },
+    {
+      "id": "quote-email-open",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "quotes-list-open",
+        "quote-actions"
+      ],
+      "usage_check": "quote_emailed"
+    },
+    {
+      "id": "quote-email-compose",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "quote-actions-email",
+        "quote-email-dialog"
+      ],
+      "usage_check": "quote_emailed"
+    },
+    {
+      "id": "quote-email-views",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "quote-email-views"
+      ],
+      "usage_check": "quote_views_opened"
+    },
+    {
+      "id": "schedule-add-job",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "schedule-add-event",
+        "schedule-event-notifications"
+      ],
+      "usage_check": "schedule_event_created"
+    },
+    {
+      "id": "schedule-waiting-jobs",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 0,
+      "base_keys": [
+        "schedule-unscheduled",
+        "schedule-unscheduled-header"
+      ],
+      "usage_check": "unscheduled_planned"
+    },
+    {
+      "id": "send-later",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "compose-send-later-panel",
+        "compose-send-later-cancel"
+      ],
+      "usage_check": "send_later_used"
+    },
+    {
+      "id": "message-templates",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "compose-templates-list"
+      ],
+      "usage_check": "templates_used"
+    },
+    {
+      "id": "contract-signature",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "quote-contract-dialog",
+        "quote-contract-signing"
+      ],
+      "usage_check": "signature_sent"
+    },
+    {
+      "id": "chat-ask",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "chat-panel-body",
+        "chat-ask-form"
+      ],
+      "usage_check": "chat_asked"
+    },
+    {
+      "id": "chat-share-page",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "chat-share-page"
+      ],
+      "usage_check": "chat_page_shared"
+    },
+    {
+      "id": "ai-reply",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "ai-reply-modes"
+      ],
+      "usage_check": "ai_reply_used"
+    },
+    {
+      "id": "ai-reply-revise",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "ai-reply-revise"
+      ],
+      "usage_check": "ai_reply_revised"
+    },
+    {
+      "id": "calls-from-deal",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "deals-call-phone"
+      ],
+      "usage_check": "customer_called"
+    },
+    {
+      "id": "calls-follow-up",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 0,
+      "base_keys": [
+        "deal-call-item",
+        "call-add-note"
+      ],
+      "usage_check": "call_followed_up"
+    },
+    {
+      "id": "draw-exact-size",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "quote-canvas-dimension"
+      ],
+      "usage_check": "quote_drawn"
+    },
+    {
+      "id": "draw-cutouts",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "quote-canvas-cutouts"
+      ],
+      "usage_check": "quote_cutout_added"
+    },
+    {
+      "id": "automations-sends",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "admin-automations-email-templates"
+      ],
+      "usage_check": "automation_set_up"
+    },
+    {
+      "id": "automations-flows",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "admin-automations-sms-flows"
+      ],
+      "usage_check": "automation_set_up"
+    },
+    {
+      "id": "automations-trigger",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "email-template-trigger"
+      ],
+      "usage_check": "automation_set_up"
+    },
+    {
+      "id": "quote-automation",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "quote-automation-sale",
+        "quote-automation-jobs"
+      ],
+      "usage_check": "quote_automation_changed"
+    },
+    {
+      "id": "schedule-texts",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "schedule-notifications-card",
+        "schedule-ai-texts"
+      ],
+      "usage_check": "schedule_texts_saved"
+    },
+    {
+      "id": "setup-email-name",
+      "version": 1,
+      "points": 10,
+      "checklist": true,
+      "required_steps": 0,
+      "base_keys": [],
+      "usage_check": null
+    },
+    {
+      "id": "setup-email-signature",
+      "version": 1,
+      "points": 10,
+      "checklist": true,
+      "required_steps": 0,
+      "base_keys": [],
+      "usage_check": null
+    },
+    {
+      "id": "setup-telegram",
+      "version": 1,
+      "points": 10,
+      "checklist": true,
+      "required_steps": 0,
+      "base_keys": [],
+      "usage_check": null
+    }
+  ],
+  "retired_task_ids": [
+    "deal-automated-followup",
+    "deal-followup-preview",
+    "deal-followup-setup",
+    "email-ai-reply",
+    "employee-dashboard",
+    "employee-dashboard-add-widget",
+    "employee-dashboard-edit-mode",
+    "sms-ai-reply"
+  ],
+  "creditable_task_ids": [
+    "setup-email-name",
+    "setup-email-signature",
+    "setup-telegram"
+  ]
+}
