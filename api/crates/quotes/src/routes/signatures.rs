@@ -278,11 +278,40 @@ pub async fn native_document(
             "Please sign in to view this document.",
         ));
     };
+    if query.customer_id.is_some_and(|c| c <= 0) {
+        return Ok(text(StatusCode::NOT_FOUND, "Document unavailable"));
+    }
+    let scope = match query.customer_id {
+        Some(customer_id) => NativeScope::Customer(customer_id),
+        None if user.is_admin || user.is_superuser => NativeScope::Company,
+        None => NativeScope::Sender(user.id),
+    };
+    native_document_of(&state, user.company_id, id, scope).await
+}
+
+/// Whose natively signed documents a caller may open.
+pub enum NativeScope {
+    /// The documents of this customer (anyone in the company, or the
+    /// customer on their own page).
+    Customer(i64),
+    /// The ones this user sent.
+    Sender(i32),
+    /// Every one of the company (an admin).
+    Company,
+}
+
+/// A natively signed document as a response: the PDF, a presigned redirect
+/// when it is big, or a plain-text error.
+pub async fn native_document_of(
+    state: &AppState,
+    company_id: i32,
+    id: i64,
+    scope: NativeScope,
+) -> Result<Response, ApiError> {
     let unavailable = || text(StatusCode::NOT_FOUND, "Document unavailable");
-    if id <= 0 || query.customer_id.is_some_and(|c| c <= 0) {
+    if id <= 0 {
         return Ok(unavailable());
     }
-    let is_admin = user.is_admin || user.is_superuser;
     let sql = format!(
         "SELECT CAST(nd.company_id AS SIGNED) AS company_id, nd.document_id, sr.filename,
                 CAST(sr.status AS CHAR) AS status, nd.prepared_object_key, nd.prepared_sha256,
@@ -293,26 +322,24 @@ pub async fn native_document(
           WHERE sr.id = ? AND sr.company_id = ? AND sr.provider = 'native'
             AND sr.provider_document_id = nd.document_id {}
           LIMIT 1",
-        if query.customer_id.is_some() {
+        if matches!(scope, NativeScope::Customer(_)) {
             "INNER JOIN customers c ON c.id = sr.customer_id AND c.company_id = sr.company_id AND c.deleted_at IS NULL"
         } else {
             ""
         },
-        if query.customer_id.is_some() {
-            "AND sr.customer_id = ?"
-        } else if is_admin {
-            ""
-        } else {
-            "AND sr.created_by_user_id = ?"
+        match scope {
+            NativeScope::Customer(_) => "AND sr.customer_id = ?",
+            NativeScope::Sender(_) => "AND sr.created_by_user_id = ?",
+            NativeScope::Company => "",
         },
     );
     let mut select = sqlx::query_as::<_, NativeRow>(sqlx::AssertSqlSafe(sql))
         .bind(id)
-        .bind(user.company_id);
-    if let Some(customer_id) = query.customer_id {
-        select = select.bind(customer_id);
-    } else if !is_admin {
-        select = select.bind(user.id);
+        .bind(company_id);
+    match scope {
+        NativeScope::Customer(customer_id) => select = select.bind(customer_id),
+        NativeScope::Sender(user_id) => select = select.bind(user_id),
+        NativeScope::Company => {}
     }
     let Some(row) = select.fetch_optional(&state.pool).await? else {
         return Ok(unavailable());
@@ -459,13 +486,27 @@ pub async fn signed_pdf(
             "Please sign in to view this document.",
         ));
     };
+    signed_pdf_of(&state, user.company_id, id, None).await
+}
+
+/// A `SignWell` document as a response (see [`signed_pdf`]); with
+/// `customer_id`, only one sent to that customer.
+pub async fn signed_pdf_of(
+    state: &AppState,
+    company_id: i32,
+    id: i64,
+    customer_id: Option<i64>,
+) -> Result<Response, ApiError> {
     let row: Option<RequestRow> = sqlx::query_as(
         "SELECT filename, file_url, CAST(status AS CHAR) AS status, provider, provider_document_id,
                 CAST(customer_id AS SIGNED) AS customer_id
-           FROM signature_requests WHERE id = ? AND company_id = ? LIMIT 1",
+           FROM signature_requests
+          WHERE id = ? AND company_id = ? AND (? IS NULL OR customer_id = ?) LIMIT 1",
     )
     .bind(id)
-    .bind(user.company_id)
+    .bind(company_id)
+    .bind(customer_id)
+    .bind(customer_id)
     .fetch_optional(&state.pool)
     .await?;
     let Some(row) = row.filter(|row| row.provider != "native") else {
@@ -484,7 +525,7 @@ pub async fn signed_pdf(
         .filter(|id| !id.is_empty());
     let completed = match document_id {
         Some(document_id) if row.status == "signed" => {
-            signwell_completed_pdf_url(&state, user.company_id, document_id).await
+            signwell_completed_pdf_url(state, company_id, document_id).await
         }
         _ => None,
     };
@@ -519,7 +560,7 @@ pub async fn signed_pdf(
         }
     };
     let filename =
-        signed_copy_filename(&state.pool, user.company_id, row.customer_id, &row.filename).await;
+        signed_copy_filename(&state.pool, company_id, row.customer_id, &row.filename).await;
     let title = filename
         .strip_suffix(".pdf")
         .unwrap_or(&filename)
@@ -530,7 +571,7 @@ pub async fn signed_pdf(
     if bytes.len() > MAX_INLINE_BYTES {
         let key = format!(
             "{SIGNED_COPIES}/{}/{id}-{}.pdf",
-            user.company_id,
+            company_id,
             sha256_hex(&bytes)
         );
         state.storage.put(&key, bytes, "application/pdf").await?;

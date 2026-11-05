@@ -41,6 +41,7 @@ async fn features_of_each_company(pool: MySqlPool) {
             "auto_unscheduled_jobs": false,
             "auto_invoice": false,
             "quote_invoice_sync": false,
+            "auto_project": false,
             "sale_event_templates": false
         })
     );
@@ -61,6 +62,7 @@ async fn features_of_each_company(pool: MySqlPool) {
             "auto_unscheduled_jobs": false,
             "auto_invoice": false,
             "quote_invoice_sync": false,
+            "auto_project": false,
             "sale_event_templates": false
         })
     );
@@ -130,6 +132,7 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
             "auto_unscheduled_jobs": false,
             "auto_invoice": false,
             "quote_invoice_sync": false,
+            "auto_project": false,
             "sale_event_templates": false
         })
     );

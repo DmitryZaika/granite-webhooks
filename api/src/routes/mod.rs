@@ -39,6 +39,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(dashboard::router())
         .merge(leaderboard::router())
         .merge(deals::router())
+        .merge(projects::router())
         .merge(calendars::router())
         .merge(questionnaires::router())
         .merge(emails::router())

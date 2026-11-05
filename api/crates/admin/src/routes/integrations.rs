@@ -46,6 +46,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(save_auto_unscheduled_jobs))
         .routes(routes!(save_auto_invoice))
         .routes(routes!(save_quote_invoice_sync))
+        .routes(routes!(save_auto_project))
         .routes(routes!(email_api_token))
         .routes(routes!(
             quickbooks_status,
@@ -528,6 +529,57 @@ pub async fn save_quote_invoice_sync(
         return Err(ApiError::NotFound);
     }
     sqlx::query("UPDATE company SET quote_invoice_sync = ? WHERE id = ?")
+        .bind(input.enabled)
+        .bind(company_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Body of `PUT /v1/company/auto-project`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AutoProjectInput {
+    /// On: marking a deal won or a quote sold starts its project.
+    pub enabled: bool,
+}
+
+/// Switch starting a project on a sale
+///
+/// Admin › Quotes › Automation "Project on a sale". When on, marking a deal
+/// won or a quote sold starts its project in Projects (`auto_project` in
+/// `GET /v1/company/features`). Off, projects are added by hand.
+#[crate::openapi::path(
+    put,
+    path = "/v1/company/auto-project",
+    operation_id = "save_company_auto_project",
+    tag = "company",
+    params(TargetCompany),
+    request_body = AutoProjectInput,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller does not manage the company", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn save_auto_project(
+    State(state): State<AppState>,
+    UserManager(user): UserManager,
+    Query(query): Query<TargetCompany>,
+    JsonBody(input): JsonBody<AutoProjectInput>,
+) -> ApiResult<StatusCode> {
+    let company_id = target(&user, &query);
+    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM company WHERE id = ?")
+        .bind(company_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(ApiError::NotFound);
+    }
+    sqlx::query("UPDATE company SET auto_project = ? WHERE id = ?")
         .bind(input.enabled)
         .bind(company_id)
         .execute(&state.pool)

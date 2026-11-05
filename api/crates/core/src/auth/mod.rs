@@ -39,11 +39,11 @@
 //! (`Authorization: Bearer agt_...`): the agent then acts as the person who
 //! asked it, read-only, in one company (see [`agent`]).
 //!
-//! Every extractor above also applies the position sections ([`sections`]):
-//! someone holding only Inventory Manager or Scheduling Manager is refused
-//! outside the sections their company gives those positions. Inside them
-//! they pass `EmployeeUser` and `ShopOrEmployeeUser`, and `AdminUser` on an
-//! admin section's routes.
+//! Every extractor above also applies position access ([`sections`]): when a
+//! company limits the tabs of someone's positions, they are refused the data
+//! only their closed tabs use. With limited tabs they pass `EmployeeUser` and
+//! `ShopOrEmployeeUser`, and on an admin tab's routes they act as a company
+//! admin (`is_admin`, so `AdminUser` and the handlers' own checks agree).
 
 pub mod agent;
 pub mod cookie;
@@ -77,16 +77,21 @@ async fn authenticate_with_positions(
         .map(|(user, positions, _)| (user, positions))
 }
 
-/// Who is asking and what their positions open. A request outside the
-/// sections of a sectioned position is refused here, before any handler.
+/// Who is asking and what their positions open. A request outside the tabs
+/// of their positions is refused here, before any handler; on an admin tab
+/// of theirs they act as a company admin.
 async fn authenticate_with_access(
     parts: &Parts,
     state: &AppState,
 ) -> Result<(SessionUser, Vec<session::UserPositionRow>, Access), ApiError> {
-    let (user, positions) = identify(parts, state).await?;
+    let (mut user, positions) = identify(parts, state).await?;
     let access = sections::user_access(&state.pool, &user, &positions).await?;
-    if !access.allows(parts.uri.path()) {
+    let path = parts.uri.path();
+    if !access.allows(path) {
         return Err(sections::outside_sections());
+    }
+    if access.allows_admin(path) {
+        user.is_admin = true;
     }
     Ok((user, positions, access))
 }

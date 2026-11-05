@@ -5,6 +5,7 @@ pub use api_schedule::routes::*;
 
 pub mod commissions;
 pub mod customer_view;
+pub mod customer_view_extras;
 pub mod invoice_queue;
 pub mod invoices;
 pub mod online_quotes;

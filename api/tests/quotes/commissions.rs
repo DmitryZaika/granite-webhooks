@@ -378,6 +378,75 @@ async fn admins_add_paid_installed_jobs_to_the_salary_and_set_amounts(pool: MySq
 }
 
 #[test_db::test(seed)]
+async fn a_positions_base_pay_pays_everyone_with_it_unless_they_have_their_own(pool: MySqlPool) {
+    let server = server(pool.clone());
+    // Every Sales Representative (position 1): $500 on 10/2 and 10/9.
+    server
+        .post("/v1/commission-base-pay")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "positionId": 1, "amount": 500, "frequency": "weekly",
+                       "startDate": "2026-10-02", "endDate": "2026-10-09" }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    for bad in [
+        json!({ "userId": 100, "positionId": 1, "amount": 1, "frequency": "weekly", "startDate": "2026-10-02" }),
+        json!({ "amount": 1, "frequency": "weekly", "startDate": "2026-10-02" }),
+        json!({ "positionId": 999, "amount": 1, "frequency": "weekly", "startDate": "2026-10-02" }),
+    ] {
+        server
+            .post("/v1/commission-base-pay")
+            .with_session(sessions::ADMIN)
+            .json(&bad)
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+    let list = server
+        .get("/v1/commission-base-pay")
+        .with_session(sessions::ADMIN)
+        .await
+        .json::<Value>();
+    assert_eq!(list[0]["positionId"], 1);
+    assert_eq!(list[0]["userId"], Value::Null);
+    assert_eq!(list[0]["rep"], Value::Null);
+
+    // Rita is the company's only sales rep: Gus left, and Mark and Olga are
+    // sales reps in another company.
+    let reps_on = |weeks: &Value, date: &str| -> Vec<(i64, f64)> {
+        weeks
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| w["payrollDate"] == date)
+            .flat_map(|w| w["reps"].as_array().unwrap().clone())
+            .map(|r| (r["userId"].as_i64().unwrap(), r["base"].as_f64().unwrap()))
+            .collect()
+    };
+    let all = server
+        .get("/v1/commissions?scope=company")
+        .with_session(sessions::ADMIN)
+        .await
+        .json::<Value>();
+    assert_eq!(reps_on(&all["weeks"], "2026-10-02"), [(100, 500.0)]);
+    assert_eq!(reps_on(&all["weeks"], "2026-10-09"), [(100, 500.0)]);
+
+    // Her own base pay replaces the position's.
+    server
+        .post("/v1/commission-base-pay")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "userId": 100, "amount": 700, "frequency": "weekly",
+                       "startDate": "2026-10-02", "endDate": "2026-10-02" }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let mine = server
+        .get("/v1/commissions")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    assert_eq!(reps_on(&mine["weeks"], "2026-10-02"), [(100, 700.0)]);
+    assert!(reps_on(&mine["weeks"], "2026-10-09").is_empty());
+}
+
+#[test_db::test(seed)]
 async fn admins_set_each_reps_base_pay_schedule(pool: MySqlPool) {
     let server = server(pool.clone());
     // $500 on the 20th of every month, from 9/20 to 10/20.

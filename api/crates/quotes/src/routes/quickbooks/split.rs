@@ -9,7 +9,7 @@
 //! the classes they last gave them.
 
 use super::invoice::{EditableInvoice, Line, create_payload, editable, line_amount};
-use super::{prepare, qbo_refusal, refuse_installer, rules};
+use super::{new_doc_numbers, prepare, qbo_refusal, refuse_installer, rules};
 use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -399,6 +399,11 @@ pub async fn create_split(
         );
     }
     let count = payloads.len();
+    if let Some(numbers) = new_doc_numbers(&state, &ready.access, count).await {
+        for (payload, number) in payloads.iter_mut().zip(numbers) {
+            payload["DocNumber"] = json!(number);
+        }
+    }
     let mut made: Vec<EditableInvoice> = Vec::with_capacity(count);
     for (index, payload) in payloads.iter().enumerate() {
         let created = state

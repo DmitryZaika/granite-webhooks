@@ -1,10 +1,11 @@
-//! A customer's own page (no CRM session): their projects and invoices,
-//! unlocked by a one-time code emailed to the address on file.
+//! A customer's own page (no CRM session): their projects, appointments and
+//! invoices, unlocked by a one-time code emailed to the address on file.
 //!
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}`          → the gate: verified, and where a code goes
 //! - `POST   /v1/public/customer-view/{company_id}/{view_id}/code`     → email a code
 //! - `POST   /v1/public/customer-view/{company_id}/{view_id}/verify`   → enter it
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/projects` → their sales
+//! - `GET    /v1/public/customer-view/{company_id}/{view_id}/schedule` → their appointments
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/quotes`   → their online quotes
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/invoices` → their `QuickBooks` invoices
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/invoices/{invoice_id}/pdf`
@@ -29,6 +30,7 @@ use crate::routes::quickbooks::{CustomerInvoices, customer_invoice_pdf_of, invoi
 use crate::state::AppState;
 use crate::webhooks_client::OutgoingEmail;
 use axum::Json;
+use chrono::NaiveDateTime;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -44,6 +46,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(send_view_code))
         .routes(routes!(verify_view_code))
         .routes(routes!(projects))
+        .routes(routes!(schedule))
         .routes(routes!(quotes))
         .routes(routes!(invoices))
         .routes(routes!(invoice_pdf))
@@ -51,6 +54,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(send_login_code))
         .routes(routes!(verify_login_code))
         .routes(routes!(cancel_code))
+        .merge(crate::routes::customer_view_extras::router())
 }
 
 const COOKIE: &str = "__customer_view";
@@ -244,8 +248,8 @@ fn rate_limited() -> ApiError {
 
 /// The customer whose page this is.
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct ViewCustomer {
-    id: i32,
+pub(crate) struct ViewCustomer {
+    pub(crate) id: i32,
     name: Option<String>,
     email: Option<String>,
 }
@@ -653,7 +657,7 @@ pub async fn verify_view_code(
 }
 
 /// The verified customer of a page.
-async fn verified_customer(
+pub(crate) async fn verified_customer(
     state: &AppState,
     headers: &HeaderMap,
     company_id: i32,
@@ -685,6 +689,24 @@ pub struct ViewProject {
     pub sink: Option<String>,
     /// `Sold`, `Partially Cut`, `Cut`, `Installed` or `Cancelled`.
     pub status: Option<String>,
+    /// Where the work is.
+    pub project_address: Option<String>,
+    /// Countertop area in square feet.
+    pub square_feet: Option<f64>,
+    /// When it was installed (ISO 8601, UTC).
+    pub installed_date: Option<String>,
+    /// Pictures of the customer's own slabs, comma-separated URLs.
+    pub slab_pictures: Option<String>,
+    /// When the last slab was cut, once every slab is (ISO 8601, UTC).
+    pub cut_date: Option<String>,
+    /// Its latest template visit with a date (ISO 8601, UTC), past or
+    /// coming. A visit belongs to a project by [`project_of`].
+    #[sqlx(skip)]
+    pub template_date: Option<String>,
+    /// Its latest installation visit with a date (ISO 8601, UTC), past or
+    /// coming.
+    #[sqlx(skip)]
+    pub install_date: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -693,6 +715,42 @@ struct ProjectRow {
     project: ViewProject,
     all_cut: Option<i64>,
     any_cut: Option<i64>,
+    sold_at: Option<NaiveDateTime>,
+    cancelled: bool,
+}
+
+/// A dated template or installation visit of the customer.
+#[derive(sqlx::FromRow)]
+struct VisitRow {
+    kind: String,
+    start: NaiveDateTime,
+    sale_id: Option<i32>,
+}
+
+/// One of the customer's sales, for [`project_of`].
+struct Sold {
+    id: i32,
+    at: Option<NaiveDateTime>,
+    cancelled: bool,
+}
+
+/// The project a visit belongs to: its own sale when that is one of the
+/// customer's; else the latest open sale sold by the visit's day; else their
+/// first open sale. `None` when they have no open sale.
+fn project_of(sale_id: Option<i32>, start: NaiveDateTime, sales: &[Sold]) -> Option<i32> {
+    if let Some(id) = sale_id.filter(|id| sales.iter().any(|sale| sale.id == *id)) {
+        return Some(id);
+    }
+    let open = || sales.iter().filter(|sale| !sale.cancelled);
+    open()
+        .filter(|sale| sale.at.is_some_and(|at| at.date() <= start.date()))
+        .max_by_key(|sale| (sale.at, sale.id))
+        .or_else(|| open().min_by_key(|sale| (sale.at, sale.id)))
+        .map(|sale| sale.id)
+}
+
+fn iso(at: NaiveDateTime) -> String {
+    at.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 /// List the customer's projects
@@ -735,7 +793,16 @@ pub async fn projects(
                   WHEN s.cancelled_date IS NOT NULL THEN 'Cancelled'
                   WHEN s.installed_date IS NOT NULL THEN 'Installed'
                   WHEN s.sale_date IS NOT NULL THEN 'Sold'
-                END AS status
+                END AS status,
+                NULLIF(TRIM(s.project_address), '') AS project_address,
+                CAST(s.square_feet AS DOUBLE) AS square_feet,
+                DATE_FORMAT(s.installed_date, '%Y-%m-%dT%H:%i:%sZ') AS installed_date,
+                GROUP_CONCAT(DISTINCT NULLIF(TRIM(si.url), '') ORDER BY si.id SEPARATOR ',')
+                  AS slab_pictures,
+                CASE WHEN MIN(CASE WHEN si.cut_date IS NULL THEN 0 ELSE 1 END) = 1
+                     THEN DATE_FORMAT(MAX(si.cut_date), '%Y-%m-%dT%H:%i:%sZ') END AS cut_date,
+                CAST(s.sale_date AS DATETIME) AS sold_at,
+                s.cancelled_date IS NOT NULL AS cancelled
            FROM sales s
            JOIN customers c ON s.customer_id = c.id
            LEFT JOIN users u ON s.seller_id = u.id
@@ -751,7 +818,29 @@ pub async fn projects(
     .bind(company_id)
     .fetch_all(&state.pool)
     .await?;
-    let projects: Vec<ViewProject> = rows
+    let visits: Vec<VisitRow> = sqlx::query_as(
+        "SELECT cal.slug AS kind, e.start_date AS start, e.sale_id
+           FROM events e
+           JOIN users u ON u.id = e.created_user_id
+           JOIN calendars cal ON cal.id = e.calendar_id AND cal.company_id = u.company_id
+          WHERE e.customer_id = ? AND u.company_id = ? AND e.deleted_date IS NULL
+            AND e.unscheduled = 0 AND NULLIF(TRIM(e.rrule), '') IS NULL
+            AND cal.slug IN ('templates', 'installations')
+          ORDER BY e.start_date, e.id",
+    )
+    .bind(customer.id)
+    .bind(company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let sales: Vec<Sold> = rows
+        .iter()
+        .map(|row| Sold {
+            id: row.project.id,
+            at: row.sold_at,
+            cancelled: row.cancelled,
+        })
+        .collect();
+    let mut projects: Vec<ViewProject> = rows
         .into_iter()
         .map(|row| {
             let mut project = row.project;
@@ -765,7 +854,128 @@ pub async fn projects(
             project
         })
         .collect();
+    // By start, so the last one written is the latest.
+    for visit in &visits {
+        let Some(id) = project_of(visit.sale_id, visit.start, &sales) else {
+            continue;
+        };
+        let Some(project) = projects.iter_mut().find(|project| project.id == id) else {
+            continue;
+        };
+        match visit.kind.as_str() {
+            "templates" => project.template_date = Some(iso(visit.start)),
+            _ => project.install_date = Some(iso(visit.start)),
+        }
+    }
     Ok(no_store(Json(projects)))
+}
+
+/// One of the customer's appointments (a schedule event). Only what the
+/// customer needs: never the event's title, description or notes, which are
+/// the shop's own words.
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+pub struct ViewAppointment {
+    /// Event id.
+    pub id: i32,
+    /// `templates`, `installations` or `estimates` (the built-in calendars);
+    /// `None` for any other calendar.
+    pub kind: Option<String>,
+    /// Start (ISO 8601, UTC). While `unscheduled` it only holds when the
+    /// event was added.
+    pub start_date: String,
+    /// End (ISO 8601, UTC).
+    pub end_date: String,
+    /// The whole day, no time.
+    pub all_day: bool,
+    /// Waiting for a date: the shop has not picked the day yet.
+    pub unscheduled: bool,
+    /// The address.
+    pub location: Option<String>,
+    /// Who comes (the person the event is assigned to).
+    pub crew_name: Option<String>,
+    /// How the crew is getting on today: `on_my_way`, `arrived` or
+    /// `completed`.
+    pub crew_status: Option<String>,
+    /// The crew's job photos for the customer (the job card's Photos
+    /// button), oldest first. Photos in the event's comments are not here.
+    #[sqlx(skip)]
+    pub photos: Vec<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct PhotoRow {
+    event_id: i32,
+    url: String,
+}
+
+/// List the customer's appointments
+///
+/// Their templates, installations, estimates and other visits, by start:
+/// waiting-for-a-date ones last. Repeating events are left out. Needs a
+/// verified visitor.
+#[crate::openapi::path(
+    get,
+    path = "/v1/public/customer-view/{company_id}/{view_id}/schedule",
+    operation_id = "list_customer_view_schedule",
+    tag = "customer-view",
+    params(
+        ("company_id" = i32, Path, description = "Company id"),
+        ("view_id" = String, Path, description = "The customer's page id (a UUID)"),
+    ),
+    responses(
+        (status = 200, description = "The appointments", body = [ViewAppointment]),
+        (status = 401, description = "No code entered for this page", body = ErrorBody),
+        (status = 404, description = "No such page", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    )
+)]
+pub async fn schedule(
+    State(state): State<AppState>,
+    Path((company_id, view_id)): Path<(i32, String)>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let customer = verified_customer(&state, &headers, company_id, &view_id).await?;
+    let mut appointments: Vec<ViewAppointment> = sqlx::query_as(
+        "SELECT e.id,
+                CASE WHEN cal.slug IN ('templates', 'installations', 'estimates')
+                     THEN cal.slug END AS kind,
+                DATE_FORMAT(e.start_date, '%Y-%m-%dT%H:%i:%sZ') AS start_date,
+                DATE_FORMAT(e.end_date, '%Y-%m-%dT%H:%i:%sZ') AS end_date,
+                COALESCE(e.all_day, 0) <> 0 AS all_day,
+                e.unscheduled <> 0 AS unscheduled,
+                NULLIF(TRIM(e.location), '') AS location,
+                NULLIF(TRIM(a.name), '') AS crew_name,
+                e.crew_status
+           FROM events e
+           JOIN users u ON u.id = e.created_user_id
+           LEFT JOIN calendars cal ON cal.id = e.calendar_id AND cal.company_id = u.company_id
+           LEFT JOIN users a ON a.id = e.assigned_user_id AND a.is_deleted = 0
+          WHERE e.customer_id = ? AND u.company_id = ? AND e.deleted_date IS NULL
+            AND NULLIF(TRIM(e.rrule), '') IS NULL
+          ORDER BY e.unscheduled, e.start_date, e.id",
+    )
+    .bind(customer.id)
+    .bind(company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let photos: Vec<PhotoRow> = sqlx::query_as(
+        "SELECT ei.event_id, ei.url
+           FROM event_images ei
+           JOIN events e ON e.id = ei.event_id
+          WHERE e.customer_id = ? AND ei.company_id = ? AND ei.for_customer = 1
+            AND ei.deleted_at IS NULL AND e.deleted_date IS NULL
+          ORDER BY ei.created_at, ei.id",
+    )
+    .bind(customer.id)
+    .bind(company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    for photo in photos {
+        if let Some(appointment) = appointments.iter_mut().find(|a| a.id == photo.event_id) {
+            appointment.photos.push(photo.url);
+        }
+    }
+    Ok(no_store(Json(appointments)))
 }
 
 /// List the customer's online quotes
@@ -801,7 +1011,7 @@ pub async fn quotes(
     Ok(no_store(Json(quotes)))
 }
 
-fn no_store(response: impl IntoResponse) -> Response {
+pub(crate) fn no_store(response: impl IntoResponse) -> Response {
     let mut response = response.into_response();
     response.headers_mut().insert(
         header::CACHE_CONTROL,
@@ -1033,6 +1243,30 @@ pub async fn cancel_code(State(state): State<AppState>, headers: HeaderMap) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at(date: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(&format!("{date} 12:00:00"), "%Y-%m-%d %H:%M:%S").unwrap()
+    }
+
+    #[test]
+    fn visits_belong_to_the_project_sold_by_their_day() {
+        let sales = [
+            Sold { id: 1, at: Some(at("2026-03-01")), cancelled: false },
+            Sold { id: 2, at: Some(at("2026-06-01")), cancelled: false },
+            Sold { id: 3, at: Some(at("2026-07-01")), cancelled: true },
+        ];
+        // Its own sale wins.
+        assert_eq!(project_of(Some(1), at("2026-08-01"), &sales), Some(1));
+        // Else the latest open sale by the visit's day.
+        assert_eq!(project_of(None, at("2026-04-10"), &sales), Some(1));
+        assert_eq!(project_of(None, at("2026-06-01"), &sales), Some(2));
+        assert_eq!(project_of(None, at("2026-09-01"), &sales), Some(2));
+        // A visit before any sale: the first one. A sale of someone else: ignored.
+        assert_eq!(project_of(None, at("2026-01-01"), &sales), Some(1));
+        assert_eq!(project_of(Some(99), at("2026-04-10"), &sales), Some(1));
+        let cancelled = [Sold { id: 3, at: Some(at("2026-07-01")), cancelled: true }];
+        assert_eq!(project_of(None, at("2026-09-01"), &cancelled), None);
+    }
 
     #[test]
     fn emails_are_masked_and_parsed() {
