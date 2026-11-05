@@ -95126,6 +95126,14 @@
             "format": "double",
             "description": "The rep's classes' sales this month."
           },
+          "company_amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The whole company's sales this month (the report's grand total)."
+          },
           "currency": {
             "type": [
               "string",

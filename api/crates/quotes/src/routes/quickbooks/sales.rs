@@ -288,6 +288,8 @@ pub struct RepSales {
     pub status: SalesStatus,
     /// The rep's classes' sales this month.
     pub amount: Option<f64>,
+    /// The whole company's sales this month (the report's grand total).
+    pub company_amount: Option<f64>,
     /// Currency code.
     pub currency: Option<String>,
     /// First day of the report.
@@ -309,6 +311,7 @@ impl RepSales {
         Self {
             status,
             amount: None,
+            company_amount: None,
             currency: None,
             start_period: None,
             end_period: None,
@@ -378,9 +381,13 @@ pub async fn my_sales(
         .filter(|row| matches_rep(&row.name, &name))
         .filter_map(|row| row.amount)
         .sum();
+    let company_amount = report
+        .total
+        .unwrap_or_else(|| report.rows.iter().filter_map(|row| row.amount).sum());
     Ok(Json(RepSales {
         status: SalesStatus::Ok,
         amount: Some(amount),
+        company_amount: Some(company_amount),
         currency: Some(currency(&report)),
         start_period: Some(
             report
