@@ -9,7 +9,9 @@ use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
-use crate::phone::crm_push::{LeadKind, push_lead, push_notification, sales_managers};
+use crate::phone::crm_push::{
+    LeadKind, push_lead, push_manager_lead, push_notification, sales_managers,
+};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -86,7 +88,8 @@ pub async fn push_notification_route(
 /// Telegram: to the sales rep `user_id`, else to every sales manager of the
 /// company (linked to Telegram or not). Pushed as data `{granite: "1",
 /// type: "lead", kind, customerId, dealId}` (`dealId` left out when the lead
-/// has no deal yet): ids only. Nothing is pushed (`pushed: 0`) for another
+/// has no deal yet): ids only. The managers' new and repeated leads also
+/// carry `assign: "1"` (tapping opens the Assign a sales rep sheet). Nothing is pushed (`pushed: 0`) for another
 /// company's or a deleted customer. Calling it again pushes again.
 #[crate::openapi::path(
     post,
@@ -107,18 +110,30 @@ pub async fn push_lead_route(
     _caller: JobCaller,
     JsonBody(body): JsonBody<LeadPush>,
 ) -> ApiResult<Json<PushSent>> {
-    let users = match body.user_id {
-        Some(user_id) => vec![user_id],
-        None => sales_managers(&state.pool, body.company_id).await?,
+    let pushed = match body.user_id {
+        Some(user_id) => {
+            push_lead(
+                &state,
+                body.company_id,
+                &[user_id],
+                body.kind,
+                body.customer_id,
+                body.deal_id,
+            )
+            .await?
+        }
+        None => {
+            let managers = sales_managers(&state.pool, body.company_id).await?;
+            push_manager_lead(
+                &state,
+                body.company_id,
+                &managers,
+                body.kind,
+                body.customer_id,
+                body.deal_id,
+            )
+            .await?
+        }
     };
-    let pushed = push_lead(
-        &state,
-        body.company_id,
-        &users,
-        body.kind,
-        body.customer_id,
-        body.deal_id,
-    )
-    .await?;
     Ok(Json(PushSent { pushed }))
 }

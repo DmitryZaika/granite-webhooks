@@ -130,6 +130,33 @@ pub async fn push_lead(
     customer_id: i32,
     deal_id: Option<i64>,
 ) -> sqlx::Result<usize> {
+    push_lead_data(state, company_id, user_ids, kind, customer_id, deal_id, false).await
+}
+
+/// [`push_lead`] for the sales managers: a new or repeated lead also carries
+/// `assign: "1"`, so tapping it opens the customer with the Assign a sales
+/// rep sheet up (a repeated lead's rep can be changed there).
+pub async fn push_manager_lead(
+    state: &AppState,
+    company_id: i32,
+    user_ids: &[i32],
+    kind: LeadKind,
+    customer_id: i32,
+    deal_id: Option<i64>,
+) -> sqlx::Result<usize> {
+    let assign = matches!(kind, LeadKind::New | LeadKind::Repeat);
+    push_lead_data(state, company_id, user_ids, kind, customer_id, deal_id, assign).await
+}
+
+async fn push_lead_data(
+    state: &AppState,
+    company_id: i32,
+    user_ids: &[i32],
+    kind: LeadKind,
+    customer_id: i32,
+    deal_id: Option<i64>,
+    assign: bool,
+) -> sqlx::Result<usize> {
     if user_ids.is_empty() || !state.push.is_enabled() {
         return Ok(0);
     }
@@ -161,6 +188,9 @@ pub async fn push_lead(
     ];
     if let Some(deal_id) = deal_id {
         fields.push(("dealId", deal_id.to_string()));
+    }
+    if assign {
+        fields.push(("assign", "1".to_string()));
     }
     push_to_users(state, company_id, user_ids, &data("lead", fields)).await
 }
