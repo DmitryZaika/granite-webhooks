@@ -349,12 +349,13 @@ pub fn feature_sales(price: &OptionPrice) -> BTreeMap<String, f64> {
         .collect()
 }
 
-/// `monthlyBonuses`: each monthly goal reached by the month's paid sales.
-pub fn monthly_bonus(rules: &[CommissionRule], paid_sales: f64) -> f64 {
+/// `monthlyBonuses`: each monthly goal reached by what was sold in the month;
+/// they add up ($300 at 60K and $500 at 80K pay $800 at 80K).
+pub fn monthly_bonus(rules: &[CommissionRule], sales: f64) -> f64 {
     rules
         .iter()
         .filter(|r| {
-            r.active && r.applies == "monthly_goal" && r.threshold.is_some_and(|t| paid_sales >= t)
+            r.active && r.applies == "monthly_goal" && r.threshold.is_some_and(|t| sales >= t)
         })
         .fold(0.0, |s, r| s + money(r.rate))
 }
@@ -436,6 +437,11 @@ pub struct PaidRow {
     pub commission: f64,
     pub paid_date: Option<String>,
     pub payroll_date: Option<String>,
+    /// The day it was sold (YYYY-MM-DD).
+    pub signed_at: Option<String>,
+    /// A quote sold in the CRM; rows with no quote (a rep's sheet, a bonus)
+    /// never count toward a monthly goal: the sheet paid its own bonuses.
+    pub from_quote: bool,
 }
 
 /// One rep's paycheck on a payroll date.
@@ -467,16 +473,20 @@ pub struct PayrollWeek {
 }
 
 /// A rep's base pay (`commission_base_pay`): `amount` every week, two weeks
-/// or month from the first payday, until an optional last day.
+/// or month from the first payday, until an optional last day. It is one
+/// person's (`user_id`) or everyone's with a position (`position_id`); a
+/// person's own base pay replaces their position's.
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BasePay {
     /// Base pay id.
     pub id: i64,
-    /// The rep.
-    pub user_id: i32,
+    /// One person's base pay.
+    pub user_id: Option<i32>,
     /// Their name.
-    pub rep: String,
+    pub rep: Option<String>,
+    /// Or the base pay of everyone with this position.
+    pub position_id: Option<i32>,
     /// Paid each time.
     pub amount: f64,
     /// `weekly`, `biweekly` (every two weeks) or `monthly`.
@@ -526,10 +536,47 @@ pub fn base_pay_dates(
     dates
 }
 
+/// Someone who holds a position in the company.
+#[derive(Debug, Clone)]
+pub struct PositionMember {
+    pub user_id: i32,
+    pub rep: String,
+    pub position_id: i32,
+}
+
+/// Each person's base pay: their own, or else every base pay of each
+/// position they hold, as that person's.
+pub fn base_pay_by_person(base_pay: &[BasePay], members: &[PositionMember]) -> Vec<BasePay> {
+    let own: Vec<BasePay> = base_pay
+        .iter()
+        .filter(|p| p.user_id.is_some())
+        .cloned()
+        .collect();
+    let mut people = own.clone();
+    for member in members {
+        if own.iter().any(|p| p.user_id == Some(member.user_id)) {
+            continue;
+        }
+        for pay in base_pay
+            .iter()
+            .filter(|p| p.user_id.is_none() && p.position_id == Some(member.position_id))
+        {
+            people.push(BasePay {
+                user_id: Some(member.user_id),
+                rep: Some(member.rep.clone()),
+                ..pay.clone()
+            });
+        }
+    }
+    people
+}
+
 /// `payrollWeeks`: per payroll date (newest first), every rep's commissions
-/// an admin added to the salary, monthly bonuses (paid with the first payroll
-/// after the month) and their base pay on its own days (through the next
-/// payday after `today`).
+/// an admin added to the salary, monthly bonuses and their base pay on its
+/// own days (through the next payday after `today`). A month's bonus goes by
+/// what the rep sold that month (their CRM quotes, by the day sold) and is
+/// paid with the first payroll after the month. `base_pay` is per person
+/// (see [`base_pay_by_person`]).
 pub fn payroll_weeks(
     rows: &[PaidRow],
     rules: &[CommissionRule],
@@ -558,24 +605,31 @@ pub fn payroll_weeks(
         });
         reps.len() - 1
     };
-    // (user, month) → sales, in the order first seen.
+    // (user, month sold) → sales, in the order first seen.
     let mut months: Vec<(Option<i32>, String, String, f64)> = Vec::new();
     for row in rows {
+        if row.from_quote
+            && let Some(month) = row.signed_at.as_deref().and_then(|d| d.get(..7))
+        {
+            match months
+                .iter_mut()
+                .find(|m| m.0 == row.user_id && m.2 == month)
+            {
+                Some(entry) => entry.3 += row.quote_total,
+                None => months.push((
+                    row.user_id,
+                    row.rep.clone(),
+                    month.to_string(),
+                    row.quote_total,
+                )),
+            }
+        }
         // Only what an admin added to the salary is paid.
         let Some(payroll) = &row.payroll_date else {
             continue;
         };
-        let paid = row.paid_date.as_ref().unwrap_or(payroll);
         let i = cell(&mut weeks, payroll, row.user_id, &row.rep);
         weeks.get_mut(payroll.as_str()).expect("cell")[i].commission += row.commission;
-        let month = paid.get(..7).unwrap_or_default().to_string();
-        match months
-            .iter_mut()
-            .find(|m| m.0 == row.user_id && m.2 == month)
-        {
-            Some(entry) => entry.3 += row.quote_total,
-            None => months.push((row.user_id, row.rep.clone(), month, row.quote_total)),
-        }
     }
     for (user_id, rep, month, sales) in months {
         let bonus = monthly_bonus(rules, sales);
@@ -602,13 +656,14 @@ pub fn payroll_weeks(
     }
     for pay in base_pay {
         let ymd = |s: &str| NaiveDate::parse_from_str(s.get(..10)?, "%Y-%m-%d").ok();
-        let Some(start) = ymd(&pay.start_date) else {
+        let (Some(user_id), Some(start)) = (pay.user_id, ymd(&pay.start_date)) else {
             continue;
         };
+        let rep = pay.rep.as_deref().unwrap_or("Unassigned");
         let end = pay.end_date.as_deref().and_then(ymd);
         for date in base_pay_dates(start, &pay.frequency, end, today) {
             let date = date.format("%Y-%m-%d").to_string();
-            let i = cell(&mut weeks, &date, Some(pay.user_id), &pay.rep);
+            let i = cell(&mut weeks, &date, Some(user_id), rep);
             weeks.get_mut(date.as_str()).expect("cell")[i].base += pay.amount;
         }
     }
@@ -790,19 +845,22 @@ mod tests {
             threshold: Some(1000.0),
             active: true,
         };
-        let row = |paid: &str, payroll: &str, total: f64| PaidRow {
+        let row = |sold: &str, payroll: &str, total: f64| PaidRow {
             user_id: Some(100),
             rep: "Rita".into(),
             quote_total: total,
             commission: 50.0,
-            paid_date: Some(paid.into()),
+            paid_date: Some(payroll.into()),
             payroll_date: Some(payroll.into()),
+            signed_at: Some(sold.into()),
+            from_quote: true,
         };
         // $100 every Friday from 9/11 to 10/2: paid on weeks with no commission too.
         let base = BasePay {
             id: 1,
-            user_id: 100,
-            rep: "Rita".into(),
+            user_id: Some(100),
+            rep: Some("Rita".into()),
+            position_id: None,
             amount: 100.0,
             frequency: "weekly".into(),
             start_date: "2026-09-11".into(),
@@ -810,10 +868,10 @@ mod tests {
         };
         let weeks = payroll_weeks(
             &[
-                row("2026-09-10", "2026-09-11", 600.0),
+                row("2026-09-08", "2026-09-11", 600.0),
                 row("2026-09-20", "2026-09-25", 600.0),
             ],
-            &[goal],
+            std::slice::from_ref(&goal),
             &[base],
             5,
             d("2026-10-20"),
@@ -827,6 +885,69 @@ mod tests {
         assert_eq!(weeks[0].reps[0].total, 350.0);
         assert_eq!(weeks[1].reps[0].total, 150.0);
         assert_eq!(weeks[2].reps[0].total, 100.0);
+
+        // The goal counts what was sold that month in the CRM, paid or not
+        // yet; a sheet row (no quote) never counts, the sheet paid its own.
+        let sheet = PaidRow {
+            from_quote: false,
+            ..row("2026-08-03", "2026-08-07", 5000.0)
+        };
+        let unpaid = PaidRow {
+            payroll_date: None,
+            paid_date: None,
+            ..row("2026-08-20", "", 400.0)
+        };
+        let weeks = payroll_weeks(
+            &[sheet, unpaid.clone()],
+            std::slice::from_ref(&goal),
+            &[],
+            5,
+            d("2026-10-20"),
+        );
+        assert!(weeks.iter().all(|w| w.reps.iter().all(|r| r.bonus == 0.0)));
+        let weeks = payroll_weeks(
+            &[unpaid, row("2026-08-31", "2026-10-09", 600.0)],
+            &[goal],
+            &[],
+            5,
+            d("2026-10-20"),
+        );
+        // August's bonus: the first payroll Friday after the month, 9/4.
+        let bonus = weeks.iter().find(|w| w.payroll_date == "2026-09-04").unwrap();
+        assert_eq!(bonus.reps[0].bonus, 250.0);
+    }
+
+    #[test]
+    fn a_positions_base_pay_pays_everyone_with_it_who_has_none_of_their_own() {
+        let pay = |id: i64, user_id: Option<i32>, position_id: Option<i32>, amount: f64| BasePay {
+            id,
+            user_id,
+            rep: user_id.map(|_| "Own".into()),
+            position_id,
+            amount,
+            frequency: "weekly".into(),
+            start_date: "2026-10-02".into(),
+            end_date: None,
+        };
+        let member = |user_id: i32, position_id: i32| PositionMember {
+            user_id,
+            rep: format!("User {user_id}"),
+            position_id,
+        };
+        let people = base_pay_by_person(
+            &[
+                pay(1, None, Some(1), 500.0),
+                pay(2, Some(11), None, 700.0),
+                pay(3, None, Some(2), 900.0),
+            ],
+            // 10 and 11 are sales reps; 11 has their own base pay.
+            &[member(10, 1), member(11, 1), member(12, 3)],
+        );
+        let by_user: Vec<(Option<i32>, f64)> =
+            people.iter().map(|p| (p.user_id, p.amount)).collect();
+        assert_eq!(by_user, [(Some(11), 700.0), (Some(10), 500.0)]);
+        assert_eq!(people[1].rep.as_deref(), Some("User 10"));
+        assert_eq!(people[1].position_id, Some(1));
     }
 
     fn d(s: &str) -> NaiveDate {

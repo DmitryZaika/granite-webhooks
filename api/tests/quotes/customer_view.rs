@@ -116,6 +116,9 @@ async fn a_customer_unlocks_their_page_with_an_emailed_code(pool: MySqlPool) {
     assert_eq!(projects[0]["status"], "Sold");
     assert_eq!(projects[0]["seller_name"], "Rita Rep");
     assert_eq!(projects[0]["price"], 4200.0);
+    assert_eq!(projects[0]["project_address"], "1 Main St");
+    assert_eq!(projects[0]["square_feet"], 55.5);
+    assert_eq!(projects[0]["installed_date"], Value::Null);
 
     let invoices = server.get(&page("/invoices")).await;
     invoices.assert_status_ok();
@@ -132,6 +135,68 @@ async fn a_customer_unlocks_their_page_with_an_emailed_code(pool: MySqlPool) {
         .get("/v1/public/customer-view/100/4c2a7d3f-0e5b-4f9c-b2d8-6a3f9e0d1c2b/projects")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[test_db::test(seed)]
+async fn a_customer_sees_their_appointments_without_the_shops_notes(pool: MySqlPool) {
+    let (server, sent) = server(&pool).await;
+    sqlx::raw_sql(
+        "INSERT INTO calendars (id, company_id, name, slug) VALUES
+           (9100, 100, 'Templates', 'templates'), (9101, 100, 'Showroom', NULL);
+         INSERT INTO events (id, title, description, notes, start_date, end_date, all_day,
+                             unscheduled, created_user_id, assigned_user_id, customer_id,
+                             calendar_id, location, crew_status, rrule) VALUES
+           (9200, 'Alice measure', 'gate 1234', 'cash only', '2026-05-02 14:00:00',
+            '2026-05-02 16:00:00', 0, 0, 100, 101, 1000, 9100, ' 1 Main St ', 'on_my_way', NULL),
+           (9201, 'Alice showroom', NULL, NULL, '2026-04-20 15:00:00', '2026-04-20 16:00:00',
+            0, 0, 100, NULL, 1000, 9101, NULL, NULL, NULL),
+           (9202, 'Alice install', NULL, NULL, '2026-04-01 04:00:00', '2026-04-01 04:00:00',
+            1, 1, 100, NULL, 1000, NULL, NULL, NULL, NULL),
+           (9203, 'deleted', NULL, NULL, '2026-04-21 15:00:00', '2026-04-21 16:00:00',
+            0, 0, 100, NULL, 1000, 9100, NULL, NULL, NULL),
+           (9204, 'weekly', NULL, NULL, '2026-04-22 15:00:00', '2026-04-22 16:00:00',
+            0, 0, 100, NULL, 1000, 9100, NULL, NULL, 'FREQ=WEEKLY'),
+           (9205, 'someone else', NULL, NULL, '2026-04-23 15:00:00', '2026-04-23 16:00:00',
+            0, 0, 100, NULL, 1004, 9100, NULL, NULL, NULL),
+           (9206, 'other company', NULL, NULL, '2026-04-24 15:00:00', '2026-04-24 16:00:00',
+            0, 0, 106, NULL, 1000, NULL, NULL, NULL, NULL);
+         UPDATE events SET deleted_date = NOW() WHERE id = 9203;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    server
+        .get(&page("/schedule"))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    server
+        .post(&page("/code"))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .post(&page("/verify"))
+        .json(&json!({ "code": last_code(&sent) }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let schedule = server.get(&page("/schedule")).await;
+    schedule.assert_status_ok();
+    assert_eq!(schedule.header("cache-control"), "private, no-store");
+    assert_eq!(
+        schedule.json::<Value>(),
+        json!([
+            { "id": 9201, "kind": null, "start_date": "2026-04-20T15:00:00Z",
+              "end_date": "2026-04-20T16:00:00Z", "all_day": false, "unscheduled": false,
+              "location": null, "crew_name": null, "crew_status": null },
+            { "id": 9200, "kind": "templates", "start_date": "2026-05-02T14:00:00Z",
+              "end_date": "2026-05-02T16:00:00Z", "all_day": false, "unscheduled": false,
+              "location": "1 Main St", "crew_name": "Mark Manager", "crew_status": "on_my_way" },
+            { "id": 9202, "kind": null, "start_date": "2026-04-01T04:00:00Z",
+              "end_date": "2026-04-01T04:00:00Z", "all_day": true, "unscheduled": true,
+              "location": null, "crew_name": null, "crew_status": null },
+        ])
+    );
 }
 
 #[test_db::test(seed)]

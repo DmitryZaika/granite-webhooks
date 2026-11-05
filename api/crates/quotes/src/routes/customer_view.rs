@@ -1,10 +1,11 @@
-//! A customer's own page (no CRM session): their projects and invoices,
-//! unlocked by a one-time code emailed to the address on file.
+//! A customer's own page (no CRM session): their projects, appointments and
+//! invoices, unlocked by a one-time code emailed to the address on file.
 //!
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}`          → the gate: verified, and where a code goes
 //! - `POST   /v1/public/customer-view/{company_id}/{view_id}/code`     → email a code
 //! - `POST   /v1/public/customer-view/{company_id}/{view_id}/verify`   → enter it
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/projects` → their sales
+//! - `GET    /v1/public/customer-view/{company_id}/{view_id}/schedule` → their appointments
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/quotes`   → their online quotes
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/invoices` → their `QuickBooks` invoices
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/invoices/{invoice_id}/pdf`
@@ -44,6 +45,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(send_view_code))
         .routes(routes!(verify_view_code))
         .routes(routes!(projects))
+        .routes(routes!(schedule))
         .routes(routes!(quotes))
         .routes(routes!(invoices))
         .routes(routes!(invoice_pdf))
@@ -685,6 +687,12 @@ pub struct ViewProject {
     pub sink: Option<String>,
     /// `Sold`, `Partially Cut`, `Cut`, `Installed` or `Cancelled`.
     pub status: Option<String>,
+    /// Where the work is.
+    pub project_address: Option<String>,
+    /// Countertop area in square feet.
+    pub square_feet: Option<f64>,
+    /// When it was installed (ISO 8601, UTC).
+    pub installed_date: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -735,7 +743,10 @@ pub async fn projects(
                   WHEN s.cancelled_date IS NOT NULL THEN 'Cancelled'
                   WHEN s.installed_date IS NOT NULL THEN 'Installed'
                   WHEN s.sale_date IS NOT NULL THEN 'Sold'
-                END AS status
+                END AS status,
+                NULLIF(TRIM(s.project_address), '') AS project_address,
+                CAST(s.square_feet AS DOUBLE) AS square_feet,
+                DATE_FORMAT(s.installed_date, '%Y-%m-%dT%H:%i:%sZ') AS installed_date
            FROM sales s
            JOIN customers c ON s.customer_id = c.id
            LEFT JOIN users u ON s.seller_id = u.id
@@ -766,6 +777,87 @@ pub async fn projects(
         })
         .collect();
     Ok(no_store(Json(projects)))
+}
+
+/// One of the customer's appointments (a schedule event). Only what the
+/// customer needs: never the event's title, description or notes, which are
+/// the shop's own words.
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+pub struct ViewAppointment {
+    /// Event id.
+    pub id: i32,
+    /// `templates`, `installations` or `estimates` (the built-in calendars);
+    /// `None` for any other calendar.
+    pub kind: Option<String>,
+    /// Start (ISO 8601, UTC). While `unscheduled` it only holds when the
+    /// event was added.
+    pub start_date: String,
+    /// End (ISO 8601, UTC).
+    pub end_date: String,
+    /// The whole day, no time.
+    pub all_day: bool,
+    /// Waiting for a date: the shop has not picked the day yet.
+    pub unscheduled: bool,
+    /// The address.
+    pub location: Option<String>,
+    /// Who comes (the person the event is assigned to).
+    pub crew_name: Option<String>,
+    /// How the crew is getting on today: `on_my_way`, `arrived` or
+    /// `completed`.
+    pub crew_status: Option<String>,
+}
+
+/// List the customer's appointments
+///
+/// Their templates, installations, estimates and other visits, by start:
+/// waiting-for-a-date ones last. Repeating events are left out. Needs a
+/// verified visitor.
+#[crate::openapi::path(
+    get,
+    path = "/v1/public/customer-view/{company_id}/{view_id}/schedule",
+    operation_id = "list_customer_view_schedule",
+    tag = "customer-view",
+    params(
+        ("company_id" = i32, Path, description = "Company id"),
+        ("view_id" = String, Path, description = "The customer's page id (a UUID)"),
+    ),
+    responses(
+        (status = 200, description = "The appointments", body = [ViewAppointment]),
+        (status = 401, description = "No code entered for this page", body = ErrorBody),
+        (status = 404, description = "No such page", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    )
+)]
+pub async fn schedule(
+    State(state): State<AppState>,
+    Path((company_id, view_id)): Path<(i32, String)>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let customer = verified_customer(&state, &headers, company_id, &view_id).await?;
+    let appointments: Vec<ViewAppointment> = sqlx::query_as(
+        "SELECT e.id,
+                CASE WHEN cal.slug IN ('templates', 'installations', 'estimates')
+                     THEN cal.slug END AS kind,
+                DATE_FORMAT(e.start_date, '%Y-%m-%dT%H:%i:%sZ') AS start_date,
+                DATE_FORMAT(e.end_date, '%Y-%m-%dT%H:%i:%sZ') AS end_date,
+                COALESCE(e.all_day, 0) <> 0 AS all_day,
+                e.unscheduled <> 0 AS unscheduled,
+                NULLIF(TRIM(e.location), '') AS location,
+                NULLIF(TRIM(a.name), '') AS crew_name,
+                e.crew_status
+           FROM events e
+           JOIN users u ON u.id = e.created_user_id
+           LEFT JOIN calendars cal ON cal.id = e.calendar_id AND cal.company_id = u.company_id
+           LEFT JOIN users a ON a.id = e.assigned_user_id AND a.is_deleted = 0
+          WHERE e.customer_id = ? AND u.company_id = ? AND e.deleted_date IS NULL
+            AND NULLIF(TRIM(e.rrule), '') IS NULL
+          ORDER BY e.unscheduled, e.start_date, e.id",
+    )
+    .bind(customer.id)
+    .bind(company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(no_store(Json(appointments)))
 }
 
 /// List the customer's online quotes

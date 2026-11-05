@@ -4532,6 +4532,82 @@
         }
       }
     },
+    "/v1/public/customer-view/{company_id}/{view_id}/schedule": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "List the customer's appointments",
+        "description": "Their templates, installations, estimates and other visits, by start:\nwaiting-for-a-date ones last. Repeating events are left out. Needs a\nverified visitor.",
+        "operationId": "list_customer_view_schedule",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The appointments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ViewAppointment"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/public/customer-view/{company_id}/{view_id}/quotes": {
       "get": {
         "tags": [
@@ -32882,7 +32958,7 @@
           "commissions"
         ],
         "summary": "List base pay",
-        "description": "Every rep's base pay schedules.",
+        "description": "The base pay schedules: one person's, or everyone's with a position.",
         "operationId": "list_commission_base_pay",
         "responses": {
           "200": {
@@ -32940,7 +33016,7 @@
           "commissions"
         ],
         "summary": "Add base pay",
-        "description": "A rep's base pay: an amount every week, two weeks or month from the\nfirst payday (monthly: on that day of the month), until an optional last\nday. It shows in the paychecks on those days.",
+        "description": "A base pay for one person or for everyone with a position: an amount\nevery week, two weeks or month from the first payday (monthly: on that\nday of the month), until an optional last day. It shows in the paychecks\non those days; a person's own base pay replaces their position's.",
         "operationId": "create_commission_base_pay",
         "requestBody": {
           "content": {
@@ -33169,7 +33245,7 @@
           "commissions"
         ],
         "summary": "List commissions",
-        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) signed\nquotes with what they earn, and the paychecks: paid commissions, monthly\ngoal bonuses and base pay per payroll date.",
+        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) signed\nquotes with what they earn, and the paychecks: paid commissions, monthly\ngoal bonuses (by what was sold in the CRM that month) and base pay (their\nown, or their positions') per payroll date.",
         "operationId": "list_commissions",
         "parameters": [
           {
@@ -68725,11 +68801,9 @@
       },
       "BasePay": {
         "type": "object",
-        "description": "A rep's base pay (`commission_base_pay`): `amount` every week, two weeks\nor month from the first payday, until an optional last day.",
+        "description": "A rep's base pay (`commission_base_pay`): `amount` every week, two weeks\nor month from the first payday, until an optional last day. It is one\nperson's (`user_id`) or everyone's with a position (`position_id`); a\nperson's own base pay replaces their position's.",
         "required": [
           "id",
-          "userId",
-          "rep",
           "amount",
           "frequency",
           "startDate"
@@ -68741,13 +68815,27 @@
             "description": "Base pay id."
           },
           "userId": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "The rep."
+            "description": "One person's base pay."
           },
           "rep": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Their name."
+          },
+          "positionId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Or the base pay of everyone with this position."
           },
           "amount": {
             "type": "number",
@@ -68773,18 +68861,28 @@
       },
       "BasePayInput": {
         "type": "object",
-        "description": "A rep's base pay as an admin sets it.",
+        "description": "A base pay as an admin sets it: for one person or for a position.",
         "required": [
-          "userId",
           "amount",
           "frequency",
           "startDate"
         ],
         "properties": {
           "userId": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "The rep (an employee of the company)."
+            "description": "One person (an employee of the company)…"
+          },
+          "positionId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "…or everyone with this position; exactly one of the two."
           },
           "amount": {
             "type": "number",
@@ -104712,6 +104810,68 @@
           }
         }
       },
+      "ViewAppointment": {
+        "type": "object",
+        "description": "One of the customer's appointments (a schedule event). Only what the\ncustomer needs: never the event's title, description or notes, which are\nthe shop's own words.",
+        "required": [
+          "id",
+          "start_date",
+          "end_date",
+          "all_day",
+          "unscheduled"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Event id."
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`templates`, `installations` or `estimates` (the built-in calendars);\n`None` for any other calendar."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Start (ISO 8601, UTC). While `unscheduled` it only holds when the\nevent was added."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End (ISO 8601, UTC)."
+          },
+          "all_day": {
+            "type": "boolean",
+            "description": "The whole day, no time."
+          },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Waiting for a date: the shop has not picked the day yet."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address."
+          },
+          "crew_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who comes (the person the event is assigned to)."
+          },
+          "crew_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the crew is getting on today: `on_my_way`, `arrived` or\n`completed`."
+          }
+        }
+      },
       "ViewGate": {
         "type": "object",
         "description": "Whether the visitor may see the page, and where a code would go.",
@@ -104810,6 +104970,28 @@
               "null"
             ],
             "description": "`Sold`, `Partially Cut`, `Cut`, `Installed` or `Cancelled`."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the work is."
+          },
+          "square_feet": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Countertop area in square feet."
+          },
+          "installed_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was installed (ISO 8601, UTC)."
           }
         }
       },
