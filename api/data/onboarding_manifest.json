@@ -301,6 +301,39 @@
       "usage_check": "call_followed_up"
     },
     {
+      "id": "automations-sends",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "admin-automations-email-templates"
+      ],
+      "usage_check": "automation_set_up"
+    },
+    {
+      "id": "automations-flows",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "admin-automations-sms-flows"
+      ],
+      "usage_check": "automation_set_up"
+    },
+    {
+      "id": "automations-trigger",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "email-template-trigger"
+      ],
+      "usage_check": "automation_set_up"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
