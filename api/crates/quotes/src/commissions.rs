@@ -441,6 +441,8 @@ pub struct PaidRow {
     pub signed_at: Option<String>,
     /// How it counts toward a monthly goal.
     pub goal: GoalRow,
+    /// Its synced `QuickBooks` invoice: id and total.
+    pub invoice: Option<(String, f64)>,
 }
 
 /// How a commission row counts toward a monthly goal.
@@ -610,16 +612,18 @@ pub fn base_pay_by_person(base_pay: &[BasePay], members: &[PositionMember]) -> V
 /// `payrollWeeks`: per payroll date (newest first), every rep's commissions
 /// an admin added to the salary, monthly bonuses and their base pay on its
 /// own days (through the next payday after `today`). A month's bonus goes by
-/// what the rep sold that month (CRM quotes and sheet jobs, by the day sold;
-/// not a month the sheet already paid a bonus for) and is
-/// paid with the first payroll after the month. `base_pay` is per person
-/// (see [`base_pay_by_person`]).
+/// what the rep sold that month, by the day sold (not a month the sheet
+/// already paid a bonus for), and is paid with the first payroll after the
+/// month. With `quickbooks` (the company's `QuickBooks` is connected) what was
+/// sold is their synced invoices, each once; else their CRM quotes and sheet
+/// jobs. `base_pay` is per person (see [`base_pay_by_person`]).
 pub fn payroll_weeks(
     rows: &[PaidRow],
     rules: &[CommissionRule],
     base_pay: &[BasePay],
     weekday: u32,
     today: NaiveDate,
+    quickbooks: bool,
 ) -> Vec<PayrollWeek> {
     // date → reps in the order first seen.
     let mut weeks: BTreeMap<String, Vec<PayrollRep>> = BTreeMap::new();
@@ -653,21 +657,32 @@ pub fn payroll_weeks(
             Some((row.user_id, month_before(day)?))
         })
         .collect();
+    // (user, invoice) already counted: rows of one job share an invoice.
+    let mut counted: Vec<(Option<i32>, &str)> = Vec::new();
     for row in rows {
+        // With QuickBooks: only synced invoices, each once; nothing typed in.
+        let amount = if !quickbooks {
+            Some(row.quote_total)
+        } else if let Some((id, total)) = &row.invoice
+            && !counted.contains(&(row.user_id, id.as_str()))
+        {
+            counted.push((row.user_id, id.as_str()));
+            Some(*total)
+        } else {
+            None
+        };
         if row.goal == GoalRow::Sale
+            && let Some(amount) = amount
             && let Some(month) = row.signed_at.as_deref().and_then(|d| d.get(..7))
         {
             match months
                 .iter_mut()
                 .find(|m| m.0 == row.user_id && m.2 == month)
             {
-                Some(entry) => entry.3 += row.quote_total,
-                None => months.push((
-                    row.user_id,
-                    row.rep.clone(),
-                    month.to_string(),
-                    row.quote_total,
-                )),
+                Some(entry) => entry.3 += amount,
+                None => {
+                    months.push((row.user_id, row.rep.clone(), month.to_string(), amount));
+                }
             }
         }
         // Only what an admin added to the salary is paid.
@@ -903,6 +918,7 @@ mod tests {
             payroll_date: Some(payroll.into()),
             signed_at: Some(sold.into()),
             goal: GoalRow::Sale,
+            invoice: None,
         };
         // $100 every Friday from 9/11 to 10/2: paid on weeks with no commission too.
         let base = BasePay {
@@ -924,6 +940,7 @@ mod tests {
             &[base],
             5,
             d("2026-10-20"),
+            false,
         );
         let dates: Vec<&str> = weeks.iter().map(|w| w.payroll_date.as_str()).collect();
         assert_eq!(
@@ -952,6 +969,7 @@ mod tests {
             &[],
             5,
             d("2026-10-20"),
+            false,
         );
         // August's bonus: the first payroll Friday after the month, 9/4.
         let bonus = weeks
@@ -971,6 +989,7 @@ mod tests {
             &[],
             5,
             d("2026-10-20"),
+            false,
         );
         let total: f64 = weeks.iter().flat_map(|w| &w.reps).map(|r| r.bonus).sum();
         assert_eq!(total, 0.0);
@@ -980,8 +999,60 @@ mod tests {
             goal: GoalRow::of(false, Some("CRM"), 2000.0, 2000.0),
             ..row("2026-09-03", "2026-09-04", 2000.0)
         };
-        let weeks = payroll_weeks(&[fee], &[goal], &[], 5, d("2026-10-20"));
+        let weeks = payroll_weeks(
+            &[fee],
+            std::slice::from_ref(&goal),
+            &[],
+            5,
+            d("2026-10-20"),
+            false,
+        );
         assert!(weeks.iter().all(|w| w.reps.iter().all(|r| r.bonus == 0.0)));
+
+        // With QuickBooks: only synced invoices, each once (two rows of one
+        // job share it); a row with no invoice and the sheet's jobs don't count.
+        let invoiced = |sold: &str, id: &str, total: f64| PaidRow {
+            invoice: Some((id.into(), total)),
+            ..row(sold, "2026-08-07", 1.0)
+        };
+        let august = |rows: &[PaidRow]| {
+            let weeks = payroll_weeks(
+                rows,
+                std::slice::from_ref(&goal),
+                &[],
+                5,
+                d("2026-10-20"),
+                true,
+            );
+            weeks
+                .iter()
+                .flat_map(|w| &w.reps)
+                .map(|r| r.bonus)
+                .sum::<f64>()
+        };
+        let cabinets = PaidRow {
+            goal: GoalRow::of(false, Some("Smith (cabinets)"), 5000.0, 175.0),
+            ..row("2026-08-03", "2026-08-07", 5000.0)
+        };
+        let typed = row("2026-08-04", "2026-08-07", 5000.0);
+        assert_eq!(
+            august(&[
+                invoiced("2026-08-05", "77", 600.0),
+                invoiced("2026-08-06", "77", 600.0),
+                cabinets.clone(),
+                typed.clone(),
+            ]),
+            0.0
+        );
+        assert_eq!(
+            august(&[
+                invoiced("2026-08-05", "77", 600.0),
+                invoiced("2026-08-06", "78", 400.0),
+                cabinets,
+                typed,
+            ]),
+            250.0
+        );
     }
 
     #[test]
