@@ -281,5 +281,12 @@ pub async fn run(
     {
         tracing::warn!(%error, "renewing reps' RingCentral sign-ins failed");
     }
+    // Every rep's own RingCentral contacts a few customers fuller, until they
+    // have them all (`ringcentral_contacts`).
+    if let Err(error) =
+        common::telephony::ringcentral_contacts::catch_up(&state.pool, &state.telephony_http).await
+    {
+        tracing::warn!(%error, "filling reps' RingCentral contacts failed");
+    }
     Ok(Json(CallHistoryRun { processed }))
 }
