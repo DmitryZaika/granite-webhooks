@@ -288,6 +288,53 @@ async fn resolve_qbo_id(
     ))
 }
 
+/// The numbers `count` new invoices get when the company numbers its own
+/// invoices (`QuickBooks`' "Custom transaction numbers"; `QuickBooks` leaves
+/// an invoice made through the API without a number then). `None` when
+/// `QuickBooks` numbers them itself, or no number could be worked out: the
+/// invoices are still made.
+pub(super) async fn new_doc_numbers(
+    state: &AppState,
+    access: &Access,
+    count: usize,
+) -> Option<Vec<String>> {
+    let custom = match state
+        .qbo
+        .query(access, "select * from Preferences", "Preferences")
+        .await
+    {
+        Ok(rows) => rows
+            .first()
+            .is_some_and(|prefs| prefs["SalesFormsPrefs"]["CustomTxnNumbers"] == json!(true)),
+        Err(err) => {
+            tracing::warn!(error = %err, "QuickBooks preferences not read; invoice left unnumbered");
+            return None;
+        }
+    };
+    if !custom {
+        return None;
+    }
+    let recent = match state
+        .qbo
+        .query(
+            access,
+            "select DocNumber from Invoice orderby MetaData.CreateTime desc maxresults 100",
+            "Invoice",
+        )
+        .await
+    {
+        Ok(rows) => rows
+            .iter()
+            .filter_map(|row| text(&row["DocNumber"]))
+            .collect::<Vec<_>>(),
+        Err(err) => {
+            tracing::warn!(error = %err, "QuickBooks invoice numbers not read; invoice left unnumbered");
+            return None;
+        }
+    };
+    invoice::next_doc_numbers(&recent, count)
+}
+
 async fn invoices_for(
     state: &AppState,
     access: &Access,
@@ -498,7 +545,7 @@ pub async fn create_invoice(
 ) -> ApiResult<Json<EditableInvoice>> {
     refuse_installer(&state, &user).await?;
     let ready = prepare(&state, &user, customer_id, input.quote_id, &input.invoice).await?;
-    let payload = create_payload(
+    let mut payload = create_payload(
         &ready.qbo_id,
         &input.invoice,
         ready.email.as_deref(),
@@ -506,6 +553,12 @@ pub async fn create_invoice(
     )
     .map_err(ApiError::BadRequest)?;
     let access = ready.access;
+    if let Some(number) = new_doc_numbers(&state, &access, 1)
+        .await
+        .and_then(|numbers| numbers.into_iter().next())
+    {
+        payload["DocNumber"] = json!(number);
+    }
     let company_id = user.company_id;
     let created = state
         .qbo
