@@ -667,7 +667,9 @@ pub async fn resolve_ringcentral_extension(
     let Some(phone) = phone else {
         return Ok(kept(None));
     };
-    if !company_features(&state.pool, company_id).await?.ringcentral {
+    // Only the company's own sign-in lists its extensions; a rep's own
+    // sign-in fills their extension when they connect.
+    if !ringcentral::company_connected(&state.pool, company_id).await? {
         return Ok(kept(current));
     }
     let pool = &state.pool;

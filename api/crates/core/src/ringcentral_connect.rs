@@ -35,9 +35,6 @@ pub enum ConnectError {
     Incomplete,
     #[error("AES_KEY is not set")]
     NoKey,
-    /// A rep signed in to a `RingCentral` account other than the company's.
-    #[error("the login belongs to another RingCentral account")]
-    OtherAccount,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -148,9 +145,9 @@ impl RingCentralApp {
         Ok(())
     }
 
-    /// Trades a rep's code for tokens and saves their own sign-in, once it
-    /// is shown to be a user of the company's `RingCentral` account. An
-    /// extension moves to the rep who signed in last.
+    /// Trades a rep's code for tokens and saves their own sign-in. Each rep
+    /// may have their own `RingCentral` account, so it need not be the
+    /// company's. An extension moves to the rep who signed in last.
     pub async fn connect_rep(
         &self,
         pool: &MySqlPool,
@@ -191,21 +188,6 @@ impl RingCentralApp {
                 .or_else(|| value.as_str().map(str::to_string))
         };
         let extension_id = id_of(&me["id"]).ok_or(ConnectError::Incomplete)?;
-        let company_account = ringcentral::request(
-            pool,
-            client,
-            company_id,
-            Method::GET,
-            "account/~",
-            &Body::Empty,
-            None,
-        )
-        .await
-        .map_err(|error| ConnectError::Request(format!("company account: {}", error.status)))?;
-        let account = id_of(&me["account"]["id"]);
-        if account.is_none() || account != id_of(&company_account["id"]) {
-            return Err(ConnectError::OtherAccount);
-        }
         let phone = texting_number(&get("account/~/extension/~/phone-number?perPage=100").await?);
         let mut tx = pool.begin().await?;
         sqlx::query(
