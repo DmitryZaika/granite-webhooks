@@ -167,6 +167,71 @@ impl TelegramBots {
         }
     }
 
+    /// Sends plain `text`. False when it was not sent (logged).
+    pub async fn send_text(&self, bot: Bot, chat_id: i64, text: &str) -> bool {
+        self.call(
+            bot,
+            "sendMessage",
+            &serde_json::json!({ "chat_id": chat_id, "text": text }),
+        )
+        .await
+    }
+
+    /// Replaces message `message_id`'s text with `text`; its buttons go.
+    /// False when Telegram refused (logged).
+    pub async fn edit_text(&self, bot: Bot, chat_id: i64, message_id: i64, text: &str) -> bool {
+        self.call(
+            bot,
+            "editMessageText",
+            &serde_json::json!({ "chat_id": chat_id, "message_id": message_id, "text": text }),
+        )
+        .await
+    }
+
+    /// Replaces message `message_id`'s buttons with `rows` (empty: none).
+    /// False when Telegram refused (logged).
+    pub async fn edit_buttons(
+        &self,
+        bot: Bot,
+        chat_id: i64,
+        message_id: i64,
+        rows: &[Vec<serde_json::Value>],
+    ) -> bool {
+        self.call(
+            bot,
+            "editMessageReplyMarkup",
+            &serde_json::json!({
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reply_markup": { "inline_keyboard": rows },
+            }),
+        )
+        .await
+    }
+
+    async fn call(&self, bot: Bot, method: &str, body: &serde_json::Value) -> bool {
+        let Some(token) = self.token(bot) else {
+            return false;
+        };
+        let result = self
+            .http
+            .post(format!("{}/bot{token}/{method}", self.api_base))
+            .json(body)
+            .send()
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => true,
+            Ok(response) => {
+                tracing::warn!(?bot, method, status = %response.status(), "telegram call refused");
+                false
+            }
+            Err(err) => {
+                tracing::warn!(?bot, method, error = %err.without_url(), "telegram call failed");
+                false
+            }
+        }
+    }
+
     /// Whether `bot` can message `chat_id`: Some(true) yes, Some(false) no
     /// (blocked, chat gone), None when it could not be checked (no token,
     /// network error, unexpected answer).

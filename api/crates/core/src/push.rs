@@ -51,6 +51,7 @@ fn apns(data: &BTreeMap<String, String>) -> Value {
             match field("kind") {
                 Some("repeat") => "Repeated lead",
                 Some("assigned") => "Lead assigned to you",
+                Some("taken") => "Lead assigned",
                 Some("quote") => "Online quote finished",
                 _ => "New lead",
             },

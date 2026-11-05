@@ -212,7 +212,7 @@ async fn the_app_can_send_itself_test_pushes(pool: MySqlPool) {
         .assert_status_ok();
 }
 
-/// A Telegram that records each message: (bot path segment, body).
+/// A Telegram that records each call: ("<bot path segment>/<method>", body).
 async fn telegram_stub() -> (
     String,
     std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>,
@@ -224,15 +224,17 @@ async fn telegram_stub() -> (
     let chats: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
     let recorded = chats.clone();
     let telegram = Router::new().route(
-        "/{bot}/sendMessage",
-        post(move |Path(bot): Path<String>, Json(body): Json<Value>| {
-            let recorded = recorded.clone();
-            async move {
-                let mut list = recorded.lock().unwrap();
-                list.push((bot, body));
-                Json(json!({ "ok": true, "result": { "message_id": 800 + list.len() } }))
-            }
-        }),
+        "/{bot}/{method}",
+        post(
+            move |Path((bot, method)): Path<(String, String)>, Json(body): Json<Value>| {
+                let recorded = recorded.clone();
+                async move {
+                    let mut list = recorded.lock().unwrap();
+                    list.push((format!("{bot}/{method}"), body));
+                    Json(json!({ "ok": true, "result": { "message_id": 800 + list.len() } }))
+                }
+            },
+        ),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -258,6 +260,16 @@ async fn a_lead_assigned_from_the_phone_reaches_the_rep_in_the_app_and_in_telegr
     add_phone(&pool, 2, 101, 100).await;
     // Rita has the app and Telegram's lead alerts.
     sql(&pool, "UPDATE users SET telegram_id = 5551 WHERE id = 100").await;
+    // Mark, the sales manager, got the lead in Telegram: once with its text
+    // kept, once before texts were kept.
+    sql(&pool, "UPDATE users SET telegram_id = 7771 WHERE id = 101").await;
+    sql(
+        &pool,
+        "INSERT INTO telegram_lead_messages (customer_id, company_id, chat_id, message_id, text)
+         VALUES (1001, 100, 7771, 41, 'New lead: Bob Unassigned\nChoose a salesperson.'),
+                (1001, 100, 7771, 42, NULL)",
+    )
+    .await;
 
     // Mark's phone lists the sales reps (Assign a sales rep) ...
     let res = server
@@ -283,7 +295,8 @@ async fn a_lead_assigned_from_the_phone_reaches_the_rep_in_the_app_and_in_telegr
     .await
     .unwrap();
 
-    // Rita hears of it on her phone and in Telegram, both.
+    // Rita hears of it on her phone and in Telegram, both, in the words a
+    // Telegram assignment uses. Mark assigned it: his phone is not told.
     assert_eq!(
         pushes(&stubs, "lead"),
         [(
@@ -293,16 +306,38 @@ async fn a_lead_assigned_from_the_phone_reaches_the_rep_in_the_app_and_in_telegr
         )]
     );
     let sent = chats.lock().unwrap().clone();
-    assert_eq!(sent.len(), 1, "{sent:?}");
-    assert_eq!(sent[0].0, "bot111:leads");
-    assert_eq!(sent[0].1["chat_id"], 5551);
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    let to_rita: Vec<_> = sent
+        .iter()
+        .filter(|(_, body)| body["chat_id"] == 5551)
+        .collect();
+    assert_eq!(to_rita.len(), 1, "{sent:?}");
+    assert_eq!(to_rita[0].0, "bot111:leads/sendMessage");
     assert_eq!(
-        sent[0].1["text"],
-        "You were assigned a lead: Bob Unassigned."
+        to_rita[0].1["text"],
+        format!(
+            "You were assigned a lead. Click here: \nhttps://crm.test/employee/deals/edit/{deal}/project"
+        )
     );
+    // Mark's Telegram messages say who has it, as after pressing Rita's button.
+    let edited = sent
+        .iter()
+        .find(|(path, _)| path == "bot111:leads/editMessageText")
+        .expect("the kept text is edited");
+    assert_eq!(edited.1["chat_id"], 7771);
+    assert_eq!(edited.1["message_id"], 41);
     assert_eq!(
-        sent[0].1["reply_markup"]["inline_keyboard"][0][0]["url"],
-        format!("https://crm.test/employee/deals/edit/{deal}/project")
+        edited.1["text"],
+        "New lead: Bob Unassigned\nChoose a salesperson.\n\nLead assigned to Rita Rep"
+    );
+    let relabeled = sent
+        .iter()
+        .find(|(path, _)| path == "bot111:leads/editMessageReplyMarkup")
+        .expect("the older message's buttons are replaced");
+    assert_eq!(relabeled.1["message_id"], 42);
+    assert_eq!(
+        relabeled.1["reply_markup"]["inline_keyboard"][0][0]["text"],
+        "Lead assigned to Rita Rep"
     );
 
     // The same rep again tells nobody again.
@@ -313,9 +348,10 @@ async fn a_lead_assigned_from_the_phone_reaches_the_rep_in_the_app_and_in_telegr
         .await
         .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(pushes(&stubs, "lead").len(), 1);
-    assert_eq!(chats.lock().unwrap().len(), 1);
+    assert_eq!(chats.lock().unwrap().len(), 3);
 
-    // A rep who takes a lead themselves is not told.
+    // A rep who takes a lead themselves is not told; Mark's phone and
+    // Telegram messages are.
     server
         .put("/v1/customers/1001/sales-rep")
         .add_header(HEADER, token(2))
@@ -328,8 +364,19 @@ async fn a_lead_assigned_from_the_phone_reaches_the_rep_in_the_app_and_in_telegr
         .json(&json!({ "sales_rep": 100 }))
         .await
         .assert_status(StatusCode::NO_CONTENT);
-    assert_eq!(pushes(&stubs, "lead").len(), 1);
-    assert_eq!(chats.lock().unwrap().len(), 1);
+    let lead_pushes = pushes(&stubs, "lead");
+    assert_eq!(lead_pushes.len(), 2, "{lead_pushes:?}");
+    assert_eq!(lead_pushes[1].0, "push-2");
+    assert_eq!(lead_pushes[1].1["kind"], "taken");
+    assert_eq!(lead_pushes[1].1.get("assign"), None);
+    let sent = chats.lock().unwrap().clone();
+    assert_eq!(sent.len(), 5, "{sent:?}");
+    assert_eq!(
+        sent.iter()
+            .filter(|(_, body)| body["chat_id"] == 5551)
+            .count(),
+        1
+    );
 
     // The phone still may not edit or delete the customer.
     server

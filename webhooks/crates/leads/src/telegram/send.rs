@@ -6,7 +6,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-use crate::crud::telegram_messages::insert_telegram_lead_message;
+use crate::crud::telegram_messages::insert_telegram_lead_message_text;
 use crate::crud::users::{SalesUser, get_sales_users};
 use crate::libs::constants::{
     ERR_DB, ERR_SEND_TELEGRAM, OK_RESPONSE, SALES_MANAGER, SALES_WORKER, internal_error,
@@ -139,12 +139,13 @@ async fn persist_lead_messages(
     messages: &[Message],
 ) {
     for message in messages {
-        if let Err(error) = insert_telegram_lead_message(
+        if let Err(error) = insert_telegram_lead_message_text(
             pool,
             customer_id,
             company_id,
             message.chat.id.0,
             message.id.0,
+            message.text(),
         )
         .await
         {

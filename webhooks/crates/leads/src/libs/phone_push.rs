@@ -20,6 +20,8 @@ pub enum LeadKind {
     Repeat,
     /// A lead a manager assigned to this rep.
     Assigned,
+    /// For the managers: a lead now has a rep (the app says whom).
+    Taken,
 }
 
 /// Who is told.
@@ -40,6 +42,10 @@ struct LeadPush {
     kind: LeadKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     user_id: Option<i32>,
+    /// Managers not told (`Audience::Managers` only): the rep, the manager
+    /// who assigned it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    except_user_ids: Vec<i32>,
 }
 
 /// API root and the key to send.
@@ -81,12 +87,7 @@ pub async fn push_lead(
     kind: LeadKind,
     audience: Audience,
 ) {
-    let Some((api_url, key)) = api_endpoint() else {
-        #[cfg(not(any(test, feature = "test-support")))]
-        tracing::warn!(customer_id, "API_URL or LAMBDA_KEY not set; no lead push");
-        return;
-    };
-    let push = LeadPush {
+    send(LeadPush {
         company_id,
         customer_id,
         deal_id,
@@ -95,6 +96,38 @@ pub async fn push_lead(
             Audience::Managers => None,
             Audience::Rep(user_id) => Some(user_id),
         },
+        except_user_ids: Vec::new(),
+    })
+    .await;
+}
+
+/// Tells the sales managers' phones that lead `customer_id` (deal
+/// `deal_id`) has a rep now, as its Telegram message is edited to "Lead
+/// assigned to …": a `taken` push. `except` (the rep, the manager who
+/// assigned it) are not told.
+pub async fn push_lead_taken(
+    company_id: i32,
+    customer_id: i64,
+    deal_id: Option<u64>,
+    except: Vec<i32>,
+) {
+    send(LeadPush {
+        company_id,
+        customer_id,
+        deal_id,
+        kind: LeadKind::Taken,
+        user_id: None,
+        except_user_ids: except,
+    })
+    .await;
+}
+
+async fn send(push: LeadPush) {
+    let customer_id = push.customer_id;
+    let Some((api_url, key)) = api_endpoint() else {
+        #[cfg(not(any(test, feature = "test-support")))]
+        tracing::warn!(customer_id, "API_URL or LAMBDA_KEY not set; no lead push");
+        return;
     };
     match push_request(&common::http::client(), &api_url, &key, &push)
         .send()
@@ -128,6 +161,7 @@ mod tests {
             deal_id: None,
             kind: LeadKind::New,
             user_id: None,
+            except_user_ids: Vec::new(),
         };
         let request = push_request(
             &common::http::client(),
@@ -164,6 +198,20 @@ mod tests {
         assert_eq!(
             body,
             json!({ "company_id": 3, "customer_id": 42, "deal_id": 7, "kind": "assigned", "user_id": 9 })
+        );
+    }
+
+    #[tokio::test]
+    async fn the_managers_hear_who_took_the_lead() {
+        let stub = StubServer::start(|_| Some(json!({ "pushed": 2 }))).await;
+        use_api(&stub.base);
+        push_lead_taken(3, 42, Some(7), vec![9, 1]).await;
+        let requests = stub.requests();
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value = serde_json::from_str(&requests[0].body).unwrap();
+        assert_eq!(
+            body,
+            json!({ "company_id": 3, "customer_id": 42, "deal_id": 7, "kind": "taken", "except_user_ids": [9, 1] })
         );
     }
 

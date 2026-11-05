@@ -88,6 +88,9 @@ pub enum LeadKind {
     Repeat,
     /// A lead a manager assigned to this rep.
     Assigned,
+    /// For the managers: a lead now has a sales rep (assigned in Telegram
+    /// or the app); the app reads whom from the customer.
+    Taken,
     /// A customer finished the online quote.
     Quote,
 }
@@ -99,6 +102,7 @@ impl LeadKind {
             Self::Repeat => "repeat",
             Self::Assigned => "assigned",
             Self::Quote => "quote",
+            Self::Taken => "taken",
         }
     }
 }
@@ -130,7 +134,16 @@ pub async fn push_lead(
     customer_id: i32,
     deal_id: Option<i64>,
 ) -> sqlx::Result<usize> {
-    push_lead_data(state, company_id, user_ids, kind, customer_id, deal_id, false).await
+    push_lead_data(
+        state,
+        company_id,
+        user_ids,
+        kind,
+        customer_id,
+        deal_id,
+        false,
+    )
+    .await
 }
 
 /// [`push_lead`] for the sales managers: a new or repeated lead also carries
@@ -145,7 +158,16 @@ pub async fn push_manager_lead(
     deal_id: Option<i64>,
 ) -> sqlx::Result<usize> {
     let assign = matches!(kind, LeadKind::New | LeadKind::Repeat);
-    push_lead_data(state, company_id, user_ids, kind, customer_id, deal_id, assign).await
+    push_lead_data(
+        state,
+        company_id,
+        user_ids,
+        kind,
+        customer_id,
+        deal_id,
+        assign,
+    )
+    .await
 }
 
 async fn push_lead_data(

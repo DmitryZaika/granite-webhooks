@@ -62103,7 +62103,7 @@
           "phone"
         ],
         "summary": "Push a lead alert to phones",
-        "description": "Called by the `webhooks` Lambda (job key) as it sends a lead alert to\nTelegram: to the sales rep `user_id`, else to every sales manager of the\ncompany (linked to Telegram or not). Pushed as data `{granite: \"1\",\ntype: \"lead\", kind, customerId, dealId}` (`dealId` left out when the lead\nhas no deal yet): ids only. The managers' new and repeated leads also\ncarry `assign: \"1\"` (tapping opens the Assign a sales rep sheet). Nothing is pushed (`pushed: 0`) for another\ncompany's or a deleted customer. Calling it again pushes again.",
+        "description": "Called by the `webhooks` Lambda (job key) as it sends a lead alert to\nTelegram: to the sales rep `user_id`, else to every sales manager of the\ncompany (linked to Telegram or not). Pushed as data `{granite: \"1\",\ntype: \"lead\", kind, customerId, dealId}` (`dealId` left out when the lead\nhas no deal yet): ids only. The managers' new and repeated leads also\ncarry `assign: \"1\"` (tapping opens the Assign a sales rep sheet). A\n`taken` push tells the managers (but `except_user_ids`) that the lead\nwas assigned, as its Telegram message is edited. Nothing is pushed (`pushed: 0`) for another\ncompany's or a deleted customer. Calling it again pushes again.",
         "operationId": "push_lead",
         "requestBody": {
           "content": {
@@ -83240,6 +83240,7 @@
           "new",
           "repeat",
           "assigned",
+          "taken",
           "quote"
         ]
       },
@@ -83394,6 +83395,14 @@
             ],
             "format": "int32",
             "description": "Who is told: this user (the sales rep); the company's sales managers\nwhen left out."
+          },
+          "except_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Sales managers not told (no `user_id` only): for `taken`, the rep\nand the manager who assigned the lead."
           }
         }
       },
