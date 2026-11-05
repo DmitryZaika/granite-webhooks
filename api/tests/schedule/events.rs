@@ -641,3 +641,35 @@ async fn search_puts_mine_then_title_hits_then_the_nearest_first(pool: MySqlPool
     // My customers and jobs, then ones I only made, then the rest
     assert_eq!(ids, [8975, 8971, 8973, 8976, 8972, 8974, 8970]);
 }
+
+#[test_db::test(seed)]
+async fn search_puts_word_starts_open_and_upcoming_first_and_allows_a_typo(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO events (id, title, start_date, end_date, created_user_id, unscheduled, completed_at) VALUES
+           (8980, 'Plover install', UTC_TIMESTAMP() + INTERVAL 10 DAY, UTC_TIMESTAMP() + INTERVAL 10 DAY, 101, 0, NULL),
+           (8981, 'Replover job', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 0, NULL),
+           (8982, 'Plover done', UTC_TIMESTAMP() + INTERVAL 1 DAY, UTC_TIMESTAMP() + INTERVAL 1 DAY, 101, 0, UTC_TIMESTAMP()),
+           (8983, 'Plover last week', UTC_TIMESTAMP() - INTERVAL 7 DAY, UTC_TIMESTAMP() - INTERVAL 7 DAY, 101, 0, NULL),
+           (8984, 'I-Plover two days ago', UTC_TIMESTAMP() - INTERVAL 2 DAY, UTC_TIMESTAMP() - INTERVAL 2 DAY, 101, 0, NULL),
+           (8985, 'Ploevr typo', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 0, NULL),
+           (8986, 'Plonk deck', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 0, NULL);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let found: Value = server(pool)
+        .get("/v1/events/search")
+        .add_query_param("q", "plover")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    let ids: Vec<i64> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["id"].as_i64().unwrap())
+        .collect();
+    // Word starts (past counts double: 2 days ago, 10 days ahead, 7 days
+    // ago), the finished job, then "contains", then the typo; "Plonk" no
+    assert_eq!(ids, [8984, 8980, 8983, 8982, 8981, 8985]);
+}
