@@ -8,7 +8,6 @@ struct FeatureRow {
     quickbooks_connected: bool,
     onboarding: bool,
     leaderboard: bool,
-    projects: bool,
     e_signature: bool,
     domain: Option<String>,
     cloudtalk: bool,
@@ -33,8 +32,6 @@ pub const ONBOARDING_ON: &str =
     "(COALESCE(c.onboarding_enabled, gf_onboarding.enabled_for_all, 0) <> 0)";
 pub const LEADERBOARD_ON: &str =
     "(COALESCE(c.leaderboard_enabled, gf_leaderboard.enabled_for_all, 0) <> 0)";
-/// The superuser's Projects switch (no platform-wide default).
-pub const PROJECTS_ON: &str = "(COALESCE(c.projects_enabled, 0) <> 0)";
 
 fn filled(column: &str) -> String {
     format!("(COALESCE(TRIM({column}), '') <> '')")
@@ -66,7 +63,6 @@ pub async fn company_features(
                  AND c.qbo_refresh_expires IS NOT NULL) AS quickbooks_connected,
                 {ONBOARDING_ON} AS onboarding,
                 {LEADERBOARD_ON} AS leaderboard,
-                {PROJECTS_ON} AS projects,
                 {SIGNATURE_ON} AS e_signature,
                 c.domain,
                 ({ct_key} AND {ct_secret}) AS cloudtalk,
@@ -111,7 +107,6 @@ pub async fn company_features(
             quickbooks_connected: false,
             onboarding: false,
             leaderboard: false,
-            projects: false,
             e_signature: false,
             inbound_email: false,
             cloudtalk: false,
@@ -130,7 +125,6 @@ pub async fn company_features(
             quickbooks_connected: row.quickbooks_connected,
             onboarding: row.onboarding,
             leaderboard: row.leaderboard,
-            projects: row.projects,
             e_signature: row.e_signature,
             inbound_email: mail_domain(row.domain.as_deref()).is_some(),
             cloudtalk: row.cloudtalk,

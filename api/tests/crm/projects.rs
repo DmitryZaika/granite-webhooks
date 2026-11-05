@@ -7,8 +7,8 @@ use sqlx::MySqlPool;
 
 // Seed: in company 100 Rita (100) is a sales rep and owns the open deal 8002
 // "Erin countertops" of Erin Builder (1004); Mark (101) is the Sales Manager;
-// Ada (102) is the admin. Projects starts off; `turn_on` also turns on
-// "Project on a sale".
+// Ada (102) is the admin. "Project on a sale" starts off; `turn_on` turns it
+// on.
 
 async fn run(pool: &MySqlPool, sql: &str) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
@@ -20,7 +20,7 @@ async fn run(pool: &MySqlPool, sql: &str) {
 async fn turn_on(pool: &MySqlPool) {
     run(
         pool,
-        "UPDATE company SET projects_enabled = 1, auto_project = 1 WHERE id = 100",
+        "UPDATE company SET auto_project = 1 WHERE id = 100",
     )
     .await;
 }
@@ -76,12 +76,12 @@ async fn version(pool: &MySqlPool, id: i32) -> i32 {
 }
 
 #[test_db::test(seed)]
-async fn projects_stay_off_until_a_superuser_turns_them_on(pool: MySqlPool) {
+async fn projects_need_no_switch_and_a_win_adds_none_until_project_on_a_sale(pool: MySqlPool) {
     server(pool.clone())
         .get("/v1/projects")
         .with_session(sessions::ADMIN)
         .await
-        .assert_status(StatusCode::NOT_FOUND);
+        .assert_status_ok();
     win_8002(&pool).await;
     assert!(projects_of_8002(&pool).await.is_empty());
 }
