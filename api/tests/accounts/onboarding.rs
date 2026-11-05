@@ -521,6 +521,7 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
         "customer_called",
         "call_followed_up",
         "quote_drawn",
+        "quote_cutout_added",
         "automation_set_up",
     ];
     let rep = Actor {
@@ -559,7 +560,27 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
+    // Two saved drawings by the second user: only the later one has a sink cutout.
+    sqlx::query(
+        "INSERT INTO quotes (id, customer_id, quote_name, quote_type, created_date, sales_rep, company_id,
+                             salesperson_id, created_by, status)
+         VALUES (9801, 1000, 'Kitchen', 'quote', NOW(), 'Rita Rep', 100, 101, 101, 'draft')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"INSERT INTO quote_revisions (quote_id, revision_number, drawing_json, created_by, created_at)
+           VALUES (9801, 1, '{"counters":[{"runs":[{"cutouts":[]}]}]}', 101, '2026-05-01 06:00:00'),
+                  (9801, 2, '{"counters":[{"runs":[{"cutouts":[{"kind":"sink"}]}]}]}', 101, '2026-05-01 06:30:00')"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let team = evaluate_team(&pool, 100, &[100, 101], &all).await.unwrap();
+    assert_eq!(team[&101]["quote_drawn"], "2026-05-01T06:00:00.000Z");
+    assert_eq!(team[&101]["quote_cutout_added"], "2026-05-01T06:30:00.000Z");
+    assert!(!team[&100].contains_key("quote_drawn"));
     assert_eq!(team[&100]["templates_used"], "2026-05-01T09:00:00.000Z");
     assert_eq!(team[&100]["automation_set_up"], "2026-05-01T07:00:00.000Z");
     assert!(!team[&101].contains_key("automation_set_up"));

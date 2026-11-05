@@ -173,6 +173,17 @@ static CHECKS: [UsageCheck; 18] = [
                  JOIN quotes q ON q.id = qr.quote_id AND q.company_id = {c}
                 WHERE qr.created_by IS NOT NULL [[qr.created_by]]",
     },
+    // A saved quote drawing with a sink, cooktop or other cutout on a counter.
+    UsageCheck {
+        id: "quote_cutout_added",
+        kind: Kind::Data,
+        rows: "SELECT qr.created_by AS user_id, qr.created_at AS ts
+                 FROM quote_revisions qr
+                 JOIN quotes q ON q.id = qr.quote_id AND q.company_id = {c}
+                WHERE qr.created_by IS NOT NULL
+                  AND JSON_EXTRACT(qr.drawing_json, '$.counters[*].runs[*].cutouts[0]') IS NOT NULL
+                  [[qr.created_by]]",
+    },
     // A company automation the admin set up: an email template tied to a list
     // (it sends by itself after its delay), or a company follow-up flow.
     UsageCheck {
@@ -209,13 +220,6 @@ static CHECKS: [UsageCheck; 18] = [
     // cost log cannot tell it from a first draft.
     UsageCheck {
         id: "ai_reply_revised",
-        kind: Kind::Event,
-        rows: "",
-    },
-    // A sink, cooktop or other cutout placed on a quote drawing. It lives only
-    // inside the drawing's JSON, so the app reports it.
-    UsageCheck {
-        id: "quote_cutout_added",
         kind: Kind::Event,
         rows: "",
     },
@@ -463,6 +467,7 @@ mod tests {
             "customer_called",
             "call_followed_up",
             "quote_drawn",
+            "quote_cutout_added",
             "automation_set_up",
         ] {
             let check = check(id).unwrap();
@@ -475,7 +480,6 @@ mod tests {
             "unscheduled_planned",
             "chat_page_shared",
             "ai_reply_revised",
-            "quote_cutout_added",
             "quote_automation_changed",
             "schedule_texts_saved",
         ] {
