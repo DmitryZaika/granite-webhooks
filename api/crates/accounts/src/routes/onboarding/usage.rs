@@ -48,7 +48,7 @@ pub struct UsageCheck {
 }
 
 /// Every check, by id.
-static CHECKS: [UsageCheck; 14] = [
+static CHECKS: [UsageCheck; 15] = [
     // A quote emailed to a customer. Quotes are scoped by their company.
     UsageCheck {
         id: "quote_emailed",
@@ -195,6 +195,13 @@ static CHECKS: [UsageCheck; 14] = [
     // A Chat question sent with "Share this page" on.
     UsageCheck {
         id: "chat_page_shared",
+        kind: Kind::Event,
+        rows: "",
+    },
+    // An AI reply draft changed with an instruction (Update draft). The AI
+    // cost log cannot tell it from a first draft.
+    UsageCheck {
+        id: "ai_reply_revised",
         kind: Kind::Event,
         rows: "",
     },
@@ -436,7 +443,12 @@ mod tests {
             assert!(!is_event_check(id), "{id}");
             assert!(check.rows.contains("{c}"), "{id}");
         }
-        for id in ["quote_views_opened", "unscheduled_planned", "chat_page_shared"] {
+        for id in [
+            "quote_views_opened",
+            "unscheduled_planned",
+            "chat_page_shared",
+            "ai_reply_revised",
+        ] {
             assert_eq!(check(id).unwrap().kind, Kind::Event, "{id}");
             assert!(is_event_check(id), "{id}");
         }
