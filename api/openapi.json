@@ -76003,7 +76003,8 @@
           "emails-per-month",
           "sms-per-month",
           "daily-sales",
-          "available-inventory"
+          "available-inventory",
+          "feature-sales"
         ]
       },
       "DayCut": {
