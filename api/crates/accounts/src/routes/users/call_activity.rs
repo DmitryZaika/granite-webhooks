@@ -269,8 +269,7 @@ pub fn ringcentral_item(record: &Value) -> Value {
 }
 
 /// The `RingCentral` call log since `date_from` (RFC 3339) of the whole
-/// company (its whole account, else each rep's own account), or of one
-/// extension; a scope `RingCentral` fails for is left out.
+/// company, or of one extension; empty when `RingCentral` fails.
 pub async fn company_ringcentral_calls(
     state: &AppState,
     company_id: i32,
@@ -281,51 +280,42 @@ pub async fn company_ringcentral_calls(
         percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
     };
     let from = encode(date_from);
-    let scopes = match extension {
-        Some(extension) => vec![format!("account/~/extension/{}", encode(extension))],
-        None => ringcentral::call_log_scopes(&state.pool, company_id)
-            .await
-            .unwrap_or_default(),
-    };
+    let scope = extension.map_or_else(
+        || "account/~".to_string(),
+        |extension| format!("account/~/extension/{}", encode(extension)),
+    );
+    let mut path =
+        format!("{scope}/call-log?view=Detailed&dateFrom={from}&perPage={RINGCENTRAL_PAGE_SIZE}");
     let mut seen = HashSet::new();
     let mut records = Vec::new();
-    for scope in scopes {
-        // Every page with the scope's own sign-in: the next page's URI names
-        // the account by number, not `~`.
-        let sign_in = ringcentral::path_extension(&scope).map(str::to_string);
-        let mut path = format!(
-            "{scope}/call-log?view=Detailed&dateFrom={from}&perPage={RINGCENTRAL_PAGE_SIZE}"
-        );
-        for _ in 0..RINGCENTRAL_MAX_PAGES {
-            let Ok(body) = ringcentral::request_as(
-                &state.pool,
-                &state.telephony_http,
-                company_id,
-                sign_in.as_deref(),
-                Method::GET,
-                &path,
-                &ringcentral::Body::Empty,
-                None,
-            )
-            .await
-            else {
-                break;
-            };
-            for record in body["records"].as_array().into_iter().flatten() {
-                if seen.insert(text(&record["id"])) {
-                    records.push(record.clone());
-                }
+    for _ in 0..RINGCENTRAL_MAX_PAGES {
+        let Ok(body) = ringcentral::request(
+            &state.pool,
+            &state.telephony_http,
+            company_id,
+            Method::GET,
+            &path,
+            &ringcentral::Body::Empty,
+            None,
+        )
+        .await
+        else {
+            return Vec::new();
+        };
+        for record in body["records"].as_array().into_iter().flatten() {
+            if seen.insert(text(&record["id"])) {
+                records.push(record.clone());
             }
-            // The next page is a full URI; keep what follows the API root.
-            let Some(next) = body["navigation"]["nextPage"]["uri"]
-                .as_str()
-                .and_then(|uri| uri.split_once("/restapi/v1.0/"))
-                .map(|(_, rest)| rest.to_string())
-            else {
-                break;
-            };
-            path = next;
         }
+        // The next page is a full URI; keep what follows the API root.
+        let Some(next) = body["navigation"]["nextPage"]["uri"]
+            .as_str()
+            .and_then(|uri| uri.split_once("/restapi/v1.0/"))
+            .map(|(_, rest)| rest.to_string())
+        else {
+            break;
+        };
+        path = next;
     }
     records
 }

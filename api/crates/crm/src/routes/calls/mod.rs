@@ -524,18 +524,10 @@ pub async fn start(
             let body = json!({
                 "from": { "phoneNumber": line }, "to": { "phoneNumber": to }, "playPrompt": false,
             });
-            // The caller's own sign-in when they connected one (`~` is then
-            // them), else the company's.
-            let extension = user
-                .ringcentral_extension_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty());
-            let result = common::telephony::ringcentral::request_as(
+            let result = common::telephony::ringcentral::request(
                 &state.pool,
                 &state.telephony_http,
                 user.company_id,
-                extension,
                 Method::POST,
                 "account/~/extension/~/ring-out",
                 &common::telephony::ringcentral::Body::Json(&body),

@@ -48,63 +48,6 @@ impl From<AuthError> for ApiError {
     }
 }
 
-impl From<sqlx::Error> for ApiError {
-    fn from(error: sqlx::Error) -> Self {
-        Self {
-            status: 500,
-            message: Some(error.to_string()),
-        }
-    }
-}
-
-/// The company itself is connected: its OAuth sign-in is alive, or it saved
-/// JWT credentials. Without it only the reps' own sign-ins work: each rep
-/// may have their own `RingCentral` account.
-pub async fn company_connected(pool: &MySqlPool, company_id: i32) -> Result<bool, sqlx::Error> {
-    let connected: Option<bool> = sqlx::query_scalar(
-        "SELECT (ringcentral_access_token IS NOT NULL
-                 AND ringcentral_refresh_token IS NOT NULL
-                 AND ringcentral_access_expires IS NOT NULL
-                 AND ringcentral_refresh_expires > UNIX_TIMESTAMP())
-             OR (COALESCE(TRIM(ringcentral_client_id), '') <> ''
-                 AND COALESCE(TRIM(ringcentral_client_secret), '') <> ''
-                 AND COALESCE(TRIM(ringcentral_jwt), '') <> '')
-           FROM company WHERE id = ?",
-    )
-    .bind(company_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(connected.unwrap_or(false))
-}
-
-/// The extensions of the company's reps who connected their own
-/// `RingCentral`.
-pub async fn rep_extensions(pool: &MySqlPool, company_id: i32) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT extension_id FROM ringcentral_user_logins
-          WHERE company_id = ? ORDER BY extension_id",
-    )
-    .bind(company_id)
-    .fetch_all(pool)
-    .await
-}
-
-/// Where the company's call log is read: its whole account when the company
-/// itself is connected, else each rep's own extension.
-pub async fn call_log_scopes(
-    pool: &MySqlPool,
-    company_id: i32,
-) -> Result<Vec<String>, sqlx::Error> {
-    if company_connected(pool, company_id).await? {
-        return Ok(vec!["account/~".to_string()]);
-    }
-    Ok(rep_extensions(pool, company_id)
-        .await?
-        .into_iter()
-        .map(|extension| format!("account/~/extension/{extension}"))
-        .collect())
-}
-
 /// One file of an MMS.
 #[derive(Debug, Clone)]
 pub struct MmsFile {
@@ -215,27 +158,6 @@ pub async fn request_as(
     Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
 }
 
-async fn get_as(
-    pool: &MySqlPool,
-    client: &Client,
-    company_id: i32,
-    extension: Option<&str>,
-    path: &str,
-) -> Result<reqwest::Response, ApiError> {
-    call(
-        pool,
-        client,
-        company_id,
-        extension,
-        Method::GET,
-        path,
-        &Body::Empty,
-        None,
-        "*/*",
-    )
-    .await
-}
-
 /// `GET restapi/v1.0/<path>` as bytes and their content type, for call
 /// recordings and voicemail (which refuse an `application/json` `Accept`).
 pub async fn get_raw(
@@ -244,28 +166,18 @@ pub async fn get_raw(
     company_id: i32,
     path: &str,
 ) -> Result<(Vec<u8>, String), ApiError> {
-    let extension = path_extension(path);
-    let response = if extension.is_some() || company_connected(pool, company_id).await? {
-        get_as(pool, client, company_id, extension, path).await?
-    } else {
-        // No company sign-in: a call recording belongs to one rep's own
-        // account, so ask each rep's sign-in until one has it.
-        let mut last = ApiError {
-            status: 404,
-            message: Some("No RingCentral sign-in has this file".into()),
-        };
-        let mut found = None;
-        for rep in rep_extensions(pool, company_id).await? {
-            match get_as(pool, client, company_id, Some(&rep), path).await {
-                Ok(response) => {
-                    found = Some(response);
-                    break;
-                }
-                Err(error) => last = error,
-            }
-        }
-        found.ok_or(last)?
-    };
+    let response = call(
+        pool,
+        client,
+        company_id,
+        path_extension(path),
+        Method::GET,
+        path,
+        &Body::Empty,
+        None,
+        "*/*",
+    )
+    .await?;
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -763,8 +675,7 @@ pub async fn ensure_sms_subscription(
     client: &Client,
     company_id: i32,
 ) -> Result<SubscriptionOutcome, ApiError> {
-    // Without a company sign-in each rep's own subscription brings their texts.
-    if webhook_target(company_id).is_none() || !company_connected(pool, company_id).await? {
+    if webhook_target(company_id).is_none() {
         return Ok(SubscriptionOutcome::Skipped);
     }
     let extensions = request(

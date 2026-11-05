@@ -112,48 +112,17 @@ async fn ringcentral_calls(
 ) -> Result<Vec<Value>, ringcentral::ApiError> {
     let at =
         |time: DateTime<Utc>| encode(&time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-    let mut items = Vec::new();
-    // The company's whole account, else each rep's own account.
-    for scope in ringcentral::call_log_scopes(&state.pool, company_id).await? {
-        let path = format!(
-            "{scope}/call-log?view=Detailed&perPage=1000&dateFrom={}&dateTo={}",
-            at(from),
-            at(to)
-        );
-        let extension = ringcentral::path_extension(&path).map(str::to_string);
-        let read = ringcentral_scope_calls(state, company_id, extension.as_deref(), path).await;
-        match (read, &extension) {
-            (Ok(calls), _) => items.extend(calls),
-            // A rep whose own sign-in stopped working does not hold up the rest.
-            (Err(err), Some(extension)) => {
-                tracing::info!(
-                    company_id,
-                    extension,
-                    status = err.status,
-                    "rep call log skipped"
-                );
-            }
-            (Err(err), None) => return Err(err),
-        }
-    }
-    Ok(items)
-}
-
-/// One scope's call log, every page read with the same sign-in (the next
-/// page's URI names the account by number, not `~`).
-async fn ringcentral_scope_calls(
-    state: &AppState,
-    company_id: i32,
-    extension: Option<&str>,
-    mut path: String,
-) -> Result<Vec<Value>, ringcentral::ApiError> {
+    let mut path = format!(
+        "account/~/call-log?view=Detailed&perPage=1000&dateFrom={}&dateTo={}",
+        at(from),
+        at(to)
+    );
     let mut items = Vec::new();
     for _ in 0..MAX_PAGES {
-        let body = ringcentral::request_as(
+        let body = ringcentral::request(
             &state.pool,
             &state.telephony_http,
             company_id,
-            extension,
             Method::GET,
             &path,
             &ringcentral::Body::Empty,
