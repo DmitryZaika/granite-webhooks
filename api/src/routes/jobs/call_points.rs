@@ -23,7 +23,7 @@ use common::telephony::{cloudtalk, ringcentral};
 use lambda_http::tracing;
 use reqwest::Method;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 
 const CLOUDTALK_PAGE: usize = 1000;
@@ -181,41 +181,14 @@ async fn ringcentral_calls(
         percent_encoding::NON_ALPHANUMERIC,
     )
     .to_string();
-    let mut calls = Vec::new();
-    // The company's whole account, else each rep's own account.
-    for scope in ringcentral::call_log_scopes(&state.pool, company_id).await? {
-        let sign_in = ringcentral::path_extension(&scope).map(str::to_string);
-        let path = format!(
-            "{scope}/call-log?direction=Outbound&view=Detailed&dateFrom={from}&perPage=250"
-        );
-        match ringcentral_scope_calls(state, company_id, sign_in.as_deref(), path).await {
-            Ok(found) => calls.extend(found),
-            // A rep whose own sign-in stopped working does not hold up the rest.
-            Err(err) if sign_in.is_some() => {
-                tracing::info!(company_id, extension = ?sign_in, status = err.status, "rep call log skipped");
-            }
-            Err(err) => return Err(err),
-        }
-    }
-    Ok(calls)
-}
-
-/// One scope's outbound calls, every page with the same sign-in (the next
-/// page's URI names the account by number, not `~`). A rep's own call log
-/// may leave out the extension, so it is filled in.
-async fn ringcentral_scope_calls(
-    state: &AppState,
-    company_id: i32,
-    sign_in: Option<&str>,
-    mut path: String,
-) -> Result<Vec<OutboundCall>, ringcentral::ApiError> {
+    let mut path =
+        format!("account/~/call-log?direction=Outbound&view=Detailed&dateFrom={from}&perPage=250");
     let mut calls = Vec::new();
     for _ in 0..MAX_PAGES {
-        let body = ringcentral::request_as(
+        let body = ringcentral::request(
             &state.pool,
             &state.telephony_http,
             company_id,
-            sign_in,
             Method::GET,
             &path,
             &ringcentral::Body::Empty,
@@ -227,16 +200,7 @@ async fn ringcentral_scope_calls(
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|record| {
-                    let mut record = record.clone();
-                    if let Some(extension) = sign_in
-                        && record["extension"]["id"].is_null()
-                        && record["from"]["extensionId"].is_null()
-                    {
-                        record["extension"] = json!({ "id": extension });
-                    }
-                    ringcentral_call(&record)
-                }),
+                .filter_map(ringcentral_call),
         );
         // The next page is a full URI; keep what follows the API root.
         let Some(next) = body["navigation"]["nextPage"]["uri"]

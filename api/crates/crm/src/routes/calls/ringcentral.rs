@@ -6,7 +6,7 @@
 //! ones the Remix `userCallMedia` route plays.
 
 use chrono::DateTime;
-use common::telephony::ringcentral::{ApiError, Body, call_log_scopes, request};
+use common::telephony::ringcentral::{ApiError, Body, request};
 use reqwest::{Client, Method};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
@@ -322,38 +322,23 @@ impl Fetch<'_> {
         if phones.is_empty() {
             return Ok(Vec::new());
         }
-        // The company's whole account, else each rep's own account.
-        let scopes = call_log_scopes(self.pool, self.company_id).await?;
-        let mut found: Vec<Value> = Vec::new();
-        for scope in &scopes {
-            let mut path = format!("{scope}/call-log?perPage=250&view=Detailed");
-            for (key, value) in [("dateFrom", date_from), ("dateTo", date_to)] {
-                if let Some(value) = value {
-                    let _ = write!(path, "&{key}={}", urlencode(value));
-                }
-            }
-            match self.get(&path).await {
-                Ok(mut body) => {
-                    if let Value::Array(records) = body["records"].take() {
-                        found.extend(records);
-                    }
-                }
-                // A rep whose own sign-in stopped working does not hide the rest.
-                Err(_) if scope.contains("/extension/") => {}
-                Err(error) => return Err(error),
+        let mut path = "account/~/call-log?perPage=250&view=Detailed".to_string();
+        for (key, value) in [("dateFrom", date_from), ("dateTo", date_to)] {
+            if let Some(value) = value {
+                let _ = write!(path, "&{key}={}", urlencode(value));
             }
         }
-        if scopes.len() > 1 {
-            found.sort_by(|a, b| text(b, &["startTime"]).cmp(text(a, &["startTime"])));
-        }
+        let body = self.get(&path).await?;
         let wanted: HashSet<String> = phones
             .iter()
             .map(|phone| digits(phone))
             .filter(|d| !d.is_empty())
             .collect();
         let mut seen = HashSet::new();
-        let records: Vec<Value> = found
-            .iter()
+        let records: Vec<Value> = body["records"]
+            .as_array()
+            .into_iter()
+            .flatten()
             .filter(|record| {
                 let id = id_text(&record["id"]);
                 !id.is_empty()

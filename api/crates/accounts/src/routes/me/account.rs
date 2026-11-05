@@ -59,9 +59,7 @@ pub struct Account {
     pub ringcentral_signed_in: bool,
     /// The home company has `CloudTalk`.
     pub has_cloudtalk_api: bool,
-    /// My Account shows `RingCentral`: every rep may connect their own
-    /// account, so it shows whenever Granite Manager's `RingCentral` app is
-    /// set up, or the home company already has `RingCentral`.
+    /// The home company has `RingCentral`.
     pub has_ringcentral_api: bool,
     /// The signature applies (not for shop managers and workers).
     pub shows_email_signature: bool,
@@ -239,7 +237,7 @@ pub async fn account(
         ringcentral_phone_number: row.ringcentral_phone_number,
         ringcentral_signed_in,
         has_cloudtalk_api: features.cloudtalk,
-        has_ringcentral_api: features.ringcentral || state.ringcentral_app.is_some(),
+        has_ringcentral_api: features.ringcentral,
         shows_email_signature: !shop,
         has_onboarding_feedback,
         feedback_dismissed: progress.has_row && progress.state.feedback_dismissed,
