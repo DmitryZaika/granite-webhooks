@@ -692,7 +692,7 @@ async fn finished_setup_credit(
             credited, state, ..
         }) if !credited.is_empty() => Some(Credit {
             task_ids: credited,
-            state,
+            state: *state,
         }),
         // Best effort: the save stands without the reward.
         Ok(_) => None,

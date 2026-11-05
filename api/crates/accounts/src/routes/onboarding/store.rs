@@ -16,11 +16,12 @@ use std::collections::{BTreeMap, HashMap};
 const FUTURE_TOLERANCE_MINUTES: i64 = 5;
 
 /// Every table an onboarding journey lives in; scoped by (user, company).
-const TABLES: [&str; 4] = [
+const TABLES: [&str; 5] = [
     "user_onboarding",
     "user_onboarding_modules",
     "user_feature_tasks",
     "user_points_ledger",
+    "user_feature_task_sightings",
 ];
 
 /// Who progress is stored for: the user and their HOME company
@@ -136,6 +137,10 @@ pub enum OnboardingEvent {
         task_id: String,
         version: i64,
     },
+    /// The user met the tour's opening control on its own page before the
+    /// tour ever ran. The first sighting is kept; it creates no tour row.
+    #[serde(rename = "task.sighted", rename_all = "camelCase")]
+    TaskSighted { at: String, task_id: String },
 }
 
 /// Most steps one `task.step_done` may carry.
@@ -155,7 +160,8 @@ impl OnboardingEvent {
             | Self::TaskPosition { at, .. }
             | Self::TaskStepDone { at, .. }
             | Self::TaskClosed { at, .. }
-            | Self::TaskCompleted { at, .. } => at,
+            | Self::TaskCompleted { at, .. }
+            | Self::TaskSighted { at, .. } => at,
         }
     }
 
@@ -165,7 +171,8 @@ impl OnboardingEvent {
             Self::TaskPosition { task_id, .. }
             | Self::TaskStepDone { task_id, .. }
             | Self::TaskClosed { task_id, .. }
-            | Self::TaskCompleted { task_id, .. } => Some(task_id),
+            | Self::TaskCompleted { task_id, .. }
+            | Self::TaskSighted { task_id, .. } => Some(task_id),
             _ => None,
         }
     }
@@ -246,6 +253,7 @@ impl OnboardingEvent {
             Self::TaskCompleted {
                 task_id, version, ..
             } => (!task_ok(task_id) || *version < 0).then_some("Invalid task"),
+            Self::TaskSighted { task_id, .. } => (!task_ok(task_id)).then_some("Invalid task"),
             _ => None,
         }
     }
@@ -311,6 +319,13 @@ pub struct OnboardingState {
     pub module_step_keys: BTreeMap<String, String>,
     /// Feature tours, by task id.
     pub tasks: BTreeMap<String, TaskProgress>,
+    /// Sightings of feature tours, by task id: when the user first met the
+    /// tour's opening control on the tour's own page (UTC, ISO 8601), before
+    /// the tour ever ran. A sighting at or before the user's feature-tour
+    /// reset is left out. The app starts such a tour by itself only on a
+    /// later local day than its sighting. A sighting is not tour progress:
+    /// it adds no entry to `tasks`.
+    pub sightings: BTreeMap<String, String>,
     /// Points of completed tours.
     pub points: i64,
     /// Latest change (UTC, ISO 8601).
@@ -390,7 +405,7 @@ fn by_users(select: &str, users: &[i32], rest: &str) -> QueryBuilder<MySql> {
     query
 }
 
-/// The records of many users at once (four queries in all); every user asked
+/// The records of many users at once (a handful of queries in all); every user asked
 /// for has one, empty when they never started.
 pub async fn load_records(
     pool: &MySqlPool,
@@ -457,7 +472,42 @@ pub async fn load_records(
         record.state.updated_at = later(record.state.updated_at.take(), updated);
     }
     fill_tasks(pool, users, &mut records).await?;
+    fill_sightings(pool, users, &mut records).await?;
     Ok(records)
+}
+
+/// The tour sightings of [`load_records`]: those after the user's feature-tour
+/// reset, for tasks that are not retired.
+async fn fill_sightings(
+    pool: &MySqlPool,
+    users: &[i32],
+    records: &mut HashMap<i32, OnboardingRecord>,
+) -> sqlx::Result<()> {
+    let mut query = QueryBuilder::<MySql>::new(format!(
+        "SELECT s.user_id, s.task_id, DATE_FORMAT(s.first_seen_at, {ISO})
+           FROM user_feature_task_sightings s
+           LEFT JOIN user_onboarding uo
+             ON uo.user_id = s.user_id AND uo.company_id = s.company_id
+          WHERE s.first_seen_at > COALESCE(uo.feature_tasks_reset_at, '1000-01-01')
+            AND s.user_id IN ("
+    ));
+    let mut list = query.separated(", ");
+    for user in users {
+        list.push_bind(*user);
+    }
+    query.push(")");
+    let sightings: Vec<(i32, String, String)> = query.build_query_as().fetch_all(pool).await?;
+    for (user, task_id, seen) in sightings {
+        let Some(record) = records.get_mut(&user) else {
+            continue;
+        };
+        if manifest::is_retired(&task_id) {
+            continue;
+        }
+        record.state.updated_at = later(record.state.updated_at.take(), Some(seen.clone()));
+        record.state.sightings.insert(task_id, seen);
+    }
+    Ok(())
 }
 
 /// The feature tours of [`load_records`], with the points each paid.
@@ -945,6 +995,28 @@ async fn apply_one(
                  status = IF(user_feature_tasks.status = 'completed', 'completed', 'closed')",
                 extra,
             )
+            .await?;
+        }
+        OnboardingEvent::TaskSighted { task_id, .. } => {
+            // The first sighting stays, unless it is from before the user's
+            // reset: then it is replaced. `first_seen_at`, which the stale
+            // condition reads, is assigned last. No tour row is created: any
+            // row there counts as met.
+            sqlx::query(
+                "INSERT INTO user_feature_task_sightings (user_id, company_id, task_id, first_seen_at)
+                 VALUES (?, ?, ?, ?) AS new
+                 ON DUPLICATE KEY UPDATE first_seen_at = IF(
+                   user_feature_task_sightings.first_seen_at <= COALESCE(
+                     (SELECT uo.feature_tasks_reset_at FROM user_onboarding uo
+                       WHERE uo.user_id = new.user_id AND uo.company_id = new.company_id),
+                     '1000-01-01'),
+                   new.first_seen_at, user_feature_task_sightings.first_seen_at)",
+            )
+            .bind(user)
+            .bind(company)
+            .bind(task_id)
+            .bind(at)
+            .execute(&mut *conn)
             .await?;
         }
         OnboardingEvent::TaskCompleted {

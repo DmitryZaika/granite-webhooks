@@ -42952,7 +42952,7 @@
           "me"
         ],
         "summary": "My onboarding progress",
-        "description": "The first-run journey, feature tours and points saved for the signed-in\nuser (their home company's journey). `has_row` is false before any.\n`usage` lists the features the user already uses (check id -> first use):\nthe app never starts those tours by itself and offers them only as\n0-point replays. Data checks run here (positives are cached); it is empty\nwhile the company's guided tours are off. `account_created_at` dates the\naccount (new-user pacing of tours).",
+        "description": "The first-run journey, feature tours and points saved for the signed-in\nuser (their home company's journey). `has_row` is false before any.\n`usage` lists the features the user already uses (check id -> first use):\nthe app never starts those tours by itself and offers them only as\n0-point replays. Data checks run here (positives are cached); it is empty\nwhile the company's guided tours are off. `account_created_at` dates the\naccount (new-user pacing of tours). `state.sightings` holds, per task id,\nwhen the user first met a tour's opening control on its page before the\ntour ever ran; the app starts that tour by itself only on a later local\nday. Sightings at or before the user's feature-tour reset are left out.",
         "operationId": "get_my_onboarding",
         "responses": {
           "200": {
@@ -77123,7 +77123,7 @@
             "items": {
               "type": "object"
             },
-            "description": "1 to 200 events, oldest first. Each has a `type` and an ISO 8601 `at`:\n`journey.position` (`moduleId`, `stepKey`), `journey.module_step`,\n`journey.module_completed`, `journey.module_reopened` (`moduleId`),\n`journey.dismissed`, `journey.resumed`, `journey.completed`,\n`journey.feedback_dismissed`, `task.position` (`taskId`, `version`,\n`stepKey`, optional `usageSkipped`: true when the tour is a replay of a\nfeature the user already uses, which then pays 0 points; optional\n`trigger`: `auto` | `user` | `gesture`, what started the tour) and\n`task.closed` (`taskId`, `version`, `stepKey`), `task.step_done` (`taskId`,\n`version`, `steps`: step key → `action` | `manual`), `task.completed`\n(`taskId`, `version`)."
+            "description": "1 to 200 events, oldest first. Each has a `type` and an ISO 8601 `at`:\n`journey.position` (`moduleId`, `stepKey`), `journey.module_step`,\n`journey.module_completed`, `journey.module_reopened` (`moduleId`),\n`journey.dismissed`, `journey.resumed`, `journey.completed`,\n`journey.feedback_dismissed`, `task.position` (`taskId`, `version`,\n`stepKey`, optional `usageSkipped`: true when the tour is a replay of a\nfeature the user already uses, which then pays 0 points; optional\n`trigger`: `auto` | `user` | `gesture`, what started the tour) and\n`task.closed` (`taskId`, `version`, `stepKey`), `task.step_done` (`taskId`,\n`version`, `steps`: step key → `action` | `manual`), `task.completed`\n(`taskId`, `version`), `task.sighted` (`taskId`: the user met the tour's\nopening control on its own page before the tour ever ran; the first one\nis kept, replays change nothing, and it creates no tour progress)."
           }
         }
       },
@@ -84125,6 +84125,7 @@
           "completed_module_ids",
           "module_step_keys",
           "tasks",
+          "sightings",
           "points"
         ],
         "properties": {
@@ -84172,6 +84173,16 @@
             "description": "Feature tours, by task id.",
             "additionalProperties": {
               "$ref": "#/components/schemas/TaskProgress"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "sightings": {
+            "type": "object",
+            "description": "Sightings of feature tours, by task id: when the user first met the\ntour's opening control on the tour's own page (UTC, ISO 8601), before\nthe tour ever ran. A sighting at or before the user's feature-tour\nreset is left out. The app starts such a tour by itself only on a\nlater local day than its sighting. A sighting is not tour progress:\nit adds no entry to `tasks`.",
+            "additionalProperties": {
+              "type": "string"
             },
             "propertyNames": {
               "type": "string"

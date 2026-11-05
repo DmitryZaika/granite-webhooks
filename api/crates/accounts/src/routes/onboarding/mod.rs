@@ -1,7 +1,8 @@
 //! Guided tours: the first-run journey, feature tours and their points.
 //!
 //! - `GET  /v1/me/onboarding`        → the saved progress
-//! - `POST /v1/me/onboarding/events` → apply progress events
+//! - `POST /v1/me/onboarding/events` → apply progress events (including
+//!   `task.sighted`, saved as `state.sightings`)
 //! - `POST /v1/me/onboarding/usage`  → report a use of a feature only the app
 //!   can see (see [`usage`])
 //! - `POST /v1/me/onboarding/reset`  → restart the first-run journey
@@ -68,7 +69,10 @@ async fn home_actor(state: &AppState, user_id: i32) -> ApiResult<Actor> {
 /// the app never starts those tours by itself and offers them only as
 /// 0-point replays. Data checks run here (positives are cached); it is empty
 /// while the company's guided tours are off. `account_created_at` dates the
-/// account (new-user pacing of tours).
+/// account (new-user pacing of tours). `state.sightings` holds, per task id,
+/// when the user first met a tour's opening control on its page before the
+/// tour ever ran; the app starts that tour by itself only on a later local
+/// day. Sightings at or before the user's feature-tour reset are left out.
 #[crate::openapi::path(
     get,
     path = "/v1/me/onboarding",
@@ -165,7 +169,9 @@ pub struct EventsInput {
     /// `trigger`: `auto` | `user` | `gesture`, what started the tour) and
     /// `task.closed` (`taskId`, `version`, `stepKey`), `task.step_done` (`taskId`,
     /// `version`, `steps`: step key → `action` | `manual`), `task.completed`
-    /// (`taskId`, `version`).
+    /// (`taskId`, `version`), `task.sighted` (`taskId`: the user met the tour's
+    /// opening control on its own page before the tour ever ran; the first one
+    /// is kept, replays change nothing, and it creates no tour progress).
     #[schema(value_type = Vec<Object>)]
     pub events: Vec<OnboardingEvent>,
 }
@@ -445,7 +451,7 @@ pub enum CreditOutcome {
     NothingPending,
     Applied {
         credited: Vec<String>,
-        state: OnboardingState,
+        state: Box<OnboardingState>,
         enabled: bool,
     },
 }
@@ -512,7 +518,7 @@ pub async fn credit_done(
         .collect();
     Ok(CreditOutcome::Applied {
         credited,
-        state: record.state,
+        state: Box::new(record.state),
         enabled: feature_tasks_enabled,
     })
 }
@@ -559,7 +565,7 @@ pub async fn setup(
             credited, state, ..
         }) if !credited.is_empty() => Some(Credit {
             task_ids: credited,
-            state,
+            state: *state,
         }),
         // Best effort: the widget renders without the credit.
         Ok(_) | Err(_) => None,
@@ -655,7 +661,7 @@ pub async fn claim(
                 enabled,
             } => {
                 if credited.iter().any(|task| task == task_id) {
-                    result("credited", Some(task_id.to_string()), Some(state))
+                    result("credited", Some(task_id.to_string()), Some(*state))
                 } else if enabled {
                     result("not-done", None, None)
                 } else {

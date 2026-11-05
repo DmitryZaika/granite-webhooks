@@ -146,6 +146,7 @@ async fn malformed_events_are_refused(pool: MySqlPool) {
         json!({ "events": [{ "type": "journey.module_completed", "at": "2026-05-01T10:00:00Z", "moduleId": "nope" }] }),
         json!({ "events": [{ "type": "journey.dismissed", "at": "2026-05-01T10:00:00Z", "extra": 1 }] }),
         json!({ "events": [{ "type": "points.granted", "at": "2026-05-01T10:00:00Z" }] }),
+        json!({ "events": [{ "type": "task.sighted", "at": "2026-05-01T10:00:00Z", "taskId": "" }] }),
     ] {
         let status = server
             .post("/v1/me/onboarding/events")
@@ -546,6 +547,106 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
         .await
         .unwrap();
     assert!(evaluate(&pool, rep, &all).await.unwrap().is_empty());
+}
+
+fn sighted(at: &str) -> Value {
+    post_events(json!([
+        { "type": "task.sighted", "at": at, "taskId": "dashboard-overview" }
+    ]))
+}
+
+async fn my_progress(server: &axum_test::TestServer) -> Value {
+    server
+        .get("/v1/me/onboarding")
+        .with_session(sessions::REP)
+        .await
+        .json()
+}
+
+#[test_db::test(seed)]
+async fn a_sighting_is_saved_once_and_is_not_tour_progress(pool: MySqlPool) {
+    tours_on(&pool).await;
+    let server = server(pool.clone());
+    let first: Value = server
+        .post("/v1/me/onboarding/events")
+        .with_session(sessions::REP)
+        .json(&sighted("2026-05-01T10:00:00.000Z"))
+        .await
+        .json();
+    assert_eq!(
+        first["state"]["sightings"],
+        json!({ "dashboard-overview": "2026-05-01T10:00:00.000Z" })
+    );
+    // A replay with a later time keeps the first one.
+    let replay: Value = server
+        .post("/v1/me/onboarding/events")
+        .with_session(sessions::REP)
+        .json(&sighted("2026-05-02T10:00:00.000Z"))
+        .await
+        .json();
+    assert_eq!(
+        replay["state"]["sightings"]["dashboard-overview"],
+        "2026-05-01T10:00:00.000Z"
+    );
+    let progress = my_progress(&server).await;
+    assert_eq!(
+        progress["state"]["sightings"]["dashboard-overview"],
+        "2026-05-01T10:00:00.000Z"
+    );
+    // It is not tour progress: no tour row, no entry in `tasks`.
+    assert_eq!(progress["state"]["tasks"], json!({}));
+    let rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM user_feature_tasks WHERE user_id = 100")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 0);
+}
+
+#[test_db::test(seed)]
+async fn sightings_respect_the_tour_reset(pool: MySqlPool) {
+    tours_on(&pool).await;
+    let server = server(pool.clone());
+    sqlx::query(
+        "INSERT INTO user_feature_task_sightings (user_id, company_id, task_id, first_seen_at)
+         VALUES (100, 100, 'dashboard-overview', '2026-05-01 10:00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        my_progress(&server).await["state"]["sightings"]["dashboard-overview"],
+        "2026-05-01T10:00:00.000Z"
+    );
+    sqlx::query("INSERT INTO user_onboarding (user_id, company_id, feature_tasks_reset_at) VALUES (100, 100, '2026-05-02 00:00:00') ON DUPLICATE KEY UPDATE feature_tasks_reset_at = VALUES(feature_tasks_reset_at)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // A sighting from before the reset is left out ...
+    assert_eq!(my_progress(&server).await["state"]["sightings"], json!({}));
+    // ... an event dated before it is dropped ...
+    let dropped: Value = server
+        .post("/v1/me/onboarding/events")
+        .with_session(sessions::REP)
+        .json(&sighted("2026-05-01T12:00:00.000Z"))
+        .await
+        .json();
+    assert_eq!(dropped["state"]["sightings"], json!({}));
+    // ... and a sighting after it replaces the stale row.
+    let fresh: Value = server
+        .post("/v1/me/onboarding/events")
+        .with_session(sessions::REP)
+        .json(&sighted("2026-05-03T09:00:00.000Z"))
+        .await
+        .json();
+    assert_eq!(
+        fresh["state"]["sightings"]["dashboard-overview"],
+        "2026-05-03T09:00:00.000Z"
+    );
+    assert_eq!(
+        my_progress(&server).await["state"]["sightings"]["dashboard-overview"],
+        "2026-05-03T09:00:00.000Z"
+    );
 }
 
 #[test_db::test(seed)]
