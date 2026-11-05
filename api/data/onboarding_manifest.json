@@ -301,6 +301,18 @@
       "usage_check": "call_followed_up"
     },
     {
+      "id": "quote-automation",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "quote-automation-sale",
+        "quote-automation-jobs"
+      ],
+      "usage_check": "quote_automation_changed"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
