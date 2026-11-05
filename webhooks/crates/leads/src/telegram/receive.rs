@@ -8,12 +8,12 @@ use crate::crud::users::{email_exists, get_user_tg_info, user_has_telegram_id};
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
 use crate::libs::constants::{ERR_DB, ERR_SEND_EMAIL, OK_RESPONSE};
 use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
-use crate::libs::phone_push::{Audience, LeadKind, push_lead};
+use crate::libs::phone_push::{Audience, LeadKind, push_lead, push_lead_taken};
 use crate::libs::types::BasicResponse;
 use crate::ringcentral::api::sync_customer_to_ring_central;
 use crate::telegram::utils::extract_message;
 use crate::telegram::utils::parse_code;
-use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
+use crate::telegram::utils::{assigned_text, gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
 use common::crud::scheduled_emails::schedule_templates_for_deal_list;
@@ -47,12 +47,17 @@ Invalid message. Please send one of the following commands:
 <code>
 ";
 
+/// Edits the managers' Telegram messages about lead `lead_id` to say who has
+/// it now: each message's own text (as sent; `fallback`, the pressed
+/// message's text, for ones saved before texts were kept), then
+/// "Lead assigned to {rep_name}". The buttons go.
 async fn update_manager_lead_messages<T: Telegram>(
     pool: &MySqlPool,
     bot: &T,
     company_id: i32,
     lead_id: i32,
-    content: &str,
+    fallback: &str,
+    rep_name: &str,
 ) {
     let messages = match list_active_manager_telegram_lead_messages(pool, company_id, lead_id).await
     {
@@ -69,8 +74,10 @@ async fn update_manager_lead_messages<T: Telegram>(
     };
 
     for message in messages {
+        let base = message.text.as_deref().unwrap_or(fallback);
+        let content = assigned_text(base, rep_name);
         if let Err(error) = bot
-            .edit_message_text(message.chat_id, message.message_id, content.to_string())
+            .edit_message_text(message.chat_id, message.message_id, content)
             .await
         {
             tracing::error!(
@@ -282,7 +289,6 @@ async fn handle_assign_lead<T: Telegram>(
     let former_message = extract_message(&message).unwrap_or_default();
 
     let user_name = tg_info.name.unwrap_or_else(|| "Unknown".to_string());
-    let full_content = format!("{former_message}\n\nLead assigned to {user_name}");
 
     let list_id = get_default_list_id_from_company_id(pool, position.company_id)
         .await
@@ -299,7 +305,15 @@ async fn handle_assign_lead<T: Telegram>(
             return internal_error(ERR_DB);
         }
     };
-    update_manager_lead_messages(pool, bot, position.company_id, lead_id, &full_content).await;
+    update_manager_lead_messages(
+        pool,
+        bot,
+        position.company_id,
+        lead_id,
+        &former_message,
+        &user_name,
+    )
+    .await;
     if result.created {
         schedule_templates_for_deal_list(
             pool,
@@ -328,6 +342,26 @@ async fn handle_assign_lead<T: Telegram>(
         Some(deal_id),
         LeadKind::Assigned,
         Audience::Rep(position.user_id),
+    )
+    .await;
+    // The managers' phones hear who has it, as their Telegram messages did.
+    let assigner: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE telegram_id = ? AND company_id = ? AND is_deleted = 0 LIMIT 1",
+    )
+    .bind(message.chat.id.0)
+    .bind(position.company_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(?error, lead_id, "Assigning manager not looked up");
+        None
+    });
+    let except = std::iter::once(position.user_id).chain(assigner).collect();
+    push_lead_taken(
+        position.company_id,
+        i64::from(lead_id),
+        Some(deal_id),
+        except,
     )
     .await;
     // Leads go to the app and to Telegram both: the app does not replace
@@ -1042,8 +1076,17 @@ mod local_tests {
         let edited_pairs: Vec<(i64, i32)> = edited.iter().map(|entry| (entry.0, entry.1)).collect();
         assert_eq!(edited_pairs, expected_pairs);
 
-        let expected_text = format!("{original_text}\n\nLead assigned to Alex Sales");
-        assert!(edited.iter().all(|entry| entry.2 == expected_text));
+        // Each message keeps its own text as sent (the pressed one's for a
+        // message saved without it), then says who has the lead.
+        for entry in &edited {
+            let kept = persisted
+                .iter()
+                .find(|message| (message.chat_id, message.message_id) == (entry.0, entry.1))
+                .and_then(|message| message.text.clone())
+                .unwrap_or_else(|| original_text.to_string());
+            assert_eq!(entry.2, format!("{kept}\n\nLead assigned to Alex Sales"));
+        }
+        assert!(persisted.iter().all(|message| message.text.is_some()));
 
         let assigned_notice = bot
             .sent

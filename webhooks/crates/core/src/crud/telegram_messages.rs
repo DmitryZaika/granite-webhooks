@@ -5,6 +5,9 @@ pub struct TelegramLeadMessage {
     pub id: u64,
     pub chat_id: i64,
     pub message_id: i32,
+    /// The text it was sent with; `None` for messages saved before it was
+    /// kept (and in [`list_active_telegram_lead_messages`]).
+    pub text: Option<String>,
 }
 
 pub async fn insert_telegram_lead_message(
@@ -14,15 +17,31 @@ pub async fn insert_telegram_lead_message(
     chat_id: i64,
     message_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
+    insert_telegram_lead_message_text(pool, customer_id, company_id, chat_id, message_id, None)
+        .await
+}
+
+/// [`insert_telegram_lead_message`] keeping the text the message was sent
+/// with: an assignment made in the app edits it to "Lead assigned to …"
+/// (Telegram cannot read a sent message back).
+pub async fn insert_telegram_lead_message_text(
+    pool: &MySqlPool,
+    customer_id: i32,
+    company_id: i32,
+    chat_id: i64,
+    message_id: i32,
+    text: Option<&str>,
+) -> Result<MySqlQueryResult, sqlx::Error> {
     query!(
         r#"
-        INSERT INTO telegram_lead_messages (customer_id, company_id, chat_id, message_id)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO telegram_lead_messages (customer_id, company_id, chat_id, message_id, text)
+        VALUES (?, ?, ?, ?, ?)
         "#,
         customer_id,
         company_id,
         chat_id,
-        message_id
+        message_id,
+        text
     )
     .execute(pool)
     .await
@@ -53,6 +72,7 @@ pub async fn list_active_telegram_lead_messages(
             id: row.id,
             chat_id: row.chat_id,
             message_id: row.message_id,
+            text: None,
         })
         .collect())
 }
@@ -64,7 +84,7 @@ pub async fn list_active_manager_telegram_lead_messages(
 ) -> Result<Vec<TelegramLeadMessage>, sqlx::Error> {
     let rows = sqlx::query!(
         r#"
-        SELECT DISTINCT tlm.id, tlm.chat_id, tlm.message_id
+        SELECT DISTINCT tlm.id, tlm.chat_id, tlm.message_id, tlm.text
         FROM telegram_lead_messages tlm
         INNER JOIN users u
             ON u.telegram_id = tlm.chat_id
@@ -88,6 +108,7 @@ pub async fn list_active_manager_telegram_lead_messages(
             id: row.id,
             chat_id: row.chat_id,
             message_id: row.message_id,
+            text: row.text,
         })
         .collect())
 }

@@ -39,6 +39,10 @@ pub struct LeadPush {
     /// when left out.
     #[serde(default)]
     pub user_id: Option<i32>,
+    /// Sales managers not told (no `user_id` only): for `taken`, the rep
+    /// and the manager who assigned the lead.
+    #[serde(default)]
+    pub except_user_ids: Vec<i32>,
 }
 
 /// How many phones were told.
@@ -89,7 +93,9 @@ pub async fn push_notification_route(
 /// company (linked to Telegram or not). Pushed as data `{granite: "1",
 /// type: "lead", kind, customerId, dealId}` (`dealId` left out when the lead
 /// has no deal yet): ids only. The managers' new and repeated leads also
-/// carry `assign: "1"` (tapping opens the Assign a sales rep sheet). Nothing is pushed (`pushed: 0`) for another
+/// carry `assign: "1"` (tapping opens the Assign a sales rep sheet). A
+/// `taken` push tells the managers (but `except_user_ids`) that the lead
+/// was assigned, as its Telegram message is edited. Nothing is pushed (`pushed: 0`) for another
 /// company's or a deleted customer. Calling it again pushes again.
 #[crate::openapi::path(
     post,
@@ -123,7 +129,8 @@ pub async fn push_lead_route(
             .await?
         }
         None => {
-            let managers = sales_managers(&state.pool, body.company_id).await?;
+            let mut managers = sales_managers(&state.pool, body.company_id).await?;
+            managers.retain(|id| !body.except_user_ids.contains(id));
             push_manager_lead(
                 &state,
                 body.company_id,
