@@ -48,7 +48,7 @@ pub struct UsageCheck {
 }
 
 /// Every check, by id.
-static CHECKS: [UsageCheck; 13] = [
+static CHECKS: [UsageCheck; 18] = [
     // A quote emailed to a customer. Quotes are scoped by their company.
     UsageCheck {
         id: "quote_emailed",
@@ -164,6 +164,31 @@ static CHECKS: [UsageCheck; 13] = [
                   AND al.feature IN ('call_note_summary', 'call_activity_extract', 'call_transcription')
                   [[al.user_id]]",
     },
+    // A quote drawing the user saved: each save of the drawing is a revision.
+    UsageCheck {
+        id: "quote_drawn",
+        kind: Kind::Data,
+        rows: "SELECT qr.created_by AS user_id, qr.created_at AS ts
+                 FROM quote_revisions qr
+                 JOIN quotes q ON q.id = qr.quote_id AND q.company_id = {c}
+                WHERE qr.created_by IS NOT NULL [[qr.created_by]]",
+    },
+    // A company automation the admin set up: an email template tied to a list
+    // (it sends by itself after its delay), or a company follow-up flow.
+    UsageCheck {
+        id: "automation_set_up",
+        kind: Kind::Data,
+        rows: "SELECT et.created_by AS user_id, et.created_at AS ts
+                 FROM email_templates et
+                WHERE et.company_id = {c} AND et.user_id IS NULL AND et.created_by IS NOT NULL
+                  AND (et.lead_group_id IS NOT NULL OR et.lead_list_id IS NOT NULL)
+                  [[et.created_by]]
+               UNION ALL
+               SELECT sf.created_by AS user_id, sf.created_at AS ts
+                 FROM sms_flows sf
+                WHERE sf.company_id = {c} AND sf.user_id IS NULL AND sf.created_by IS NOT NULL
+                  [[sf.created_by]]",
+    },
     UsageCheck {
         id: "quote_views_opened",
         kind: Kind::Event,
@@ -184,6 +209,26 @@ static CHECKS: [UsageCheck; 13] = [
     // cost log cannot tell it from a first draft.
     UsageCheck {
         id: "ai_reply_revised",
+        kind: Kind::Event,
+        rows: "",
+    },
+    // A sink, cooktop or other cutout placed on a quote drawing. It lives only
+    // inside the drawing's JSON, so the app reports it.
+    UsageCheck {
+        id: "quote_cutout_added",
+        kind: Kind::Event,
+        rows: "",
+    },
+    // A quote automation switch changed and saved (Admin, Quotes, Automation).
+    UsageCheck {
+        id: "quote_automation_changed",
+        kind: Kind::Event,
+        rows: "",
+    },
+    // Schedule's customer texts saved (Admin, Schedule). The notification
+    // rules keep no user column.
+    UsageCheck {
+        id: "schedule_texts_saved",
         kind: Kind::Event,
         rows: "",
     },
@@ -417,6 +462,8 @@ mod tests {
             "ai_reply_used",
             "customer_called",
             "call_followed_up",
+            "quote_drawn",
+            "automation_set_up",
         ] {
             let check = check(id).unwrap();
             assert_eq!(check.kind, Kind::Data, "{id}");
@@ -428,6 +475,9 @@ mod tests {
             "unscheduled_planned",
             "chat_page_shared",
             "ai_reply_revised",
+            "quote_cutout_added",
+            "quote_automation_changed",
+            "schedule_texts_saved",
         ] {
             assert_eq!(check(id).unwrap().kind, Kind::Event, "{id}");
             assert!(is_event_check(id), "{id}");

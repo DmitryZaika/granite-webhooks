@@ -448,8 +448,18 @@ async fn only_event_checks_can_be_reported(pool: MySqlPool) {
     assert_eq!(stored().await.len(), 1);
 }
 
+/// The seed gives the rep CloudTalk calls this month, which `customer_called`
+/// counts; tests that pin the whole usage map start without them.
+async fn without_seeded_calls(pool: &MySqlPool) {
+    sqlx::query("DELETE FROM phone_call_points WHERE company_id = 100")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 #[test_db::test(seed)]
 async fn progress_reports_usage_and_the_account_date(pool: MySqlPool) {
+    without_seeded_calls(&pool).await;
     let server = server(pool.clone());
     seed_usage(&pool, 100, "2026-05-01 09:00:00", "2026-05-01 09:30:00").await;
     sqlx::query(
@@ -497,6 +507,7 @@ async fn progress_reports_usage_and_the_account_date(pool: MySqlPool) {
 
 #[test_db::test(seed)]
 async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
+    without_seeded_calls(&pool).await;
     use api::routes::onboarding::store::Actor;
     use api::routes::onboarding::usage::{evaluate, evaluate_team};
     let all = [
@@ -505,6 +516,12 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
         "send_later_used",
         "templates_used",
         "signature_sent",
+        "chat_asked",
+        "ai_reply_used",
+        "customer_called",
+        "call_followed_up",
+        "quote_drawn",
+        "automation_set_up",
     ];
     let rep = Actor {
         user_id: 100,
@@ -533,13 +550,24 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
+    // A company follow-up flow the user created; a personal one is not.
+    sqlx::query(
+        "INSERT INTO sms_flows (company_id, user_id, name, created_by, created_at)
+         VALUES (100, NULL, 'Company flow', 100, '2026-05-01 07:00:00'),
+                (100, 101, 'My flow', 101, '2026-05-01 07:00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let team = evaluate_team(&pool, 100, &[100, 101], &all).await.unwrap();
     assert_eq!(team[&100]["templates_used"], "2026-05-01T09:00:00.000Z");
+    assert_eq!(team[&100]["automation_set_up"], "2026-05-01T07:00:00.000Z");
+    assert!(!team[&101].contains_key("automation_set_up"));
     assert_eq!(team[&101]["send_later_used"], "2026-05-01T08:00:00.000Z");
     assert!(!team[&100].contains_key("send_later_used"));
     // One user's check finds the same, from the cache the team run filled.
     let own = evaluate(&pool, rep, &all).await.unwrap();
-    assert_eq!(own.len(), 1);
+    assert_eq!(own.len(), 2);
     // A reset after the use drops the cached positive, and the data no
     // longer counts.
     sqlx::query("INSERT INTO user_onboarding (user_id, company_id, feature_tasks_reset_at) VALUES (100, 100, '2026-05-02 00:00:00') ON DUPLICATE KEY UPDATE feature_tasks_reset_at = VALUES(feature_tasks_reset_at)")
