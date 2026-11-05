@@ -301,6 +301,28 @@
       "usage_check": "call_followed_up"
     },
     {
+      "id": "draw-exact-size",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "quote-canvas-dimension"
+      ],
+      "usage_check": "quote_drawn"
+    },
+    {
+      "id": "draw-cutouts",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "quote-canvas-cutouts"
+      ],
+      "usage_check": "quote_cutout_added"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
