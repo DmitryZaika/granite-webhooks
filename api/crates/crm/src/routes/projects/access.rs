@@ -92,7 +92,8 @@ impl TryFrom<String> for Stage {
 ///
 /// Projects move on their own: the template on the calendar makes it
 /// Template Scheduled, the template maker's Completed makes it Templated,
-/// the installation on the calendar (once templated) Install Scheduled, the
+/// the shop's Fabricated In Fabrication (ready), the installation on the
+/// calendar once fabricated Install Scheduled, the
 /// installer's Completed Installed, and the transaction's installed and paid
 /// dates Installed and Paid & Completed. Paid is the transaction's paid date
 /// or the customer's QuickBooks invoices all paid (`p.qbo_paid_at`, see
@@ -124,15 +125,9 @@ pub const STAGE_SQL: &str = "(CASE WHEN s.installed_date IS NOT NULL
                         AND (e.project_id = p.id
                              OR (e.project_id IS NULL AND e.customer_id = p.customer_id
                                  AND e.created_date >= p.created_at - INTERVAL 1 DAY)))
-             AND (p.stage_code IN ('templated', 'fabrication', 'install_scheduled')
-                  OR EXISTS (SELECT 1 FROM events e
-                               JOIN calendars cal ON cal.id = e.calendar_id
-                                                 AND cal.slug = 'templates'
-                              WHERE e.deleted_date IS NULL AND e.crew_status = 'completed'
-                                AND (e.project_id = p.id
-                                     OR (e.project_id IS NULL AND e.customer_id = p.customer_id
-                                         AND e.created_date >= p.created_at - INTERVAL 1 DAY)))),
-             5, 1)),
+             AND p.fabricated_at IS NOT NULL,
+             5, 1),
+          IF(p.fabricated_at IS NOT NULL, 4, 1)),
         'new', 'template_scheduled', 'templated', 'fabrication', 'install_scheduled',
         'installed', 'completed') END)";
 

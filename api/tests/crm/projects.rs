@@ -441,6 +441,17 @@ async fn the_schedule_and_the_crew_move_a_project(pool: MySqlPool) {
         "{page:?}"
     );
 
+    // The shop marks it fabricated: it waits in In Fabrication.
+    act(
+        &pool,
+        id,
+        sessions::ADMIN,
+        json!({ "intent": "fabricated", "version": version(&pool, id).await }),
+    )
+    .await
+    .assert_status_ok();
+    assert_eq!(stage().await, "fabrication");
+
     // The installation on the calendar, then the installer's Completed.
     sqlx::query(
         "INSERT INTO events (id, title, start_date, end_date, all_day, unscheduled,

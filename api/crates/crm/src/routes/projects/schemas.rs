@@ -24,6 +24,8 @@ pub struct Project {
     pub is_on_hold: bool,
     pub cancelled_at: Option<String>,
     pub templated_at: Option<String>,
+    /// The shop marked it fabricated.
+    pub fabricated_at: Option<String>,
     pub archived_at: Option<String>,
     /// Bumped on every change; actions send it back to catch a stale page.
     pub version: i32,
@@ -234,6 +236,10 @@ pub enum ProjectAction {
         date: Option<String>,
         reason: String,
     },
+    /// The shop finished fabricating it (production).
+    Fabricated {
+        version: i32,
+    },
     /// Move back, with a reason (managers).
     Correct {
         version: i32,
@@ -253,6 +259,7 @@ impl ProjectAction {
             | Self::Cancel { version, .. }
             | Self::Archive { version, .. }
             | Self::CorrectPayment { version, .. }
+            | Self::Fabricated { version }
             | Self::Correct { version, .. } => *version,
         }
     }

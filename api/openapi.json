@@ -90619,6 +90619,26 @@
           },
           {
             "type": "object",
+            "description": "The shop finished fabricating it (production).",
+            "required": [
+              "version",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "fabricated"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Move back, with a reason (managers).",
             "required": [
               "version",

@@ -20,6 +20,7 @@ pub fn project_select() -> String {
                 CAST(p.quoted_amount AS DOUBLE) AS quoted_amount, p.project_address,
                 {STAGE_SQL} AS stage_code, p.position, p.is_on_hold <> 0 AS is_on_hold,
                 {cancelled} AS cancelled_at, {templated} AS templated_at,
+                {fabricated} AS fabricated_at,
                 {archived} AS archived_at, p.version, {created} AS created_at,
                 {updated} AS updated_at, {installed} AS installed_at, {paid} AS paid_at,
                 {sale_cancelled} AS sale_cancelled_at,
@@ -48,6 +49,7 @@ pub fn project_select() -> String {
                  ORDER BY q2.status IN ('converted', 'accepted') DESC, q2.id DESC LIMIT 1)",
         cancelled = iso("p.cancelled_at"),
         templated = iso("p.templated_at"),
+        fabricated = iso("p.fabricated_at"),
         archived = iso("p.archived_at"),
         created = iso("p.created_at"),
         updated = iso("p.updated_at"),
@@ -488,6 +490,35 @@ pub async fn apply(
             .bind(company)
             .execute(&mut *tx)
             .await?;
+        }
+        ProjectAction::Fabricated { .. } => {
+            Viewer::require(perms.production)?;
+            if cancelled {
+                return Err(conflict("This project is cancelled"));
+            }
+            if p.stage_code < Stage::Templated {
+                return Err(conflict("Template the job before it is fabricated"));
+            }
+            if p.fabricated_at.is_none() {
+                sqlx::query(
+                    "UPDATE projects SET fabricated_at = UTC_TIMESTAMP(), version = version + 1
+                      WHERE id = ? AND company_id = ?",
+                )
+                .bind(id)
+                .bind(company)
+                .execute(&mut *tx)
+                .await?;
+                insert_history(
+                    &mut tx,
+                    company,
+                    id,
+                    viewer.user_id,
+                    (Some(p.stage_code), p.stage_code.max(Stage::Fabrication)),
+                    "fabricated",
+                    None,
+                )
+                .await?;
+            }
         }
         ProjectAction::Hold { on_hold, .. } => {
             Viewer::require(perms.manage)?;
