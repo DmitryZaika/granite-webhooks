@@ -21548,7 +21548,7 @@
           "templates"
         ],
         "summary": "Create an email template",
-        "description": "`scope: company` (admins only) makes it the whole company's; otherwise\nit is the caller's own. A company template may send automatically:\n`lead_list_id` + `hour_delay` schedule it for deals entering that list.",
+        "description": "`scope: company` (admins only) makes it the whole company's; otherwise\nit is the caller's own. Either may send automatically: `lead_list_id` +\n`hour_delay` schedule it for deals entering that list — a company\ntemplate for the reps who use the company's automations, a personal one\nfor the caller's own deals once they use their own\n(`PUT /v1/me/lead-automation`).",
         "operationId": "create_email_template",
         "requestBody": {
           "content": {
@@ -21602,7 +21602,7 @@
             }
           },
           "409": {
-            "description": "Another company template sends on this list after this delay",
+            "description": "Another template of the same owner sends on this list after this delay",
             "content": {
               "application/json": {
                 "schema": {
@@ -21635,7 +21635,7 @@
           "templates"
         ],
         "summary": "Edit an email template",
-        "description": "The caller's own templates, and (admins) the company's, whose automation\n(`lead_list_id`, `hour_delay`) it sets too; removing the automation calls\noff the template's pending sends.",
+        "description": "The caller's own templates, and (admins) the company's, with their\nautomation (`lead_list_id`, `hour_delay`; `sales_rep_ids` only for a\ncompany template); removing the automation calls off the template's\npending sends.",
         "operationId": "update_email_template",
         "parameters": [
           {
@@ -21711,7 +21711,7 @@
             }
           },
           "409": {
-            "description": "Another company template sends on this list after this delay",
+            "description": "Another template of the same owner sends on this list after this delay",
             "content": {
               "application/json": {
                 "schema": {
@@ -22357,7 +22357,7 @@
           "templates"
         ],
         "summary": "Create an SMS template",
-        "description": "`scope: company` (admins only) makes it the company's, and only a\ncompany template can drip; otherwise it is the caller's own. It goes\nlast.",
+        "description": "`scope: company` (admins only) makes it the company's; otherwise it is\nthe caller's own. Either can drip (`drip`): a company template for the\nreps who use the company's automations, a personal one for the caller's\ndeals once they use their own (`PUT /v1/me/lead-automation`). It goes\nlast.",
         "operationId": "create_sms_template",
         "requestBody": {
           "content": {
@@ -22434,7 +22434,7 @@
           "templates"
         ],
         "summary": "Edit an SMS template",
-        "description": "The caller's own template, or (admins) a company one. Leaving out\n`lead_list_id` / `hour_delay` keeps the drip; a template that stops\ndripping cancels its pending drip texts.",
+        "description": "The caller's own template, or (admins) a company one. Leaving out\n`drip` keeps the drip; a template that stops dripping cancels its\npending drip texts.",
         "operationId": "update_sms_template",
         "parameters": [
           {
@@ -22571,6 +22571,138 @@
           },
           "404": {
             "description": "No such template the caller may change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/lead-automation": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Get whose automations the caller's deals get",
+        "description": "`company` (the default): when a deal of the caller lands on a list (e.g.\nNot Contacted Yet), the company's automated email and SMS templates for\nthat list go out (Admin › Automations; those naming no sales reps, or\nnaming the caller). `own`: only the caller's own automated templates do —\npersonal templates with a `lead_list_id` (`GET /v1/email-templates`,\n`GET /v1/sms-templates`, `scope: personal`).",
+        "operationId": "get_lead_automation",
+        "responses": {
+          "200": {
+            "description": "The caller's choice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadAutomation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Choose whose automations the caller's deals get",
+        "description": "`company` or `own` (see `GET /v1/me/lead-automation`). Changing it calls\noff the pending automatic sends of the side left behind (the company's on\nthe caller's deals, or the caller's own); deals already on a list get\nnothing new, the choice applies to deals that land on a list from now on.\nReturns the saved choice.",
+        "operationId": "set_lead_automation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadAutomation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadAutomation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
             "content": {
               "application/json": {
                 "schema": {
@@ -77444,7 +77576,7 @@
       },
       "Drip": {
         "type": "object",
-        "description": "When a company template sends itself.",
+        "description": "When a template sends itself.",
         "properties": {
           "lead_list_id": {
             "type": [
@@ -77483,7 +77615,7 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "Sales reps whose deals get it; empty: every rep's. Left out keeps the\ntemplate's reps."
+            "description": "Company templates: sales reps whose deals get it; empty: every\nrep's. Left out keeps the template's reps. Ignored for a personal\ntemplate, which goes to its owner's deals."
           }
         }
       },
@@ -78128,7 +78260,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Company templates: the deal list whose deals get it automatically."
+            "description": "The deal list whose deals get it automatically: a company template\ngoes to the reps who use the company's automations, a personal one to\nits owner's deals when they use their own. Null: never automatic."
           },
           "hour_delay": {
             "type": [
@@ -78231,7 +78363,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Company templates only: send it automatically when a deal enters\nthis list (with `hour_delay`); null for no automation."
+            "description": "Send it automatically when a deal enters this list (with\n`hour_delay`); null for no automation. A personal template sends for\nits owner's deals once they use their own automations\n(`PUT /v1/me/lead-automation`)."
           },
           "hour_delay": {
             "type": [
@@ -78250,7 +78382,7 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "With `lead_list_id`: sales reps whose deals get it; empty: every\nrep's. Left out keeps the template's reps."
+            "description": "Company templates with `lead_list_id`: sales reps whose deals get\nit; empty: every rep's. Left out keeps the template's reps. Ignored\nfor a personal template."
           }
         },
         "additionalProperties": false
@@ -82732,6 +82864,28 @@
           }
         }
       },
+      "LeadAutomation": {
+        "type": "object",
+        "description": "The caller's automation choice; also the body of `PUT /v1/me/lead-automation`.",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/LeadAutomationMode",
+            "description": "`company` or `own`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LeadAutomationMode": {
+        "type": "string",
+        "description": "Whose automated templates a sales rep's deals get.",
+        "enum": [
+          "company",
+          "own"
+        ]
+      },
       "LeadCard": {
         "type": "object",
         "description": "A lead's card.",
@@ -85174,7 +85328,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Drip",
-                "description": "Company templates only."
+                "description": "When it sends itself; left out: never."
               },
               {
                 "type": "null"
@@ -98855,7 +99009,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Company drip: the deal list that starts it."
+            "description": "Drip: the deal list that starts it; null: never automatic."
           },
           "hour_delay": {
             "type": [
@@ -98863,19 +99017,19 @@
               "null"
             ],
             "format": "int32",
-            "description": "Company drip: hours after a deal enters the list."
+            "description": "Drip: hours after a deal enters the list."
           },
           "minute_delay": {
             "type": "integer",
             "format": "int32",
-            "description": "Company drip: minutes on top of `hour_delay`, 0 to 59."
+            "description": "Drip: minutes on top of `hour_delay`, 0 to 59."
           },
           "customer_sources": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Company drip: customer sources (`customers.source`) that get it."
+            "description": "Drip: customer sources (`customers.source`) that get it."
           },
           "sales_rep_ids": {
             "type": "array",
@@ -98958,7 +99112,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Drip",
-                "description": "Company templates only; left out keeps the drip."
+                "description": "When it sends itself; left out keeps the drip."
               },
               {
                 "type": "null"

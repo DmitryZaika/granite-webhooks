@@ -1,0 +1,18 @@
+---
+description: After every change, open a PR and merge it into main
+alwaysApply: true
+---
+
+# Always open a PR and merge it to main
+
+The owner's standing instruction (2026-11-05), for every request in this repo and
+in its sibling repo (general_datebase / granite-webhooks):
+
+1. Do the work on the session's branch, commit and push it.
+2. Open a pull request into `main`.
+3. Merge it into `main` once the repo's own checks for the change pass.
+
+This does not need to be asked for again; the owner does not want to be asked.
+It does not change the other rules: never run migrations, never touch the main
+database, never deploy. Merging only lands code on `main`; deploys stay manual
+(`workflow_dispatch`), so say which migrations must run before a deploy.
