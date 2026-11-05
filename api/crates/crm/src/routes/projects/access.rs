@@ -22,25 +22,32 @@ const SCHEDULING_MANAGER: i32 = 13;
 
 /// Where a project is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum Stage {
     /// Awaiting Template.
     New,
+    /// Template Scheduled: its template is on the calendar.
+    TemplateScheduled,
     /// Templated.
     Templated,
     /// In Fabrication.
     Fabrication,
-    /// Installed (its transaction has an installed date).
+    /// Install Scheduled: its installation is on the calendar.
+    InstallScheduled,
+    /// Installed (its transaction has an installed date, or the installer
+    /// tapped Completed).
     Installed,
     /// Paid & Completed (installed and paid).
     Completed,
 }
 
 impl Stage {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::New,
+        Self::TemplateScheduled,
         Self::Templated,
         Self::Fabrication,
+        Self::InstallScheduled,
         Self::Installed,
         Self::Completed,
     ];
@@ -48,8 +55,10 @@ impl Stage {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::New => "new",
+            Self::TemplateScheduled => "template_scheduled",
             Self::Templated => "templated",
             Self::Fabrication => "fabrication",
+            Self::InstallScheduled => "install_scheduled",
             Self::Installed => "installed",
             Self::Completed => "completed",
         }
@@ -58,8 +67,10 @@ impl Stage {
     pub const fn label(self) -> &'static str {
         match self {
             Self::New => "Awaiting Template",
+            Self::TemplateScheduled => "Template Scheduled",
             Self::Templated => "Templated",
             Self::Fabrication => "In Fabrication",
+            Self::InstallScheduled => "Install Scheduled",
             Self::Installed => "Installed",
             Self::Completed => "Paid & Completed",
         }
@@ -78,10 +89,50 @@ impl TryFrom<String> for Stage {
 }
 
 /// The stage of `projects p` with its transaction `sales s` (LEFT JOIN).
+///
+/// Projects move on their own: the template on the calendar makes it
+/// Template Scheduled, the template maker's Completed makes it Templated,
+/// the installation on the calendar (once templated) Install Scheduled, the
+/// installer's Completed Installed, and the transaction's installed and paid
+/// dates Installed and Paid & Completed. A stage someone moved it to by hand
+/// counts when it is further on. The jobs are the Templates and
+/// Installations calendar events linked to the project, or of its customer
+/// made since the project started and linked to none.
 pub const STAGE_SQL: &str = "(CASE WHEN s.installed_date IS NOT NULL
         THEN IF(s.paid_date IS NOT NULL, 'completed', 'installed')
-      WHEN p.stage_code IN ('installed', 'completed') THEN 'fabrication'
-      ELSE CAST(p.stage_code AS CHAR) END)";
+      ELSE ELT(GREATEST(
+          FIELD(IF(p.stage_code IN ('installed', 'completed'), 'fabrication', CAST(p.stage_code AS CHAR)),
+                'new', 'template_scheduled', 'templated', 'fabrication', 'install_scheduled'),
+          (SELECT COALESCE(MAX(CASE
+                    WHEN cal.slug = 'installations' AND e.crew_status = 'completed'
+                      THEN IF(s.paid_date IS NOT NULL, 7, 6)
+                    WHEN cal.slug = 'templates' AND e.crew_status = 'completed' THEN 3
+                    WHEN cal.slug = 'templates' AND COALESCE(e.unscheduled, 0) = 0 THEN 2
+                    ELSE 1 END), 1)
+             FROM events e
+             JOIN calendars cal ON cal.id = e.calendar_id
+                               AND cal.slug IN ('templates', 'installations')
+            WHERE e.deleted_date IS NULL
+              AND (e.project_id = p.id
+                   OR (e.project_id IS NULL AND e.customer_id = p.customer_id
+                       AND e.created_date >= p.created_at - INTERVAL 1 DAY))),
+          IF(EXISTS (SELECT 1 FROM events e
+                       JOIN calendars cal ON cal.id = e.calendar_id AND cal.slug = 'installations'
+                      WHERE e.deleted_date IS NULL AND COALESCE(e.unscheduled, 0) = 0
+                        AND (e.project_id = p.id
+                             OR (e.project_id IS NULL AND e.customer_id = p.customer_id
+                                 AND e.created_date >= p.created_at - INTERVAL 1 DAY)))
+             AND (p.stage_code IN ('templated', 'fabrication', 'install_scheduled')
+                  OR EXISTS (SELECT 1 FROM events e
+                               JOIN calendars cal ON cal.id = e.calendar_id
+                                                 AND cal.slug = 'templates'
+                              WHERE e.deleted_date IS NULL AND e.crew_status = 'completed'
+                                AND (e.project_id = p.id
+                                     OR (e.project_id IS NULL AND e.customer_id = p.customer_id
+                                         AND e.created_date >= p.created_at - INTERVAL 1 DAY)))),
+             5, 1)),
+        'new', 'template_scheduled', 'templated', 'fabrication', 'install_scheduled',
+        'installed', 'completed') END)";
 
 /// A forward move a production user may make; going back takes a manager's
 /// correction with a reason.
@@ -91,7 +142,7 @@ pub fn check_transition(from: Stage, to: Stage) -> ApiResult<()> {
             "Moving back needs a manager's correction with a reason".into(),
         ));
     }
-    if from == Stage::New && to > Stage::Templated {
+    if from < Stage::Templated && to > Stage::Templated {
         return Err(ApiError::Conflict(
             "Template the job before it goes to fabrication".into(),
         ));
@@ -313,6 +364,14 @@ mod tests {
         assert!(check_transition(Stage::Templated, Stage::Installed).is_ok());
         assert!(check_transition(Stage::New, Stage::Fabrication).is_err());
         assert!(check_transition(Stage::Fabrication, Stage::Templated).is_err());
+        // A scheduled template still has to be templated first.
+        assert!(check_transition(Stage::TemplateScheduled, Stage::Templated).is_ok());
+        assert!(check_transition(Stage::TemplateScheduled, Stage::Fabrication).is_err());
+        assert!(check_transition(Stage::Fabrication, Stage::InstallScheduled).is_ok());
+        assert_eq!(
+            Stage::try_from("template_scheduled".to_string()),
+            Ok(Stage::TemplateScheduled)
+        );
         assert_eq!(
             Stage::try_from("fabrication".to_string()),
             Ok(Stage::Fabrication)

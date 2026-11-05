@@ -1,4 +1,4 @@
-use super::access::{Stage, Viewer};
+use super::access::{STAGE_SQL, Stage, Viewer};
 use super::schemas::{
     BoardQuery, Calendar, ConvertedDeal, DealProject, LinkableSale, Person, Project, ProjectAction,
     ProjectAppointment, ProjectFile, ProjectNote, ProjectTask, ProjectWorkspace, ProjectsBoard,
@@ -84,15 +84,15 @@ pub async fn board(
         sql.push(" AND p.archived_at IS NULL");
     }
     sql.push(match query.view.as_deref() {
-        Some("cancelled") => " AND (p.cancelled_at IS NOT NULL OR s.cancelled_date IS NOT NULL)",
-        Some("completed") => {
-            " AND p.cancelled_at IS NULL AND s.cancelled_date IS NULL
-              AND s.installed_date IS NOT NULL AND s.paid_date IS NOT NULL"
+        Some("cancelled") => {
+            " AND (p.cancelled_at IS NOT NULL OR s.cancelled_date IS NOT NULL)".to_string()
         }
-        _ => {
-            " AND p.cancelled_at IS NULL AND s.cancelled_date IS NULL
-              AND (s.installed_date IS NULL OR s.paid_date IS NULL)"
-        }
+        Some("completed") => format!(
+            " AND p.cancelled_at IS NULL AND s.cancelled_date IS NULL AND {STAGE_SQL} = 'completed'"
+        ),
+        _ => format!(
+            " AND p.cancelled_at IS NULL AND s.cancelled_date IS NULL AND {STAGE_SQL} <> 'completed'"
+        ),
     });
     match query.owner.as_deref().map(str::trim) {
         Some("unassigned") => {
@@ -233,12 +233,32 @@ pub async fn get(
             .readable_url(&file.url, Some(file.content_type.as_str()))
             .await;
     }
+    // Stage moves, and the template maker's and installer's Completed (the
+    // jobs that move it on their own, see `STAGE_SQL`).
     let history: Vec<StageChange> = sqlx::query_as(
-        "SELECT h.id, h.from_stage, h.to_stage, h.source_action, h.reason, u.name AS author,
-                DATE_FORMAT(h.created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at
-           FROM project_stage_history h LEFT JOIN users u ON u.id = h.actor_id
-          WHERE h.project_id = ? AND h.company_id = ? ORDER BY h.id DESC LIMIT 100",
+        "SELECT id, from_stage, to_stage, source_action, reason, author, created_at FROM (
+           SELECT h.id, h.from_stage, h.to_stage, h.source_action, h.reason, u.name AS author,
+                  DATE_FORMAT(h.created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at, h.created_at AS at
+             FROM project_stage_history h LEFT JOIN users u ON u.id = h.actor_id
+            WHERE h.project_id = ? AND h.company_id = ?
+           UNION ALL
+           SELECT -e.id, NULL, IF(cal.slug = 'templates', 'templated', 'installed'),
+                  IF(cal.slug = 'templates', 'template-completed', 'install-completed'),
+                  NULL, u.name, DATE_FORMAT(e.completed_at, '%Y-%m-%dT%H:%i:%sZ'), e.completed_at
+             FROM projects p
+             JOIN events e ON e.deleted_date IS NULL AND e.crew_status = 'completed'
+                          AND e.completed_at IS NOT NULL
+                          AND (e.project_id = p.id
+                               OR (e.project_id IS NULL AND e.customer_id = p.customer_id
+                                   AND e.created_date >= p.created_at - INTERVAL 1 DAY))
+             JOIN calendars cal ON cal.id = e.calendar_id
+                               AND cal.slug IN ('templates', 'installations')
+             LEFT JOIN users u ON u.id = e.assigned_user_id
+            WHERE p.id = ? AND p.company_id = ?
+         ) entries ORDER BY at DESC LIMIT 100",
     )
+    .bind(id)
+    .bind(company)
     .bind(id)
     .bind(company)
     .fetch_all(&mut *conn)

@@ -382,7 +382,10 @@ pub async fn apply(
                             ));
                         }
                     }
-                    Stage::New | Stage::Fabrication => {}
+                    Stage::New
+                    | Stage::TemplateScheduled
+                    | Stage::Fabrication
+                    | Stage::InstallScheduled => {}
                 }
                 let stored = if to == Stage::Installed && p.paid_at.is_some() {
                     Stage::Completed

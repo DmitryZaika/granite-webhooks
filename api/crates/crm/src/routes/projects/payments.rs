@@ -2,7 +2,8 @@
 //!
 //! A project counts the invoices of its customer's `QuickBooks` customer
 //! dated from 30 days before it started (a deposit invoice often comes just
-//! before the win). A customer not linked to `QuickBooks` yet has no answer.
+//! before the win). A customer not linked to `QuickBooks` has no invoice, as
+//! on Commissions.
 
 use super::access::Viewer;
 use crate::auth::EmployeeUser;
@@ -106,20 +107,22 @@ fn status(count: usize, total: f64, balance: f64) -> PaymentStatus {
 /// The payments of `rows` from their customers' invoices.
 fn payments(rows: &[Row], invoices: &[Invoice]) -> Vec<ProjectPayment> {
     rows.iter()
-        .filter_map(|row| {
-            let qbo_id = row.qbo_id.as_deref()?;
+        .map(|row| {
             let mine: Vec<&Invoice> = invoices
                 .iter()
-                .filter(|invoice| invoice.customer == qbo_id && invoice.date >= row.since)
+                .filter(|invoice| {
+                    row.qbo_id.as_deref() == Some(invoice.customer.as_str())
+                        && invoice.date >= row.since
+                })
                 .collect();
             let total: f64 = mine.iter().map(|invoice| invoice.total).sum();
             let balance: f64 = mine.iter().map(|invoice| invoice.balance).sum();
-            Some(ProjectPayment {
+            ProjectPayment {
                 project_id: row.id,
                 status: status(mine.len(), total, balance),
                 balance,
                 total,
-            })
+            }
         })
         .collect()
 }
@@ -127,8 +130,8 @@ fn payments(rows: &[Row], invoices: &[Invoice]) -> Vec<ProjectPayment> {
 /// Projects' payments
 ///
 /// Whether each asked project is paid, from its customer's `QuickBooks`
-/// invoices. Projects the caller doesn't see, and customers not in
-/// `QuickBooks`, are left out.
+/// invoices. Projects the caller doesn't see are left out; with `QuickBooks`
+/// not connected, all are.
 #[crate::openapi::path(
     get,
     path = "/v1/projects/payments",
@@ -174,12 +177,6 @@ pub async fn list(
         .collect();
     customers.sort_unstable();
     customers.dedup();
-    if customers.is_empty() {
-        return Ok(Json(ProjectPayments {
-            connected: true,
-            payments: Vec::new(),
-        }));
-    }
     let found = async {
         let access = state.qbo.access(&state.pool, viewer.company_id).await?;
         let mut invoices = Vec::new();
@@ -274,6 +271,7 @@ mod tests {
                 (11, PaymentStatus::Partial),
                 (12, PaymentStatus::Unpaid),
                 (13, PaymentStatus::None),
+                (14, PaymentStatus::None),
             ]
         );
     }

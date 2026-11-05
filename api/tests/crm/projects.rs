@@ -103,7 +103,15 @@ async fn a_sold_deal_goes_to_projects(pool: MySqlPool) {
     assert_eq!(project["sales_rep_id"], 100);
     assert_eq!(
         admin["stages"],
-        json!(["new", "templated", "fabrication", "installed", "completed"])
+        json!([
+            "new",
+            "template_scheduled",
+            "templated",
+            "fabrication",
+            "install_scheduled",
+            "installed",
+            "completed"
+        ])
     );
 
     // Winning it again starts nothing more; the deal page finds it.
@@ -129,7 +137,15 @@ async fn each_position_sees_its_part_of_the_board(pool: MySqlPool) {
     assert!(ids(&board(&pool, sessions::MANAGER).await).is_empty());
     assert_eq!(
         board(&pool, sessions::MANAGER).await["stages"],
-        json!(["new", "templated", "fabrication", "installed", "completed"])
+        json!([
+            "new",
+            "template_scheduled",
+            "templated",
+            "fabrication",
+            "install_scheduled",
+            "installed",
+            "completed"
+        ])
     );
 
     // Another rep's project is not Rita's.
@@ -354,4 +370,99 @@ async fn payment_is_confirmed_once_and_a_stale_page_is_told(pool: MySqlPool) {
     )
     .await
     .assert_status(StatusCode::FORBIDDEN);
+}
+
+#[test_db::test(seed)]
+async fn the_schedule_and_the_crew_move_a_project(pool: MySqlPool) {
+    use chrono::Utc;
+    use chrono_tz::America::Indiana::Indianapolis;
+
+    turn_on(&pool).await;
+    win_8002(&pool).await;
+    let id = projects_of_8002(&pool).await[0];
+    let stage = || {
+        let pool = pool.clone();
+        async move { board(&pool, sessions::ADMIN).await["projects"][0]["stage_code"].clone() }
+    };
+    assert_eq!(stage().await, "new");
+
+    // Mark (101) makes templates. The sold quote's template waits unscheduled.
+    let today = Utc::now().with_timezone(&Indianapolis).date_naive();
+    run(
+        &pool,
+        "INSERT INTO calendars (id, company_id, name, color, slug) VALUES
+           (9880, 100, 'Templates', 'blue', 'templates'),
+           (9881, 100, 'Installations', 'red', 'installations');
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 11, 100);",
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO events (id, title, start_date, end_date, all_day, unscheduled,
+                             created_user_id, assigned_user_id, calendar_id, project_id)
+         VALUES (9870, 'Template', ?, ?, 1, 1, 102, 101, 9880, ?)",
+    )
+    .bind(today.and_hms_opt(0, 0, 0).unwrap())
+    .bind(today.and_hms_opt(23, 59, 59).unwrap())
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stage().await, "new");
+
+    // The office puts it on the calendar.
+    run(&pool, "UPDATE events SET unscheduled = 0 WHERE id = 9870").await;
+    assert_eq!(stage().await, "template_scheduled");
+
+    // Mark taps Completed: templated, with no one moving it.
+    server(pool.clone())
+        .post("/v1/events/9870/crew-status")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "status": "completed" }))
+        .await
+        .assert_status_ok();
+    assert_eq!(stage().await, "templated");
+    let page: Value = server(pool.clone())
+        .get(&format!("/v1/projects/{id}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert!(
+        page["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line["source_action"] == "template-completed"),
+        "{page:?}"
+    );
+
+    // The installation on the calendar, then the installer's Completed.
+    sqlx::query(
+        "INSERT INTO events (id, title, start_date, end_date, all_day, unscheduled,
+                             created_user_id, assigned_user_id, calendar_id, project_id)
+         VALUES (9871, 'Install', ?, ?, 1, 0, 102, 101, 9881, ?)",
+    )
+    .bind(today.and_hms_opt(0, 0, 0).unwrap())
+    .bind(today.and_hms_opt(23, 59, 59).unwrap())
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stage().await, "install_scheduled");
+    server(pool.clone())
+        .post("/v1/events/9871/crew-status")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "status": "completed" }))
+        .await
+        .assert_status_ok();
+    assert_eq!(stage().await, "installed");
+
+    // Going back by hand still takes a manager's correction.
+    let back = act(
+        &pool,
+        id,
+        sessions::ADMIN,
+        json!({ "intent": "stage", "version": version(&pool, id).await, "stage": "templated" }),
+    )
+    .await;
+    back.assert_status(StatusCode::CONFLICT);
 }
