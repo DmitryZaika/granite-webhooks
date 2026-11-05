@@ -15,8 +15,9 @@
 
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::commissions::{
-    BasePay, CommissionPart, CommissionRule, PaidRow, PayrollWeek, feature_sales,
-    next_week_payroll, payroll_weeks, pick_invoice, quote_commission, status_of,
+    BasePay, CommissionPart, CommissionRule, PaidRow, PayrollWeek, PositionMember,
+    base_pay_by_person, feature_sales, next_week_payroll, payroll_weeks, pick_invoice,
+    quote_commission, status_of,
 };
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -460,32 +461,29 @@ pub async fn save_settings(
 #[derive(sqlx::FromRow)]
 struct BasePayRow {
     id: i32,
-    user_id: i32,
+    user_id: Option<i32>,
     rep: Option<String>,
+    position_id: Option<i32>,
     amount: f64,
     frequency: String,
     start_date: String,
     end_date: Option<String>,
 }
 
-/// The company's base pay (one rep's with `user_id`), by rep then first payday.
-pub async fn load_base_pay(
-    pool: &MySqlPool,
-    company_id: i32,
-    user_id: Option<i32>,
-) -> ApiResult<Vec<BasePay>> {
+/// The company's base pay: positions' first, then people's by name, then
+/// first payday.
+pub async fn load_base_pay(pool: &MySqlPool, company_id: i32) -> ApiResult<Vec<BasePay>> {
     let rows: Vec<BasePayRow> = sqlx::query_as(
-        "SELECT b.id, b.user_id, u.name AS rep, CAST(b.amount AS DOUBLE) AS amount, b.frequency,
+        "SELECT b.id, b.user_id, u.name AS rep, b.position_id,
+                CAST(b.amount AS DOUBLE) AS amount, b.frequency,
                 DATE_FORMAT(b.start_date, '%Y-%m-%d') AS start_date,
                 DATE_FORMAT(b.end_date, '%Y-%m-%d') AS end_date
            FROM commission_base_pay b
            LEFT JOIN users u ON u.id = b.user_id
-          WHERE b.company_id = ? AND b.deleted_at IS NULL AND (? IS NULL OR b.user_id = ?)
-          ORDER BY u.name, b.start_date, b.id",
+          WHERE b.company_id = ? AND b.deleted_at IS NULL
+          ORDER BY b.position_id IS NULL, b.position_id, u.name, b.start_date, b.id",
     )
     .bind(company_id)
-    .bind(user_id)
-    .bind(user_id)
     .fetch_all(pool)
     .await?;
     Ok(rows
@@ -493,7 +491,10 @@ pub async fn load_base_pay(
         .map(|r| BasePay {
             id: i64::from(r.id),
             user_id: r.user_id,
-            rep: r.rep.unwrap_or_else(|| "Unassigned".into()),
+            rep: r
+                .user_id
+                .map(|_| r.rep.unwrap_or_else(|| "Unassigned".into())),
+            position_id: r.position_id,
             amount: r.amount,
             frequency: r.frequency,
             start_date: r.start_date,
@@ -502,9 +503,45 @@ pub async fn load_base_pay(
         .collect())
 }
 
+#[derive(sqlx::FromRow)]
+struct PositionMemberRow {
+    user_id: i32,
+    rep: Option<String>,
+    position_id: i32,
+}
+
+/// Who holds which position in the company (one person's with `user_id`);
+/// deleted users hold none.
+async fn load_position_members(
+    pool: &MySqlPool,
+    company_id: i32,
+    user_id: Option<i32>,
+) -> ApiResult<Vec<PositionMember>> {
+    let rows: Vec<PositionMemberRow> = sqlx::query_as(
+        "SELECT up.user_id, u.name AS rep, up.position_id
+           FROM users_positions up
+           JOIN users u ON u.id = up.user_id AND u.is_deleted = 0
+          WHERE up.company_id = ? AND (? IS NULL OR up.user_id = ?)
+          ORDER BY u.name, up.user_id, up.position_id",
+    )
+    .bind(company_id)
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| PositionMember {
+            user_id: r.user_id,
+            rep: r.rep.unwrap_or_else(|| "Unassigned".into()),
+            position_id: r.position_id,
+        })
+        .collect())
+}
+
 /// List base pay
 ///
-/// Every rep's base pay schedules.
+/// The base pay schedules: one person's, or everyone's with a position.
 #[crate::openapi::path(
     get,
     path = "/v1/commission-base-pay",
@@ -522,17 +559,19 @@ pub async fn list_base_pay(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<Vec<BasePay>>> {
-    Ok(Json(
-        load_base_pay(&state.pool, user.company_id, None).await?,
-    ))
+    Ok(Json(load_base_pay(&state.pool, user.company_id).await?))
 }
 
-/// A rep's base pay as an admin sets it.
+/// A base pay as an admin sets it: for one person or for a position.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BasePayInput {
-    /// The rep (an employee of the company).
-    pub user_id: i32,
+    /// One person (an employee of the company)…
+    #[serde(default)]
+    pub user_id: Option<i32>,
+    /// …or everyone with this position; exactly one of the two.
+    #[serde(default)]
+    pub position_id: Option<i32>,
     /// Paid each time; not negative.
     pub amount: f64,
     /// `weekly`, `biweekly` (every two weeks) or `monthly`.
@@ -582,15 +621,35 @@ async fn save_base_pay(
             "The last day is before the first payday.".into(),
         ));
     }
-    let rep: Option<i32> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0",
-    )
-    .bind(input.user_id)
-    .bind(company_id)
-    .fetch_optional(pool)
-    .await?;
-    if rep.is_none() {
-        return Err(ApiError::BadRequest("Pick a rep of your company.".into()));
+    match (input.user_id, input.position_id) {
+        (Some(person), None) => {
+            let found: Option<i32> = sqlx::query_scalar(
+                "SELECT id FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0",
+            )
+            .bind(person)
+            .bind(company_id)
+            .fetch_optional(pool)
+            .await?;
+            if found.is_none() {
+                return Err(ApiError::BadRequest(
+                    "Pick someone of your company.".into(),
+                ));
+            }
+        }
+        (None, Some(position)) => {
+            let found: Option<i32> = sqlx::query_scalar("SELECT id FROM positions WHERE id = ?")
+                .bind(position)
+                .fetch_optional(pool)
+                .await?;
+            if found.is_none() {
+                return Err(ApiError::BadRequest("Pick a position.".into()));
+            }
+        }
+        _ => {
+            return Err(ApiError::BadRequest(
+                "Pick a position or one person.".into(),
+            ));
+        }
     }
     let amount = crate::commissions::money(input.amount);
     if let Some(id) = id {
@@ -606,10 +665,12 @@ async fn save_base_pay(
         }
         sqlx::query(
             "UPDATE commission_base_pay
-                SET user_id = ?, amount = ?, frequency = ?, start_date = ?, end_date = ?
+                SET user_id = ?, position_id = ?, amount = ?, frequency = ?, start_date = ?,
+                    end_date = ?
               WHERE id = ? AND company_id = ?",
         )
         .bind(input.user_id)
+        .bind(input.position_id)
         .bind(amount)
         .bind(&input.frequency)
         .bind(&start)
@@ -622,11 +683,13 @@ async fn save_base_pay(
     }
     let id = sqlx::query(
         "INSERT INTO commission_base_pay
-           (company_id, user_id, amount, frequency, start_date, end_date, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+           (company_id, user_id, position_id, amount, frequency, start_date, end_date,
+            created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(company_id)
     .bind(input.user_id)
+    .bind(input.position_id)
     .bind(amount)
     .bind(&input.frequency)
     .bind(&start)
@@ -640,9 +703,10 @@ async fn save_base_pay(
 
 /// Add base pay
 ///
-/// A rep's base pay: an amount every week, two weeks or month from the
-/// first payday (monthly: on that day of the month), until an optional last
-/// day. It shows in the paychecks on those days.
+/// A base pay for one person or for everyone with a position: an amount
+/// every week, two weeks or month from the first payday (monthly: on that
+/// day of the month), until an optional last day. It shows in the paychecks
+/// on those days; a person's own base pay replaces their position's.
 #[crate::openapi::path(
     post,
     path = "/v1/commission-base-pay",
@@ -901,7 +965,8 @@ pub struct Commissions {
 ///
 /// The caller's (`mine`) or, for admins, everyone's (`company`) signed
 /// quotes with what they earn, and the paychecks: paid commissions, monthly
-/// goal bonuses and base pay per payroll date.
+/// goal bonuses (by what was sold in the CRM that month) and base pay (their
+/// own, or their positions') per payroll date.
 #[crate::openapi::path(
     get,
     path = "/v1/commissions",
@@ -931,7 +996,14 @@ pub async fn list_commissions(
     let rows = load_rows(&state.pool, user.company_id, only).await?;
     let rules = load_rules(&state.pool, user.company_id).await?;
     let settings = load_settings(&state.pool, user.company_id).await?;
-    let base_pay = load_base_pay(&state.pool, user.company_id, only).await?;
+    let members = load_position_members(&state.pool, user.company_id, only).await?;
+    let base_pay: Vec<BasePay> = base_pay_by_person(
+        &load_base_pay(&state.pool, user.company_id).await?,
+        &members,
+    )
+    .into_iter()
+    .filter(|pay| only.is_none() || pay.user_id == only)
+    .collect();
     let paid: Vec<PaidRow> = rows
         .iter()
         .map(|r| PaidRow {
@@ -941,6 +1013,8 @@ pub async fn list_commissions(
             commission: r.commission,
             paid_date: r.paid_date.clone(),
             payroll_date: r.payroll_date.clone(),
+            signed_at: r.signed_at.clone(),
+            from_quote: r.quote_id.is_some(),
         })
         .collect();
     let weeks = payroll_weeks(
