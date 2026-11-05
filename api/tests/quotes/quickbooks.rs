@@ -578,6 +578,7 @@ async fn a_rep_sees_their_class_sales_and_customers(pool: MySqlPool) {
         .json();
     assert_eq!(sales["status"], "ok");
     assert_eq!(sales["amount"], 1250.5);
+    assert_eq!(sales["company_amount"], 1349.5);
     assert_eq!(sales["currency"], "USD");
     assert!(sales["days_remaining_in_month"].as_u64().unwrap() >= 1);
     let customers: Value = server
