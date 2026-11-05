@@ -233,6 +233,28 @@
       "usage_check": "signature_sent"
     },
     {
+      "id": "ai-reply",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "ai-reply-modes"
+      ],
+      "usage_check": "ai_reply_used"
+    },
+    {
+      "id": "ai-reply-revise",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "ai-reply-revise"
+      ],
+      "usage_check": "ai_reply_revised"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
