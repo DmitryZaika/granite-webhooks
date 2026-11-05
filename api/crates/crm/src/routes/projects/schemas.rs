@@ -52,35 +52,51 @@ pub struct Project {
 /// Someone in the company.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
 pub struct Person {
+    /// Its id.
     pub id: i32,
+    /// Its name.
     pub name: String,
 }
 
 /// A task on a project, for anyone in the company.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
 pub struct ProjectTask {
+    /// Its id.
     pub id: i32,
+    /// The project it belongs to.
     pub project_id: i32,
+    /// Its name.
     pub name: String,
+    /// Who does it; null for nobody.
     pub assigned_user_id: Option<i32>,
+    /// That person's name.
     pub assigned_user_name: Option<String>,
     /// Store wall time `YYYY-MM-DDTHH:MM:SS`; `T00:00:00` is a date with no time.
     pub deadline: Option<String>,
+    /// `low`, `medium` or `high` (no longer shown; new tasks are `medium`).
     pub priority: String,
+    /// When it was done, UTC ISO; null while open.
     pub completed_at: Option<String>,
+    /// Who made it.
     pub created_by: i32,
+    /// Its maker's name.
     pub created_by_name: Option<String>,
+    /// When it was made, UTC ISO.
     pub created_at: String,
 }
 
 /// The next template or installation appointment.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
 pub struct ProjectAppointment {
+    /// Its id.
     pub id: i32,
+    /// The project it belongs to.
     pub project_id: i32,
     /// `templates` or `installations` (the calendar).
     pub kind: String,
+    /// The event title.
     pub title: String,
+    /// When it starts, UTC ISO.
     pub start_date: String,
     /// Waiting for a date on the schedule (`start_date` means nothing yet).
     pub unscheduled: bool,
@@ -109,82 +125,123 @@ pub struct BoardQuery {
 /// `GET /v1/projects`: the caller's board.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectsBoard {
+    /// The projects, in board order.
     pub projects: Vec<Project>,
     /// The columns the caller has, in order.
     pub stages: Vec<Stage>,
+    /// People who may own a project (the owner filter).
     pub owners: Vec<Person>,
     /// The next appointments of these projects.
     pub appointments: Vec<ProjectAppointment>,
     /// Their open tasks, the most urgent first.
     pub tasks: Vec<ProjectTask>,
+    /// What the caller may do.
     pub permissions: Permissions,
+    /// This page, from 1.
     pub page: u32,
+    /// Another page follows.
     pub has_next: bool,
 }
 
+/// A note on a project.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
 pub struct ProjectNote {
+    /// Its id.
     pub id: i32,
+    /// The text.
     pub content: String,
+    /// Who made it.
     pub created_by: i32,
+    /// Its author's name.
     pub author: Option<String>,
+    /// When it was made, UTC ISO.
     pub created_at: String,
 }
 
+/// A file on a project.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
 pub struct ProjectFile {
+    /// Its id.
     pub id: i32,
+    /// Its name.
     pub name: String,
     /// A URL the browser can open.
     pub url: String,
+    /// MIME type.
     pub content_type: String,
+    /// Who made it.
     pub created_by: i32,
+    /// When it was made, UTC ISO.
     pub created_at: String,
 }
 
+/// A line of a project's history.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
 pub struct StageChange {
+    /// Its id.
     pub id: i32,
+    /// The stage before; null for the first line.
     pub from_stage: Option<String>,
+    /// The stage after.
     pub to_stage: String,
+    /// What did it: `deal-handoff`, `stage-change`, `fabricated`, `template-completed`, `install-completed`, ...
     pub source_action: String,
+    /// Why, for a correction or cancel.
     pub reason: Option<String>,
+    /// Its author's name.
     pub author: Option<String>,
+    /// When it was made, UTC ISO.
     pub created_at: String,
 }
 
 /// A transaction of the customer the project may link to.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
 pub struct LinkableSale {
+    /// Its id.
     pub id: i32,
+    /// The transaction price.
     pub price: Option<f64>,
+    /// The job address.
     pub project_address: Option<String>,
+    /// When it was installed, UTC ISO.
     pub installed_date: Option<String>,
+    /// When it was paid, UTC ISO.
     pub paid_date: Option<String>,
 }
 
+/// A calendar its appointments go on.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
 pub struct Calendar {
+    /// Its id.
     pub id: i32,
+    /// `templates` or `installations`.
     pub slug: String,
+    /// Its name.
     pub name: String,
 }
 
 /// `GET /v1/projects/{id}`: a project's page.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectWorkspace {
+    /// The project.
     pub project: Project,
+    /// Its tasks, open and done.
     pub tasks: Vec<ProjectTask>,
+    /// Its notes, newest first.
     pub notes: Vec<ProjectNote>,
+    /// Its files.
     pub files: Vec<ProjectFile>,
+    /// What happened, newest first.
     pub history: Vec<StageChange>,
     /// Transactions to link (empty once one is linked).
     pub sales: Vec<LinkableSale>,
+    /// Everyone in the company, to give tasks to.
     pub people: Vec<Person>,
     /// The Templates and Installations calendars.
     pub calendars: Vec<Calendar>,
     /// Every appointment of the project, newest first.
     pub appointments: Vec<ProjectAppointment>,
+    /// What the caller may do.
     pub permissions: Permissions,
     /// The caller's user id (to show which tasks and notes are theirs).
     pub user_id: i32,
@@ -197,53 +254,77 @@ pub struct ProjectWorkspace {
 pub enum ProjectAction {
     /// Move forward (production).
     Stage {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
+        /// The stage.
         stage: Stage,
     },
     /// Link the customer's transaction.
     LinkSale {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
         #[serde(rename = "saleId")]
+        /// The transaction.
         sale_id: i32,
     },
     /// Confirm full payment on this date (ISO).
     Paid {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
+        /// The date, ISO.
         date: String,
     },
     /// Pick the owner (null: nobody).
     Assign {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
         #[serde(rename = "ownerId")]
+        /// The owner; null for nobody.
         owner_id: Option<i32>,
     },
+    /// Put on hold or take off hold (managers).
     Hold {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
         #[serde(rename = "onHold")]
+        /// On hold (true) or not.
         on_hold: bool,
     },
+    /// Cancel, with a reason (managers).
     Cancel {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
+        /// Why, for a correction or cancel.
         reason: String,
     },
+    /// Archive a finished or cancelled project, or bring it back (managers).
     Archive {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
+        /// Archived (true) or back on the board.
         archived: bool,
     },
     /// Change or clear the payment date, with a reason.
     CorrectPayment {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
+        /// The date, ISO.
         date: Option<String>,
+        /// Why, for a correction or cancel.
         reason: String,
     },
     /// The shop finished fabricating it (production).
     Fabricated {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
     },
     /// Move back, with a reason (managers).
     Correct {
+        /// The project's version as the page has it; a stale page gets a 409.
         version: i32,
+        /// The stage.
         stage: Stage,
+        /// Why, for a correction or cancel.
         reason: String,
     },
 }
@@ -277,6 +358,7 @@ pub struct DealProject {
 /// `POST /v1/deals/{id}/project`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ConvertedDeal {
+    /// The project it belongs to.
     pub project_id: i32,
     /// False when the deal had a project already.
     pub created: bool,
@@ -308,20 +390,25 @@ pub struct TaskUpdate {
 /// Body of `POST /v1/projects/{id}/notes`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NoteInput {
+    /// The text.
     pub content: String,
 }
 
 /// One file uploaded with `POST /v1/uploads` (folder `deals`).
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NewProjectFile {
+    /// Where it was uploaded.
     pub url: String,
+    /// Its name.
     pub name: String,
     #[serde(rename = "contentType", default)]
+    /// MIME type.
     pub content_type: Option<String>,
 }
 
 /// Body of `POST /v1/projects/{id}/files`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NewProjectFiles {
+    /// Its files.
     pub files: Vec<NewProjectFile>,
 }

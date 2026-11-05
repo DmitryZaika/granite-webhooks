@@ -48,7 +48,9 @@ pub enum PaymentStatus {
 /// One project's payment.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectPayment {
+    /// The project it belongs to.
     pub project_id: i32,
+    /// Paid in full, partly, not at all, or no invoice.
     pub status: PaymentStatus,
     /// What is still owed.
     pub balance: f64,

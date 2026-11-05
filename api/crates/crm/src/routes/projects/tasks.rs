@@ -384,6 +384,8 @@ pub async fn delete_task(
 }
 
 /// Add a note
+///
+/// A note on the project, for everyone who can open it.
 #[crate::openapi::path(
     post,
     path = "/v1/projects/{id}/notes",
@@ -438,7 +440,7 @@ pub async fn create_note(
 #[crate::openapi::path(
     delete,
     path = "/v1/projects/{id}/notes/{note_id}",
-    operation_id = "delete_project_note",
+    operation_id = "delete_production_project_note",
     tag = "projects",
     params(
         ("id" = i32, Path, description = "Project id"),

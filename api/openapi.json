@@ -17086,6 +17086,7 @@
           "projects"
         ],
         "summary": "Add a note",
+        "description": "A note on the project, for everyone who can open it.",
         "operationId": "create_project_note",
         "parameters": [
           {
@@ -17185,7 +17186,7 @@
         ],
         "summary": "Delete a note",
         "description": "Its author or a project manager.",
-        "operationId": "delete_project_note",
+        "operationId": "delete_production_project_note",
         "parameters": [
           {
             "name": "id",
@@ -69525,6 +69526,7 @@
       },
       "Calendar": {
         "type": "object",
+        "description": "A calendar its appointments go on.",
         "required": [
           "id",
           "slug",
@@ -69533,13 +69535,16 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Its id."
           },
           "slug": {
-            "type": "string"
+            "type": "string",
+            "description": "`templates` or `installations`."
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Its name."
           }
         }
       },
@@ -73450,7 +73455,8 @@
         "properties": {
           "project_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The project it belongs to."
           },
           "created": {
             "type": "boolean",
@@ -83102,32 +83108,37 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Its id."
           },
           "price": {
             "type": [
               "number",
               "null"
             ],
-            "format": "double"
+            "format": "double",
+            "description": "The transaction price."
           },
           "project_address": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The job address."
           },
           "installed_date": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "When it was installed, UTC ISO."
           },
           "paid_date": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "When it was paid, UTC ISO."
           }
         }
       },
@@ -84650,16 +84661,19 @@
         ],
         "properties": {
           "url": {
-            "type": "string"
+            "type": "string",
+            "description": "Where it was uploaded."
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Its name."
           },
           "contentType": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "MIME type."
           }
         }
       },
@@ -84674,7 +84688,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/NewProjectFile"
-            }
+            },
+            "description": "Its files."
           }
         }
       },
@@ -85062,7 +85077,8 @@
         ],
         "properties": {
           "content": {
-            "type": "string"
+            "type": "string",
+            "description": "The text."
           }
         }
       },
@@ -87433,10 +87449,12 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Its id."
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Its name."
           }
         }
       },
@@ -90527,10 +90545,12 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "stage": {
-                "$ref": "#/components/schemas/Stage"
+                "$ref": "#/components/schemas/Stage",
+                "description": "The stage."
               },
               "intent": {
                 "type": "string",
@@ -90551,11 +90571,13 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "saleId": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The transaction."
               },
               "intent": {
                 "type": "string",
@@ -90576,10 +90598,12 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "date": {
-                "type": "string"
+                "type": "string",
+                "description": "The date, ISO."
               },
               "intent": {
                 "type": "string",
@@ -90599,14 +90623,16 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "ownerId": {
                 "type": [
                   "integer",
                   "null"
                 ],
-                "format": "int32"
+                "format": "int32",
+                "description": "The owner; null for nobody."
               },
               "intent": {
                 "type": "string",
@@ -90618,6 +90644,7 @@
           },
           {
             "type": "object",
+            "description": "Put on hold or take off hold (managers).",
             "required": [
               "version",
               "onHold",
@@ -90626,10 +90653,12 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "onHold": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "On hold (true) or not."
               },
               "intent": {
                 "type": "string",
@@ -90641,6 +90670,7 @@
           },
           {
             "type": "object",
+            "description": "Cancel, with a reason (managers).",
             "required": [
               "version",
               "reason",
@@ -90649,10 +90679,12 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "reason": {
-                "type": "string"
+                "type": "string",
+                "description": "Why, for a correction or cancel."
               },
               "intent": {
                 "type": "string",
@@ -90664,6 +90696,7 @@
           },
           {
             "type": "object",
+            "description": "Archive a finished or cancelled project, or bring it back (managers).",
             "required": [
               "version",
               "archived",
@@ -90672,10 +90705,12 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "archived": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "Archived (true) or back on the board."
               },
               "intent": {
                 "type": "string",
@@ -90696,16 +90731,19 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "date": {
                 "type": [
                   "string",
                   "null"
-                ]
+                ],
+                "description": "The date, ISO."
               },
               "reason": {
-                "type": "string"
+                "type": "string",
+                "description": "Why, for a correction or cancel."
               },
               "intent": {
                 "type": "string",
@@ -90725,7 +90763,8 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "intent": {
                 "type": "string",
@@ -90747,13 +90786,16 @@
             "properties": {
               "version": {
                 "type": "integer",
-                "format": "int32"
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
               },
               "stage": {
-                "$ref": "#/components/schemas/Stage"
+                "$ref": "#/components/schemas/Stage",
+                "description": "The stage."
               },
               "reason": {
-                "type": "string"
+                "type": "string",
+                "description": "Why, for a correction or cancel."
               },
               "intent": {
                 "type": "string",
@@ -90780,21 +90822,25 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Its id."
           },
           "project_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The project it belongs to."
           },
           "kind": {
             "type": "string",
             "description": "`templates` or `installations` (the calendar)."
           },
           "title": {
-            "type": "string"
+            "type": "string",
+            "description": "The event title."
           },
           "start_date": {
-            "type": "string"
+            "type": "string",
+            "description": "When it starts, UTC ISO."
           },
           "unscheduled": {
             "type": "boolean",
@@ -90926,6 +90972,7 @@
       },
       "ProjectFile": {
         "type": "object",
+        "description": "A file on a project.",
         "required": [
           "id",
           "name",
@@ -90937,29 +90984,35 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Its id."
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Its name."
           },
           "url": {
             "type": "string",
             "description": "A URL the browser can open."
           },
           "content_type": {
-            "type": "string"
+            "type": "string",
+            "description": "MIME type."
           },
           "created_by": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Who made it."
           },
           "created_at": {
-            "type": "string"
+            "type": "string",
+            "description": "When it was made, UTC ISO."
           }
         }
       },
       "ProjectNote": {
         "type": "object",
+        "description": "A note on a project.",
         "required": [
           "id",
           "content",
@@ -90969,23 +91022,28 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Its id."
           },
           "content": {
-            "type": "string"
+            "type": "string",
+            "description": "The text."
           },
           "created_by": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Who made it."
           },
           "author": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Its author's name."
           },
           "created_at": {
-            "type": "string"
+            "type": "string",
+            "description": "When it was made, UTC ISO."
           }
         }
       },
@@ -91021,10 +91079,12 @@
         "properties": {
           "project_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The project it belongs to."
           },
           "status": {
-            "$ref": "#/components/schemas/PaymentStatus"
+            "$ref": "#/components/schemas/PaymentStatus",
+            "description": "Paid in full, partly, not at all, or no invoice."
           },
           "balance": {
             "type": "number",
@@ -91128,27 +91188,32 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Its id."
           },
           "project_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The project it belongs to."
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Its name."
           },
           "assigned_user_id": {
             "type": [
               "integer",
               "null"
             ],
-            "format": "int32"
+            "format": "int32",
+            "description": "Who does it; null for nobody."
           },
           "assigned_user_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "That person's name."
           },
           "deadline": {
             "type": [
@@ -91158,26 +91223,31 @@
             "description": "Store wall time `YYYY-MM-DDTHH:MM:SS`; `T00:00:00` is a date with no time."
           },
           "priority": {
-            "type": "string"
+            "type": "string",
+            "description": "`low`, `medium` or `high` (no longer shown; new tasks are `medium`)."
           },
           "completed_at": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "When it was done, UTC ISO; null while open."
           },
           "created_by": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Who made it."
           },
           "created_by_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Its maker's name."
           },
           "created_at": {
-            "type": "string"
+            "type": "string",
+            "description": "When it was made, UTC ISO."
           }
         }
       },
@@ -91199,31 +91269,36 @@
         ],
         "properties": {
           "project": {
-            "$ref": "#/components/schemas/Project"
+            "$ref": "#/components/schemas/Project",
+            "description": "The project."
           },
           "tasks": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ProjectTask"
-            }
+            },
+            "description": "Its tasks, open and done."
           },
           "notes": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ProjectNote"
-            }
+            },
+            "description": "Its notes, newest first."
           },
           "files": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ProjectFile"
-            }
+            },
+            "description": "Its files."
           },
           "history": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/StageChange"
-            }
+            },
+            "description": "What happened, newest first."
           },
           "sales": {
             "type": "array",
@@ -91236,7 +91311,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Person"
-            }
+            },
+            "description": "Everyone in the company, to give tasks to."
           },
           "calendars": {
             "type": "array",
@@ -91253,7 +91329,8 @@
             "description": "Every appointment of the project, newest first."
           },
           "permissions": {
-            "$ref": "#/components/schemas/Permissions"
+            "$ref": "#/components/schemas/Permissions",
+            "description": "What the caller may do."
           },
           "user_id": {
             "type": "integer",
@@ -91280,7 +91357,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Project"
-            }
+            },
+            "description": "The projects, in board order."
           },
           "stages": {
             "type": "array",
@@ -91293,7 +91371,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Person"
-            }
+            },
+            "description": "People who may own a project (the owner filter)."
           },
           "appointments": {
             "type": "array",
@@ -91310,15 +91389,18 @@
             "description": "Their open tasks, the most urgent first."
           },
           "permissions": {
-            "$ref": "#/components/schemas/Permissions"
+            "$ref": "#/components/schemas/Permissions",
+            "description": "What the caller may do."
           },
           "page": {
             "type": "integer",
             "format": "int32",
+            "description": "This page, from 1.",
             "minimum": 0
           },
           "has_next": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Another page follows."
           }
         }
       },
@@ -98788,6 +98870,7 @@
       },
       "StageChange": {
         "type": "object",
+        "description": "A line of a project's history.",
         "required": [
           "id",
           "to_stage",
@@ -98797,34 +98880,41 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Its id."
           },
           "from_stage": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The stage before; null for the first line."
           },
           "to_stage": {
-            "type": "string"
+            "type": "string",
+            "description": "The stage after."
           },
           "source_action": {
-            "type": "string"
+            "type": "string",
+            "description": "What did it: `deal-handoff`, `stage-change`, `fabricated`, `template-completed`, `install-completed`, ..."
           },
           "reason": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Why, for a correction or cancel."
           },
           "author": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Its author's name."
           },
           "created_at": {
-            "type": "string"
+            "type": "string",
+            "description": "When it was made, UTC ISO."
           }
         }
       },
