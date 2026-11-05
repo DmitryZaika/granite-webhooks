@@ -617,7 +617,11 @@ async fn search_puts_mine_then_title_hits_then_the_nearest_first(pool: MySqlPool
            (8971, 'Zork mine far', NULL, UTC_TIMESTAMP() + INTERVAL 300 DAY, UTC_TIMESTAMP() + INTERVAL 300 DAY, 101, 100, 0),
            (8972, 'Zork mine near', NULL, UTC_TIMESTAMP() - INTERVAL 2 DAY, UTC_TIMESTAMP() - INTERVAL 2 DAY, 100, NULL, 0),
            (8973, 'Mine by place', 'Zork Lane', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 100, 0),
-           (8974, 'Zork mine unscheduled', NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 100, NULL, 1);",
+           (8974, 'Zork mine unscheduled', NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 100, NULL, 1);
+         -- My customer's job made by someone else; a job I made for another rep's customer
+         INSERT INTO events (id, title, start_date, end_date, created_user_id, customer_id, unscheduled) VALUES
+           (8975, 'Zork my customer', UTC_TIMESTAMP() + INTERVAL 100 DAY, UTC_TIMESTAMP() + INTERVAL 100 DAY, 101, 1000, 0),
+           (8976, 'Zork their customer', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 100, 1004, 0);",
     )
     .execute(&pool)
     .await
@@ -634,5 +638,6 @@ async fn search_puts_mine_then_title_hits_then_the_nearest_first(pool: MySqlPool
         .iter()
         .map(|event| event["id"].as_i64().unwrap())
         .collect();
-    assert_eq!(ids, [8972, 8971, 8974, 8973, 8970]);
+    // My customers and jobs, then ones I only made, then the rest
+    assert_eq!(ids, [8975, 8971, 8973, 8976, 8972, 8974, 8970]);
 }
