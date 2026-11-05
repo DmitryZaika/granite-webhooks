@@ -105,3 +105,73 @@ async fn admins_manage_sources(pool: MySqlPool) {
         .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(labels(&server).await, ["Showroom"]);
 }
+
+#[test_db::test(seed)]
+async fn a_source_ticked_as_walk_in_shows_under_walk_ins(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO customer_sources (id, company_id, source_key, label, is_system) VALUES
+           (900, 100, 'check-in', 'Walk-in - Lexington', 1),
+           (902, 100, 'Walk-in - Nicholasville', 'Walk-in - Nicholasville', 0),
+           (903, 101, 'Theirs', 'Theirs', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE customers SET source = 'Walk-in - Nicholasville' WHERE id = 1000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let server = server(pool.clone());
+    let walk_in_ids = || async {
+        server
+            .get("/v1/customers/page?tab=walkin&page_size=100")
+            .with_session(sessions::ADMIN)
+            .await
+            .json::<Value>()["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_i64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let tick = |id: i64, session: &'static str, on: bool| {
+        let request = server
+            .put(&format!("/v1/customer-sources/{id}/walk-in"))
+            .with_session(session)
+            .json(&json!({ "walk_in": on }));
+        async move { request.await }
+    };
+    assert!(!walk_in_ids().await.contains(&1000));
+
+    tick(902, sessions::REP, true)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    tick(900, sessions::ADMIN, false)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    tick(903, sessions::ADMIN, true)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    tick(902, sessions::ADMIN, true)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(walk_in_ids().await.contains(&1000));
+    let listed = server
+        .get("/v1/customer-sources")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    let nich = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == 902)
+        .unwrap()
+        .clone();
+    assert_eq!(nich["is_walkin"], true);
+
+    tick(902, sessions::ADMIN, false)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(!walk_in_ids().await.contains(&1000));
+}

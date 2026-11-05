@@ -4251,6 +4251,98 @@
         ]
       }
     },
+    "/v1/customer-sources/{id}/walk-in": {
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Count a customer source as a walk-in",
+        "description": "Its customers show under the Customers list's Walk-in filter and in the\nwalk-in statistics, like the built-in walk-in (for a second showroom).",
+        "operationId": "set_customer_source_walk_in",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "A built-in source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such source in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/public/customer-view/{company_id}/{view_id}": {
       "get": {
         "tags": [
@@ -39420,7 +39512,7 @@
           "schedule"
         ],
         "summary": "Search events",
-        "description": "The company's events where every word of `q` is in the title, customer's\nname, location, description or notes; with `calendar_ids`, only those\ncalendars' events.\n\nSmart order: the caller's own first (assigned to or made by them, or for\ntheir customer), then title or customer-name hits before hits only in the\nplace or notes, then the nearest to now; unscheduled ones last.",
+        "description": "The company's events where every word of `q` is in the title, customer's\nname, location, description or notes; with `calendar_ids`, only those\ncalendars' events.\n\nA word of 4+ letters also finds a title or customer name that has it with\none typo (\"deborh\" finds \"Deborah\").\n\nSmart order: the caller's own first (for their customer or assigned to\nthem), then ones they only made (a scheduler makes everyone's), then the\nrest. In each: a title or customer-name word starting with the search,\nthen containing it, then hits only in the place or notes, then typo\nhits; open jobs before ones the crew finished; then the nearest to now,\nupcoming before past (past distance counts double); unscheduled last.",
         "operationId": "search_events",
         "parameters": [
           {
@@ -75670,7 +75762,8 @@
           "id",
           "source_key",
           "label",
-          "is_system"
+          "is_system",
+          "is_walkin"
         ],
         "properties": {
           "id": {
@@ -75689,6 +75782,10 @@
           "is_system": {
             "type": "boolean",
             "description": "Built in: can be renamed but not deleted."
+          },
+          "is_walkin": {
+            "type": "boolean",
+            "description": "Counts as a walk-in (Walk-in filter, walk-in statistics). The\nbuilt-in walk-in always does, whatever this says."
           }
         }
       },
@@ -76197,7 +76294,7 @@
           },
           "walk_in": {
             "$ref": "#/components/schemas/ConversionCount",
-            "description": "Walk-in customers (`source = check-in`)."
+            "description": "Walk-in customers: `source = check-in` or a source ticked as a walk-in."
           },
           "call_in": {
             "$ref": "#/components/schemas/ConversionCount",
@@ -106036,6 +106133,19 @@
             "type": "string",
             "format": "date-time",
             "description": "When they sent it."
+          }
+        }
+      },
+      "WalkIn": {
+        "type": "object",
+        "description": "Body of `PUT /v1/customer-sources/{id}/walk-in`.",
+        "required": [
+          "walk_in"
+        ],
+        "properties": {
+          "walk_in": {
+            "type": "boolean",
+            "description": "Whether the source's customers count as walk-ins."
           }
         }
       },

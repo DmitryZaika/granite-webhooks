@@ -4,6 +4,7 @@ use super::schemas::{
     CustomerSearchRow, CustomersPage, CustomersTab, CustomersView, EmailsByCustomer, ListFilter,
     ListResponse, PageRequest, PageSort,
 };
+use super::service::WALKIN_SOURCE;
 use chrono::{DateTime, Datelike, Months, NaiveTime, Utc};
 use sqlx::{FromRow, MySql, MySqlPool, QueryBuilder};
 
@@ -78,13 +79,13 @@ fn push_page_filter(
     tab: CustomersTab,
 ) {
     push_list_filter(query, company_id, filter);
-    query.push(match tab {
-        CustomersTab::Walkin => " AND c.source = 'check-in'",
-        CustomersTab::Leads => " AND c.source = 'leads'",
-        CustomersTab::CallIn => " AND c.source = 'call-in'",
-        CustomersTab::Other => " AND c.source IN ('other', 'user-input')",
-        CustomersTab::All => "",
-    });
+    match tab {
+        CustomersTab::Walkin => query.push(" AND ").push(WALKIN_SOURCE),
+        CustomersTab::Leads => query.push(" AND c.source = 'leads'"),
+        CustomersTab::CallIn => query.push(" AND c.source = 'call-in'"),
+        CustomersTab::Other => query.push(" AND c.source IN ('other', 'user-input')"),
+        CustomersTab::All => query,
+    };
     query
         .push(" AND c.id != ")
         .push_bind(SAMPLE_CUSTOMER_ID)
