@@ -722,8 +722,10 @@ pub struct ImageProxyQuery {
 /// Fetch a stone image through the API
 ///
 /// Returns the bytes of an image in the storage bucket so the browser can
-/// draw it on a canvas (the bucket sends no CORS headers). Other URLs and
-/// files that are not images (or are SVG) are refused.
+/// draw it on a canvas and crop it (the bucket sends no CORS headers): a
+/// stone's picture, or a slab picture in a quote layout. A crop is saved as a
+/// new file, never over the original. Any employee may load one. Other URLs
+/// and files that are not images (or are SVG) are refused.
 #[crate::openapi::path(
     get,
     path = "/v1/stones/image-proxy",
@@ -734,7 +736,7 @@ pub struct ImageProxyQuery {
         (status = 200, description = "The image", content_type = "image/*", body = Vec<u8>),
         (status = 400, description = "Not an image in the bucket", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 404, description = "No such file", body = ErrorBody),
         (status = 500, description = "Storage error", body = ErrorBody),
         (status = 503, description = "No bucket configured", body = ErrorBody),
@@ -743,7 +745,7 @@ pub struct ImageProxyQuery {
 )]
 pub async fn image_proxy(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _employee: EmployeeUser,
     Query(query): Query<ImageProxyQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let disallowed = || ApiError::BadRequest("Invalid or disallowed URL".into());
