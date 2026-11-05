@@ -129,16 +129,39 @@ async fn lead_alerts_reach_the_managers_or_the_rep(pool: MySqlPool) {
         job(&server, "/v1/phone/pushes/lead", assigned).await,
         json!({ "pushed": 1 })
     );
+    // A repeated lead: the managers' copy opens the Assign sheet, the rep's does not.
+    let repeat_managers = json!({
+        "company_id": 100, "customer_id": 1000, "deal_id": 8004, "kind": "repeat",
+    });
+    assert_eq!(
+        job(&server, "/v1/phone/pushes/lead", repeat_managers).await,
+        json!({ "pushed": 1 })
+    );
+    let repeat_rep = json!({
+        "company_id": 100, "customer_id": 1000, "deal_id": 8004, "kind": "repeat", "user_id": 100,
+    });
+    assert_eq!(
+        job(&server, "/v1/phone/pushes/lead", repeat_rep).await,
+        json!({ "pushed": 1 })
+    );
     assert_eq!(
         pushes(&stubs, "lead"),
         [
             (
                 "push-2".to_string(),
-                json!({ "granite": "1", "type": "lead", "kind": "new", "customerId": "1001", "dealId": "8001" })
+                json!({ "granite": "1", "type": "lead", "kind": "new", "customerId": "1001", "dealId": "8001", "assign": "1" })
             ),
             (
                 "push-1".to_string(),
                 json!({ "granite": "1", "type": "lead", "kind": "assigned", "customerId": "1000", "dealId": "8004" })
+            ),
+            (
+                "push-2".to_string(),
+                json!({ "granite": "1", "type": "lead", "kind": "repeat", "customerId": "1000", "dealId": "8004", "assign": "1" })
+            ),
+            (
+                "push-1".to_string(),
+                json!({ "granite": "1", "type": "lead", "kind": "repeat", "customerId": "1000", "dealId": "8004" })
             ),
         ]
     );

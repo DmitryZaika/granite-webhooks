@@ -7,7 +7,9 @@ use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
-use crate::phone::crm_push::{LeadKind, push_lead, push_maintenance, push_notification};
+use crate::phone::crm_push::{
+    LeadKind, push_lead, push_maintenance, push_manager_lead, push_notification, sales_managers,
+};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -190,7 +192,13 @@ pub async fn send_test_push(
                 _ => LeadKind::Quote,
             };
             let (deal_id, customer) = newest_deal(&state, me, company).await?;
-            push_lead(&state, company, &[me], lead, customer, Some(deal_id)).await?
+            // A sales manager's repeated lead comes as the managers get it (Assign sheet).
+            let manager = sales_managers(&state.pool, company).await?.contains(&me);
+            if manager && lead == LeadKind::Repeat {
+                push_manager_lead(&state, company, &[me], lead, customer, Some(deal_id)).await?
+            } else {
+                push_lead(&state, company, &[me], lead, customer, Some(deal_id)).await?
+            }
         }
     };
     Ok(Json(PushSent { pushed }))

@@ -879,11 +879,10 @@ async fn managers_switch_sold_quote_jobs_in_unscheduled(pool: MySqlPool) {
 async fn managers_switch_invoice_on_sold_quote(pool: MySqlPool) {
     let Setup { server, .. } = setup(&pool, false, false).await;
     let on = || async {
-        let on: bool =
-            sqlx::query_scalar("SELECT auto_invoice <> 0 FROM company WHERE id = 100")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let on: bool = sqlx::query_scalar("SELECT auto_invoice <> 0 FROM company WHERE id = 100")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         on
     };
     // Off by default; a rep and a non-manager admin may not switch it.
