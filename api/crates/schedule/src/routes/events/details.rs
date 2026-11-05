@@ -801,9 +801,10 @@ pub struct FoundEvent {
 /// name, location, description or notes; with `calendar_ids`, only those
 /// calendars' events.
 ///
-/// Smart order: the caller's own first (assigned to or made by them, or for
-/// their customer), then title or customer-name hits before hits only in the
-/// place or notes, then the nearest to now; unscheduled ones last.
+/// Smart order: the caller's own first (for their customer or assigned to
+/// them), then ones they only made (a scheduler makes everyone's), then the
+/// rest; in each, title or customer-name hits before hits only in the place
+/// or notes, then the nearest to now; unscheduled ones last.
 #[crate::openapi::path(
     get,
     path = "/v1/events/search",
@@ -862,11 +863,12 @@ pub async fn search(
             AND {words_match}
             AND (? IS NULL OR IF(? = '', e.calendar_id IS NULL, FIND_IN_SET(e.calendar_id, ?) > 0))
             AND (? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)
-          ORDER BY CASE WHEN e.assigned_user_id = ? OR e.created_user_id = ? OR c.sales_rep = ?
+          ORDER BY CASE WHEN e.assigned_user_id = ? OR c.sales_rep = ?
                           OR EXISTS (SELECT 1 FROM deals mine
                                       WHERE mine.customer_id = e.customer_id AND mine.user_id = ?
                                         AND mine.deleted_at IS NULL)
-                        THEN 0 ELSE 1 END,
+                        THEN 0
+                        WHEN e.created_user_id = ? THEN 1 ELSE 2 END,
                    CASE WHEN {name_match} THEN 0 ELSE 1 END,
                    COALESCE(e.unscheduled, 0) <> 0,
                    ABS(TIMESTAMPDIFF(SECOND, e.start_date, UTC_TIMESTAMP())),
