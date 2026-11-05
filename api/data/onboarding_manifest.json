@@ -233,6 +233,29 @@
       "usage_check": "signature_sent"
     },
     {
+      "id": "chat-ask",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "chat-panel-body",
+        "chat-ask-form"
+      ],
+      "usage_check": "chat_asked"
+    },
+    {
+      "id": "chat-share-page",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "chat-share-page"
+      ],
+      "usage_check": "chat_page_shared"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
