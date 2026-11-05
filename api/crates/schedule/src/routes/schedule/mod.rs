@@ -216,11 +216,12 @@ fn bad(message: &str) -> ApiError {
     ApiError::BadRequest(message.into())
 }
 
-/// Manager and Office Manager (the scheduling manager) positions.
-const SEE_EVERY_EVENT: [i32; 2] = [5, 10];
+/// Shop Manager, Shop Worker, Manager and Office Manager (the scheduling
+/// manager) positions.
+const SEE_EVERY_EVENT: [i32; 4] = [3, 4, 5, 10];
 
-/// Everyone sees the events they made or are assigned to; admins, Managers
-/// and Office Managers see the whole company's. `None` for those, else the
+/// Everyone sees the events they made or are assigned to; admins, the shop,
+/// Managers and Office Managers see the whole company's. `None` for those, else the
 /// caller's id, bound three times to
 /// `(? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)`.
 pub async fn own_events_only(
