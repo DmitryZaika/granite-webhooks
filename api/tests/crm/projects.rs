@@ -18,11 +18,7 @@ async fn run(pool: &MySqlPool, sql: &str) {
 }
 
 async fn turn_on(pool: &MySqlPool) {
-    run(
-        pool,
-        "UPDATE company SET auto_project = 1 WHERE id = 100",
-    )
-    .await;
+    run(pool, "UPDATE company SET auto_project = 1 WHERE id = 100").await;
 }
 
 async fn win_8002(pool: &MySqlPool) {
@@ -473,13 +469,59 @@ async fn the_schedule_and_the_crew_move_a_project(pool: MySqlPool) {
         .assert_status_ok();
     assert_eq!(stage().await, "installed");
 
-    // Going back by hand still takes a manager's correction.
-    let back = act(
+    // Anyone who moves projects can move it back by hand; it stays there.
+    act(
         &pool,
         id,
         sessions::ADMIN,
         json!({ "intent": "stage", "version": version(&pool, id).await, "stage": "templated" }),
     )
+    .await
+    .assert_status_ok();
+    assert_eq!(stage().await, "templated");
+}
+
+#[test_db::test(seed)]
+async fn a_project_moved_back_stays_there_until_moved_forward(pool: MySqlPool) {
+    turn_on(&pool).await;
+    win_8002(&pool).await;
+    let id = projects_of_8002(&pool).await[0];
+    let stage = || {
+        let pool = pool.clone();
+        async move { board(&pool, sessions::ADMIN).await["projects"][0]["stage_code"].clone() }
+    };
+    // Its template is on the calendar: Template Scheduled.
+    run(
+        &pool,
+        "INSERT INTO calendars (id, company_id, name, color, slug) VALUES
+           (9880, 100, 'Templates', 'blue', 'templates');",
+    )
     .await;
-    back.assert_status(StatusCode::CONFLICT);
+    sqlx::query(
+        "INSERT INTO events (id, title, start_date, end_date, all_day, unscheduled,
+                             created_user_id, assigned_user_id, calendar_id, project_id)
+         VALUES (9870, 'Template', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 0, 102, 101, 9880, ?)",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stage().await, "template_scheduled");
+
+    // Back to Awaiting Template: the scheduled template doesn't move it on.
+    act(
+        &pool,
+        id,
+        sessions::ADMIN,
+        json!({ "intent": "stage", "version": version(&pool, id).await, "stage": "new" }),
+    )
+    .await
+    .assert_status_ok();
+    assert_eq!(stage().await, "new");
+
+    // Forward by hand again: the calendar counts once more.
+    act(&pool, id, sessions::ADMIN, json!({ "intent": "stage", "version": version(&pool, id).await, "stage": "template_scheduled" }))
+        .await
+        .assert_status_ok();
+    assert_eq!(stage().await, "template_scheduled");
 }

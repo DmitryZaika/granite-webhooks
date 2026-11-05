@@ -183,6 +183,22 @@ async fn bump(conn: &mut MySqlConnection, company_id: i32, id: i32) -> sqlx::Res
     Ok(())
 }
 
+/// Caps the project at `stage` (moved back by hand), or lifts the cap.
+async fn set_stage_cap(
+    conn: &mut MySqlConnection,
+    company_id: i32,
+    project_id: i32,
+    stage: Option<Stage>,
+) -> sqlx::Result<()> {
+    sqlx::query("UPDATE projects SET stage_cap = ? WHERE id = ? AND company_id = ?")
+        .bind(stage.map(Stage::as_str))
+        .bind(project_id)
+        .bind(company_id)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 async fn save_stage(
     conn: &mut MySqlConnection,
     viewer: &Viewer,
@@ -368,7 +384,12 @@ pub async fn apply(
                 return Err(conflict("Take this project off hold before moving it"));
             }
             check_transition(p.stage_code, to)?;
-            if p.stage_code != to {
+            if to < p.stage_code {
+                // Back by hand: it stays there (its calendar jobs don't move it
+                // on) until someone moves it forward by hand.
+                set_stage_cap(&mut tx, company, id, Some(to)).await?;
+                save_stage(&mut tx, viewer, &p, to, "moved-back", None).await?;
+            } else if p.stage_code != to {
                 if to >= Stage::Fabrication && p.sale_id.is_none() {
                     return Err(conflict("Link the project's transaction first"));
                 }
@@ -404,6 +425,7 @@ pub async fn apply(
                 } else {
                     to
                 };
+                set_stage_cap(&mut tx, company, id, None).await?;
                 save_stage(&mut tx, viewer, &p, stored, "stage-change", None).await?;
             }
         }
@@ -652,6 +674,7 @@ pub async fn apply(
             .bind(company)
             .execute(&mut *tx)
             .await?;
+            set_stage_cap(&mut tx, company, id, Some(to)).await?;
             save_stage(&mut tx, viewer, &p, to, "manager-correction", Some(&why)).await?;
         }
     }

@@ -98,10 +98,11 @@ impl TryFrom<String> for Stage {
 /// dates Installed and Paid & Completed. Paid is the transaction's paid date
 /// or the customer's QuickBooks invoices all paid (`p.qbo_paid_at`, see
 /// `payments`). A stage someone moved it to by hand
-/// counts when it is further on. The jobs are the Templates and
+/// counts when it is further on. A stage someone moved it back to by hand
+/// (`p.stage_cap`) caps it until someone moves it forward by hand. The jobs are the Templates and
 /// Installations calendar events linked to the project, or of its customer
 /// made since the project started and linked to none.
-pub const STAGE_SQL: &str = "(CASE WHEN s.installed_date IS NOT NULL
+pub const STAGE_SQL: &str = "ELT(LEAST(FIELD((CASE WHEN s.installed_date IS NOT NULL
         THEN IF(s.paid_date IS NOT NULL OR p.qbo_paid_at IS NOT NULL, 'completed', 'installed')
       ELSE ELT(GREATEST(
           FIELD(IF(p.stage_code IN ('installed', 'completed'), 'fabrication', CAST(p.stage_code AS CHAR)),
@@ -129,15 +130,23 @@ pub const STAGE_SQL: &str = "(CASE WHEN s.installed_date IS NOT NULL
              5, 1),
           IF(p.fabricated_at IS NOT NULL, 4, 1)),
         'new', 'template_scheduled', 'templated', 'fabrication', 'install_scheduled',
-        'installed', 'completed') END)";
+        'installed', 'completed') END),
+        'new', 'template_scheduled', 'templated', 'fabrication', 'install_scheduled', 'installed', 'completed'),
+      COALESCE(NULLIF(FIELD(p.stage_cap, 'new', 'template_scheduled', 'templated', 'fabrication',
+        'install_scheduled', 'installed', 'completed'), 0), 7)),
+      'new', 'template_scheduled', 'templated', 'fabrication', 'install_scheduled', 'installed', 'completed')";
 
-/// A forward move a production user may make; going back takes a manager's
-/// correction with a reason.
+/// A move a production user may make: back to any stage before Paid &
+/// Completed, forward only through Templated.
 pub fn check_transition(from: Stage, to: Stage) -> ApiResult<()> {
     if to < from {
-        return Err(ApiError::Conflict(
-            "Moving back needs a manager's correction with a reason".into(),
-        ));
+        return if from == Stage::Completed {
+            Err(ApiError::Conflict(
+                "A paid project stays in Paid & Completed".into(),
+            ))
+        } else {
+            Ok(())
+        };
     }
     if from < Stage::Templated && to > Stage::Templated {
         return Err(ApiError::Conflict(
@@ -352,7 +361,10 @@ mod tests {
         assert!(check_transition(Stage::New, Stage::Templated).is_ok());
         assert!(check_transition(Stage::Templated, Stage::Installed).is_ok());
         assert!(check_transition(Stage::New, Stage::Fabrication).is_err());
-        assert!(check_transition(Stage::Fabrication, Stage::Templated).is_err());
+        // Back to any stage, except out of Paid & Completed.
+        assert!(check_transition(Stage::Fabrication, Stage::Templated).is_ok());
+        assert!(check_transition(Stage::Installed, Stage::New).is_ok());
+        assert!(check_transition(Stage::Completed, Stage::Installed).is_err());
         // A scheduled template still has to be templated first.
         assert!(check_transition(Stage::TemplateScheduled, Stage::Templated).is_ok());
         assert!(check_transition(Stage::TemplateScheduled, Stage::Fabrication).is_err());
