@@ -56,6 +56,10 @@ pub enum SaleProgress {
     InProgress,
     /// Installed or cancelled.
     Finished,
+    /// In progress with no slab cut yet.
+    Sold,
+    /// In progress with every slab cut.
+    Cut,
 }
 
 /// Query of `GET /v1/transactions`.
@@ -118,6 +122,9 @@ pub struct TransactionRow {
     /// Sink models, joined.
     #[sqlx(skip)]
     pub sink_type: Option<String>,
+    /// Faucet models, joined.
+    #[sqlx(skip)]
+    pub faucet_type: Option<String>,
     /// `Sold`, `Partially Cut`, `Cut`, `Installed` or `Cancelled`.
     #[sqlx(skip)]
     pub status: String,
@@ -223,6 +230,9 @@ pub async fn list(
             SaleProgress::Finished => {
                 sql.push(" AND (s.installed_date IS NOT NULL OR s.cancelled_date IS NOT NULL)");
             }
+            SaleProgress::Sold | SaleProgress::Cut => {
+                sql.push(" AND s.installed_date IS NULL AND s.cancelled_date IS NULL");
+            }
             SaleProgress::All => {}
         }
         if let Some(search) = query
@@ -244,7 +254,19 @@ pub async fn list(
             searching = true;
         }
     }
-    sql.push(" GROUP BY s.id, s.sale_date, c.name, u.name ORDER BY ");
+    sql.push(" GROUP BY s.id, s.sale_date, c.name, u.name");
+    if view != TransactionsView::Admin {
+        match query.status {
+            SaleProgress::Sold => {
+                sql.push(" HAVING any_cut = 0");
+            }
+            SaleProgress::Cut => {
+                sql.push(" HAVING all_cut = 1");
+            }
+            _ => {}
+        }
+    }
+    sql.push(" ORDER BY ");
     // A search puts the caller's own sales first
     if searching {
         sql.push("s.seller_id = ")
@@ -258,21 +280,38 @@ pub async fn list(
     } else {
         ", "
     };
-    let sinks: Vec<(i32, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT s.id, GROUP_CONCAT(st.name SEPARATOR '{separator}')
-           FROM sales s
-           JOIN slab_inventory si ON s.id = si.sale_id
-           JOIN sinks sk ON si.id = sk.slab_id
-           JOIN sink_type st ON sk.sink_type_id = st.id
-          WHERE s.company_id = ?
-          GROUP BY s.id"
+    let fixtures = |table: &str, type_table: &str, column: &str| {
+        format!(
+            "SELECT s.id, GROUP_CONCAT(ft.name SEPARATOR '{separator}')
+               FROM sales s
+               JOIN slab_inventory si ON s.id = si.sale_id
+               JOIN {table} f ON si.id = f.slab_id
+               JOIN {type_table} ft ON f.{column} = ft.id
+              WHERE s.company_id = ?
+              GROUP BY s.id"
+        )
+    };
+    let sinks: Vec<(i32, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(fixtures(
+        "sinks",
+        "sink_type",
+        "sink_type_id",
+    )))
+    .bind(user.company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let faucets: Vec<(i32, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(fixtures(
+        "faucets",
+        "faucet_type",
+        "faucet_type_id",
     )))
     .bind(user.company_id)
     .fetch_all(&state.pool)
     .await?;
     let mut sinks: HashMap<i32, Option<String>> = sinks.into_iter().collect();
+    let mut faucets: HashMap<i32, Option<String>> = faucets.into_iter().collect();
     for row in &mut rows {
         row.sink_type = sinks.remove(&row.id).flatten();
+        row.faucet_type = faucets.remove(&row.id).flatten();
         row.status = status_of(row).to_string();
     }
     Ok(Json(rows))

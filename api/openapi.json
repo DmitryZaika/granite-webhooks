@@ -37344,7 +37344,9 @@
               "enum": [
                 "all",
                 "in_progress",
-                "finished"
+                "finished",
+                "sold",
+                "cut"
               ]
             }
           },
@@ -104842,6 +104844,13 @@
               "null"
             ],
             "description": "Sink models, joined."
+          },
+          "faucet_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Faucet models, joined."
           },
           "status": {
             "type": "string",
