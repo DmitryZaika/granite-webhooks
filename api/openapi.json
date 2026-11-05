@@ -16848,6 +16848,76 @@
             "session_cookie": []
           }
         ]
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a project",
+        "description": "Deletes the project for good, with its tasks, notes, files and history.\nIts calendar events and the deal stay. Admins, Managers and Sales Managers.",
+        "operationId": "delete_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only Managers and Sales Managers delete projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project in the company, or Projects is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/projects/{id}/actions": {
@@ -87894,7 +87964,8 @@
           "convert",
           "production",
           "markPaid",
-          "manage"
+          "manage",
+          "delete"
         ],
         "properties": {
           "viewAll": {
@@ -87916,6 +87987,10 @@
           "manage": {
             "type": "boolean",
             "description": "Cancels, puts on hold, archives, corrects stages, picks the owner."
+          },
+          "delete": {
+            "type": "boolean",
+            "description": "Deletes a project for good (admins, Managers, Sales Managers)."
           }
         }
       },

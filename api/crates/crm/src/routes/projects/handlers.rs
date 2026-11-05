@@ -170,6 +170,68 @@ pub async fn board(
     }))
 }
 
+/// Delete a project
+///
+/// Deletes the project for good, with its tasks, notes, files and history.
+/// Its calendar events and the deal stay. Admins, Managers and Sales Managers.
+#[crate::openapi::path(
+    delete,
+    path = "/v1/projects/{id}",
+    operation_id = "delete_project",
+    tag = "projects",
+    params(("id" = i32, Path, description = "Project id")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Only Managers and Sales Managers delete projects", body = ErrorBody),
+        (status = 404, description = "No such project in the company, or Projects is off", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<axum::http::StatusCode> {
+    let viewer = Viewer::load(&state.pool, &user).await?;
+    Viewer::require(viewer.permissions.delete)?;
+    let company = viewer.company_id;
+    let mut tx = state.pool.begin().await?;
+    let found: Option<i32> =
+        sqlx::query_scalar("SELECT id FROM projects WHERE id = ? AND company_id = ? FOR UPDATE")
+            .bind(id)
+            .bind(company)
+            .fetch_optional(&mut *tx)
+            .await?;
+    found.ok_or(ApiError::NotFound)?;
+    sqlx::query("UPDATE events SET project_id = NULL WHERE project_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    for table in [
+        "project_activities",
+        "project_notes",
+        "project_files",
+        "project_stage_history",
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DELETE FROM {table} WHERE project_id = ? AND company_id = ?"
+        )))
+        .bind(id)
+        .bind(company)
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query("DELETE FROM projects WHERE id = ? AND company_id = ?")
+        .bind(id)
+        .bind(company)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 /// A project's page
 ///
 /// The project, its tasks, notes, files, stage history, appointments and the
