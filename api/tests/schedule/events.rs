@@ -548,6 +548,24 @@ async fn files_are_attached_from_the_events_folder(pool: MySqlPool) {
         history(&pool, 8950).await,
         ["Attachment added", "Attachment removed"]
     );
+
+    // A job photo for the customer is marked so; the others stay inside.
+    server
+        .post("/v1/events/8950/photos")
+        .with_session(sessions::REP)
+        .json(&json!({ "urls": [urls[1].0], "for_customer": true }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let flags: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT url, for_customer <> 0 FROM event_images WHERE event_id = 8950 ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        flags,
+        [(urls[0].0.clone(), false), (urls[1].0.clone(), true)]
+    );
 }
 
 #[test_db::test(seed)]

@@ -188,15 +188,159 @@ async fn a_customer_sees_their_appointments_without_the_shops_notes(pool: MySqlP
         json!([
             { "id": 9201, "kind": null, "start_date": "2026-04-20T15:00:00Z",
               "end_date": "2026-04-20T16:00:00Z", "all_day": false, "unscheduled": false,
-              "location": null, "crew_name": null, "crew_status": null },
+              "location": null, "crew_name": null, "crew_status": null, "photos": [] },
             { "id": 9200, "kind": "templates", "start_date": "2026-05-02T14:00:00Z",
               "end_date": "2026-05-02T16:00:00Z", "all_day": false, "unscheduled": false,
-              "location": "1 Main St", "crew_name": "Mark Manager", "crew_status": "on_my_way" },
+              "location": "1 Main St", "crew_name": "Mark Manager", "crew_status": "on_my_way",
+              "photos": [] },
             { "id": 9202, "kind": null, "start_date": "2026-04-01T04:00:00Z",
               "end_date": "2026-04-01T04:00:00Z", "all_day": true, "unscheduled": true,
-              "location": null, "crew_name": null, "crew_status": null },
+              "location": null, "crew_name": null, "crew_status": null, "photos": [] },
         ])
     );
+}
+
+async fn unlock(server: &TestServer, sent: &Sent) {
+    server
+        .post(&page("/code"))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .post(&page("/verify"))
+        .json(&json!({ "code": last_code(sent) }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}
+
+const PROJECT_FIXTURE: &str = "
+UPDATE users SET phone_number = ' 317-555-0199 ' WHERE id = 100;
+UPDATE company SET address = '9 Shop Rd' WHERE id = 100;
+UPDATE slab_inventory SET cut_date = '2026-04-20 10:00:00' WHERE id = 6071;
+INSERT INTO calendars (id, company_id, name, slug) VALUES
+  (9100, 100, 'Templates', 'templates'), (9101, 100, 'Installations', 'installations');
+INSERT INTO events (id, title, start_date, end_date, unscheduled, created_user_id, assigned_user_id,
+                    customer_id, calendar_id, location, crew_status) VALUES
+  (9300, 'T', '2026-04-18 14:00:00', '2026-04-18 15:00:00', 0, 100, NULL, 1000, 9100, NULL, NULL),
+  (9301, 'I', '2026-05-06 13:00:00', '2026-05-06 17:00:00', 0, 100, 101, 1000, 9101, '1 Main St',
+   'on_my_way'),
+  (9302, 'I later', '2026-04-10 13:00:00', '2026-04-10 13:00:00', 1, 100, NULL, 1000, 9101, NULL, NULL),
+  (9303, 'Erin', '2026-05-06 13:00:00', '2026-05-06 17:00:00', 0, 100, 101, 1004, 9101, NULL,
+   'on_my_way');
+INSERT INTO event_images (event_id, company_id, url, created_by, for_customer, deleted_at) VALUES
+  (9301, 100, 'https://f/done.jpg', 'Mark', 1, NULL),
+  (9301, 100, 'https://f/inside.jpg', 'Mark', 0, NULL),
+  (9301, 100, 'https://f/gone.jpg', 'Mark', 1, NOW());
+INSERT INTO signature_requests (id, company_id, customer_id, deal_id, created_by_user_id, filename,
+                                file_url, signer_name, signer_email, status, created_at, updated_at) VALUES
+  (9921, 100, 1000, NULL, 100, 'Contract.pdf', 'x', 'Alice', 'a@x.test', 'signed',
+   '2026-05-02 10:00:00', NOW()),
+  (9922, 100, 1000, NULL, 100, 'Draft.pdf', 'x', 'Alice', 'a@x.test', 'draft',
+   '2026-05-03 10:00:00', NOW()),
+  (9923, 100, 1004, NULL, 100, 'Erin.pdf', 'x', 'Erin', 'e@x.test', 'sent',
+   '2026-05-03 10:00:00', NOW());
+INSERT INTO quotes (id, customer_id, quote_name, quote_type, created_date, sales_rep, company_id,
+                    salesperson_id, created_by, status, portal_token) VALUES
+  (9931, 1000, 'Kitchen', 'countertops', '2026-04-01 09:00:00', 'Rep', 100, 100, 100, 'sent',
+   'tok-9931'),
+  (9932, 1000, 'Bath', 'countertops', '2026-04-02 09:00:00', 'Rep', 100, 100, 100, 'draft', NULL);
+INSERT INTO crew_positions (user_id, company_id, latitude, longitude, recorded_at) VALUES
+  (101, 100, 39.7, -86.1, UTC_TIMESTAMP());
+";
+
+#[test_db::test(seed)]
+async fn the_page_shows_the_rep_documents_timeline_photos_and_crew(pool: MySqlPool) {
+    let (server, sent) = server(&pool).await;
+    sqlx::raw_sql(PROJECT_FIXTURE).execute(&pool).await.unwrap();
+    for path in ["/contact", "/documents", "/documents/9921", "/crew/9301"] {
+        server
+            .get(&page(path))
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+    unlock(&server, &sent).await;
+
+    let contact = server.get(&page("/contact")).await;
+    contact.assert_status_ok();
+    assert_eq!(
+        contact.json::<Value>(),
+        json!({ "company_name": "Acme Stone", "company_address": "9 Shop Rd",
+                "rep": { "name": "Rita Rep", "email": "rep@acme.test", "phone": "317-555-0199" } })
+    );
+
+    // The template and the dated install belong to the only project.
+    let projects = server.get(&page("/projects")).await.json::<Value>();
+    assert_eq!(projects[0]["template_date"], "2026-04-18T14:00:00Z");
+    assert_eq!(projects[0]["install_date"], "2026-05-06T13:00:00Z");
+    assert_eq!(projects[0]["cut_date"], "2026-04-20T10:00:00Z");
+    assert_eq!(projects[0]["status"], "Cut");
+    assert_eq!(projects[0]["slab_pictures"], "https://img.example/tm-2.jpg");
+
+    // Only the job photos for the customer, not the ones inside or deleted.
+    let schedule = server.get(&page("/schedule")).await.json::<Value>();
+    let install = schedule
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == 9301)
+        .unwrap();
+    assert_eq!(install["photos"], json!(["https://f/done.jpg"]));
+
+    // Sent contracts and emailed quotes; no drafts, nobody else's.
+    assert_eq!(
+        server.get(&page("/documents")).await.json::<Value>(),
+        json!([
+            { "kind": "contract", "id": 9921, "name": "Contract.pdf", "status": "signed",
+              "created_at": "2026-05-02T10:00:00Z", "link": null },
+            { "kind": "quote", "id": 9931, "name": "Kitchen", "status": "sent",
+              "created_at": "2026-04-01T09:00:00Z", "link": "/quote-portal/tok-9931" },
+        ])
+    );
+    for other in ["/documents/9922", "/documents/9923", "/documents/9931"] {
+        server
+            .get(&page(other))
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
+    // Its own contract goes on to the file (none behind 'x' here).
+    server
+        .get(&page("/documents/9921"))
+        .await
+        .assert_status(StatusCode::BAD_GATEWAY);
+
+    // The crew on the way: where they are; no ETA without Google.
+    let crew = server.get(&page("/crew/9301")).await;
+    crew.assert_status_ok();
+    let crew = crew.json::<Value>();
+    assert_eq!(crew["crew_name"], "Mark Manager");
+    assert_eq!(crew["latitude"], 39.7);
+    assert_eq!(crew["longitude"], -86.1);
+    assert_eq!(crew["minutes_away"], Value::Null);
+    // Not someone else's visit, not an old position, not once arrived.
+    server
+        .get(&page("/crew/9303"))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    sqlx::raw_sql(
+        "UPDATE crew_positions SET recorded_at = UTC_TIMESTAMP() - INTERVAL 2 HOUR WHERE user_id = 101",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    server
+        .get(&page("/crew/9301"))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    sqlx::raw_sql(
+        "UPDATE crew_positions SET recorded_at = UTC_TIMESTAMP() WHERE user_id = 101;
+         UPDATE events SET crew_status = 'arrived' WHERE id = 9301;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    server
+        .get(&page("/crew/9301"))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }
 
 #[test_db::test(seed)]
