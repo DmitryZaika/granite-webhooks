@@ -40383,7 +40383,7 @@
           "schedule"
         ],
         "summary": "The event's project",
-        "description": "The sale the event's project view shows: the event's own, else its\ncustomer's latest sale that is not cancelled.",
+        "description": "The sales the event's project view shows: the event's own sale, else the\ncustomer's sales at the event's address, with the other sales at that\naddress. A customer with one project lends it when there is no street to\ncompare; a builder's other jobs never show.",
         "operationId": "get_event_sale",
         "parameters": [
           {
@@ -79329,6 +79329,9 @@
       "EventSale": {
         "type": "object",
         "description": "`GET /v1/events/{id}/sale`.",
+        "required": [
+          "sale_ids"
+        ],
         "properties": {
           "sale_id": {
             "type": [
@@ -79336,7 +79339,15 @@
               "null"
             ],
             "format": "int32",
-            "description": "The event's own sale, else its customer's latest; null when neither."
+            "description": "The project's newest sale (it holds the notes); null when none."
+          },
+          "sale_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Every sale of the project, newest first: one per area when they were\nsold apart."
           }
         }
       },
