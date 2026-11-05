@@ -34204,6 +34204,102 @@
         ]
       }
     },
+    "/v1/feature-sales": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List feature sales",
+        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) sold quotes\nin the dates, each with the dollars of every extra on its accepted option,\nworked out from the quote as it is now.",
+        "operationId": "list_feature_sales",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`mine` (default) or `company` (admins).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First sold day (YYYY-MM-DD); none: no limit.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last sold day (YYYY-MM-DD); none: no limit.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sold quotes' extras",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureSales"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown scope or bad date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, or not an admin for `company`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/public/companies/{company_id}/frame": {
       "get": {
         "tags": [
@@ -62005,7 +62101,7 @@
           "phone"
         ],
         "summary": "Push a lead alert to phones",
-        "description": "Called by the `webhooks` Lambda (job key) as it sends a lead alert to\nTelegram: to the sales rep `user_id`, else to every sales manager of the\ncompany (linked to Telegram or not). Pushed as data `{granite: \"1\",\ntype: \"lead\", kind, customerId, dealId}` (`dealId` left out when the lead\nhas no deal yet): ids only. Nothing is pushed (`pushed: 0`) for another\ncompany's or a deleted customer. Calling it again pushes again.",
+        "description": "Called by the `webhooks` Lambda (job key) as it sends a lead alert to\nTelegram: to the sales rep `user_id`, else to every sales manager of the\ncompany (linked to Telegram or not). Pushed as data `{granite: \"1\",\ntype: \"lead\", kind, customerId, dealId}` (`dealId` left out when the lead\nhas no deal yet): ids only. The managers' new and repeated leads also\ncarry `assign: \"1\"` (tapping opens the Assign a sales rep sheet). Nothing is pushed (`pushed: 0`) for another\ncompany's or a deleted customer. Calling it again pushes again.",
         "operationId": "push_lead",
         "requestBody": {
           "content": {
@@ -72308,8 +72404,7 @@
           "signature_enabled",
           "billing_required",
           "onboarding_enabled",
-          "leaderboard_enabled",
-          "projects_enabled"
+          "leaderboard_enabled"
         ],
         "properties": {
           "id": {
@@ -72448,10 +72543,6 @@
           "leaderboard_enabled": {
             "type": "boolean",
             "description": "Points leaderboard switch (own setting, else the platform default)."
-          },
-          "projects_enabled": {
-            "type": "boolean",
-            "description": "Projects switch."
           }
         }
       },
@@ -72463,7 +72554,6 @@
           "quickbooks_connected",
           "onboarding",
           "leaderboard",
-          "projects",
           "e_signature",
           "inbound_email",
           "cloudtalk",
@@ -72493,10 +72583,6 @@
           "leaderboard": {
             "type": "boolean",
             "description": "The points leaderboard (the company's own switch, else the\nplatform-wide default). See `GET /v1/points-leaderboard`."
-          },
-          "projects": {
-            "type": "boolean",
-            "description": "Projects: sold jobs from template to paid (`GET /v1/projects`)."
           },
           "e_signature": {
             "type": "boolean",
@@ -79497,6 +79583,68 @@
           }
         }
       },
+      "FeatureSale": {
+        "type": "object",
+        "description": "One sold quote's extras.",
+        "required": [
+          "quoteId",
+          "rep",
+          "features"
+        ],
+        "properties": {
+          "quoteId": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The quote."
+          },
+          "userId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The rep: its salesperson, else who made it."
+          },
+          "rep": {
+            "type": "string",
+            "description": "Their name (\"Unassigned\" when none)."
+          },
+          "signedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was sold or signed (YYYY-MM-DD)."
+          },
+          "features": {
+            "type": "object",
+            "description": "Dollars of each extra on the accepted option (`waterfall`, `miter`,\n`phantom_seam`, `custom_edge`, `support`, `faucet`, `soap_dispenser`).",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "FeatureSales": {
+        "type": "object",
+        "description": "Sold quotes' extras.",
+        "required": [
+          "rows"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeatureSale"
+            },
+            "description": "Sold quotes with at least one extra, newest first."
+          }
+        }
+      },
       "FeatureUsage": {
         "type": "object",
         "description": "`GET /v1/ai-usage/feature`.",
@@ -79573,8 +79721,7 @@
           "quickbooks",
           "signature",
           "onboarding",
-          "leaderboard",
-          "projects"
+          "leaderboard"
         ],
         "properties": {
           "quickbooks": {
@@ -79592,10 +79739,6 @@
           "leaderboard": {
             "type": "boolean",
             "description": "The points leaderboard is on (own switch, else the platform default)."
-          },
-          "projects": {
-            "type": "boolean",
-            "description": "Projects (sold jobs from template to paid) is on."
           }
         }
       },
@@ -97924,8 +98067,7 @@
           "quickbooks",
           "signature",
           "onboarding",
-          "leaderboard",
-          "projects"
+          "leaderboard"
         ],
         "properties": {
           "quickbooks": {
@@ -97943,10 +98085,6 @@
           "leaderboard": {
             "type": "boolean",
             "description": "The points leaderboard is on."
-          },
-          "projects": {
-            "type": "boolean",
-            "description": "Projects is on."
           }
         }
       },
