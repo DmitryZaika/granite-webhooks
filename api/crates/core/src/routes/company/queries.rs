@@ -70,7 +70,9 @@ pub async fn company_features(
                   AND c.ringcentral_refresh_token IS NOT NULL
                   AND c.ringcentral_access_expires IS NOT NULL
                   AND c.ringcentral_refresh_expires > UNIX_TIMESTAMP())
-                 OR ({rc_id} AND {rc_secret} AND {rc_jwt})) AS ringcentral,
+                 OR ({rc_id} AND {rc_secret} AND {rc_jwt})
+                 OR EXISTS (SELECT 1 FROM ringcentral_user_logins l
+                             WHERE l.company_id = c.id)) AS ringcentral,
                 EXISTS (SELECT 1 FROM telnyx_company_config t
                          WHERE t.company_id = c.id AND t.enabled <> 0) AS telnyx,
                 EXISTS (SELECT 1 FROM telnyx_company_config t

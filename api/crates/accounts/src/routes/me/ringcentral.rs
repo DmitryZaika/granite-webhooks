@@ -14,7 +14,6 @@ use crate::extract::JsonBody;
 use crate::oauth_state;
 use crate::openapi::ToSchema;
 use crate::ringcentral_connect::{self, ConnectError};
-use crate::routes::company::queries::company_features;
 use crate::routes::users::texting_history;
 use crate::state::AppState;
 use axum::Json;
@@ -64,7 +63,7 @@ pub async fn start(
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<RingcentralSignIn>> {
     let actor = home_actor(&state.pool, user.id).await?;
-    let app = connect_app(&state, actor.company_id).await?;
+    let app = connect_app(&state)?;
     let state_token = oauth_state::sign(
         &state.session_secret,
         STATE_KIND,
@@ -76,20 +75,12 @@ pub async fn start(
     }))
 }
 
-/// The app reps sign in through, once the company itself is connected.
-async fn connect_app(
-    state: &AppState,
-    company_id: i32,
-) -> ApiResult<&ringcentral_connect::RingCentralApp> {
-    let app = state.ringcentral_app.as_ref().ok_or_else(|| {
+/// The app reps sign in through. Each rep signs in to their own
+/// `RingCentral` account; the company needs no connection of its own.
+fn connect_app(state: &AppState) -> ApiResult<&ringcentral_connect::RingCentralApp> {
+    state.ringcentral_app.as_ref().ok_or_else(|| {
         ApiError::BadRequest("RingCentral connect is not set up yet. Ask a superuser.".into())
-    })?;
-    if !company_features(&state.pool, company_id).await?.ringcentral {
-        return Err(ApiError::BadRequest(
-            "Your company isn't connected to RingCentral. Ask a manager to connect it on the Company page.".into(),
-        ));
-    }
-    Ok(app)
+    })
 }
 
 /// Body of `POST /v1/me/ringcentral`.
@@ -118,9 +109,10 @@ pub struct RingcentralConnected {
 
 /// Finish connecting my RingCentral
 ///
-/// Trades the code for the caller's own tokens, after checking they signed
-/// in to the company's `RingCentral` account. Their line becomes the
-/// extension that signed in and its texting number, their earlier texts
+/// Trades the code for the caller's own tokens: each rep signs in to their
+/// own `RingCentral` account, and the company needs no connection of its
+/// own. Their line becomes the extension that signed in and its texting
+/// number, their earlier texts
 /// follow them, and `RingCentral` pushes their new texts to the CRM (a
 /// failed subscription does not undo the connect).
 #[crate::openapi::path(
@@ -131,7 +123,7 @@ pub struct RingcentralConnected {
     request_body = RingcentralReturn,
     responses(
         (status = 200, description = "Connected", body = RingcentralConnected),
-        (status = 400, description = "Cancelled, expired or foreign state, another RingCentral account, or RingCentral refused the code", body = ErrorBody),
+        (status = 400, description = "Cancelled, expired or foreign state, or RingCentral refused the code", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -166,7 +158,7 @@ pub async fn finish(
             "Invalid data returned from RingCentral.".into(),
         ));
     };
-    let app = connect_app(&state, actor.company_id).await?;
+    let app = connect_app(&state)?;
     let before = stored(pool, actor).await?.line();
     let login = match app
         .connect_rep(
@@ -181,11 +173,6 @@ pub async fn finish(
     {
         Ok(login) => login,
         Err(ConnectError::Database(error)) => return Err(ApiError::Database(error)),
-        Err(ConnectError::OtherAccount) => {
-            return Err(ApiError::BadRequest(
-                "That RingCentral login isn't in your company's RingCentral account. Sign in with your own work login.".into(),
-            ));
-        }
         Err(error) => {
             tracing::warn!(%error, user_id = actor.user_id, "RingCentral rep connect failed");
             return Err(ApiError::BadRequest(

@@ -609,7 +609,7 @@ async fn ringcentral_connects_and_disconnects(pool: MySqlPool) {
 }
 
 /// `RingCentral` for a rep's own sign-in: `code=rep` signs in extension 555
-/// of account 42 (the company's), `code=stranger` a user of account 77; the
+/// of account 42, `code=stranger` extension 556 of their own account 77; the
 /// company's own token comes from its JWT.
 async fn rep_stub() -> String {
     let bearer = |headers: &axum::http::HeaderMap| {
@@ -731,17 +731,6 @@ async fn a_rep_connects_their_own_ringcentral(pool: MySqlPool) {
         .json(&json!({ "state": company_state, "code": "rep" }))
         .await
         .assert_status(StatusCode::BAD_REQUEST);
-    let stranger = server
-        .post("/v1/me/ringcentral")
-        .with_session(sessions::REP)
-        .json(&json!({ "state": rep_state, "code": "stranger" }))
-        .await;
-    stranger.assert_status(StatusCode::BAD_REQUEST);
-    assert!(
-        stranger
-            .text()
-            .contains("isn't in your company's RingCentral account")
-    );
 
     let connected: Value = server
         .post("/v1/me/ringcentral")
@@ -783,6 +772,52 @@ async fn a_rep_connects_their_own_ringcentral(pool: MySqlPool) {
     assert_eq!(
         account(&server).await.json::<Value>()["ringcentral_signed_in"],
         false
+    );
+}
+
+/// Every rep has their own `RingCentral` account: a company with no
+/// connection of its own still lets each rep connect theirs.
+#[test_db::test(seed)]
+async fn a_rep_connects_their_own_account_without_a_company_connection(pool: MySqlPool) {
+    let base = rep_stub().await;
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+        .with_app_url(APP_URL)
+        .with_ringcentral_app(RingCentralApp::new(
+            "rc-client",
+            "rc-secret",
+            &base,
+            Some(KEY),
+        ));
+    let server = TestServer::new(app(state));
+    let account = |server: &TestServer| server.get("/v1/me/account").with_session(sessions::REP);
+    let before: Value = account(&server).await.json();
+    assert_eq!(before["has_ringcentral_api"], true);
+    assert_eq!(before["ringcentral_signed_in"], false);
+
+    let link: Value = server
+        .post("/v1/me/ringcentral/start")
+        .with_session(sessions::REP)
+        .json(&json!({}))
+        .await
+        .json();
+    let rep_state = query(link["url"].as_str().unwrap())["state"].clone();
+    // `stranger` is a user of another RingCentral account (77).
+    let connected: Value = server
+        .post("/v1/me/ringcentral")
+        .with_session(sessions::REP)
+        .json(&json!({ "state": rep_state, "code": "stranger" }))
+        .await
+        .json();
+    assert_eq!(connected["ringcentral_phone_number"], "3177087664");
+    let extension: String =
+        sqlx::query_scalar("SELECT extension_id FROM ringcentral_user_logins WHERE user_id = 100")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(extension, "556");
+    assert_eq!(
+        account(&server).await.json::<Value>()["ringcentral_signed_in"],
+        true
     );
 }
 
@@ -879,11 +914,10 @@ async fn managers_switch_sold_quote_jobs_in_unscheduled(pool: MySqlPool) {
 async fn managers_switch_invoice_on_sold_quote(pool: MySqlPool) {
     let Setup { server, .. } = setup(&pool, false, false).await;
     let on = || async {
-        let on: bool =
-            sqlx::query_scalar("SELECT auto_invoice <> 0 FROM company WHERE id = 100")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let on: bool = sqlx::query_scalar("SELECT auto_invoice <> 0 FROM company WHERE id = 100")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         on
     };
     // Off by default; a rep and a non-manager admin may not switch it.
