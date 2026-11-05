@@ -27,7 +27,8 @@ pub struct CompanyFeatures {
     pub inbound_email: bool,
     /// The company has CloudTalk credentials (calls and texts).
     pub cloudtalk: bool,
-    /// The company is connected to RingCentral (OAuth, or JWT credentials).
+    /// The company is connected to RingCentral (OAuth, or JWT credentials),
+    /// or at least one rep connected their own RingCentral on My Account.
     /// When both are set up, texts go through RingCentral.
     pub ringcentral: bool,
     /// Granite Phone is switched on (`telnyx_company_config.enabled`): calls
