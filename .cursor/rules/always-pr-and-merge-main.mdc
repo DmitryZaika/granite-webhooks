@@ -6,11 +6,12 @@ alwaysApply: true
 # Always open a PR and merge it to main
 
 The owner's standing instruction (2026-11-05), for every request in this repo and
-in its sibling repo (general_datebase / granite-webhooks):
+in its sibling repo (general_datebase / granite-webhooks), whatever the request:
 
 1. Do the work on the session's branch, commit and push it.
 2. Open a pull request into `main`.
-3. Merge it into `main` once the repo's own checks for the change pass.
+3. Merge it into `main` right away. Always. Do not wait for CI and do not ask;
+   run the repo's own checks before pushing and report anything that failed.
 
 This does not need to be asked for again; the owner does not want to be asked.
 It does not change the other rules: never run migrations, never touch the main
