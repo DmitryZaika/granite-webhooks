@@ -503,8 +503,6 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
         "schedule_event_created",
         "send_later_used",
         "templates_used",
-        "questionnaire_answered",
-        "call_coached",
         "signature_sent",
     ];
     let rep = Actor {
@@ -521,8 +519,8 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
             .all(|uses| uses.is_empty())
     );
     sqlx::query(
-        "INSERT INTO call_coaching_analyses (company_id, call_id, user_id, status, created_at)
-         VALUES (100, 'c1', 100, 'ready', '2026-05-01 09:00:00')",
+        "INSERT INTO user_template_usage (user_id, template_type, template_id, last_used_at)
+         VALUES (100, 'email', 1, '2026-05-01 09:00:00')",
     )
     .execute(&pool)
     .await
@@ -535,7 +533,7 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
     .await
     .unwrap();
     let team = evaluate_team(&pool, 100, &[100, 101], &all).await.unwrap();
-    assert_eq!(team[&100]["call_coached"], "2026-05-01T09:00:00.000Z");
+    assert_eq!(team[&100]["templates_used"], "2026-05-01T09:00:00.000Z");
     assert_eq!(team[&101]["send_later_used"], "2026-05-01T08:00:00.000Z");
     assert!(!team[&100].contains_key("send_later_used"));
     // One user's check finds the same, from the cache the team run filled.

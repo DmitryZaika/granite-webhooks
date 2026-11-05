@@ -48,7 +48,7 @@ pub struct UsageCheck {
 }
 
 /// Every check, by id.
-static CHECKS: [UsageCheck; 15] = [
+static CHECKS: [UsageCheck; 13] = [
     // A quote emailed to a customer. Quotes are scoped by their company.
     UsageCheck {
         id: "quote_emailed",
@@ -100,24 +100,6 @@ static CHECKS: [UsageCheck; 15] = [
                  FROM cloudtalk_sms_templates st
                 WHERE st.company_id = {c} AND st.user_id IS NOT NULL
                   AND st.deleted_at IS NULL [[st.user_id]]",
-    },
-    // A sales questionnaire answered on a deal; the deal's customer scopes it.
-    UsageCheck {
-        id: "questionnaire_answered",
-        kind: Kind::Data,
-        rows: "SELECT r.answered_by AS user_id, r.created_at AS ts
-                 FROM sales_questionnaire_responses r
-                 JOIN deals d ON d.id = r.deal_id
-                 JOIN customers cu ON cu.id = d.customer_id AND cu.company_id = {c}
-                WHERE r.answered_by IS NOT NULL [[r.answered_by]]",
-    },
-    // A call scored by the coach.
-    UsageCheck {
-        id: "call_coached",
-        kind: Kind::Data,
-        rows: "SELECT cc.user_id AS user_id, cc.created_at AS ts
-                 FROM call_coaching_analyses cc
-                WHERE cc.company_id = {c} [[cc.user_id]]",
     },
     // A document sent out for signature (a draft never went out).
     UsageCheck {
@@ -430,8 +412,6 @@ mod tests {
             "schedule_event_created",
             "send_later_used",
             "templates_used",
-            "questionnaire_answered",
-            "call_coached",
             "signature_sent",
             "chat_asked",
             "ai_reply_used",
