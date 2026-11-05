@@ -419,11 +419,16 @@ pub async fn delete_comment(
 pub struct PhotosInput {
     /// Files uploaded to the `events` folder (`POST /v1/uploads`).
     pub urls: Vec<String>,
+    /// Job photos the customer sees on their own page (the job card's
+    /// Photos button). Default: only inside the event.
+    #[serde(default)]
+    pub for_customer: bool,
 }
 
 /// Post files in an event's comments
 ///
-/// Files already uploaded with `POST /v1/uploads` (folder `events`).
+/// Files already uploaded with `POST /v1/uploads` (folder `events`). With
+/// `for_customer` they are job photos the customer also sees.
 #[crate::openapi::path(
     post,
     path = "/v1/events/{id}/photos",
@@ -456,12 +461,14 @@ pub async fn add_photos(
     }
     for url in &input.urls {
         sqlx::query(
-            "INSERT INTO event_images (event_id, company_id, url, created_by) VALUES (?, ?, ?, ?)",
+            "INSERT INTO event_images (event_id, company_id, url, created_by, for_customer)
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(user.company_id)
         .bind(url)
         .bind(&user.name)
+        .bind(input.for_customer)
         .execute(&state.pool)
         .await?;
     }

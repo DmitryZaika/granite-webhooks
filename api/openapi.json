@@ -5054,6 +5054,322 @@
         }
       }
     },
+    "/v1/public/customer-view/{company_id}/{view_id}/contact": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Get who the customer deals with",
+        "description": "Their sales rep's name, email and phone, and the company. Needs a\nverified visitor.",
+        "operationId": "get_customer_view_contact",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The contact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewContact"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/documents": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "List the customer's documents",
+        "description": "The contracts sent to them for signature (sent, opened or signed; not\ndrafts, declined or expired ones) and the quotes emailed to them, newest\nfirst. Needs a verified visitor.",
+        "operationId": "list_customer_view_documents",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The documents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ViewDocument"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/documents/{id}": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Open one of the customer's contracts",
+        "description": "The PDF of a contract sent to this customer: signed once they signed it,\nelse as sent. Opened in a browser tab: errors are plain text. Needs a\nverified visitor.",
+        "operationId": "open_customer_view_document",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signature request id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The PDF",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "302": {
+            "description": "Over 4 MB: redirect to a presigned link"
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page, or not this customer's contract",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The document could not be downloaded",
+            "content": {
+              "text/plain": {}
+            }
+          },
+          "503": {
+            "description": "The file cannot be read right now",
+            "content": {
+              "text/plain": {}
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/crew/{event_id}": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Where the crew is",
+        "description": "Only while the crew of this customer's visit is on the way (they tapped\n**On my way** and have not arrived) and their phone reported in the last\n30 minutes; otherwise 404. Needs a verified visitor.",
+        "operationId": "get_customer_view_crew",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "event_id",
+            "in": "path",
+            "description": "The visit (event id)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The crew",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewCrew"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page, or the crew is not on the way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/users/sales-reps": {
       "get": {
         "tags": [
@@ -39247,7 +39563,7 @@
           "schedule"
         ],
         "summary": "Post files in an event's comments",
-        "description": "Files already uploaded with `POST /v1/uploads` (folder `events`).",
+        "description": "Files already uploaded with `POST /v1/uploads` (folder `events`). With\n`for_customer` they are job photos the customer also sees.",
         "operationId": "add_event_photos",
         "parameters": [
           {
@@ -87935,6 +88251,10 @@
               "type": "string"
             },
             "description": "Files uploaded to the `events` folder (`POST /v1/uploads`)."
+          },
+          "for_customer": {
+            "type": "boolean",
+            "description": "Job photos the customer sees on their own page (the job card's\nPhotos button). Default: only inside the event."
           }
         }
       },
@@ -104908,7 +105228,8 @@
           "start_date",
           "end_date",
           "all_day",
-          "unscheduled"
+          "unscheduled",
+          "photos"
         ],
         "properties": {
           "id": {
@@ -104959,6 +105280,127 @@
               "null"
             ],
             "description": "How the crew is getting on today: `on_my_way`, `arrived` or\n`completed`."
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The crew's job photos for the customer (the job card's Photos\nbutton), oldest first. Photos in the event's comments are not here."
+          }
+        }
+      },
+      "ViewContact": {
+        "type": "object",
+        "description": "Who the customer deals with.",
+        "properties": {
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company's name."
+          },
+          "company_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company's address."
+          },
+          "rep": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ViewRep",
+                "description": "The customer's sales rep (their **Sales Rep**, else whoever sold\ntheir latest project); `None` when neither."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ViewCrew": {
+        "type": "object",
+        "description": "The crew on the way to one of the customer's visits.",
+        "required": [
+          "latitude",
+          "longitude",
+          "recorded_at"
+        ],
+        "properties": {
+          "crew_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is coming."
+          },
+          "latitude": {
+            "type": "number",
+            "format": "double",
+            "description": "Where their phone was last."
+          },
+          "longitude": {
+            "type": "number",
+            "format": "double",
+            "description": "Where their phone was last."
+          },
+          "recorded_at": {
+            "type": "string",
+            "description": "When (ISO 8601, UTC)."
+          },
+          "minutes_away": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Driving minutes from there to the visit in today's traffic; `None`\nwhen Google cannot tell."
+          }
+        }
+      },
+      "ViewDocument": {
+        "type": "object",
+        "description": "A document sent to the customer.",
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`contract` (sent for signature) or `quote`."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The signature request or the quote."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "status": {
+            "type": "string",
+            "description": "A contract's `sent`, `viewed` or `signed`; a quote's own status."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was made (ISO 8601, UTC)."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A quote's page on this site (`/quote-portal/<token>`); a contract\nopens with `.../documents/{id}`."
           }
         }
       },
@@ -105082,6 +105524,61 @@
               "null"
             ],
             "description": "When it was installed (ISO 8601, UTC)."
+          },
+          "slab_pictures": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pictures of the customer's own slabs, comma-separated URLs."
+          },
+          "cut_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the last slab was cut, once every slab is (ISO 8601, UTC)."
+          },
+          "template_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its latest template visit with a date (ISO 8601, UTC), past or\ncoming. A visit belongs to a project by [`project_of`]."
+          },
+          "install_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its latest installation visit with a date (ISO 8601, UTC), past or\ncoming."
+          }
+        }
+      },
+      "ViewRep": {
+        "type": "object",
+        "description": "The customer's sales rep.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "email": {
+            "type": "string",
+            "description": "Work email."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their own phone, else their Granite Phone line, else their CloudTalk\nor `RingCentral` number (as the AI's emails sign)."
           }
         }
       },
