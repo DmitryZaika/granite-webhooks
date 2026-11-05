@@ -1,7 +1,8 @@
 //! Projects: a sold job in production, from template to paid. A deal that is
 //! won starts its project (Awaiting Template); a transaction made for the
 //! customer links to it; Installed and Paid & Completed follow the
-//! transaction. Off until a superuser turns Projects on for the company.
+//! transaction. On for every company; for now the app shows it only to the
+//! person trying it out.
 //!
 //! - `GET    /v1/projects`                         → the caller's board
 //! - `GET    /v1/projects/payments`               → paid or not, from QuickBooks invoices

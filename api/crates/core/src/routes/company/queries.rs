@@ -33,8 +33,9 @@ pub const ONBOARDING_ON: &str =
     "(COALESCE(c.onboarding_enabled, gf_onboarding.enabled_for_all, 0) <> 0)";
 pub const LEADERBOARD_ON: &str =
     "(COALESCE(c.leaderboard_enabled, gf_leaderboard.enabled_for_all, 0) <> 0)";
-/// The superuser's Projects switch (no platform-wide default).
-pub const PROJECTS_ON: &str = "(COALESCE(c.projects_enabled, 0) <> 0)";
+/// Projects is on for every company; the app shows it only to who tries
+/// it out (`seesProjects` in the CRM).
+pub const PROJECTS_ON: &str = "TRUE";
 
 fn filled(column: &str) -> String {
     format!("(COALESCE(TRIM({column}), '') <> '')")
@@ -111,7 +112,7 @@ pub async fn company_features(
             quickbooks_connected: false,
             onboarding: false,
             leaderboard: false,
-            projects: false,
+            projects: true,
             e_signature: false,
             inbound_email: false,
             cloudtalk: false,

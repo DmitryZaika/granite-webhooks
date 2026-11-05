@@ -667,20 +667,6 @@ fn unique(error: sqlx::Error, message: &str) -> ApiError {
     }
 }
 
-/// The company has Projects on.
-pub async fn enabled<'e>(
-    executor: impl sqlx::Executor<'e, Database = MySql>,
-    company_id: i32,
-) -> sqlx::Result<bool> {
-    let on: Option<bool> = sqlx::query_scalar(
-        "SELECT COALESCE(projects_enabled, 0) <> 0 FROM company WHERE id = ? AND deleted_at IS NULL",
-    )
-    .bind(company_id)
-    .fetch_optional(executor)
-    .await?;
-    Ok(on == Some(true))
-}
-
 /// The deal's project id.
 pub async fn deal_project(
     conn: &mut MySqlConnection,
@@ -791,7 +777,7 @@ pub async fn convert_deal(
 }
 
 /// A deal was won (deals board, sold quote): its project starts, when the
-/// company has Projects and Admin › Quotes › Automation "Project on a sale". Logged, never returned: the win is already saved.
+/// company has Projects and Admin › Quotes › Automation "Create a project from a sold quote". Logged, never returned: the win is already saved.
 pub async fn start_for_won_deal(
     pool: &MySqlPool,
     company_id: i32,
@@ -814,7 +800,7 @@ async fn try_start(
             .bind(company_id)
             .fetch_optional(pool)
             .await?;
-    if automatic != Some(true) || !enabled(pool, company_id).await? {
+    if automatic != Some(true) {
         return Ok(());
     }
     let mut tx = pool.begin().await?;
@@ -857,9 +843,6 @@ async fn try_link(
     customer_id: i32,
     sale_id: i32,
 ) -> sqlx::Result<()> {
-    if !enabled(&mut *conn, company_id).await? {
-        return Ok(());
-    }
     sqlx::query(
         "UPDATE projects SET sale_id = ?, version = version + 1
           WHERE company_id = ? AND customer_id = ? AND sale_id IS NULL

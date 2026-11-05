@@ -213,7 +213,6 @@ impl Viewer {
     }
 
     pub async fn load(pool: &MySqlPool, user: &SessionUser) -> ApiResult<Self> {
-        require_enabled(pool, user.company_id).await?;
         let positions = user_positions(pool, user.id).await?;
         Ok(Self::new(user, &positions))
     }
@@ -250,21 +249,6 @@ impl Viewer {
                 "Your position can't do this on a project".into(),
             ))
         }
-    }
-}
-
-/// 404 unless a superuser turned Projects on for the company.
-pub async fn require_enabled(pool: &MySqlPool, company_id: i32) -> ApiResult<()> {
-    let on: Option<bool> = sqlx::query_scalar(
-        "SELECT COALESCE(projects_enabled, 0) <> 0 FROM company WHERE id = ? AND deleted_at IS NULL",
-    )
-    .bind(company_id)
-    .fetch_optional(pool)
-    .await?;
-    if on == Some(true) {
-        Ok(())
-    } else {
-        Err(ApiError::NotFound)
     }
 }
 

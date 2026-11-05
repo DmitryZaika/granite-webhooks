@@ -1143,7 +1143,6 @@ pub async fn switch_feature(
         "signature" => "signature_enabled",
         "onboarding" => "onboarding_enabled",
         "leaderboard" => "leaderboard_enabled",
-        "projects" => "projects_enabled",
         _ => return Err(ApiError::BadRequest("Invalid feature toggle".into())),
     };
     let updated = sqlx::query(sqlx::AssertSqlSafe(format!(

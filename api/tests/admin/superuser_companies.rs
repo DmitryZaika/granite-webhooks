@@ -455,7 +455,6 @@ async fn superusers_switch_features_and_billing(pool: MySqlPool) {
         ("signature", true),
         ("onboarding", false),
         ("leaderboard", true),
-        ("projects", true),
     ] {
         server
             .put(&format!("/v1/superuser/companies/100/features/{feature}"))
@@ -466,6 +465,13 @@ async fn superusers_switch_features_and_billing(pool: MySqlPool) {
     }
     server
         .put("/v1/superuser/companies/100/features/sql")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "enabled": true }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    // Projects has no switch: it is on for everyone.
+    server
+        .put("/v1/superuser/companies/100/features/projects")
         .with_session(sessions::ADMIN)
         .json(&json!({ "enabled": true }))
         .await
