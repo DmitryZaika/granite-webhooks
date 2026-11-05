@@ -12,7 +12,10 @@ use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::phone::crm_push::push_notification_logged;
-use crate::routes::events::notify::{Booking, NotifyKind, appointment_when, notify_booking};
+use crate::routes::events::history::record_customer_message;
+use crate::routes::events::notify::{
+    Booking, Channel, NotifyKind, appointment_when, notify_booking,
+};
 use crate::routes::schedule::notifications;
 use crate::state::AppState;
 use crate::webhooks_client::TelegramCrmNotify;
@@ -55,6 +58,7 @@ pub struct ReminderRun {
 #[derive(sqlx::FromRow)]
 struct CustomerReminder {
     id: i32,
+    event_id: i32,
     company_id: i32,
     customer_id: i32,
     reminder_kind: String,
@@ -123,7 +127,7 @@ async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(
     .execute(&state.pool)
     .await?;
     let due: Vec<CustomerReminder> = sqlx::query_as(
-        "SELECT r.id, r.company_id, r.customer_id, CAST(r.reminder_kind AS CHAR) AS reminder_kind,
+        "SELECT r.id, r.event_id, r.company_id, r.customer_id, CAST(r.reminder_kind AS CHAR) AS reminder_kind,
                 c.name AS customer_name,
                 COALESCE(NULLIF(TRIM(e.contact_email), ''), primary_email.email) AS customer_email,
                 NULLIF(TRIM(e.contact_phone), '') AS customer_phone,
@@ -173,7 +177,17 @@ async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(
             location: reminder.location.as_deref(),
         };
         let outcome = match notify_booking(state, &booking).await {
-            Ok(Some(_)) => None,
+            Ok(Some(channel)) => {
+                record_customer_message(
+                    &state.pool,
+                    reminder.event_id,
+                    reminder.company_id,
+                    channel == Channel::Sms,
+                    reminder_label(&reminder.reminder_kind),
+                )
+                .await;
+                None
+            }
             Ok(None) => Some("notification_unavailable".to_string()),
             Err(err) => {
                 // One failure must not hold up the reminders queued behind it.
@@ -195,6 +209,15 @@ async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(
         }
     }
     Ok(())
+}
+
+/// What the event's history calls a built-in customer reminder.
+pub fn reminder_label(kind: &str) -> &'static str {
+    if kind == "24h" {
+        "Reminder (1 day before)"
+    } else {
+        "Reminder (1 hour before)"
+    }
 }
 
 /// The calendar's reminder label and notification type.
@@ -346,7 +369,13 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
 
 #[cfg(test)]
 mod tests {
-    use super::rep_message;
+    use super::{reminder_label, rep_message};
+
+    #[test]
+    fn customer_reminders_are_named_in_the_history() {
+        assert_eq!(reminder_label("24h"), "Reminder (1 day before)");
+        assert_eq!(reminder_label("1h"), "Reminder (1 hour before)");
+    }
 
     #[test]
     fn rep_messages_name_the_calendar() {

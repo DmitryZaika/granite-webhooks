@@ -463,6 +463,16 @@ async fn a_completed_step_goes_out_when_the_crew_taps_completed(pool: MySqlPool)
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].subject, "Thank you");
     assert_eq!(sent[0].body, "<p>Hi Alice, your job is done.</p>");
+    let noted: Vec<String> = sqlx::query_scalar(
+        "SELECT message FROM event_history WHERE event_id = 9900 AND action = 'customer_message'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        noted,
+        ["Email sent to the customer: Thanks (when completed)"]
+    );
 }
 
 #[test_db::test(seed)]
