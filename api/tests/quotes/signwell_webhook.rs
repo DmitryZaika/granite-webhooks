@@ -228,7 +228,7 @@ async fn a_signed_contract_sells_its_quote_and_wins_its_deal(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn a_quote_with_no_snapshot_prices_from_today_and_gets_a_new_won_deal(pool: MySqlPool) {
     let setup = setup(&pool).await;
-    // Bob's only deal is lost: the sale gets a new one. No snapshot: the
+    // Bob's only deal is lost: the sale gets a new one, won, so it leaves the first stage (Contacted, 101). No snapshot: the
     // revision with today's stock, Absolute Black at its $75 retail price
     // (17.7 × 75 = 1327.5, rounded to the dollar).
     let quote_id = quote(&pool, 1001, None, &drawing(1), None).await;
@@ -256,7 +256,7 @@ async fn a_quote_with_no_snapshot_prices_from_today_and_gets_a_new_won_deal(pool
     .unwrap();
     assert_eq!(
         (customer, won, amount, list, user),
-        (1001, Some(1), Some(1328.0), 100, Some(100))
+        (1001, Some(1), Some(1328.0), 101, Some(100))
     );
     let stages: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM deal_stage_history WHERE deal_id = ? AND list_id = 100",
