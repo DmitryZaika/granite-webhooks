@@ -546,7 +546,7 @@ pub struct AutoProjectInput {
 
 /// Switch starting a project on a sale
 ///
-/// Admin › Quotes › Automation "Create a project from a sold quote". When on, marking a deal
+/// Admin › Quotes › Automation "Project on a sale". When on, marking a deal
 /// won or a quote sold starts its project in Projects (`auto_project` in
 /// `GET /v1/company/features`). Off, projects are added by hand.
 #[crate::openapi::path(

@@ -26,6 +26,10 @@ pub struct Project {
     pub templated_at: Option<String>,
     /// The shop marked it fabricated.
     pub fabricated_at: Option<String>,
+    /// Its template is on the calendar for this time (UTC ISO), not done yet.
+    pub template_date: Option<String>,
+    /// Its installation is on the calendar for this time (UTC ISO), not done yet.
+    pub install_date: Option<String>,
     pub archived_at: Option<String>,
     /// Bumped on every change; actions send it back to catch a stale page.
     pub version: i32,

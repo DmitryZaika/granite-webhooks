@@ -99177,13 +99177,11 @@
       },
       "Stage": {
         "type": "string",
-        "description": "Where a project is.",
+        "description": "Where a project is: the board's four lists, and Paid & Completed.",
         "enum": [
           "new",
-          "template_scheduled",
           "templated",
           "fabrication",
-          "install_scheduled",
           "installed",
           "completed"
         ]

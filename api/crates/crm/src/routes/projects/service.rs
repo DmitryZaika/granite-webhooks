@@ -1,7 +1,7 @@
 //! Project writes: starting a project from a won deal, linking its
 //! transaction, and the stage and milestone actions.
 
-use super::access::{STAGE_SQL, Stage, Viewer, check_transition};
+use super::access::{STAGE_SQL, Stage, Viewer, check_transition, job_date_sql};
 use super::schemas::{Project, ProjectAction};
 use crate::error::{ApiError, ApiResult};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
@@ -21,6 +21,7 @@ pub fn project_select() -> String {
                 {STAGE_SQL} AS stage_code, p.position, p.is_on_hold <> 0 AS is_on_hold,
                 {cancelled} AS cancelled_at, {templated} AS templated_at,
                 {fabricated} AS fabricated_at,
+                {template_date} AS template_date, {install_date} AS install_date,
                 {archived} AS archived_at, p.version, {created} AS created_at,
                 {updated} AS updated_at, {installed} AS installed_at, {paid} AS paid_at,
                 {sale_cancelled} AS sale_cancelled_at,
@@ -50,6 +51,8 @@ pub fn project_select() -> String {
         cancelled = iso("p.cancelled_at"),
         templated = iso("p.templated_at"),
         fabricated = iso("p.fabricated_at"),
+        template_date = job_date_sql("templates"),
+        install_date = job_date_sql("installations"),
         archived = iso("p.archived_at"),
         created = iso("p.created_at"),
         updated = iso("p.updated_at"),
@@ -394,10 +397,7 @@ pub async fn apply(
                             ));
                         }
                     }
-                    Stage::New
-                    | Stage::TemplateScheduled
-                    | Stage::Fabrication
-                    | Stage::InstallScheduled => {}
+                    Stage::New | Stage::Fabrication => {}
                 }
                 let stored = if to == Stage::Installed && p.paid_at.is_some() {
                     Stage::Completed
@@ -777,7 +777,7 @@ pub async fn convert_deal(
 }
 
 /// A deal was won (deals board, sold quote): its project starts, when the
-/// company has Projects and Admin › Quotes › Automation "Create a project from a sold quote". Logged, never returned: the win is already saved.
+/// company has Projects and Admin › Quotes › Automation "Project on a sale". Logged, never returned: the win is already saved.
 pub async fn start_for_won_deal(
     pool: &MySqlPool,
     company_id: i32,

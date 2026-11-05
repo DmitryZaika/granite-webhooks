@@ -8,7 +8,7 @@ use sqlx::MySqlPool;
 // Seed: in company 100 Rita (100) is a sales rep and owns the open deal 8002
 // "Erin countertops" of Erin Builder (1004); Mark (101) is the Sales Manager;
 // Ada (102) is the admin. Projects is on for every company; `turn_on`
-// turns on "Create a project from a sold quote".
+// turns on "Project on a sale".
 
 async fn run(pool: &MySqlPool, sql: &str) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
@@ -95,15 +95,7 @@ async fn a_sold_deal_goes_to_projects(pool: MySqlPool) {
     assert_eq!(project["sales_rep_id"], 100);
     assert_eq!(
         admin["stages"],
-        json!([
-            "new",
-            "template_scheduled",
-            "templated",
-            "fabrication",
-            "install_scheduled",
-            "installed",
-            "completed"
-        ])
+        json!(["new", "templated", "fabrication", "installed", "completed"])
     );
 
     // Winning it again starts nothing more; the deal page finds it.
@@ -129,15 +121,7 @@ async fn each_position_sees_its_part_of_the_board(pool: MySqlPool) {
     assert!(ids(&board(&pool, sessions::MANAGER).await).is_empty());
     assert_eq!(
         board(&pool, sessions::MANAGER).await["stages"],
-        json!([
-            "new",
-            "template_scheduled",
-            "templated",
-            "fabrication",
-            "install_scheduled",
-            "installed",
-            "completed"
-        ])
+        json!(["new", "templated", "fabrication", "installed", "completed"])
     );
 
     // Another rep's project is not Rita's.
@@ -407,9 +391,11 @@ async fn the_schedule_and_the_crew_move_a_project(pool: MySqlPool) {
     .unwrap();
     assert_eq!(stage().await, "new");
 
-    // The office puts it on the calendar.
+    // The office puts it on the calendar: it stays, and its status says so.
     run(&pool, "UPDATE events SET unscheduled = 0 WHERE id = 9870").await;
-    assert_eq!(stage().await, "template_scheduled");
+    assert_eq!(stage().await, "new");
+    let card = board(&pool, sessions::ADMIN).await["projects"][0].clone();
+    assert!(card["template_date"].is_string(), "{card:?}");
 
     // Mark taps Completed: templated, with no one moving it.
     server(pool.clone())
@@ -456,7 +442,10 @@ async fn the_schedule_and_the_crew_move_a_project(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
-    assert_eq!(stage().await, "install_scheduled");
+    assert_eq!(stage().await, "fabrication");
+    let card = board(&pool, sessions::ADMIN).await["projects"][0].clone();
+    assert!(card["install_date"].is_string(), "{card:?}");
+    assert!(card["template_date"].is_null(), "the template is done: {card:?}");
     server(pool.clone())
         .post("/v1/events/9871/crew-status")
         .with_session(sessions::MANAGER)
