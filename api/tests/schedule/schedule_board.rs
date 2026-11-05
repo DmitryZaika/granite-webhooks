@@ -290,11 +290,13 @@ async fn the_shop_sees_the_schedule(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
-    server
-        .get(april)
-        .with_session(sessions::VIEWER)
-        .await
-        .assert_status_ok();
+    // A shop worker sees everyone's events, not only their own.
+    let events = server.get(april).with_session(sessions::VIEWER).await;
+    events.assert_status_ok();
+    assert_eq!(
+        common::ids(&events.json::<Value>()["events"]),
+        [9712, 9710, 9711]
+    );
 }
 
 #[test_db::test(seed)]
