@@ -174,6 +174,8 @@ pub struct Permissions {
     pub mark_paid: bool,
     /// Cancels, puts on hold, archives, corrects stages, picks the owner.
     pub manage: bool,
+    /// Deletes a project for good (admins, Managers, Sales Managers).
+    pub delete: bool,
 }
 
 /// The caller, as projects see them.
@@ -218,6 +220,7 @@ impl Viewer {
                 production: admin || scheduling || shop,
                 mark_paid: admin || sales_manager,
                 manage: admin || office,
+                delete: admin || sales_manager,
             },
             own: rep,
             convert_any: admin || sales_manager,
@@ -356,6 +359,9 @@ mod tests {
         let sales = viewer(false, &[SALES_MANAGER]);
         assert!(!sales.permissions.view_all && sales.convert_any);
         assert!(sales.permissions.convert && sales.permissions.mark_paid);
+        assert!(sales.permissions.delete && !office.delete && !shop.delete);
+        assert!(viewer(false, &[MANAGER]).permissions.delete);
+        assert!(!viewer(false, &[SALES_REP]).permissions.delete);
         let rep = viewer(false, &[SALES_REP]);
         assert!(rep.permissions.convert && !rep.convert_any && !rep.permissions.view_all);
     }
