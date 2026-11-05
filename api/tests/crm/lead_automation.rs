@@ -130,10 +130,7 @@ async fn reps_get_the_company_automations_or_their_own(pool: MySqlPool) {
     let first = new_lead_deal(&pool, 8690).await;
     assert_eq!(pending(&pool, "scheduled_emails", first, 8670).await, 1);
     assert_eq!(pending(&pool, "scheduled_sms", first, 8671).await, 1);
-    assert_eq!(
-        pending(&pool, "scheduled_emails", first, own_email).await,
-        0
-    );
+    assert_eq!(pending(&pool, "scheduled_emails", first, own_email).await, 0);
     assert_eq!(pending(&pool, "scheduled_sms", first, own_sms).await, 0);
 
     // Her own flow: the company's pending sends on her deals stop...
@@ -142,17 +139,11 @@ async fn reps_get_the_company_automations_or_their_own(pool: MySqlPool) {
     assert_eq!(pending(&pool, "scheduled_emails", first, 8670).await, 0);
     assert_eq!(pending(&pool, "scheduled_sms", first, 8671).await, 0);
     // ...and nothing is backfilled for deals already on the list.
-    assert_eq!(
-        pending(&pool, "scheduled_emails", first, own_email).await,
-        0
-    );
+    assert_eq!(pending(&pool, "scheduled_emails", first, own_email).await, 0);
 
     // Her next lead gets only her own drips.
     let second = new_lead_deal(&pool, 8691).await;
-    assert_eq!(
-        pending(&pool, "scheduled_emails", second, own_email).await,
-        1
-    );
+    assert_eq!(pending(&pool, "scheduled_emails", second, own_email).await, 1);
     assert_eq!(pending(&pool, "scheduled_sms", second, own_sms).await, 1);
     assert_eq!(pending(&pool, "scheduled_emails", second, 8670).await, 0);
     assert_eq!(pending(&pool, "scheduled_sms", second, 8671).await, 0);
@@ -162,17 +153,11 @@ async fn reps_get_the_company_automations_or_their_own(pool: MySqlPool) {
 
     // Back to company settings: her own pending sends stop.
     set_mode(&server, DINA, "company").await;
-    assert_eq!(
-        pending(&pool, "scheduled_emails", second, own_email).await,
-        0
-    );
+    assert_eq!(pending(&pool, "scheduled_emails", second, own_email).await, 0);
     assert_eq!(pending(&pool, "scheduled_sms", second, own_sms).await, 0);
     let third = new_lead_deal(&pool, 8692).await;
     assert_eq!(pending(&pool, "scheduled_emails", third, 8670).await, 1);
-    assert_eq!(
-        pending(&pool, "scheduled_emails", third, own_email).await,
-        0
-    );
+    assert_eq!(pending(&pool, "scheduled_emails", third, own_email).await, 0);
 
     let res = server
         .put("/v1/me/lead-automation")

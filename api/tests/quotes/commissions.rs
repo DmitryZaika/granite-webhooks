@@ -3,8 +3,8 @@
 use crate::common;
 
 use axum::http::StatusCode;
-use common::{WithSession, server, sessions};
-use serde_json::{Value, json};
+use common::{server, sessions, WithSession};
+use serde_json::{json, Value};
 use sqlx::MySqlPool;
 
 fn doc() -> Value {
@@ -384,10 +384,8 @@ async fn a_positions_base_pay_pays_everyone_with_it_unless_they_have_their_own(p
     server
         .post("/v1/commission-base-pay")
         .with_session(sessions::ADMIN)
-        .json(
-            &json!({ "positionId": 1, "amount": 500, "frequency": "weekly",
-                       "startDate": "2026-10-02", "endDate": "2026-10-09" }),
-        )
+        .json(&json!({ "positionId": 1, "amount": 500, "frequency": "weekly",
+                       "startDate": "2026-10-02", "endDate": "2026-10-09" }))
         .await
         .assert_status(StatusCode::CREATED);
     for bad in [
@@ -435,10 +433,8 @@ async fn a_positions_base_pay_pays_everyone_with_it_unless_they_have_their_own(p
     server
         .post("/v1/commission-base-pay")
         .with_session(sessions::ADMIN)
-        .json(
-            &json!({ "userId": 100, "amount": 700, "frequency": "weekly",
-                       "startDate": "2026-10-02", "endDate": "2026-10-02" }),
-        )
+        .json(&json!({ "userId": 100, "amount": 700, "frequency": "weekly",
+                       "startDate": "2026-10-02", "endDate": "2026-10-02" }))
         .await
         .assert_status(StatusCode::CREATED);
     let mine = server
