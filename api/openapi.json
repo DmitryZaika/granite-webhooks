@@ -31706,7 +31706,7 @@
           "commissions"
         ],
         "summary": "List base pay",
-        "description": "Every rep's base pay schedules.",
+        "description": "The base pay schedules: one person's, or everyone's with a position.",
         "operationId": "list_commission_base_pay",
         "responses": {
           "200": {
@@ -31764,7 +31764,7 @@
           "commissions"
         ],
         "summary": "Add base pay",
-        "description": "A rep's base pay: an amount every week, two weeks or month from the\nfirst payday (monthly: on that day of the month), until an optional last\nday. It shows in the paychecks on those days.",
+        "description": "A base pay for one person or for everyone with a position: an amount\nevery week, two weeks or month from the first payday (monthly: on that\nday of the month), until an optional last day. It shows in the paychecks\non those days; a person's own base pay replaces their position's.",
         "operationId": "create_commission_base_pay",
         "requestBody": {
           "content": {
@@ -31993,7 +31993,7 @@
           "commissions"
         ],
         "summary": "List commissions",
-        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) signed\nquotes with what they earn, and the paychecks: paid commissions, monthly\ngoal bonuses and base pay per payroll date.",
+        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) signed\nquotes with what they earn, and the paychecks: paid commissions, monthly\ngoal bonuses (by what was sold in the CRM that month) and base pay (their\nown, or their positions') per payroll date.",
         "operationId": "list_commissions",
         "parameters": [
           {
@@ -67448,11 +67448,9 @@
       },
       "BasePay": {
         "type": "object",
-        "description": "A rep's base pay (`commission_base_pay`): `amount` every week, two weeks\nor month from the first payday, until an optional last day.",
+        "description": "A rep's base pay (`commission_base_pay`): `amount` every week, two weeks\nor month from the first payday, until an optional last day. It is one\nperson's (`user_id`) or everyone's with a position (`position_id`); a\nperson's own base pay replaces their position's.",
         "required": [
           "id",
-          "userId",
-          "rep",
           "amount",
           "frequency",
           "startDate"
@@ -67464,13 +67462,27 @@
             "description": "Base pay id."
           },
           "userId": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "The rep."
+            "description": "One person's base pay."
           },
           "rep": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Their name."
+          },
+          "positionId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Or the base pay of everyone with this position."
           },
           "amount": {
             "type": "number",
@@ -67496,18 +67508,28 @@
       },
       "BasePayInput": {
         "type": "object",
-        "description": "A rep's base pay as an admin sets it.",
+        "description": "A base pay as an admin sets it: for one person or for a position.",
         "required": [
-          "userId",
           "amount",
           "frequency",
           "startDate"
         ],
         "properties": {
           "userId": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "The rep (an employee of the company)."
+            "description": "One person (an employee of the company)…"
+          },
+          "positionId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "…or everyone with this position; exactly one of the two."
           },
           "amount": {
             "type": "number",
