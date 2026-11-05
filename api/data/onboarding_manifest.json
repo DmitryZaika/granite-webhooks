@@ -233,6 +233,29 @@
       "usage_check": "signature_sent"
     },
     {
+      "id": "calls-from-deal",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "deals-call-phone"
+      ],
+      "usage_check": "customer_called"
+    },
+    {
+      "id": "calls-follow-up",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 0,
+      "base_keys": [
+        "deal-call-item",
+        "call-add-note"
+      ],
+      "usage_check": "call_followed_up"
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
