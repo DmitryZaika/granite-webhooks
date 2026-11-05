@@ -612,7 +612,9 @@ async fn search_finds_titles_customers_and_places(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn search_puts_mine_then_title_hits_then_the_nearest_first(pool: MySqlPool) {
     sqlx::raw_sql(
-        "INSERT INTO events (id, title, location, start_date, end_date, created_user_id, assigned_user_id, unscheduled) VALUES
+        "-- Rita sees every event, as a manager does
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 3, 100);
+         INSERT INTO events (id, title, location, start_date, end_date, created_user_id, assigned_user_id, unscheduled) VALUES
            (8970, 'Zork other', NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, NULL, 0),
            (8971, 'Zork mine far', NULL, UTC_TIMESTAMP() + INTERVAL 300 DAY, UTC_TIMESTAMP() + INTERVAL 300 DAY, 101, 100, 0),
            (8972, 'Zork mine near', NULL, UTC_TIMESTAMP() - INTERVAL 2 DAY, UTC_TIMESTAMP() - INTERVAL 2 DAY, 100, NULL, 0),
@@ -645,7 +647,8 @@ async fn search_puts_mine_then_title_hits_then_the_nearest_first(pool: MySqlPool
 #[test_db::test(seed)]
 async fn search_puts_word_starts_open_and_upcoming_first_and_allows_a_typo(pool: MySqlPool) {
     sqlx::raw_sql(
-        "INSERT INTO events (id, title, start_date, end_date, created_user_id, unscheduled, completed_at) VALUES
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 3, 100);
+         INSERT INTO events (id, title, start_date, end_date, created_user_id, unscheduled, completed_at) VALUES
            (8980, 'Plover install', UTC_TIMESTAMP() + INTERVAL 10 DAY, UTC_TIMESTAMP() + INTERVAL 10 DAY, 101, 0, NULL),
            (8981, 'Replover job', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 0, NULL),
            (8982, 'Plover done', UTC_TIMESTAMP() + INTERVAL 1 DAY, UTC_TIMESTAMP() + INTERVAL 1 DAY, 101, 0, UTC_TIMESTAMP()),
