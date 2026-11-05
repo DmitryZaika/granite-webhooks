@@ -1,5 +1,6 @@
 use super::schemas::{ConversionRow, MonthlyCount, SalesStats, SmsProvider, TopSoldStone};
 use crate::period::MonthToDate;
+use crate::routes::customers::service::WALKIN_SOURCE;
 use chrono::NaiveDate;
 // Dynamic SQL here only splices constants and fixed table names.
 use sqlx::{AssertSqlSafe, MySqlPool};
@@ -68,8 +69,8 @@ pub async fn deal_conversion(
                 COUNT(*) AS total_created,
                 COUNT(CASE WHEN c.source = 'leads' AND d.is_won = 1 THEN 1 END) AS leads_won,
                 COUNT(CASE WHEN c.source = 'leads' THEN 1 END) AS leads_created,
-                COUNT(CASE WHEN c.source = 'check-in' AND d.is_won = 1 THEN 1 END) AS walk_in_won,
-                COUNT(CASE WHEN c.source = 'check-in' THEN 1 END) AS walk_in_created,
+                COUNT(CASE WHEN {WALKIN_SOURCE} AND d.is_won = 1 THEN 1 END) AS walk_in_won,
+                COUNT(CASE WHEN {WALKIN_SOURCE} THEN 1 END) AS walk_in_created,
                 COUNT(CASE WHEN c.source = 'call-in' AND d.is_won = 1 THEN 1 END) AS call_in_won,
                 COUNT(CASE WHEN c.source = 'call-in' THEN 1 END) AS call_in_created
          {LIVE_DEALS}"

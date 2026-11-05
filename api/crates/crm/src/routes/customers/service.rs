@@ -27,6 +27,11 @@ pub const BUILTIN_SOURCES: &[&str] = &[
     "check-list",
     "user-input",
 ];
+/// `c` (`customers`) is a walk-in: the built-in walk-in source, or one of the
+/// company's own sources ticked as a walk-in (`customer_sources.is_walkin`).
+pub const WALKIN_SOURCE: &str = "(c.source = 'check-in' OR c.source IN \
+     (SELECT ws.source_key FROM customer_sources ws \
+       WHERE ws.company_id = c.company_id AND ws.is_walkin = 1))";
 /// `positions.id` of a sales rep.
 pub const SALES_REP_POSITION: i32 = 1;
 /// Name and `created_by` of the Moraware quote import's shared customer: the

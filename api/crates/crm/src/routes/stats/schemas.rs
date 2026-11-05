@@ -38,7 +38,7 @@ pub struct DealConversion {
     pub total: ConversionCount,
     /// Customers from leads (`source = leads`).
     pub leads: ConversionCount,
-    /// Walk-in customers (`source = check-in`).
+    /// Walk-in customers: `source = check-in` or a source ticked as a walk-in.
     pub walk_in: ConversionCount,
     /// Customers who called in (`source = call-in`).
     pub call_in: ConversionCount,
