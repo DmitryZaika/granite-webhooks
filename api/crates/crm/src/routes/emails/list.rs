@@ -7,9 +7,9 @@ use super::schemas::{
     SuggestionRow,
 };
 use super::sql::{
-    Arg, Mailbox, Sql, client_read_at, company_scope, customer_name_by_email, list_search,
-    normalize_search_term, normalized, receiver_condition, sender_condition, thread_in_inbox,
-    unread_incoming,
+    Arg, Mailbox, Sql, client_read_at, company_scope, customer_name_by_email, header_match,
+    list_search, normalize_search_term, normalized, receiver_condition, sender_condition,
+    thread_in_inbox, unread_incoming,
 };
 use sqlx::MySqlPool;
 
@@ -298,8 +298,9 @@ pub async fn folder_counts(
 /// Suggestions per conversation, newest first.
 const SUGGEST_LIMIT: usize = 8;
 
-/// Typeahead for the mailbox search: the newest matching message of up to
-/// 8 conversations, in the given folder (`searchEmailSuggestions`).
+/// Typeahead for the mailbox search: the best matching message (subject,
+/// address or customer name before text), newest first, of up to 8
+/// conversations, in the given folder (`searchEmailSuggestions`).
 #[allow(clippy::too_many_lines)]
 pub async fn suggestions(
     pool: &MySqlPool,
@@ -333,6 +334,7 @@ pub async fn suggestions(
     } else {
         None
     };
+    let header = header_match(&term, extra.clone());
     let search = list_search(&term, extra);
     if search.sql.is_empty() {
         return Ok(Vec::new());
@@ -424,6 +426,8 @@ pub async fn suggestions(
         ordered.extend(search.args);
         args = ordered;
     }
+    args.extend(header.args);
+    // Subject, address or customer-name hits first, then hits in the text; newest first in each.
     let rows: Vec<SuggestionRow> = Sql::new(
         format!(
             "SELECT e.thread_id, e.subject, e.body, e.sent_at, e.sender_email, e.receiver_email,
@@ -432,11 +436,12 @@ pub async fn suggestions(
              LEFT JOIN users s ON e.sender_user_id = s.id
              LEFT JOIN users r ON e.receiver_email = r.email
              WHERE {where_sql}{} AND e.thread_id IS NOT NULL
-             ORDER BY e.sent_at DESC, e.id DESC
+             ORDER BY {}, e.sent_at DESC, e.id DESC
              LIMIT {fetch}",
             name("e.sender_email"),
             name("e.receiver_email"),
-            search.sql
+            search.sql,
+            header.sql
         ),
         args,
     )

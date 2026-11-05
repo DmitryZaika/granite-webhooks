@@ -37,6 +37,11 @@ pub struct Recipient {
     pub email: String,
     /// Company of a business customer.
     pub company_name: Option<String>,
+    /// 0 with the caller's live deal, 1 the caller's customer, 2 the rest
+    /// (users: 0). Sorts first; not sent.
+    #[serde(skip)]
+    #[sqlx(default)]
+    pub owner_rank: i32,
 }
 
 /// Result of `GET /v1/customers/email-recipients`.
@@ -152,8 +157,9 @@ fn rank(recipient: &Recipient, term: &str) -> u8 {
 
 fn sort_by_rank(list: &mut [Recipient], term: &str) {
     list.sort_by(|a, b| {
-        rank(a, term)
-            .cmp(&rank(b, term))
+        a.owner_rank
+            .cmp(&b.owner_rank)
+            .then_with(|| rank(a, term).cmp(&rank(b, term)))
             .then_with(|| a.name.cmp(&b.name))
     });
 }
@@ -165,8 +171,13 @@ fn dedupe(list: Vec<Recipient>) -> Vec<Recipient> {
         .collect()
 }
 
+/// Binds: the caller twice, then the company. `owner_rank` as in
+/// `push_owner_rank`: the caller's live deal, then the caller's customer.
 const CUSTOMER_ADDRESSES: &str =
-    "SELECT c.id, COALESCE(c.name, '') AS name, ce.email, c.company_name
+    "SELECT c.id, COALESCE(c.name, '') AS name, ce.email, c.company_name,
+            CAST(CASE WHEN EXISTS (SELECT 1 FROM deals mine WHERE mine.customer_id = c.id
+                                     AND mine.user_id = ? AND mine.deleted_at IS NULL) THEN 0
+                      WHEN c.sales_rep = ? THEN 1 ELSE 2 END AS SIGNED) AS owner_rank
      FROM customers c JOIN customers_emails ce ON ce.customer_id = c.id
      WHERE c.company_id = ? AND c.deleted_at IS NULL AND ce.email IS NOT NULL AND ce.email != ''";
 
@@ -241,16 +252,17 @@ pub async fn recipients(
     let mut customers: Vec<Recipient> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "{CUSTOMER_ADDRESSES}
            AND (c.name LIKE ? OR ce.email LIKE ? OR (c.company_name IS NOT NULL AND c.company_name LIKE ?))
-         ORDER BY c.sales_rep <=> ? DESC,
+         ORDER BY owner_rank,
                   CASE WHEN ce.email LIKE ? THEN 0 WHEN c.name LIKE ? THEN 1
                        WHEN c.company_name LIKE ? THEN 2 ELSE 3 END, c.name
          LIMIT 15"
     )))
+    .bind(user.id)
+    .bind(user.id)
     .bind(user.company_id)
     .bind(&like)
     .bind(&like)
     .bind(&like)
-    .bind(user.id)
     .bind(&prefix)
     .bind(&prefix)
     .bind(&prefix)
@@ -260,8 +272,10 @@ pub async fn recipients(
     let extra: Vec<Recipient> = match term.find('@') {
         Some(at) if at > 0 && at + 1 < term.len() => {
             sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "{CUSTOMER_ADDRESSES} AND LOWER(ce.email) LIKE ? LIMIT 50"
+                "{CUSTOMER_ADDRESSES} AND LOWER(ce.email) LIKE ? ORDER BY owner_rank LIMIT 50"
             )))
+            .bind(user.id)
+            .bind(user.id)
             .bind(user.company_id)
             .bind(format!("%@{}", &lowered[at + 1..]))
             .fetch_all(pool)
@@ -272,8 +286,10 @@ pub async fn recipients(
             let keep = if count > 3 { count - 1 } else { 3 };
             let head: String = lowered.chars().take(keep).collect();
             sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "{CUSTOMER_ADDRESSES} AND LOWER(SUBSTRING_INDEX(ce.email, '@', 1)) LIKE ? LIMIT 50"
+                "{CUSTOMER_ADDRESSES} AND LOWER(SUBSTRING_INDEX(ce.email, '@', 1)) LIKE ? ORDER BY owner_rank LIMIT 50"
             )))
+            .bind(user.id)
+            .bind(user.id)
             .bind(user.company_id)
             .bind(format!("{head}%"))
             .fetch_all(pool)
@@ -321,6 +337,7 @@ mod tests {
             name: name.into(),
             email: email.into(),
             company_name: None,
+            owner_rank: 0,
         }
     }
 
@@ -333,6 +350,29 @@ mod tests {
         ];
         sort_by_rank(&mut list, "pol");
         let names: Vec<&str> = list.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, ["Polly", "Beverly Pollis", "Check-in"]);
+        // Both have a word starting with "pol": by name.
+        assert_eq!(names, ["Beverly Pollis", "Polly", "Check-in"]);
+    }
+
+    #[test]
+    fn my_customers_come_first() {
+        let mine = Recipient {
+            owner_rank: 1,
+            ..recipient("Vicky Kutroff", "victoria3343@att.net")
+        };
+        let mut list = vec![
+            Recipient {
+                owner_rank: 2,
+                ..recipient("Victoria Berry", "vberry@cwt-me.com")
+            },
+            mine,
+            Recipient {
+                owner_rank: 0,
+                ..recipient("Joyce Victoria", "joyce@gmail.com")
+            },
+        ];
+        sort_by_rank(&mut list, "victoria");
+        let names: Vec<&str> = list.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["Joyce Victoria", "Vicky Kutroff", "Victoria Berry"]);
     }
 }
