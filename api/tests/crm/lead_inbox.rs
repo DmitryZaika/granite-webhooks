@@ -46,6 +46,12 @@ async fn a_rep_sees_only_their_recent_leads(pool: MySqlPool) {
     assert_eq!(inbox["assigned"][0]["sales_rep_name"], "Rita Rep");
     assert_eq!(ids(&inbox["unassigned"]), Vec::<i64>::new());
     assert_eq!(inbox["reps"], serde_json::json!([]));
+    // A rep still sees how many leads each sales rep got this month.
+    let team = inbox["team"].as_array().unwrap();
+    assert_eq!(team.len(), 1);
+    assert_eq!(team[0]["id"], 100);
+    assert_eq!(team[0]["name"], "Rita Rep");
+    assert!(team[0]["month_leads"].as_i64().unwrap() >= 1);
 }
 
 #[test_db::test(seed)]
@@ -65,4 +71,5 @@ async fn a_manager_sees_unassigned_leads_and_the_reps(pool: MySqlPool) {
     assert_eq!(reps.len(), 1);
     assert_eq!(reps[0]["id"], 100);
     assert!(reps[0]["month_leads"].as_i64().unwrap() >= 1);
+    assert_eq!(inbox["team"], inbox["reps"]);
 }

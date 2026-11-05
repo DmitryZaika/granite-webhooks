@@ -59,8 +59,6 @@ pub struct ShellFeatures {
     pub onboarding: bool,
     /// The points leaderboard is on.
     pub leaderboard: bool,
-    /// Projects is on.
-    pub projects: bool,
 }
 
 /// `GET /v1/app/shell`.
@@ -293,19 +291,18 @@ pub async fn shell(
         can_manage_company: user.is_superuser || here(MANAGER),
         can_manage_billing: here(MANAGER),
         is_shop_manager: here(SHOP_MANAGER),
-        has_projects_board: features.projects
-            && (user.is_admin
-                || [
-                    SALES_REP,
-                    SALES_MANAGER,
-                    SHOP_MANAGER,
-                    MANAGER,
-                    OFFICE_MANAGER,
-                    INVENTORY_MANAGER,
-                    SCHEDULING_MANAGER,
-                ]
-                .into_iter()
-                .any(here)),
+        has_projects_board: user.is_admin
+            || [
+                SALES_REP,
+                SALES_MANAGER,
+                SHOP_MANAGER,
+                MANAGER,
+                OFFICE_MANAGER,
+                INVENTORY_MANAGER,
+                SCHEDULING_MANAGER,
+            ]
+            .into_iter()
+            .any(here),
         is_template_maker: here(TEMPLATE_MAKER),
         user_signature_access: user.is_signature_available,
         user_ai_promises,
@@ -315,7 +312,6 @@ pub async fn shell(
             signature: features.e_signature,
             onboarding: features.onboarding,
             leaderboard: features.leaderboard,
-            projects: features.projects,
         },
         feature_capabilities,
         user,

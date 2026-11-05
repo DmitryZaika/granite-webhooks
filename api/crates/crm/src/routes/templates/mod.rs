@@ -10,6 +10,7 @@
 //! - `PUT    /v1/me/template-order/{type}`      → save a drag-and-drop order
 //! - `DELETE /v1/me/template-order/{type}`      → back to automatic order
 //! - `POST   /v1/templates/fill`                → a template with its variables filled
+//! - `GET|PUT /v1/me/lead-automation`        → whose drips the caller's deals get (see [`lead_automation`])
 //! - `GET|POST /v1/sms-templates`, `PUT|DELETE /v1/sms-templates/{id}` → SMS templates (see [`sms`])
 //!
 //! Replaces the Remix `api.email-templates*`, `api.sms.templates.order`,
@@ -17,6 +18,7 @@
 //! the `admin.automations.email-templates*` loaders and actions.
 
 pub mod handlers;
+pub mod lead_automation;
 pub mod order;
 mod reps;
 pub mod schemas;
@@ -39,4 +41,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::fill))
         .routes(routes!(sms::list, sms::create))
         .routes(routes!(sms::update, sms::delete))
+        .routes(routes!(lead_automation::get, lead_automation::set))
 }

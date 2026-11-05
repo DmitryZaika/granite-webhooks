@@ -7,8 +7,8 @@ use sqlx::MySqlPool;
 
 // Seed: in company 100 Rita (100) is a sales rep and owns the open deal 8002
 // "Erin countertops" of Erin Builder (1004); Mark (101) is the Sales Manager;
-// Ada (102) is the admin. Projects is on for every company; `turn_on`
-// turns on "Project on a sale".
+// Ada (102) is the admin. "Project on a sale" starts off; `turn_on` turns it
+// on.
 
 async fn run(pool: &MySqlPool, sql: &str) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
@@ -72,7 +72,7 @@ async fn version(pool: &MySqlPool, id: i32) -> i32 {
 }
 
 #[test_db::test(seed)]
-async fn projects_need_no_switch_but_a_win_starts_none_without_project_on_a_sale(pool: MySqlPool) {
+async fn projects_need_no_switch_and_a_win_adds_none_until_project_on_a_sale(pool: MySqlPool) {
     assert!(ids(&board(&pool, sessions::ADMIN).await).is_empty());
     win_8002(&pool).await;
     assert!(projects_of_8002(&pool).await.is_empty());
@@ -445,7 +445,10 @@ async fn the_schedule_and_the_crew_move_a_project(pool: MySqlPool) {
     assert_eq!(stage().await, "fabrication");
     let card = board(&pool, sessions::ADMIN).await["projects"][0].clone();
     assert!(card["install_date"].is_string(), "{card:?}");
-    assert!(card["template_date"].is_null(), "the template is done: {card:?}");
+    assert!(
+        card["template_date"].is_null(),
+        "the template is done: {card:?}"
+    );
     server(pool.clone())
         .post("/v1/events/9871/crew-status")
         .with_session(sessions::MANAGER)
@@ -454,13 +457,66 @@ async fn the_schedule_and_the_crew_move_a_project(pool: MySqlPool) {
         .assert_status_ok();
     assert_eq!(stage().await, "installed");
 
-    // Going back by hand still takes a manager's correction.
-    let back = act(
+    // Anyone who moves projects can move it back by hand; it stays there.
+    act(
         &pool,
         id,
         sessions::ADMIN,
         json!({ "intent": "stage", "version": version(&pool, id).await, "stage": "templated" }),
     )
+    .await
+    .assert_status_ok();
+    assert_eq!(stage().await, "templated");
+}
+
+#[test_db::test(seed)]
+async fn a_project_moved_back_stays_there_until_moved_forward(pool: MySqlPool) {
+    turn_on(&pool).await;
+    win_8002(&pool).await;
+    let id = projects_of_8002(&pool).await[0];
+    let stage = || {
+        let pool = pool.clone();
+        async move { board(&pool, sessions::ADMIN).await["projects"][0]["stage_code"].clone() }
+    };
+    // The template maker tapped Completed: Templated.
+    run(
+        &pool,
+        "INSERT INTO calendars (id, company_id, name, color, slug) VALUES
+           (9880, 100, 'Templates', 'blue', 'templates');",
+    )
     .await;
-    back.assert_status(StatusCode::CONFLICT);
+    sqlx::query(
+        "INSERT INTO events (id, title, start_date, end_date, all_day, unscheduled,
+                             created_user_id, assigned_user_id, calendar_id, project_id,
+                             crew_status)
+         VALUES (9870, 'Template', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 0, 102, 101, 9880, ?,
+                 'completed')",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stage().await, "templated");
+
+    // Back to Awaiting Template: the completed template doesn't move it on.
+    act(
+        &pool,
+        id,
+        sessions::ADMIN,
+        json!({ "intent": "stage", "version": version(&pool, id).await, "stage": "new" }),
+    )
+    .await
+    .assert_status_ok();
+    assert_eq!(stage().await, "new");
+
+    // Forward by hand again: the calendar counts once more.
+    act(
+        &pool,
+        id,
+        sessions::ADMIN,
+        json!({ "intent": "stage", "version": version(&pool, id).await, "stage": "templated" }),
+    )
+    .await
+    .assert_status_ok();
+    assert_eq!(stage().await, "templated");
 }

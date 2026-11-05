@@ -6,7 +6,7 @@ use super::schemas::{Project, ProjectAction};
 use crate::error::{ApiError, ApiResult};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use lambda_http::tracing;
-use sqlx::{MySql, MySqlConnection, MySqlPool};
+use sqlx::{MySqlConnection, MySqlPool};
 
 fn iso(column: &str) -> String {
     format!("DATE_FORMAT({column}, '%Y-%m-%dT%H:%i:%sZ')")
@@ -180,6 +180,22 @@ async fn add_history(
 async fn bump(conn: &mut MySqlConnection, company_id: i32, id: i32) -> sqlx::Result<()> {
     sqlx::query("UPDATE projects SET version = version + 1 WHERE id = ? AND company_id = ?")
         .bind(id)
+        .bind(company_id)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// Caps the project at `stage` (moved back by hand), or lifts the cap.
+async fn set_stage_cap(
+    conn: &mut MySqlConnection,
+    company_id: i32,
+    project_id: i32,
+    stage: Option<Stage>,
+) -> sqlx::Result<()> {
+    sqlx::query("UPDATE projects SET stage_cap = ? WHERE id = ? AND company_id = ?")
+        .bind(stage.map(Stage::as_str))
+        .bind(project_id)
         .bind(company_id)
         .execute(&mut *conn)
         .await?;
@@ -371,7 +387,12 @@ pub async fn apply(
                 return Err(conflict("Take this project off hold before moving it"));
             }
             check_transition(p.stage_code, to)?;
-            if p.stage_code != to {
+            if to < p.stage_code {
+                // Back by hand: it stays there (its calendar jobs don't move it
+                // on) until someone moves it forward by hand.
+                set_stage_cap(&mut tx, company, id, Some(to)).await?;
+                save_stage(&mut tx, viewer, &p, to, "moved-back", None).await?;
+            } else if p.stage_code != to {
                 if to >= Stage::Fabrication && p.sale_id.is_none() {
                     return Err(conflict("Link the project's transaction first"));
                 }
@@ -404,6 +425,7 @@ pub async fn apply(
                 } else {
                     to
                 };
+                set_stage_cap(&mut tx, company, id, None).await?;
                 save_stage(&mut tx, viewer, &p, stored, "stage-change", None).await?;
             }
         }
@@ -652,6 +674,7 @@ pub async fn apply(
             .bind(company)
             .execute(&mut *tx)
             .await?;
+            set_stage_cap(&mut tx, company, id, Some(to)).await?;
             save_stage(&mut tx, viewer, &p, to, "manager-correction", Some(&why)).await?;
         }
     }
@@ -776,8 +799,8 @@ pub async fn convert_deal(
     Ok((id, true))
 }
 
-/// A deal was won (deals board, sold quote): its project starts, when the
-/// company has Projects and Admin › Quotes › Automation "Project on a sale". Logged, never returned: the win is already saved.
+/// A deal was won (deals board, sold quote): its project starts when
+/// Admin › Quotes › Automation "Project on a sale" is on. Logged, never returned: the win is already saved.
 pub async fn start_for_won_deal(
     pool: &MySqlPool,
     company_id: i32,

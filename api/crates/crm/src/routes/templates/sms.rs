@@ -1,10 +1,12 @@
 //! SMS templates (`cloudtalk_sms_templates`, used by both providers).
 //!
-//! A company template can be an automated drip: sent `hour_delay` hours
-//! and `minute_delay` minutes after a deal enters `lead_list_id`, to
-//! customers whose source is in `customer_sources` (default: leads only), on
-//! deals of the sales reps in `sales_rep_ids` (default: every rep; one
-//! template per list, delay and rep). Replaces the Remix `api.sms.templates*` routes and their unused
+//! A template can be an automated drip: sent `hour_delay` hours and
+//! `minute_delay` minutes after a deal enters `lead_list_id`, to customers
+//! whose source is in `customer_sources` (default: leads only). A company
+//! drip goes to deals of the sales reps in `sales_rep_ids` (default: every
+//! rep; one template per list, delay and rep) who use the company's
+//! automations; a personal drip goes to its owner's deals once they use their
+//! own (`PUT /v1/me/lead-automation`; one per list and delay). Replaces the Remix `api.sms.templates*` routes and their unused
 //! `api.{cloudtalk,ringcentral}.sms.templates*` twins.
 
 use super::handlers::template_body_error;
@@ -73,13 +75,13 @@ pub struct SmsTemplate {
     pub created_at: Option<DateTime<Utc>>,
     /// When it last changed.
     pub updated_at: Option<DateTime<Utc>>,
-    /// Company drip: the deal list that starts it.
+    /// Drip: the deal list that starts it; null: never automatic.
     pub lead_list_id: Option<i32>,
-    /// Company drip: hours after a deal enters the list.
+    /// Drip: hours after a deal enters the list.
     pub hour_delay: Option<i32>,
-    /// Company drip: minutes on top of `hour_delay`, 0 to 59.
+    /// Drip: minutes on top of `hour_delay`, 0 to 59.
     pub minute_delay: i32,
-    /// Company drip: customer sources (`customers.source`) that get it.
+    /// Drip: customer sources (`customers.source`) that get it.
     pub customer_sources: Vec<String>,
     /// Company drip: sales reps whose deals get it; empty: every rep's.
     pub sales_rep_ids: Vec<i32>,
@@ -135,7 +137,7 @@ pub struct SmsTemplates {
     pub deal_lists: Vec<DripList>,
 }
 
-/// When a company template sends itself.
+/// When a template sends itself.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct Drip {
     /// The deal list that starts it; null: no drip.
@@ -148,8 +150,9 @@ pub struct Drip {
     /// Customer sources that get it; empty or left out: only leads.
     #[serde(default)]
     pub customer_sources: Vec<String>,
-    /// Sales reps whose deals get it; empty: every rep's. Left out keeps the
-    /// template's reps.
+    /// Company templates: sales reps whose deals get it; empty: every
+    /// rep's. Left out keeps the template's reps. Ignored for a personal
+    /// template, which goes to its owner's deals.
     #[serde(default)]
     pub sales_rep_ids: Option<Vec<i32>>,
 }
@@ -202,7 +205,7 @@ pub struct NewSmsTemplate {
     /// `company` (admins only) or `personal` (default).
     #[serde(default)]
     pub scope: TemplateScope,
-    /// Company templates only.
+    /// When it sends itself; left out: never.
     pub drip: Option<Drip>,
     /// Up to ten files (`POST /v1/sms/attachments`) sent with the text.
     #[serde(default)]
@@ -216,7 +219,7 @@ pub struct SmsTemplateUpdate {
     pub name: String,
     /// The text, with `{{variables}}`, up to 1600 characters.
     pub body: String,
-    /// Company templates only; left out keeps the drip.
+    /// When it sends itself; left out keeps the drip.
     pub drip: Option<Drip>,
     /// Up to ten files sent with the text; left out keeps the template's.
     pub attachments: Option<Vec<SmsFile>>,
@@ -315,6 +318,19 @@ fn checked_text(name: &str, body: &str) -> ApiResult<(String, String)> {
     Ok((name.to_string(), body.to_string()))
 }
 
+/// A personal template's drip names no sales reps: it goes to its owner's
+/// deals.
+fn for_owner(drip: Drip, owner: Option<i32>) -> Drip {
+    if owner.is_some() {
+        Drip {
+            sales_rep_ids: Some(Vec::new()),
+            ..drip
+        }
+    } else {
+        drip
+    }
+}
+
 /// A drip needs both a list and a delay in range; without a list there is
 /// none. Sources are trimmed, lowercased and deduped; none means leads.
 /// Left-out reps are `kept_reps`.
@@ -367,11 +383,13 @@ async fn checked_drip(
     })
 }
 
-/// Another company template already drips on this list and delay for one of
-/// the same sales reps.
+/// Another template of the same owner (`owner`: a personal template's user;
+/// `None`: the company) already drips on this list and delay for one of the
+/// same sales reps.
 async fn drip_taken(
     pool: &MySqlPool,
     company_id: i32,
+    owner: Option<i32>,
     drip: &StoredDrip,
     except: Option<i32>,
 ) -> ApiResult<()> {
@@ -380,10 +398,11 @@ async fn drip_taken(
     };
     let others: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT CAST(sales_rep_ids AS CHAR) FROM cloudtalk_sms_templates
-          WHERE company_id = ? AND user_id IS NULL AND lead_list_id = ? AND hour_delay = ?
+          WHERE company_id = ? AND user_id <=> ? AND lead_list_id = ? AND hour_delay = ?
             AND minute_delay = ? AND deleted_at IS NULL AND id <> ?",
     )
     .bind(company_id)
+    .bind(owner)
     .bind(list)
     .bind(delay)
     .bind(drip.minutes)
@@ -394,9 +413,11 @@ async fn drip_taken(
         .iter()
         .any(|other| super::reps::overlap(&drip.reps, &super::reps::ids_of(other.as_deref())))
     {
-        return Err(ApiError::BadRequest(
-            "Another SMS template already uses this list and delay for the same sales reps.".into(),
-        ));
+        return Err(ApiError::BadRequest(if owner.is_some() {
+            "Another of your SMS templates already uses this list and delay.".into()
+        } else {
+            "Another SMS template already uses this list and delay for the same sales reps.".into()
+        }));
     }
     Ok(())
 }
@@ -530,8 +551,10 @@ pub async fn list(
 
 /// Create an SMS template
 ///
-/// `scope: company` (admins only) makes it the company's, and only a
-/// company template can drip; otherwise it is the caller's own. It goes
+/// `scope: company` (admins only) makes it the company's; otherwise it is
+/// the caller's own. Either can drip (`drip`): a company template for the
+/// reps who use the company's automations, a personal one for the caller's
+/// deals once they use their own (`PUT /v1/me/lead-automation`). It goes
 /// last.
 #[crate::openapi::path(
     post,
@@ -560,13 +583,13 @@ pub async fn create(
     if company && !is_admin(&user) {
         return Err(ApiError::Forbidden);
     }
-    let drip = match input.drip {
-        Some(drip) if company => checked_drip(pool, user.company_id, drip, &[]).await?,
-        _ => StoredDrip::NONE,
-    };
-    drip_taken(pool, user.company_id, &drip, None).await?;
-    let files = checked_files(user.company_id, &input.attachments)?;
     let owner = (!company).then_some(user.id);
+    let drip = match input.drip {
+        Some(drip) => checked_drip(pool, user.company_id, for_owner(drip, owner), &[]).await?,
+        None => StoredDrip::NONE,
+    };
+    drip_taken(pool, user.company_id, owner, &drip, None).await?;
+    let files = checked_files(user.company_id, &input.attachments)?;
     let position: Option<i32> = sqlx::query_scalar(
         "SELECT MAX(position) FROM cloudtalk_sms_templates
           WHERE company_id = ? AND user_id <=> ? AND deleted_at IS NULL",
@@ -609,8 +632,8 @@ pub async fn create(
 /// Edit an SMS template
 ///
 /// The caller's own template, or (admins) a company one. Leaving out
-/// `lead_list_id` / `hour_delay` keeps the drip; a template that stops
-/// dripping cancels its pending drip texts.
+/// `drip` keeps the drip; a template that stops dripping cancels its
+/// pending drip texts.
 #[crate::openapi::path(
     put,
     path = "/v1/sms-templates/{id}",
@@ -641,12 +664,13 @@ pub async fn update(
     let company = existing.user_id.is_none();
     let kept = StoredDrip::of(&existing);
     let drip = match input.drip {
-        Some(drip) if company => checked_drip(pool, user.company_id, drip, &kept.reps).await?,
-        _ => kept,
+        Some(drip) => {
+            let drip = for_owner(drip, existing.user_id);
+            checked_drip(pool, user.company_id, drip, &kept.reps).await?
+        }
+        None => kept,
     };
-    if company {
-        drip_taken(pool, user.company_id, &drip, Some(id)).await?;
-    }
+    drip_taken(pool, user.company_id, existing.user_id, &drip, Some(id)).await?;
     let files = match &input.attachments {
         Some(files) => checked_files(user.company_id, files)?,
         None => existing.attachments.clone(),
@@ -670,9 +694,9 @@ pub async fn update(
     .bind(user.company_id)
     .execute(pool)
     .await?;
-    if company && (drip.list.is_none() || drip.hours.is_none()) {
+    if drip.list.is_none() || drip.hours.is_none() {
         cancel_scheduled(pool, id, "Template deleted").await?;
-    } else if company {
+    } else {
         super::reps::cancel_for_other_reps(pool, super::reps::Queue::Sms, id, &drip.reps).await?;
     }
     let after = automation_notice::sms_template(pool, user.company_id, id).await;

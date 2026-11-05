@@ -46,7 +46,9 @@ pub struct EmailTemplate {
     pub scope: TemplateScope,
     /// The caller may edit or delete it (only their own templates).
     pub can_edit: bool,
-    /// Company templates: the deal list whose deals get it automatically.
+    /// The deal list whose deals get it automatically: a company template
+    /// goes to the reps who use the company's automations, a personal one to
+    /// its owner's deals when they use their own. Null: never automatic.
     pub lead_list_id: Option<i32>,
     /// Hours after a deal enters `lead_list_id` that it is sent.
     pub hour_delay: Option<i32>,
@@ -75,15 +77,18 @@ pub struct EmailTemplateInput {
     /// Create only: `company` (admins) or `personal` (default).
     #[serde(default)]
     pub scope: Option<TemplateScope>,
-    /// Company templates only: send it automatically when a deal enters
-    /// this list (with `hour_delay`); null for no automation.
+    /// Send it automatically when a deal enters this list (with
+    /// `hour_delay`); null for no automation. A personal template sends for
+    /// its owner's deals once they use their own automations
+    /// (`PUT /v1/me/lead-automation`).
     #[serde(default)]
     pub lead_list_id: Option<i32>,
     /// Hours to wait (0–8760); required with `lead_list_id`.
     #[serde(default)]
     pub hour_delay: Option<i32>,
-    /// With `lead_list_id`: sales reps whose deals get it; empty: every
-    /// rep's. Left out keeps the template's reps.
+    /// Company templates with `lead_list_id`: sales reps whose deals get
+    /// it; empty: every rep's. Left out keeps the template's reps. Ignored
+    /// for a personal template.
     #[serde(default)]
     pub sales_rep_ids: Option<Vec<i32>>,
 }

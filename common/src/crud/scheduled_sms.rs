@@ -2,6 +2,7 @@ use chrono::{Duration, Utc};
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 
+use crate::crud::lead_automation::DRIP_TEMPLATE_FOR_REP;
 use crate::utils::email_send_window::clamp_automated_sms_send_at;
 
 #[derive(sqlx::FromRow)]
@@ -29,9 +30,10 @@ pub async fn cancel_pending_scheduled_sms_for_deal(
     .await
 }
 
-/// Queues the company SMS drips of `list_id` for the deal. A template goes to
-/// the customer sources it names (none: only leads) and to deals of the sales
-/// reps it names (none: every rep's), once per customer.
+/// Queues the SMS drips of `list_id` for the deal: the company's, or the deal
+/// owner's own when they chose their own automations
+/// ([`DRIP_TEMPLATE_FOR_REP`]). A template goes to the customer sources it
+/// names (none: only leads), once per customer.
 pub async fn schedule_sms_templates_for_deal_list(
     pool: &MySqlPool,
     list_id: i32,
@@ -50,26 +52,24 @@ pub async fn schedule_sms_templates_for_deal_list(
         return Ok(());
     };
 
-    let templates: Vec<SmsDripTemplate> = sqlx::query_as(
-        r#"
-        SELECT id, hour_delay, minute_delay
-        FROM cloudtalk_sms_templates
-        WHERE company_id = ?
-          AND user_id IS NULL
-          AND lead_list_id = ?
-          AND deleted_at IS NULL
-          AND IF(customer_sources IS NULL OR JSON_LENGTH(customer_sources) = 0,
-                 ? = 'leads',
-                 JSON_CONTAINS(customer_sources, JSON_QUOTE(?)))
-          AND (sales_rep_ids IS NULL OR JSON_LENGTH(sales_rep_ids) = 0
-               OR JSON_CONTAINS(sales_rep_ids, CAST(? AS JSON)))
-        ORDER BY hour_delay ASC, id ASC
-        "#,
-    )
+    let templates: Vec<SmsDripTemplate> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT t.id, t.hour_delay, t.minute_delay
+           FROM cloudtalk_sms_templates t
+          WHERE t.company_id = ?
+            AND t.lead_list_id = ?
+            AND t.deleted_at IS NULL
+            AND IF(t.customer_sources IS NULL OR JSON_LENGTH(t.customer_sources) = 0,
+                   ? = 'leads',
+                   JSON_CONTAINS(t.customer_sources, JSON_QUOTE(?)))
+            AND {DRIP_TEMPLATE_FOR_REP}
+          ORDER BY t.hour_delay ASC, t.id ASC"
+    )))
     .bind(company_id)
     .bind(list_id)
     .bind(&source)
     .bind(&source)
+    .bind(user_id)
+    .bind(user_id)
     .bind(user_id)
     .fetch_all(pool)
     .await?;

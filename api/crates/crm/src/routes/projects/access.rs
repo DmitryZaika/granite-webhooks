@@ -96,8 +96,10 @@ pub const PROJECT_JOB_SQL: &str = "e.deleted_date IS NULL
 /// A template or installation on the calendar does not move it: the card
 /// shows it as its status (`template_date`, `install_date`). A stage someone
 /// moved it to by hand counts when it is further on (an older stored
-/// Template/Install Scheduled counts as Awaiting Template/In Fabrication).
-pub const STAGE_SQL: &str = "(CASE WHEN s.installed_date IS NOT NULL
+/// Template/Install Scheduled counts as Awaiting Template/In Fabrication). A
+/// stage someone moved it back to by hand (`p.stage_cap`) caps it until
+/// someone moves it forward by hand.
+pub const STAGE_SQL: &str = "ELT(LEAST(FIELD((CASE WHEN s.installed_date IS NOT NULL
         THEN IF(s.paid_date IS NOT NULL OR p.qbo_paid_at IS NOT NULL, 'completed', 'installed')
       ELSE ELT(GREATEST(
           FIELD(CASE WHEN p.stage_code IN ('installed', 'completed', 'install_scheduled')
@@ -118,7 +120,13 @@ pub const STAGE_SQL: &str = "(CASE WHEN s.installed_date IS NOT NULL
                    OR (e.project_id IS NULL AND e.customer_id = p.customer_id
                        AND e.created_date >= p.created_at - INTERVAL 1 DAY))),
           IF(p.fabricated_at IS NOT NULL, 3, 1)),
-        'new', 'templated', 'fabrication', 'installed', 'completed') END)";
+        'new', 'templated', 'fabrication', 'installed', 'completed') END),
+        'new', 'templated', 'fabrication', 'installed', 'completed'),
+      COALESCE(NULLIF(FIELD(CASE p.stage_cap WHEN 'template_scheduled' THEN 'new'
+                                             WHEN 'install_scheduled' THEN 'fabrication'
+                                             ELSE p.stage_cap END,
+        'new', 'templated', 'fabrication', 'installed', 'completed'), 0), 5)),
+      'new', 'templated', 'fabrication', 'installed', 'completed')";
 
 /// When the project's next `slug` job (`templates` or `installations`) is on
 /// the calendar, UTC ISO; NULL when none waits (done ones don't count).
@@ -132,13 +140,17 @@ pub fn job_date_sql(slug: &str) -> String {
     )
 }
 
-/// A forward move a production user may make; going back takes a manager's
-/// correction with a reason.
+/// A move a production user may make: back to any stage before Paid &
+/// Completed, forward only through Templated.
 pub fn check_transition(from: Stage, to: Stage) -> ApiResult<()> {
     if to < from {
-        return Err(ApiError::Conflict(
-            "Moving back needs a manager's correction with a reason".into(),
-        ));
+        return if from == Stage::Completed {
+            Err(ApiError::Conflict(
+                "A paid project stays in Paid & Completed".into(),
+            ))
+        } else {
+            Ok(())
+        };
     }
     if from == Stage::New && to > Stage::Templated {
         return Err(ApiError::Conflict(
@@ -353,7 +365,10 @@ mod tests {
         assert!(check_transition(Stage::New, Stage::Templated).is_ok());
         assert!(check_transition(Stage::Templated, Stage::Installed).is_ok());
         assert!(check_transition(Stage::New, Stage::Fabrication).is_err());
-        assert!(check_transition(Stage::Fabrication, Stage::Templated).is_err());
+        // Back to any stage, except out of Paid & Completed.
+        assert!(check_transition(Stage::Fabrication, Stage::Templated).is_ok());
+        assert!(check_transition(Stage::Installed, Stage::New).is_ok());
+        assert!(check_transition(Stage::Completed, Stage::Installed).is_err());
         assert_eq!(
             Stage::try_from("fabrication".to_string()),
             Ok(Stage::Fabrication)

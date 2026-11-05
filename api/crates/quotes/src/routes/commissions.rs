@@ -1002,9 +1002,23 @@ pub async fn list_commissions(
     .into_iter()
     .filter(|pay| only.is_none() || pay.user_id == only)
     .collect();
+    let quickbooks = state.qbo.is_connected(&state.pool, user.company_id).await?;
+    // Each row's synced QuickBooks invoice (row id → invoice id, total).
+    let invoices: Vec<(i32, String, f64)> = sqlx::query_as(
+        "SELECT id, qbo_invoice_id, CAST(invoice_total AS DOUBLE) FROM quote_commissions
+          WHERE company_id = ? AND qbo_invoice_id IS NOT NULL AND qbo_invoice_id <> ''
+            AND invoice_total IS NOT NULL",
+    )
+    .bind(user.company_id)
+    .fetch_all(&state.pool)
+    .await?;
     let paid: Vec<PaidRow> = rows
         .iter()
         .map(|r| PaidRow {
+            invoice: invoices
+                .iter()
+                .find(|(id, _, _)| *id == r.id)
+                .map(|(_, invoice, total)| (invoice.clone(), *total)),
             user_id: r.user_id,
             rep: r.rep.clone(),
             quote_total: r.quote_total,
@@ -1026,6 +1040,7 @@ pub async fn list_commissions(
         &base_pay,
         settings.payroll_weekday,
         chrono::Utc::now().date_naive(),
+        quickbooks,
     );
     Ok(Json(Commissions { rows, weeks }))
 }
