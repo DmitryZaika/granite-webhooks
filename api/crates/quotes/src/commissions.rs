@@ -439,9 +439,45 @@ pub struct PaidRow {
     pub payroll_date: Option<String>,
     /// The day it was sold (YYYY-MM-DD).
     pub signed_at: Option<String>,
-    /// A quote sold in the CRM; rows with no quote (a rep's sheet, a bonus)
-    /// never count toward a monthly goal: the sheet paid its own bonuses.
-    pub from_quote: bool,
+    /// How it counts toward a monthly goal.
+    pub goal: GoalRow,
+}
+
+/// How a commission row counts toward a monthly goal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalRow {
+    /// A sale, by the day sold: a CRM quote or a job on the rep's sheet
+    /// (cabinets too).
+    Sale,
+    /// A bonus the sheet already paid: the month before its payday gets no
+    /// other bonus.
+    PaidBonus,
+    /// Neither: a sheet row paid in full that is no sale (e.g. a fee).
+    Other,
+}
+
+impl GoalRow {
+    /// A CRM quote is a sale; a sheet row named `Bonus …` is a paid bonus; a
+    /// sheet row paying its whole total is no sale; any other sheet row is.
+    pub fn of(from_quote: bool, label: Option<&str>, total: f64, commission: f64) -> Self {
+        if from_quote {
+            return Self::Sale;
+        }
+        if label.is_some_and(|l| l.trim().to_lowercase().starts_with("bonus")) {
+            Self::PaidBonus
+        } else if total > 0.0 && commission >= total - 0.005 {
+            Self::Other
+        } else {
+            Self::Sale
+        }
+    }
+}
+
+/// `YYYY-MM` of the month before the one of `date` (`YYYY-MM-DD`).
+fn month_before(date: &str) -> Option<String> {
+    let day = NaiveDate::parse_from_str(date.get(..10)?, "%Y-%m-%d").ok()?;
+    let last = day.with_day(1)?.pred_opt()?;
+    Some(last.format("%Y-%m").to_string())
 }
 
 /// One rep's paycheck on a payroll date.
@@ -574,7 +610,8 @@ pub fn base_pay_by_person(base_pay: &[BasePay], members: &[PositionMember]) -> V
 /// `payrollWeeks`: per payroll date (newest first), every rep's commissions
 /// an admin added to the salary, monthly bonuses and their base pay on its
 /// own days (through the next payday after `today`). A month's bonus goes by
-/// what the rep sold that month (their CRM quotes, by the day sold) and is
+/// what the rep sold that month (CRM quotes and sheet jobs, by the day sold;
+/// not a month the sheet already paid a bonus for) and is
 /// paid with the first payroll after the month. `base_pay` is per person
 /// (see [`base_pay_by_person`]).
 pub fn payroll_weeks(
@@ -607,8 +644,17 @@ pub fn payroll_weeks(
     };
     // (user, month sold) → sales, in the order first seen.
     let mut months: Vec<(Option<i32>, String, String, f64)> = Vec::new();
+    // (user, month) whose bonus the sheet already paid.
+    let paid_bonus: Vec<(Option<i32>, String)> = rows
+        .iter()
+        .filter(|row| row.goal == GoalRow::PaidBonus)
+        .filter_map(|row| {
+            let day = row.payroll_date.as_deref().or(row.signed_at.as_deref())?;
+            Some((row.user_id, month_before(day)?))
+        })
+        .collect();
     for row in rows {
-        if row.from_quote
+        if row.goal == GoalRow::Sale
             && let Some(month) = row.signed_at.as_deref().and_then(|d| d.get(..7))
         {
             match months
@@ -632,6 +678,9 @@ pub fn payroll_weeks(
         weeks.get_mut(payroll.as_str()).expect("cell")[i].commission += row.commission;
     }
     for (user_id, rep, month, sales) in months {
+        if paid_bonus.iter().any(|(u, m)| *u == user_id && *m == month) {
+            continue;
+        }
         let bonus = monthly_bonus(rules, sales);
         if bonus == 0.0 {
             continue;
@@ -853,7 +902,7 @@ mod tests {
             paid_date: Some(payroll.into()),
             payroll_date: Some(payroll.into()),
             signed_at: Some(sold.into()),
-            from_quote: true,
+            goal: GoalRow::Sale,
         };
         // $100 every Friday from 9/11 to 10/2: paid on weeks with no commission too.
         let base = BasePay {
@@ -886,11 +935,11 @@ mod tests {
         assert_eq!(weeks[1].reps[0].total, 150.0);
         assert_eq!(weeks[2].reps[0].total, 100.0);
 
-        // The goal counts what was sold that month in the CRM, paid or not
-        // yet; a sheet row (no quote) never counts, the sheet paid its own.
-        let sheet = PaidRow {
-            from_quote: false,
-            ..row("2026-08-03", "2026-08-07", 5000.0)
+        // The goal counts everything sold that month, paid or not yet: CRM
+        // quotes and the sheet's jobs (cabinets too).
+        let cabinets = PaidRow {
+            goal: GoalRow::of(false, Some("Smith (cabinets)"), 700.0, 24.5),
+            ..row("2026-08-03", "2026-08-07", 700.0)
         };
         let unpaid = PaidRow {
             payroll_date: None,
@@ -898,23 +947,41 @@ mod tests {
             ..row("2026-08-20", "", 400.0)
         };
         let weeks = payroll_weeks(
-            &[sheet, unpaid.clone()],
+            &[cabinets.clone(), unpaid.clone()],
             std::slice::from_ref(&goal),
             &[],
             5,
             d("2026-10-20"),
         );
-        assert!(weeks.iter().all(|w| w.reps.iter().all(|r| r.bonus == 0.0)));
+        // August's bonus: the first payroll Friday after the month, 9/4.
+        let bonus = weeks
+            .iter()
+            .find(|w| w.payroll_date == "2026-09-04")
+            .unwrap();
+        assert_eq!(bonus.reps[0].bonus, 250.0);
+
+        // A bonus the sheet paid on 9/4 is August's: no second one.
+        let paid = PaidRow {
+            goal: GoalRow::of(false, Some("Bonus August 1.1K"), 250.0, 250.0),
+            ..row("2026-09-04", "2026-09-04", 250.0)
+        };
         let weeks = payroll_weeks(
-            &[unpaid, row("2026-08-31", "2026-10-09", 600.0)],
-            &[goal],
+            &[cabinets, unpaid, paid],
+            std::slice::from_ref(&goal),
             &[],
             5,
             d("2026-10-20"),
         );
-        // August's bonus: the first payroll Friday after the month, 9/4.
-        let bonus = weeks.iter().find(|w| w.payroll_date == "2026-09-04").unwrap();
-        assert_eq!(bonus.reps[0].bonus, 250.0);
+        let total: f64 = weeks.iter().flat_map(|w| &w.reps).map(|r| r.bonus).sum();
+        assert_eq!(total, 0.0);
+
+        // A sheet row paying its whole total (a fee) is no sale.
+        let fee = PaidRow {
+            goal: GoalRow::of(false, Some("CRM"), 2000.0, 2000.0),
+            ..row("2026-09-03", "2026-09-04", 2000.0)
+        };
+        let weeks = payroll_weeks(&[fee], &[goal], &[], 5, d("2026-10-20"));
+        assert!(weeks.iter().all(|w| w.reps.iter().all(|r| r.bonus == 0.0)));
     }
 
     #[test]

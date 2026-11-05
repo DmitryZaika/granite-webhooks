@@ -15,7 +15,7 @@
 
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::commissions::{
-    BasePay, CommissionPart, CommissionRule, PaidRow, PayrollWeek, PositionMember,
+    BasePay, CommissionPart, CommissionRule, GoalRow, PaidRow, PayrollWeek, PositionMember,
     base_pay_by_person, feature_sales, next_week_payroll, payroll_weeks, pick_invoice,
     quote_commission, status_of,
 };
@@ -631,9 +631,7 @@ async fn save_base_pay(
             .fetch_optional(pool)
             .await?;
             if found.is_none() {
-                return Err(ApiError::BadRequest(
-                    "Pick someone of your company.".into(),
-                ));
+                return Err(ApiError::BadRequest("Pick someone of your company.".into()));
             }
         }
         (None, Some(position)) => {
@@ -1014,7 +1012,12 @@ pub async fn list_commissions(
             paid_date: r.paid_date.clone(),
             payroll_date: r.payroll_date.clone(),
             signed_at: r.signed_at.clone(),
-            from_quote: r.quote_id.is_some(),
+            goal: GoalRow::of(
+                r.quote_id.is_some(),
+                r.label.as_deref(),
+                r.quote_total,
+                r.commission,
+            ),
         })
         .collect();
     let weeks = payroll_weeks(
