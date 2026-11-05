@@ -623,7 +623,7 @@ async fn search_puts_mine_then_title_hits_then_the_nearest_first(pool: MySqlPool
          -- My customer's job made by someone else; a job I made for another rep's customer
          INSERT INTO events (id, title, start_date, end_date, created_user_id, customer_id, unscheduled) VALUES
            (8975, 'Zork my customer', UTC_TIMESTAMP() + INTERVAL 100 DAY, UTC_TIMESTAMP() + INTERVAL 100 DAY, 101, 1000, 0),
-           (8976, 'Zork their customer', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 100, 1004, 0);",
+           (8976, 'Zork their customer', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 100, 1010, 0);",
     )
     .execute(&pool)
     .await
