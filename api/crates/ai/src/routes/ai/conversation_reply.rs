@@ -646,7 +646,7 @@ pub async fn conversation_reply(
     EmployeeUser(user): EmployeeUser,
     JsonBody(input): JsonBody<ConversationReplyInput>,
 ) -> ApiResult<Json<ConversationReply>> {
-    let body = draft(&state, &user, &input, "quick_reply").await?;
+    let body = draft(&state, &user, &input, "ai_reply").await?;
     Ok(Json(ConversationReply { body }))
 }
 

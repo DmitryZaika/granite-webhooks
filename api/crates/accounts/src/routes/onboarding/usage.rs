@@ -48,7 +48,7 @@ pub struct UsageCheck {
 }
 
 /// Every check, by id.
-static CHECKS: [UsageCheck; 9] = [
+static CHECKS: [UsageCheck; 14] = [
     // A quote emailed to a customer. Quotes are scoped by their company.
     UsageCheck {
         id: "quote_emailed",
@@ -128,6 +128,60 @@ static CHECKS: [UsageCheck; 9] = [
                 WHERE sr.company_id = {c} AND sr.status <> 'draft'
                   [[sr.created_by_user_id]]",
     },
+    // A question asked in Chat. `chat_log` (kept from 2026-10-28) may have
+    // no company: the asker's home company scopes it. Older questions are
+    // only in the AI cost log.
+    UsageCheck {
+        id: "chat_asked",
+        kind: Kind::Data,
+        rows: "SELECT cl.user_id AS user_id, cl.created_at AS ts
+                 FROM chat_log cl
+                 JOIN users u ON u.id = cl.user_id AND u.company_id = {c}
+                WHERE 1 = 1 [[cl.user_id]]
+               UNION ALL
+               SELECT al.user_id AS user_id, al.created_at AS ts
+                 FROM ai_usage_log al
+                WHERE al.company_id = {c} AND al.feature = 'chat' AND al.success = 1
+                  AND al.user_id IS NOT NULL [[al.user_id]]",
+    },
+    // A draft from the AI reply button. Until 2026-11-05 it was logged as
+    // `quick_reply` with the composer suggestions; only AI reply asked the
+    // large model.
+    UsageCheck {
+        id: "ai_reply_used",
+        kind: Kind::Data,
+        rows: "SELECT al.user_id AS user_id, al.created_at AS ts
+                 FROM ai_usage_log al
+                WHERE al.company_id = {c} AND al.success = 1 AND al.user_id IS NOT NULL
+                  AND (al.feature = 'ai_reply'
+                       OR (al.feature = 'quick_reply' AND al.model LIKE 'gpt-6.1-sol%'))
+                  [[al.user_id]]",
+    },
+    // A call the user placed: CloudTalk and RingCentral calls from the points
+    // sync, Granite Phone calls from its own table.
+    UsageCheck {
+        id: "customer_called",
+        kind: Kind::Data,
+        rows: "SELECT pp.user_id AS user_id, pp.started_at AS ts
+                 FROM phone_call_points pp
+                WHERE pp.company_id = {c} AND pp.user_id IS NOT NULL
+                  AND pp.started_at IS NOT NULL [[pp.user_id]]
+               UNION ALL
+               SELECT pc.user_id AS user_id, pc.started_at AS ts
+                 FROM phone_calls pc
+                WHERE pc.company_id = {c} AND pc.user_id IS NOT NULL
+                  AND pc.direction = 'outbound' [[pc.user_id]]",
+    },
+    // A call turned into a note, activities or text by AI.
+    UsageCheck {
+        id: "call_followed_up",
+        kind: Kind::Data,
+        rows: "SELECT al.user_id AS user_id, al.created_at AS ts
+                 FROM ai_usage_log al
+                WHERE al.company_id = {c} AND al.success = 1 AND al.user_id IS NOT NULL
+                  AND al.feature IN ('call_note_summary', 'call_activity_extract', 'call_transcription')
+                  [[al.user_id]]",
+    },
     UsageCheck {
         id: "quote_views_opened",
         kind: Kind::Event,
@@ -135,6 +189,12 @@ static CHECKS: [UsageCheck; 9] = [
     },
     UsageCheck {
         id: "unscheduled_planned",
+        kind: Kind::Event,
+        rows: "",
+    },
+    // A Chat question sent with "Share this page" on.
+    UsageCheck {
+        id: "chat_page_shared",
         kind: Kind::Event,
         rows: "",
     },
@@ -366,13 +426,17 @@ mod tests {
             "questionnaire_answered",
             "call_coached",
             "signature_sent",
+            "chat_asked",
+            "ai_reply_used",
+            "customer_called",
+            "call_followed_up",
         ] {
             let check = check(id).unwrap();
             assert_eq!(check.kind, Kind::Data, "{id}");
             assert!(!is_event_check(id), "{id}");
             assert!(check.rows.contains("{c}"), "{id}");
         }
-        for id in ["quote_views_opened", "unscheduled_planned"] {
+        for id in ["quote_views_opened", "unscheduled_planned", "chat_page_shared"] {
             assert_eq!(check(id).unwrap().kind, Kind::Event, "{id}");
             assert!(is_event_check(id), "{id}");
         }

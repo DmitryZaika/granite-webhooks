@@ -108,7 +108,7 @@ async fn a_fast_reply_reads_the_whole_conversation(pool: MySqlPool) {
             .starts_with("You help a countertop sales rep draft")
     );
     let logged: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM ai_usage_log WHERE feature = 'quick_reply'")
+        sqlx::query_scalar("SELECT COUNT(*) FROM ai_usage_log WHERE feature = 'ai_reply'")
             .fetch_one(&pool)
             .await
             .unwrap();
