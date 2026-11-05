@@ -26,6 +26,10 @@ pub fn project_select() -> String {
                 CAST(s.price AS DOUBLE) AS transaction_price,
                 COALESCE(c.name, '') AS customer_name, o.name AS owner_name,
                 rep.name AS sales_rep_name,
+                q.id AS quote_id, NULLIF(TRIM(q.quote_name), '') AS quote_name,
+                COALESCE(NULLIF(TRIM(c.phone), ''), NULLIF(TRIM(q.phone), '')) AS customer_phone,
+                COALESCE(NULLIF(TRIM(ce.email), ''), NULLIF(TRIM(q.email), '')) AS customer_email,
+                NULLIF(TRIM(c.company_name), '') AS customer_company,
                 (EXISTS (SELECT 1 FROM slab_inventory si
                           WHERE si.sale_id = s.id AND si.deleted_at IS NULL)
                  AND NOT EXISTS (SELECT 1 FROM slab_inventory si
@@ -35,7 +39,13 @@ pub fn project_select() -> String {
            JOIN customers c ON c.id = p.customer_id AND c.company_id = p.company_id
            LEFT JOIN sales s ON s.id = p.sale_id AND s.company_id = p.company_id
            LEFT JOIN users o ON o.id = p.owner_id AND o.company_id = p.company_id
-           LEFT JOIN users rep ON rep.id = p.sales_rep_id AND rep.company_id = p.company_id",
+           LEFT JOIN users rep ON rep.id = p.sales_rep_id AND rep.company_id = p.company_id
+           LEFT JOIN customers_emails ce ON ce.id = c.email_id AND ce.customer_id = c.id
+           LEFT JOIN quotes q ON q.id = (
+                SELECT q2.id FROM quotes q2
+                 WHERE q2.deal_id = p.source_deal_id AND q2.company_id = p.company_id
+                   AND q2.deleted_at IS NULL
+                 ORDER BY q2.status IN ('converted', 'accepted') DESC, q2.id DESC LIMIT 1)",
         cancelled = iso("p.cancelled_at"),
         templated = iso("p.templated_at"),
         archived = iso("p.archived_at"),
@@ -665,7 +675,11 @@ async fn create_project(
         "INSERT INTO projects (company_id, source_deal_id, customer_id, sales_rep_id, title,
                                quoted_amount, project_address, created_by)
          SELECT c.company_id, d.id, d.customer_id, d.user_id,
-                LEFT(COALESCE(NULLIF(TRIM(d.title), ''),
+                LEFT(COALESCE((SELECT NULLIF(TRIM(q.quote_name), '') FROM quotes q
+                                 WHERE q.deal_id = d.id AND q.deleted_at IS NULL
+                                 ORDER BY q.status IN ('converted', 'accepted') DESC, q.id DESC
+                                 LIMIT 1),
+                              NULLIF(TRIM(d.title), ''),
                               CONCAT(COALESCE(NULLIF(TRIM(c.name), ''), 'Customer'), ' project')), 255),
                 d.amount, NULLIF(TRIM(c.address), ''), COALESCE(?, d.user_id)
            FROM deals d JOIN customers c ON c.id = d.customer_id

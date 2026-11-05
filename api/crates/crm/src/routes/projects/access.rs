@@ -94,18 +94,20 @@ impl TryFrom<String> for Stage {
 /// Template Scheduled, the template maker's Completed makes it Templated,
 /// the installation on the calendar (once templated) Install Scheduled, the
 /// installer's Completed Installed, and the transaction's installed and paid
-/// dates Installed and Paid & Completed. A stage someone moved it to by hand
+/// dates Installed and Paid & Completed. Paid is the transaction's paid date
+/// or the customer's QuickBooks invoices all paid (`p.qbo_paid_at`, see
+/// `payments`). A stage someone moved it to by hand
 /// counts when it is further on. The jobs are the Templates and
 /// Installations calendar events linked to the project, or of its customer
 /// made since the project started and linked to none.
 pub const STAGE_SQL: &str = "(CASE WHEN s.installed_date IS NOT NULL
-        THEN IF(s.paid_date IS NOT NULL, 'completed', 'installed')
+        THEN IF(s.paid_date IS NOT NULL OR p.qbo_paid_at IS NOT NULL, 'completed', 'installed')
       ELSE ELT(GREATEST(
           FIELD(IF(p.stage_code IN ('installed', 'completed'), 'fabrication', CAST(p.stage_code AS CHAR)),
                 'new', 'template_scheduled', 'templated', 'fabrication', 'install_scheduled'),
           (SELECT COALESCE(MAX(CASE
                     WHEN cal.slug = 'installations' AND e.crew_status = 'completed'
-                      THEN IF(s.paid_date IS NOT NULL, 7, 6)
+                      THEN IF(s.paid_date IS NOT NULL OR p.qbo_paid_at IS NOT NULL, 7, 6)
                     WHEN cal.slug = 'templates' AND e.crew_status = 'completed' THEN 3
                     WHEN cal.slug = 'templates' AND COALESCE(e.unscheduled, 0) = 0 THEN 2
                     ELSE 1 END), 1)
@@ -181,9 +183,10 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    /// Admins and Managers see every project. Sales reps see their own
-    /// deals' projects. Everyone sees the projects they have a task on, done
-    /// or not: that is all a Sales, Shop, Office, Scheduling or Inventory
+    /// Admins, Managers, Office and Scheduling Managers (they schedule every
+    /// job) and Shop Managers (they fabricate every job) see every project.
+    /// Sales reps see their own deals' projects. Everyone sees the projects
+    /// they have a task on, done or not: that is all a Sales or Inventory
     /// Manager sees.
     pub fn new(user: &SessionUser, positions: &[UserPositionRow]) -> Self {
         let has = |position: i32| {
@@ -196,21 +199,21 @@ impl Viewer {
         let office = has(OFFICE_MANAGER);
         let shop = has(SHOP_MANAGER);
         let rep = has(SALES_REP);
-        let tasked =
-            sales_manager || office || shop || has(SCHEDULING_MANAGER) || has(INVENTORY_MANAGER);
+        let scheduling = office || has(SCHEDULING_MANAGER);
+        let tasked = sales_manager || has(INVENTORY_MANAGER);
         Self {
             user_id: user.id,
             company_id: user.company_id,
             permissions: Permissions {
-                view_all: admin,
+                view_all: admin || scheduling || shop,
                 convert: admin || sales_manager || rep,
-                production: admin || office || shop,
+                production: admin || scheduling || shop,
                 mark_paid: admin || sales_manager,
                 manage: admin || office,
             },
             own: rep,
             convert_any: admin || sales_manager,
-            board: admin || rep || tasked,
+            board: admin || rep || scheduling || shop || tasked,
         }
     }
 
@@ -333,9 +336,16 @@ mod tests {
     #[test]
     fn visibility_sql() {
         assert_eq!(viewer(true, &[]).visible_sql(), "TRUE");
-        assert_eq!(viewer(false, &[MANAGER]).visible_sql(), "TRUE");
-        // Managers below them see only the projects they have a task on.
-        for position in [SALES_MANAGER, SHOP_MANAGER, INVENTORY_MANAGER] {
+        // The office, scheduling and the shop see every project.
+        for position in [MANAGER, OFFICE_MANAGER, SCHEDULING_MANAGER, SHOP_MANAGER] {
+            assert_eq!(
+                viewer(false, &[position]).visible_sql(),
+                "TRUE",
+                "{position}"
+            );
+        }
+        // Sales and Inventory Managers see only the projects they have a task on.
+        for position in [SALES_MANAGER, INVENTORY_MANAGER] {
             let sql = viewer(false, &[position]).visible_sql();
             assert!(sql.contains("ta.assigned_user_id = 7"));
             assert!(!sql.contains("completed_at"), "done tasks keep it in view");

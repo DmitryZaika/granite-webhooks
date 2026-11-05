@@ -16182,6 +16182,1182 @@
         ]
       }
     },
+    "/v1/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "The board",
+        "description": "The caller's projects, as columns of the stages they work on: everything\nfor admins, Managers and Sales Managers; Awaiting Template to In\nFabrication for Office Managers; Templated onward for Shop Managers; their\nown for sales reps.",
+        "operationId": "list_projects",
+        "parameters": [
+          {
+            "name": "view",
+            "in": "query",
+            "description": "`active` (default), `completed` or `cancelled`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "description": "An owner's user id, or `unassigned`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Title, customer or address contains this.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hold",
+            "in": "query",
+            "description": "Only projects on hold.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "description": "Include archived projects.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page of 100.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectsBoard"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller's position has no Projects board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Projects is off for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/payments": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Projects' payments",
+        "description": "Whether each asked project is paid, from its customer's `QuickBooks`\ninvoices. Projects the caller doesn't see are left out; with `QuickBooks`\nnot connected, all are.",
+        "operationId": "list_project_payments",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "description": "Project ids (`ids=1&ids=2`), at most 200.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPayments"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Projects is off for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "A project's page",
+        "description": "The project, its tasks, notes, files, stage history, appointments and the\ncustomer's transactions it may link to. Anyone with an open task on it may\nopen it too.",
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectWorkspace"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see, or Projects is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/actions": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Act on a project",
+        "description": "Moves it forward, links its transaction, confirms payment, picks the\nowner, puts it on hold, cancels, archives, or corrects its stage or\npayment with a reason. A stale `version` gets a 409 saying to refresh.",
+        "operationId": "act_on_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The project after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad date, missing reason, or a move with its own button",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller's position can't do this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since the page loaded, or not possible now (the message says why)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/project": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "A deal's project",
+        "description": "The won deal's project, if any, and whether the caller may start one.",
+        "operationId": "get_deal_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deal's project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealProject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Projects is off for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Start a deal's project",
+        "description": "Turns a won deal into a project (Awaiting Template). Won deals start one\non their own; this is for deals won before Projects was on. Answers the\nexisting project when the deal has one.",
+        "operationId": "create_deal_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deal's project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConvertedDeal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller's position can't start projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such deal the caller may see, or Projects is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The deal is lost",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/tasks": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Add a task",
+        "description": "A task on the project for anyone in the company (or nobody). The person\ngets a notification now and, with a due date, another when it is due (9 AM\nstore time on a date with no time).",
+        "operationId": "create_project_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty name, bad date or priority, or someone outside the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/tasks/{task_id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a task",
+        "description": "Its creator or a project manager.",
+        "operationId": "delete_project_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the task's creator or a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such task the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Complete or reopen a task",
+        "description": "Its creator, the person it is for, or a project manager. A done task's\ndue reminder leaves the bell; reopening brings it back.",
+        "operationId": "update_project_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the task's creator, its person or a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such task the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/notes": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Add a note",
+        "operationId": "create_project_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty note",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/notes/{note_id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a note",
+        "description": "Its author or a project manager.",
+        "operationId": "delete_project_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "note_id",
+            "in": "path",
+            "description": "Note id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the note's author or a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such note the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/files": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Attach files",
+        "description": "Files already uploaded with `POST /v1/uploads` (folder `deals`).",
+        "operationId": "attach_project_files",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewProjectFiles"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Attached"
+          },
+          "400": {
+            "description": "No files, or a URL that isn't the company's upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/files/{file_id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a file",
+        "description": "Whoever attached it or a project manager.",
+        "operationId": "delete_project_file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "description": "File id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the file's uploader or a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such file the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/calendars": {
       "get": {
         "tags": [
@@ -50836,6 +52012,88 @@
         ]
       }
     },
+    "/v1/company/auto-project": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch starting a project on a sale",
+        "description": "Admin › Quotes › Automation \"Project on a sale\". When on, marking a deal\nwon or a quote sold starts its project in Projects (`auto_project` in\n`GET /v1/company/features`). Off, projects are added by hand.",
+        "operationId": "save_company_auto_project",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoProjectInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/company/api-token-email": {
       "post": {
         "tags": [
@@ -66768,6 +68026,7 @@
           "can_manage_company",
           "can_manage_billing",
           "is_shop_manager",
+          "has_projects_board",
           "is_template_maker",
           "user_signature_access",
           "user_ai_promises",
@@ -66869,6 +68128,10 @@
           "is_shop_manager": {
             "type": "boolean",
             "description": "Holds the Shop Manager position in the company."
+          },
+          "has_projects_board": {
+            "type": "boolean",
+            "description": "Projects is on and the caller's position has a Projects board (admin,\nManager, Sales Manager, Office Manager, Shop Manager, sales rep)."
           },
           "is_template_maker": {
             "type": "boolean",
@@ -67312,6 +68575,20 @@
             "description": "The waiting statuses to plan (`ready`, `called`, `not_ready`)."
           }
         }
+      },
+      "AutoProjectInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/auto-project`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: marking a deal won or a quote sold starts its project."
+          }
+        },
+        "additionalProperties": false
       },
       "AutoSaleInput": {
         "type": "object",
@@ -68150,42 +69427,21 @@
       },
       "Calendar": {
         "type": "object",
-        "description": "A calendar of the company's schedule.",
         "required": [
           "id",
-          "name",
-          "color",
-          "is_system",
-          "is_hidden"
+          "slug",
+          "name"
         ],
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32",
-            "description": "Calendar id; events reference it."
-          },
-          "name": {
-            "type": "string",
-            "description": "Display name."
-          },
-          "color": {
-            "type": "string",
-            "description": "Color name used on the schedule (e.g. `blue`)."
+            "format": "int32"
           },
           "slug": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`templates`, `installations` or `estimates` for the built-in\ncalendars every company has; null for calendars the company added."
+            "type": "string"
           },
-          "is_system": {
-            "type": "boolean",
-            "description": "A built-in calendar (it cannot be renamed or deleted)."
-          },
-          "is_hidden": {
-            "type": "boolean",
-            "description": "Hidden from everyone's schedule (only `all=true` lists these)."
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -70431,7 +71687,8 @@
           "signature_enabled",
           "billing_required",
           "onboarding_enabled",
-          "leaderboard_enabled"
+          "leaderboard_enabled",
+          "projects_enabled"
         ],
         "properties": {
           "id": {
@@ -70570,6 +71827,10 @@
           "leaderboard_enabled": {
             "type": "boolean",
             "description": "Points leaderboard switch (own setting, else the platform default)."
+          },
+          "projects_enabled": {
+            "type": "boolean",
+            "description": "Projects switch."
           }
         }
       },
@@ -70581,6 +71842,7 @@
           "quickbooks_connected",
           "onboarding",
           "leaderboard",
+          "projects",
           "e_signature",
           "inbound_email",
           "cloudtalk",
@@ -70591,6 +71853,7 @@
           "auto_unscheduled_jobs",
           "auto_invoice",
           "quote_invoice_sync",
+          "auto_project",
           "sale_event_templates"
         ],
         "properties": {
@@ -70609,6 +71872,10 @@
           "leaderboard": {
             "type": "boolean",
             "description": "The points leaderboard (the company's own switch, else the\nplatform-wide default). See `GET /v1/points-leaderboard`."
+          },
+          "projects": {
+            "type": "boolean",
+            "description": "Projects: sold jobs from template to paid (`GET /v1/projects`)."
           },
           "e_signature": {
             "type": "boolean",
@@ -70649,6 +71916,10 @@
           "quote_invoice_sync": {
             "type": "boolean",
             "description": "A new invoice from a quote starts with \"Keep in sync with the quote\"\nticked (Admin › Quotes › Automation,\n`PUT /v1/company/quote-invoice-sync`)."
+          },
+          "auto_project": {
+            "type": "boolean",
+            "description": "Marking a deal won or a quote sold starts its project in Projects\n(Admin › Quotes › Automation \"Project on a sale\",\n`PUT /v1/company/auto-project`)."
           },
           "sale_event_templates": {
             "type": "boolean",
@@ -72068,6 +73339,24 @@
             "type": "integer",
             "format": "int64",
             "description": "Call-ins' deals."
+          }
+        }
+      },
+      "ConvertedDeal": {
+        "type": "object",
+        "description": "`POST /v1/deals/{id}/project`.",
+        "required": [
+          "project_id",
+          "created"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "False when the deal had a project already."
           }
         }
       },
@@ -74683,6 +75972,27 @@
           }
         }
       },
+      "DealProject": {
+        "type": "object",
+        "description": "`GET /v1/deals/{id}/project`.",
+        "required": [
+          "can_convert"
+        ],
+        "properties": {
+          "project_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The deal's project, if it has one."
+          },
+          "can_convert": {
+            "type": "boolean",
+            "description": "Projects are on for the company and the caller may create one."
+          }
+        }
+      },
       "DealQuestionnaire": {
         "type": "object",
         "description": "A questionnaire with the deal's answers.",
@@ -77205,6 +78515,14 @@
               "format": "int32"
             },
             "description": "Its calendar's other notification flows picked for this event;\nleave out to keep the saved choice."
+          },
+          "project_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Create only: the project this template or installation is for."
           }
         }
       },
@@ -77632,7 +78950,8 @@
           "quickbooks",
           "signature",
           "onboarding",
-          "leaderboard"
+          "leaderboard",
+          "projects"
         ],
         "properties": {
           "quickbooks": {
@@ -77650,6 +78969,10 @@
           "leaderboard": {
             "type": "boolean",
             "description": "The points leaderboard is on (own switch, else the platform default)."
+          },
+          "projects": {
+            "type": "boolean",
+            "description": "Projects (sold jobs from template to paid) is on."
           }
         }
       },
@@ -81672,6 +82995,44 @@
         },
         "additionalProperties": false
       },
+      "LinkableSale": {
+        "type": "object",
+        "description": "A transaction of the customer the project may link to.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "installed_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paid_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ListResponse": {
         "oneOf": [
           {
@@ -83182,6 +84543,43 @@
         },
         "additionalProperties": false
       },
+      "NewProjectFile": {
+        "type": "object",
+        "description": "One file uploaded with `POST /v1/uploads` (folder `deals`).",
+        "required": [
+          "url",
+          "name"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NewProjectFiles": {
+        "type": "object",
+        "description": "Body of `POST /v1/projects/{id}/files`.",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewProjectFile"
+            }
+          }
+        }
+      },
       "NewQuestion": {
         "type": "object",
         "description": "Body of `POST /v1/teach-mode/questions`.",
@@ -83555,6 +84953,18 @@
               "null"
             ],
             "description": "Author name; null for comments by non-admins."
+          }
+        }
+      },
+      "NoteInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/projects/{id}/notes`.",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
           }
         }
       },
@@ -85729,6 +87139,16 @@
           }
         }
       },
+      "PaymentStatus": {
+        "type": "string",
+        "description": "How much of a project's invoices is paid.",
+        "enum": [
+          "none",
+          "unpaid",
+          "partial",
+          "paid"
+        ]
+      },
       "Payout": {
         "type": "object",
         "description": "Commissions paid to the rep, or not after all.",
@@ -85869,6 +87289,56 @@
               "null"
             ],
             "description": "Where it went, masked."
+          }
+        }
+      },
+      "Permissions": {
+        "type": "object",
+        "description": "What the caller may do with projects.",
+        "required": [
+          "viewAll",
+          "convert",
+          "production",
+          "markPaid",
+          "manage"
+        ],
+        "properties": {
+          "viewAll": {
+            "type": "boolean",
+            "description": "Sees every project."
+          },
+          "convert": {
+            "type": "boolean",
+            "description": "Turns deals into projects (their own, or any for managers)."
+          },
+          "production": {
+            "type": "boolean",
+            "description": "Moves projects forward, links transactions, books appointments."
+          },
+          "markPaid": {
+            "type": "boolean",
+            "description": "Confirms payment."
+          },
+          "manage": {
+            "type": "boolean",
+            "description": "Cancels, puts on hold, archives, corrects stages, picks the owner."
+          }
+        }
+      },
+      "Person": {
+        "type": "object",
+        "description": "Someone in the company.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -88946,6 +90416,274 @@
           }
         }
       },
+      "ProjectAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Move forward (production).",
+            "required": [
+              "version",
+              "stage",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "stage": {
+                "$ref": "#/components/schemas/Stage"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "stage"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Link the customer's transaction.",
+            "required": [
+              "version",
+              "saleId",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "saleId": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "link-sale"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Confirm full payment on this date (ISO).",
+            "required": [
+              "version",
+              "date",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "date": {
+                "type": "string"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "paid"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pick the owner (null: nobody).",
+            "required": [
+              "version",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "ownerId": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "assign"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "version",
+              "onHold",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "onHold": {
+                "type": "boolean"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "hold"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "version",
+              "reason",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "cancel"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "version",
+              "archived",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "archived": {
+                "type": "boolean"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "archive"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Change or clear the payment date, with a reason.",
+            "required": [
+              "version",
+              "reason",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "date": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "correct-payment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Move back, with a reason (managers).",
+            "required": [
+              "version",
+              "stage",
+              "reason",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "stage": {
+                "$ref": "#/components/schemas/Stage"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "correct"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Body of `POST /v1/projects/{id}/actions`. `version` is the project's as\nthe page has it: a stale page gets a 409."
+      },
+      "ProjectAppointment": {
+        "type": "object",
+        "description": "The next template or installation appointment.",
+        "required": [
+          "id",
+          "project_id",
+          "kind",
+          "title",
+          "start_date",
+          "unscheduled"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`templates` or `installations` (the calendar)."
+          },
+          "title": {
+            "type": "string"
+          },
+          "start_date": {
+            "type": "string"
+          },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Waiting for a date on the schedule (`start_date` means nothing yet)."
+          }
+        }
+      },
       "ProjectCustomer": {
         "type": "object",
         "description": "One customer of the family.",
@@ -89068,45 +90806,68 @@
           }
         }
       },
-      "ProjectNote": {
+      "ProjectFile": {
         "type": "object",
-        "description": "A note on the project.",
         "required": [
           "id",
-          "audience",
-          "content",
-          "created_at",
-          "own"
+          "name",
+          "url",
+          "content_type",
+          "created_by",
+          "created_at"
         ],
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32",
-            "description": "The note."
+            "format": "int32"
           },
-          "audience": {
-            "type": "string",
-            "description": "`installers`, `sales_rep` or `everyone`."
+          "name": {
+            "type": "string"
           },
-          "content": {
+          "url": {
             "type": "string",
-            "description": "The text."
+            "description": "A URL the browser can open."
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "description": "When it was written."
+          "content_type": {
+            "type": "string"
           },
           "created_by": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectNote": {
+        "type": "object",
+        "required": [
+          "id",
+          "content",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "content": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "author": {
             "type": [
               "string",
               "null"
-            ],
-            "description": "Author's name."
+            ]
           },
-          "own": {
-            "type": "boolean",
-            "description": "Whether the caller wrote it (only they can delete it)."
+          "created_at": {
+            "type": "string"
           }
         }
       },
@@ -89127,6 +90888,61 @@
               "null"
             ],
             "description": "`installers`, `sales_rep` or `everyone` (the default)."
+          }
+        }
+      },
+      "ProjectPayment": {
+        "type": "object",
+        "description": "One project's payment.",
+        "required": [
+          "project_id",
+          "status",
+          "balance",
+          "total"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PaymentStatus"
+          },
+          "balance": {
+            "type": "number",
+            "format": "double",
+            "description": "What is still owed."
+          },
+          "total": {
+            "type": "number",
+            "format": "double",
+            "description": "The invoices' total."
+          }
+        }
+      },
+      "ProjectPayments": {
+        "type": "object",
+        "description": "`GET /v1/projects/payments`.",
+        "required": [
+          "connected",
+          "payments",
+          "moved"
+        ],
+        "properties": {
+          "connected": {
+            "type": "boolean",
+            "description": "False when `QuickBooks` is not connected or did not answer: then no\nproject has an answer."
+          },
+          "payments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectPayment"
+            },
+            "description": "The asked projects the caller sees."
+          },
+          "moved": {
+            "type": "boolean",
+            "description": "A project became paid or unpaid just now: its stage may have moved,\nso the board is worth reading again."
           }
         }
       },
@@ -89177,6 +90993,214 @@
             ],
             "format": "date-time",
             "description": "When it was sold."
+          }
+        }
+      },
+      "ProjectTask": {
+        "type": "object",
+        "description": "A task on a project, for anyone in the company.",
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "priority",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "assigned_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "assigned_user_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Store wall time `YYYY-MM-DDTHH:MM:SS`; `T00:00:00` is a date with no time."
+          },
+          "priority": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_by": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created_by_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectWorkspace": {
+        "type": "object",
+        "description": "`GET /v1/projects/{id}`: a project's page.",
+        "required": [
+          "project",
+          "tasks",
+          "notes",
+          "files",
+          "history",
+          "sales",
+          "people",
+          "calendars",
+          "appointments",
+          "permissions",
+          "user_id"
+        ],
+        "properties": {
+          "project": {
+            "$ref": "#/components/schemas/Project"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectTask"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectNote"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectFile"
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StageChange"
+            }
+          },
+          "sales": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkableSale"
+            },
+            "description": "Transactions to link (empty once one is linked)."
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            }
+          },
+          "calendars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Calendar"
+            },
+            "description": "The Templates and Installations calendars."
+          },
+          "appointments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectAppointment"
+            },
+            "description": "Every appointment of the project, newest first."
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/Permissions"
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The caller's user id (to show which tasks and notes are theirs)."
+          }
+        }
+      },
+      "ProjectsBoard": {
+        "type": "object",
+        "description": "`GET /v1/projects`: the caller's board.",
+        "required": [
+          "projects",
+          "stages",
+          "owners",
+          "appointments",
+          "tasks",
+          "permissions",
+          "page",
+          "has_next"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            }
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Stage"
+            },
+            "description": "The columns the caller has, in order."
+          },
+          "owners": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            }
+          },
+          "appointments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectAppointment"
+            },
+            "description": "The next appointments of these projects."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectTask"
+            },
+            "description": "Their open tasks, the most urgent first."
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/Permissions"
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "has_next": {
+            "type": "boolean"
           }
         }
       },
@@ -95140,7 +97164,8 @@
           "quickbooks",
           "signature",
           "onboarding",
-          "leaderboard"
+          "leaderboard",
+          "projects"
         ],
         "properties": {
           "quickbooks": {
@@ -95158,6 +97183,10 @@
           "leaderboard": {
             "type": "boolean",
             "description": "The points leaderboard is on."
+          },
+          "projects": {
+            "type": "boolean",
+            "description": "Projects is on."
           }
         }
       },
@@ -96625,6 +98654,61 @@
           }
         },
         "additionalProperties": false
+      },
+      "Stage": {
+        "type": "string",
+        "description": "Where a project is.",
+        "enum": [
+          "new",
+          "template_scheduled",
+          "templated",
+          "fabrication",
+          "install_scheduled",
+          "installed",
+          "completed"
+        ]
+      },
+      "StageChange": {
+        "type": "object",
+        "required": [
+          "id",
+          "to_stage",
+          "source_action",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "from_stage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to_stage": {
+            "type": "string"
+          },
+          "source_action": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
       },
       "StageOrder": {
         "type": "object",
@@ -98631,6 +100715,41 @@
           "general_datebase"
         ]
       },
+      "TaskInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/projects/{id}/tasks`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "1 to 255 characters."
+          },
+          "assignedUserId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Who does it: anyone in the company; null for nobody."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM[:SS]` store wall time."
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`low`, `medium` (default) or `high`."
+          }
+        }
+      },
       "TaskProgress": {
         "type": "object",
         "description": "A feature tour's saved progress.",
@@ -98693,6 +100812,19 @@
               "null"
             ],
             "description": "When it was last closed (UTC, ISO 8601): a skip, unless completed since."
+          }
+        }
+      },
+      "TaskUpdate": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/projects/{id}/tasks/{task_id}`.",
+        "required": [
+          "completed"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean",
+            "description": "Done (true) or open again (false)."
           }
         }
       },

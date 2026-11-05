@@ -112,6 +112,8 @@ pub async fn board(
             .push_bind(like.clone())
             .push(" OR c.name LIKE ")
             .push_bind(like.clone())
+            .push(" OR q.quote_name LIKE ")
+            .push_bind(like.clone())
             .push(" OR p.project_address LIKE ")
             .push_bind(like)
             .push(")");

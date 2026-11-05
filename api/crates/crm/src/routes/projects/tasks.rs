@@ -26,6 +26,8 @@ use sqlx::MySqlConnection;
 pub const TASK_ASSIGNED: &str = "project_task_assigned";
 /// The bell, at the task's deadline.
 pub const TASK_DUE: &str = "project_task_reminder";
+/// The bell: someone finished a task you gave.
+pub const TASK_DONE: &str = "project_task_done";
 
 /// Date-only deadlines are reminded at this store time on the day.
 const DATE_ONLY_REMINDER: &str = "09:00:00";
@@ -152,6 +154,38 @@ async fn notify(
     .await;
     if let Err(error) = result {
         tracing::error!(?error, task_id, "project task notification failed");
+    }
+}
+
+/// Tells the task's giver it is done (bell and phone). Logged, never
+/// returned: the task is saved.
+async fn tell_giver(
+    state: &AppState,
+    user: &SessionUser,
+    project_id: i32,
+    task_id: i32,
+    giver: i32,
+) {
+    let result: sqlx::Result<()> = async {
+        let id = sqlx::query(
+            "INSERT INTO notifications
+                (user_id, project_id, project_task_id, message, notification_type, actor_name, due_at)
+             SELECT ?, ?, id, LEFT(name, 255), ?, ?, NOW() FROM project_activities WHERE id = ?",
+        )
+        .bind(giver)
+        .bind(project_id)
+        .bind(TASK_DONE)
+        .bind(actor_name(user))
+        .bind(task_id)
+        .execute(&state.pool)
+        .await?
+        .last_insert_id();
+        push_notification_logged(state, i64::try_from(id).unwrap_or_default()).await;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        tracing::error!(?error, task_id, "project task done notification failed");
     }
 }
 
@@ -289,15 +323,23 @@ pub async fn update_task(
     let mut conn = state.pool.acquire().await?;
     let (creator, assignee) = task_people(&mut conn, &viewer, id, task_id).await?;
     Viewer::require(viewer.permissions.manage || creator == user.id || assignee == Some(user.id))?;
-    sqlx::query(
+    // Only an open task becomes done, so its giver hears it once.
+    let finished = sqlx::query(
         "UPDATE project_activities SET completed_at = IF(?, UTC_TIMESTAMP(), NULL)
-          WHERE id = ? AND company_id = ?",
+          WHERE id = ? AND company_id = ? AND (completed_at IS NULL) = ?",
     )
     .bind(input.completed)
     .bind(task_id)
     .bind(viewer.company_id)
+    .bind(input.completed)
     .execute(&mut *conn)
-    .await?;
+    .await?
+    .rows_affected()
+        == 1
+        && input.completed;
+    if finished && creator != user.id {
+        tell_giver(&state, &user, id, task_id, creator).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

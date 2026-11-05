@@ -37,6 +37,12 @@ pub struct Project {
     pub customer_name: String,
     pub owner_name: Option<String>,
     pub sales_rep_name: Option<String>,
+    /// The deal's quote (its sold one, else its newest): the card's name.
+    pub quote_id: Option<i32>,
+    pub quote_name: Option<String>,
+    pub customer_phone: Option<String>,
+    pub customer_email: Option<String>,
+    pub customer_company: Option<String>,
     /// Every active slab of the transaction is cut.
     pub ready_to_install: bool,
 }

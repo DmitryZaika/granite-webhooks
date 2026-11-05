@@ -304,6 +304,12 @@ async fn a_task_tells_its_person_now_and_when_it_is_due(pool: MySqlPool) {
         after.iter().all(|n| n["type_title"] != "Task Due"),
         "{after:?}"
     );
+    // Ada, who gave it, hears it is done.
+    let adas = bell(sessions::ADMIN).await;
+    assert!(
+        adas.iter().any(|n| n["type_title"] == "Finished Your Task"),
+        "{adas:?}"
+    );
 
     // Only its maker (Ada) or a manager deletes it.
     server

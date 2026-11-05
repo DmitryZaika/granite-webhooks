@@ -62,8 +62,11 @@ pub struct ProjectPayments {
     /// False when `QuickBooks` is not connected or did not answer: then no
     /// project has an answer.
     pub connected: bool,
-    /// The asked projects the caller sees whose customer is in `QuickBooks`.
+    /// The asked projects the caller sees.
     pub payments: Vec<ProjectPayment>,
+    /// A project became paid or unpaid just now: its stage may have moved,
+    /// so the board is worth reading again.
+    pub moved: bool,
 }
 
 #[derive(FromRow)]
@@ -127,6 +130,35 @@ fn payments(rows: &[Row], invoices: &[Invoice]) -> Vec<ProjectPayment> {
         .collect()
 }
 
+/// Saves which projects are paid in full (`projects.qbo_paid_at`), so their
+/// stage follows; `true` when one changed.
+async fn remember_paid(
+    pool: &sqlx::MySqlPool,
+    company_id: i32,
+    payments: &[ProjectPayment],
+) -> sqlx::Result<bool> {
+    let mut changed = 0;
+    for paid in [true, false] {
+        let ids: Vec<i32> = payments
+            .iter()
+            .filter(|p| (p.status == PaymentStatus::Paid) == paid)
+            .map(|p| p.project_id)
+            .collect();
+        if ids.is_empty() {
+            continue;
+        }
+        let mut sql = QueryBuilder::<MySql>::new(if paid {
+            "UPDATE projects SET qbo_paid_at = UTC_TIMESTAMP() WHERE qbo_paid_at IS NULL"
+        } else {
+            "UPDATE projects SET qbo_paid_at = NULL WHERE qbo_paid_at IS NOT NULL"
+        });
+        sql.push(" AND company_id = ").push_bind(company_id);
+        crate::sql::push_in(&mut sql, "id", &ids);
+        changed += sql.build().execute(pool).await?.rows_affected();
+    }
+    Ok(changed > 0)
+}
+
 /// Projects' payments
 ///
 /// Whether each asked project is paid, from its customer's `QuickBooks`
@@ -157,6 +189,7 @@ pub async fn list(
         return Ok(Json(ProjectPayments {
             connected: true,
             payments: Vec::new(),
+            moved: false,
         }));
     }
     let mut sql = QueryBuilder::<MySql>::new(
@@ -207,6 +240,7 @@ pub async fn list(
             return Ok(Json(ProjectPayments {
                 connected: false,
                 payments: Vec::new(),
+                moved: false,
             }));
         }
         Err(error) => {
@@ -214,12 +248,16 @@ pub async fn list(
             return Ok(Json(ProjectPayments {
                 connected: false,
                 payments: Vec::new(),
+                moved: false,
             }));
         }
     };
+    let payments = payments(&rows, &invoices);
+    let moved = remember_paid(&state.pool, viewer.company_id, &payments).await?;
     Ok(Json(ProjectPayments {
         connected: true,
-        payments: payments(&rows, &invoices),
+        payments,
+        moved,
     }))
 }
 
