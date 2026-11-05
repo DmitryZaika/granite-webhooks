@@ -15,17 +15,26 @@
 //!   copy of a contact they already had; later runs add the customers still
 //!   missing, newest first, a few a minute (`RingCentral` allows a user about
 //!   ten contact writes a minute).
+//!
+//! A rep's sign-in shares that limit with everything else read as them (the
+//! bell's missed calls). Once `RingCentral` answers busy (429), every request
+//! in the next minute keeps it busy, so that rep is left alone for
+//! [`BUSY_PAUSE_MINUTES`]; customers saved meanwhile are marked `pending`
+//! and the job brings their contacts up to date.
 
 use super::ringcentral::{ApiError, Body, request_as};
 use regex::Regex;
 use reqwest::{Client, Method};
 use serde_json::{Map, Value, json};
 use sqlx::MySqlPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
-/// Contacts one job run adds to each rep's book.
-const ADDS_PER_RUN: i64 = 8;
+/// Contacts one job run adds or updates in each rep's book: room under the
+/// rep's ten a minute for the bell and customer saves.
+const ADDS_PER_RUN: i64 = 6;
+/// Minutes a rep is left alone after `RingCentral` answered busy.
+const BUSY_PAUSE_MINUTES: i64 = 2;
 /// Contacts per page when reading a rep's book, and the most pages read.
 const PAGE_SIZE: usize = 1000;
 const MAX_PAGES: usize = 30;
@@ -151,19 +160,60 @@ struct Rep {
 
 /// The reps of `company_id` (every company when `None`) with their own
 /// sign-in, less the one who connected the company: its connection already
-/// fills their book.
-async fn reps(pool: &MySqlPool, company_id: Option<i32>) -> Result<Vec<Rep>, sqlx::Error> {
+/// fills their book. Reps paused after a busy answer only with
+/// `include_paused`.
+async fn reps(
+    pool: &MySqlPool,
+    company_id: Option<i32>,
+    include_paused: bool,
+) -> Result<Vec<Rep>, sqlx::Error> {
     sqlx::query_as(
         "SELECT l.user_id, l.company_id, l.extension_id, l.contacts_indexed_at
            FROM ringcentral_user_logins l
            JOIN company co ON co.id = l.company_id
           WHERE (? IS NULL OR l.company_id = ?)
-            AND l.user_id <> COALESCE(co.ringcentral_connected_by, 0)",
+            AND l.user_id <> COALESCE(co.ringcentral_connected_by, 0)
+            AND (? OR l.contacts_paused_until IS NULL OR l.contacts_paused_until <= NOW())",
     )
     .bind(company_id)
     .bind(company_id)
+    .bind(include_paused)
     .fetch_all(pool)
     .await
+}
+
+/// Busy (429), or the sign-in failed or `RingCentral` broke: worth another
+/// try later, unlike a contact `RingCentral` refused.
+const fn is_transient(error: &ApiError) -> bool {
+    matches!(error.status, 401 | 403 | 429) || error.status >= 500
+}
+
+/// Leaves the rep alone for [`BUSY_PAUSE_MINUTES`].
+async fn pause(pool: &MySqlPool, user_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE ringcentral_user_logins
+            SET contacts_paused_until = NOW() + INTERVAL ? MINUTE
+          WHERE user_id = ?",
+    )
+    .bind(BUSY_PAUSE_MINUTES)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The customer's contact in the rep's book needs adding or updating.
+async fn mark_pending(pool: &MySqlPool, user_id: i32, customer_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO ringcentral_user_contacts (user_id, customer_id, pending)
+         VALUES (?, ?, 1)
+         ON DUPLICATE KEY UPDATE pending = 1",
+    )
+    .bind(user_id)
+    .bind(customer_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 fn book_path(extension: &str) -> String {
@@ -218,11 +268,13 @@ async fn save_mapping(
         Err(error) => (None, Some(error_text(error))),
     };
     sqlx::query(
-        "INSERT INTO ringcentral_user_contacts (user_id, customer_id, ringcentral_id, last_error)
-         VALUES (?, ?, ?, ?)
+        "INSERT INTO ringcentral_user_contacts
+                (user_id, customer_id, ringcentral_id, last_error, pending)
+         VALUES (?, ?, ?, ?, 0)
          ON DUPLICATE KEY UPDATE
            ringcentral_id = COALESCE(VALUES(ringcentral_id), ringcentral_id),
-           last_error = VALUES(last_error)",
+           last_error = VALUES(last_error),
+           pending = 0",
     )
     .bind(user_id)
     .bind(customer_id)
@@ -279,12 +331,15 @@ async fn find_by_phone(
     Ok(None)
 }
 
-/// Updates the customer's contact in the rep's book, or adds it.
+/// Updates the customer's contact in the rep's book, or adds it. Without a
+/// known contact, `look_up` first searches the book by phone (the job skips
+/// that: it already matched the book when it read it).
 async fn upsert(
     pool: &MySqlPool,
     client: &Client,
     rep: &Rep,
     customer: &Customer,
+    look_up: bool,
 ) -> Result<i64, ApiError> {
     let payload = customer.payload();
     let known: Option<i64> = sqlx::query_scalar(
@@ -301,7 +356,8 @@ async fn upsert(
     })?;
     let existing = match known {
         Some(id) => Some(id),
-        None => find_by_phone(pool, client, rep, &customer.phones()).await?,
+        None if look_up => find_by_phone(pool, client, rep, &customer.phones()).await?,
+        None => None,
     };
     if let Some(id) = existing {
         let path = format!("{}/{id}", book_path(&rep.extension_id));
@@ -336,8 +392,18 @@ pub async fn sync_customer(
     let Some(customer) = load_customer(pool, customer_id).await? else {
         return Ok(());
     };
-    for rep in reps(pool, Some(customer.company_id)).await? {
-        let result = upsert(pool, client, &rep, &customer).await;
+    let ready: HashSet<i32> = reps(pool, Some(customer.company_id), false)
+        .await?
+        .iter()
+        .map(|rep| rep.user_id)
+        .collect();
+    for rep in reps(pool, Some(customer.company_id), true).await? {
+        // Busy a moment ago: a request now would keep them busy.
+        if !ready.contains(&rep.user_id) {
+            mark_pending(pool, rep.user_id, customer.id).await?;
+            continue;
+        }
+        let result = upsert(pool, client, &rep, &customer, true).await;
         if let Err(error) = &result {
             tracing::warn!(
                 customer_id,
@@ -346,8 +412,12 @@ pub async fn sync_customer(
                 message = ?error.message,
                 "adding a customer to a rep's RingCentral contacts failed"
             );
-            // Busy: the job adds it within minutes.
-            if error.status == 429 {
+            // The job brings the contact up to date within minutes.
+            if is_transient(error) {
+                if error.status == 429 {
+                    pause(pool, rep.user_id).await?;
+                }
+                mark_pending(pool, rep.user_id, customer.id).await?;
                 continue;
             }
         }
@@ -485,9 +555,14 @@ async fn index_book(pool: &MySqlPool, client: &Client, rep: &Rep) -> Result<usiz
     Ok(matched)
 }
 
-/// One run for one rep: read their book the first time, else add the next
-/// customers they lack. Returns how many contacts it added.
+/// One run for one rep: read their book the first time, else bring the
+/// `pending` contacts up to date, then add the next customers they lack.
+/// Returns how many contacts it added or updated.
 async fn catch_up_rep(pool: &MySqlPool, client: &Client, rep: &Rep) -> Result<usize, ApiError> {
+    let db_error = |error: sqlx::Error| ApiError {
+        status: 500,
+        message: Some(error.to_string()),
+    };
     if rep.contacts_indexed_at.is_none() {
         let matched = index_book(pool, client, rep).await?;
         tracing::info!(
@@ -497,52 +572,73 @@ async fn catch_up_rep(pool: &MySqlPool, client: &Client, rep: &Rep) -> Result<us
         );
         return Ok(0);
     }
-    let missing: Vec<Customer> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    let pending: Vec<Customer> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {CUSTOMER_COLUMNS}
+           JOIN ringcentral_user_contacts uc
+             ON uc.customer_id = c.id AND uc.user_id = ? AND uc.pending = 1
           WHERE c.company_id = ? AND c.deleted_at IS NULL
-            AND NOT EXISTS (SELECT 1 FROM ringcentral_user_contacts uc
-                             WHERE uc.user_id = ? AND uc.customer_id = c.id)
           ORDER BY c.id DESC
           LIMIT ?"
     )))
-    .bind(rep.company_id)
     .bind(rep.user_id)
+    .bind(rep.company_id)
     .bind(ADDS_PER_RUN)
     .fetch_all(pool)
     .await
-    .map_err(|error| ApiError {
-        status: 500,
-        message: Some(error.to_string()),
-    })?;
-    let mut added = 0;
-    for customer in &missing {
-        let result = create(pool, client, rep, &customer.payload()).await;
+    .map_err(db_error)?;
+    let room = ADDS_PER_RUN - i64::try_from(pending.len()).unwrap_or(ADDS_PER_RUN);
+    let missing: Vec<Customer> = if room > 0 {
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {CUSTOMER_COLUMNS}
+              WHERE c.company_id = ? AND c.deleted_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM ringcentral_user_contacts uc
+                                 WHERE uc.user_id = ? AND uc.customer_id = c.id)
+              ORDER BY c.id DESC
+              LIMIT ?"
+        )))
+        .bind(rep.company_id)
+        .bind(rep.user_id)
+        .bind(room)
+        .fetch_all(pool)
+        .await
+        .map_err(db_error)?
+    } else {
+        Vec::new()
+    };
+    let mut done = 0;
+    for (customer, is_pending) in pending
+        .iter()
+        .map(|customer| (customer, true))
+        .chain(missing.iter().map(|customer| (customer, false)))
+    {
+        let result = if is_pending {
+            upsert(pool, client, rep, customer, false).await
+        } else {
+            create(pool, client, rep, &customer.payload()).await
+        };
         match &result {
             // Busy, or the sign-in no longer works: try again next run.
-            Err(error) if matches!(error.status, 401 | 403 | 429) || error.status >= 500 => {
+            Err(error) if is_transient(error) => {
                 return Err(ApiError {
                     status: error.status,
                     message: error.message.clone(),
                 });
             }
-            Ok(_) => added += 1,
+            Ok(_) => done += 1,
             Err(_) => {}
         }
         save_mapping(pool, rep.user_id, customer.id, &result)
             .await
-            .map_err(|error| ApiError {
-                status: 500,
-                message: Some(error.to_string()),
-            })?;
+            .map_err(db_error)?;
     }
-    Ok(added)
+    Ok(done)
 }
 
 /// The job's step: every rep's book a little fuller. Reps run side by side
 /// (each has their own `RingCentral` limits). Returns contacts added.
 pub async fn catch_up(pool: &MySqlPool, client: &Client) -> Result<usize, sqlx::Error> {
     let mut runs = tokio::task::JoinSet::new();
-    for rep in reps(pool, None).await? {
+    for rep in reps(pool, None, false).await? {
         let (pool, client) = (pool.clone(), client.clone());
         runs.spawn(async move {
             let result = catch_up_rep(&pool, &client, &rep).await;
@@ -553,12 +649,17 @@ pub async fn catch_up(pool: &MySqlPool, client: &Client) -> Result<usize, sqlx::
     while let Some(joined) = runs.join_next().await {
         match joined {
             Ok((_, Ok(count))) => added += count,
-            Ok((user_id, Err(error))) => tracing::warn!(
-                user_id,
-                status = error.status,
-                message = ?error.message,
-                "filling a rep's RingCentral contacts stopped for this run"
-            ),
+            Ok((user_id, Err(error))) => {
+                tracing::warn!(
+                    user_id,
+                    status = error.status,
+                    message = ?error.message,
+                    "filling a rep's RingCentral contacts stopped for this run"
+                );
+                if error.status == 429 {
+                    pause(pool, user_id).await?;
+                }
+            }
             Err(error) => tracing::warn!(%error, "a RingCentral contacts run panicked"),
         }
     }
@@ -704,10 +805,74 @@ mod tests {
     #[test_db::test]
     async fn the_one_who_connected_the_company_is_skipped(pool: MySqlPool) {
         let (rep, _, _) = rep_with_customers(&pool).await;
-        let found = reps(&pool, Some(rep.company_id)).await.unwrap();
+        let found = reps(&pool, Some(rep.company_id), false).await.unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].user_id, 5);
         assert!(found[0].contacts_indexed_at.is_none());
+    }
+
+    #[test_db::test]
+    async fn a_busy_rep_is_left_alone_and_their_saves_wait(pool: MySqlPool) {
+        let (rep, old, _) = rep_with_customers(&pool).await;
+        pause(&pool, rep.user_id).await.unwrap();
+        assert!(
+            reps(&pool, Some(rep.company_id), false)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            reps(&pool, Some(rep.company_id), true).await.unwrap().len(),
+            1
+        );
+        // A customer saved while busy reaches nobody now (no request is
+        // made, so this needs no RingCentral) and waits for the job.
+        sync_customer(&pool, &crate::http::client(), old).await.unwrap();
+        let pending: Vec<i32> = sqlx::query_scalar(
+            "SELECT customer_id FROM ringcentral_user_contacts WHERE user_id = ? AND pending = 1",
+        )
+        .bind(rep.user_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pending, vec![old]);
+        // Bringing it up to date clears the mark and keeps the contact id.
+        save_mapping(&pool, rep.user_id, old, &Ok(9)).await.unwrap();
+        mark_pending(&pool, rep.user_id, old).await.unwrap();
+        save_mapping(
+            &pool,
+            rep.user_id,
+            old,
+            &Err(ApiError {
+                status: 400,
+                message: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let row: (Option<i64>, bool) = sqlx::query_as(
+            "SELECT ringcentral_id, pending FROM ringcentral_user_contacts WHERE user_id = ? AND customer_id = ?",
+        )
+        .bind(rep.user_id)
+        .bind(old)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row, (Some(9), false));
+    }
+
+    #[test]
+    fn only_busy_and_broken_answers_are_tried_again() {
+        let error = |status| ApiError {
+            status,
+            message: None,
+        };
+        for status in [401, 403, 429, 500, 503] {
+            assert!(is_transient(&error(status)), "{status}");
+        }
+        for status in [400, 404, 422] {
+            assert!(!is_transient(&error(status)), "{status}");
+        }
     }
 
     #[test_db::test]
