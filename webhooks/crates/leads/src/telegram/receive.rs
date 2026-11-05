@@ -1076,8 +1076,17 @@ mod local_tests {
         let edited_pairs: Vec<(i64, i32)> = edited.iter().map(|entry| (entry.0, entry.1)).collect();
         assert_eq!(edited_pairs, expected_pairs);
 
-        let expected_text = format!("{original_text}\n\nLead assigned to Alex Sales");
-        assert!(edited.iter().all(|entry| entry.2 == expected_text));
+        // Each message keeps its own text as sent (the pressed one's for a
+        // message saved without it), then says who has the lead.
+        for entry in &edited {
+            let kept = persisted
+                .iter()
+                .find(|message| (message.chat_id, message.message_id) == (entry.0, entry.1))
+                .and_then(|message| message.text.clone())
+                .unwrap_or_else(|| original_text.to_string());
+            assert_eq!(entry.2, format!("{kept}\n\nLead assigned to Alex Sales"));
+        }
+        assert!(persisted.iter().all(|message| message.text.is_some()));
 
         let assigned_notice = bot
             .sent
