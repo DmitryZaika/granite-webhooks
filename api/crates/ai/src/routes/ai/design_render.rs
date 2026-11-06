@@ -81,10 +81,14 @@ pub async fn stones(
     Query(query): Query<StonesQuery>,
 ) -> ApiResult<Json<DesignStones>> {
     let search = query.q.as_deref().map(str::trim).unwrap_or_default();
-    let filter = if search.is_empty() {
-        ""
+    let (filter, rank) = if search.is_empty() {
+        ("", "")
     } else {
-        "AND UPPER(s.name) LIKE UPPER(?)"
+        // A name starting with the search, then a word in it, then the rest.
+        (
+            "AND UPPER(s.name) LIKE UPPER(?)",
+            "CASE WHEN UPPER(s.name) LIKE UPPER(?) THEN 0 WHEN UPPER(s.name) LIKE UPPER(?) THEN 1 ELSE 2 END, ",
+        )
     };
     let sql = format!(
         "SELECT CAST(s.id AS SIGNED) AS id, s.name, s.type
@@ -103,13 +107,16 @@ pub async fn stones(
            CAST(SUM(CASE WHEN si.id IS NOT NULL AND si.sale_id IS NULL AND si.cut_date IS NULL AND si.deleted_at IS NULL THEN 1 ELSE 0 END) AS UNSIGNED) > 0
            OR s.regular_stock = 1
          )
-          ORDER BY s.name ASC"
+          ORDER BY {rank}s.name ASC"
     );
     let mut rows = sqlx::query_as::<_, DesignStoneRow>(sqlx::AssertSqlSafe(sql))
         .bind(user.company_id)
         .bind(user.company_id);
     if !search.is_empty() {
-        rows = rows.bind(format!("%{search}%"));
+        rows = rows
+            .bind(format!("%{search}%"))
+            .bind(format!("{search}%"))
+            .bind(format!("% {search}%"));
     }
     Ok(Json(DesignStones {
         stones: rows.fetch_all(&state.pool).await?,

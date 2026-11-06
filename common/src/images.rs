@@ -147,8 +147,47 @@ pub fn decode_heic(bytes: &[u8]) -> Result<DynamicImage, ImageError> {
     })
 }
 
+/// A gray or RGB JPEG read with `jpeg-decoder`, upright; `None` for other
+/// pixel formats (CMYK, 16-bit), which `image` reads. zune-jpeg 0.5.15, the
+/// reader inside `image`, turns JPEGs with optimized Huffman tables (all that
+/// [`encode_jpeg`] writes) solid green; browsers read them fine.
+fn decode_jpeg(bytes: &[u8]) -> Option<Result<DynamicImage, ImageError>> {
+    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
+    if let Err(err) = decoder.read_info() {
+        return Some(Err(ImageError::Decode(err.to_string())));
+    }
+    let info = decoder.info()?;
+    let (width, height) = (u32::from(info.width), u32::from(info.height));
+    if let Err(err) = check_size(u64::from(width), u64::from(height)) {
+        return Some(Err(err));
+    }
+    let pixels = match decoder.decode() {
+        Ok(pixels) => pixels,
+        Err(err) => return Some(Err(ImageError::Decode(err.to_string()))),
+    };
+    let mut image: DynamicImage = match info.pixel_format {
+        jpeg_decoder::PixelFormat::L8 => image::GrayImage::from_raw(width, height, pixels)?.into(),
+        jpeg_decoder::PixelFormat::RGB24 => {
+            image::RgbImage::from_raw(width, height, pixels)?.into()
+        }
+        _ => return None,
+    };
+    if let Some(orientation) = decoder
+        .exif_data()
+        .and_then(image::metadata::Orientation::from_exif_chunk)
+    {
+        image.apply_orientation(orientation);
+    }
+    Some(Ok(image))
+}
+
 /// Any supported still picture (the first frame of a GIF), upright.
 pub fn decode(bytes: &[u8]) -> Result<DynamicImage, ImageError> {
+    if sniff(bytes) == Some(Kind::Jpeg)
+        && let Some(decoded) = decode_jpeg(bytes)
+    {
+        return decoded;
+    }
     match sniff(bytes) {
         Some(Kind::Heic) => decode_heic(bytes),
         Some(Kind::Avif) | None => Err(ImageError::Unsupported),
@@ -234,9 +273,13 @@ pub fn fit_inside(image: &DynamicImage, max: u32) -> DynamicImage {
     image.resize(max, max, FilterType::Lanczos3)
 }
 
-/// A HEIC photo as a JPEG (the CRM's `convertHeicToJpeg`, quality 92).
+/// A HEIC photo as a JPEG to store: at most [`STORED_MAX_EDGE`] a side,
+/// quality 85 (what [`compress_for_storage`] tries first).
 pub fn heic_to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, ImageError> {
-    Ok(encode_jpeg(&decode_heic(bytes)?, 92))
+    Ok(encode_jpeg(
+        &fit_inside(&decode_heic(bytes)?, STORED_MAX_EDGE),
+        STORED_JPEG_QUALITIES[0],
+    ))
 }
 
 /// A small JPEG for chat tiles: fits 320 x 320, never enlarged, quality 75
@@ -366,6 +409,113 @@ pub fn process_sms_image(bytes: &[u8]) -> Result<SmsImage, ImageError> {
 /// 80 %, rounded.
 const fn scale_down(max: u32) -> u32 {
     (max * 4 + 2) / 5
+}
+
+/// Longest side of a stored picture (the CRM's `MAX_EDGE`).
+pub const STORED_MAX_EDGE: u32 = 2560;
+/// Byte ceiling of a stored picture (the CRM's `MAX_BYTES`): one over it even
+/// at the lowest quality is made smaller.
+pub const STORED_MAX_BYTES: usize = 1536 * 1024;
+/// Shrinking for [`STORED_MAX_BYTES`] stops at this longest side.
+const STORED_MIN_EDGE: u32 = 1280;
+/// JPEG qualities tried at each size, best first. Below 78 blocks show on
+/// granite and on text.
+const STORED_JPEG_QUALITIES: [u8; 3] = [85, 82, 78];
+
+/// A picture re-encoded to be stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredImage {
+    pub bytes: Vec<u8>,
+    /// `image/jpeg` or `image/png`.
+    pub content_type: &'static str,
+    pub ext: &'static str,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Whether at least 1% of the pixels are see-through (a logo or cut-out,
+/// which stays PNG; a few clear pixels turn white in JPEG).
+fn mostly_see_through(image: &DynamicImage) -> bool {
+    if !image.color().has_alpha() {
+        return false;
+    }
+    let rgba = image.to_rgba8();
+    let clear = rgba.pixels().filter(|pixel| pixel.0[3] < u8::MAX).count();
+    clear * 100 >= rgba.pixels().len()
+}
+
+/// Pixel size from the header alone; `None` for HEIC or unreadable bytes.
+fn header_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
+/// A picture ready to store, made like the CRM's `compressImageFile` makes
+/// uploads: upright, at most 2560 px a side, a JPEG under about 1.5 MB
+/// (quality 85 to 78, then a fifth smaller at a time down to 1280 px), or PNG
+/// when at least 1% of it is see-through. HEIC always becomes JPEG.
+///
+/// `None` when the original is stored as it is: a JPEG, PNG or WebP already
+/// within 2560 px and 1.5 MB, a JPEG the re-encoding would not make smaller,
+/// GIF (it can be animated), AVIF, or bytes that are not a readable picture.
+pub fn compress_for_storage(bytes: &[u8]) -> Option<StoredImage> {
+    let kind = sniff(bytes)?;
+    if matches!(kind, Kind::Gif | Kind::Avif) {
+        return None;
+    }
+    let keepable = matches!(kind, Kind::Jpeg | Kind::Png | Kind::WebP);
+    // Most pictures already fit: no need to decode them.
+    if keepable
+        && bytes.len() <= STORED_MAX_BYTES
+        && header_size(bytes).is_some_and(|(w, h)| w.max(h) <= STORED_MAX_EDGE)
+    {
+        return None;
+    }
+    let image = decode(bytes).ok()?;
+    let resized = image.width().max(image.height()) > STORED_MAX_EDGE;
+    if keepable && !resized && bytes.len() <= STORED_MAX_BYTES {
+        return None;
+    }
+    let mut fitted = fit_inside(&image, STORED_MAX_EDGE);
+    if kind != Kind::Jpeg && mostly_see_through(&fitted) {
+        if keepable && !resized {
+            return None;
+        }
+        return Some(StoredImage {
+            bytes: encode_png(&fitted),
+            content_type: "image/png",
+            ext: "png",
+            width: fitted.width(),
+            height: fitted.height(),
+        });
+    }
+    let jpeg = loop {
+        let mut out = Vec::new();
+        for quality in STORED_JPEG_QUALITIES {
+            out = encode_jpeg(&fitted, quality);
+            if out.len() <= STORED_MAX_BYTES {
+                break;
+            }
+        }
+        let longest = fitted.width().max(fitted.height());
+        if out.len() <= STORED_MAX_BYTES || longest <= STORED_MIN_EDGE {
+            break out;
+        }
+        fitted = fit_inside(&image, scale_down(longest).max(STORED_MIN_EDGE));
+    };
+    if kind == Kind::Jpeg && !resized && jpeg.len() >= bytes.len() {
+        return None;
+    }
+    Some(StoredImage {
+        bytes: jpeg,
+        content_type: "image/jpeg",
+        ext: "jpg",
+        width: fitted.width(),
+        height: fitted.height(),
+    })
 }
 
 #[cfg(test)]
@@ -500,11 +650,69 @@ mod tests {
     }
 
     #[test]
+    fn stored_photos_fit_2560_and_the_byte_ceiling() {
+        let big = encode_jpeg(&photo(4032, 3024, false), 98);
+        let stored = compress_for_storage(&big).expect("a big photo is compressed");
+        assert_eq!(
+            (stored.content_type, stored.width, stored.height),
+            ("image/jpeg", 2560, 1920)
+        );
+        assert!(stored.bytes.len() <= STORED_MAX_BYTES);
+        assert!(stored.bytes.len() < big.len());
+        // Stored again, it is kept: nothing is compressed twice.
+        assert_eq!(compress_for_storage(&stored.bytes), None);
+    }
+
+    #[test]
+    fn stored_pictures_already_small_are_kept() {
+        assert_eq!(
+            compress_for_storage(&encode_jpeg(&photo(1600, 1200, false), 85)),
+            None
+        );
+        assert_eq!(compress_for_storage(&png(400, 300)), None);
+        assert_eq!(compress_for_storage(b"GIF89a...."), None);
+        assert_eq!(compress_for_storage(b"%PDF-1.7"), None);
+    }
+
+    #[test]
+    fn stored_pngs_go_jpeg_unless_see_through() {
+        let opaque = encode_png(&photo(3000, 2000, false));
+        let stored = compress_for_storage(&opaque).expect("a big PNG photo is compressed");
+        assert_eq!(
+            (stored.content_type, stored.ext, stored.width, stored.height),
+            ("image/jpeg", "jpg", 2560, 1707)
+        );
+        let clear = encode_png(&photo(3000, 2000, true));
+        let stored = compress_for_storage(&clear).expect("a big cut-out is resized");
+        assert_eq!(
+            (stored.content_type, stored.width, stored.height),
+            ("image/png", 2560, 1707)
+        );
+    }
+
+    #[test]
     fn transparency_turns_white_in_jpeg() {
         let clear = DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 4, Rgba([0, 0, 0, 0])));
         let jpeg = image::load_from_memory(&encode_jpeg(&clear, 90))
             .unwrap()
             .to_rgb8();
         assert!(jpeg.pixels().all(|p| p.0.iter().all(|c| *c > 245)));
+    }
+
+    #[test]
+    fn our_jpegs_read_back_in_their_colors() {
+        let gray = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            148,
+            320,
+            image::Rgb([128, 128, 128]),
+        ));
+        let read = decode(&encode_jpeg(&gray, 75)).unwrap().to_rgb8();
+        assert_eq!((read.width(), read.height()), (148, 320));
+        assert!(
+            read.pixels()
+                .all(|p| p.0.iter().all(|c| c.abs_diff(128) <= 3)),
+            "{:?}",
+            read.get_pixel(74, 160)
+        );
     }
 }

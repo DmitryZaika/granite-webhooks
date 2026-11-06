@@ -18,7 +18,6 @@ use crate::telegram::send::{
 };
 use crate::telegram::utils::lead_url;
 use common::amazon::email::send_message;
-use common::crud::phone_app::users_with_app;
 use common::crud::scheduled_emails::reschedule_templates_for_deal_list;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
@@ -26,9 +25,9 @@ use sqlx::MySqlPool;
 const REGISTER_SUBJECT: &str = "Granite Manager";
 const REGISTER_MESSAGE: &str = "Connect Telegram in the CRM to receive lead notifications: https://granite-manager.com/link-telegram-both";
 
-/// Tells the sales rep and the managers about a repeated lead (their phones,
-/// and Telegram for those without the app); emails an alert when neither
-/// could be reached.
+/// Tells the sales rep and the managers about a repeated lead (their phones
+/// and Telegram both); emails an alert when neither could be reached in
+/// Telegram.
 #[allow(clippy::too_many_arguments)]
 async fn notify_repeat_lead<T, V: LeadPayload>(
     pool: &MySqlPool,
@@ -54,13 +53,8 @@ async fn notify_repeat_lead<T, V: LeadPayload>(
         )
         .await;
     }
-    // A rep with the app gets it there only.
-    let rep_has_app = users_with_app(pool, company_id, &[user_id])
-        .await
-        .contains(&user_id);
-    let rep_notified = if rep_has_app {
-        true
-    } else if let Some(chat_id) = user_info.telegram_id {
+    // A rep with the app gets it in Telegram too: leads go to both.
+    let rep_notified = if let Some(chat_id) = user_info.telegram_id {
         let message = format!(
             "You received a REPEATED lead {name}, click here: {}",
             lead_url(deal_id)

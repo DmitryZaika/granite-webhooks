@@ -21,6 +21,7 @@ pub mod ai;
 pub mod app_origin;
 pub mod auth;
 pub mod billing;
+pub mod claude;
 pub mod db;
 pub mod deliverability;
 pub mod error;

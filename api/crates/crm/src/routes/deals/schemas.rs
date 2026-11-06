@@ -250,9 +250,9 @@ pub struct DealCreate {
 /// Result of `POST /v1/deals`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DealCreated {
-    /// The new deal, or the customer's open deal that was updated instead.
+    /// The new deal.
     pub id: i64,
-    /// False when an open deal of the customer was reused.
+    /// Always true: a create never reuses an existing deal.
     pub created: bool,
 }
 
@@ -513,6 +513,8 @@ pub struct CustomerDeal {
     pub amount: Option<String>,
     /// Name of the deal's current stage.
     pub list_name: Option<String>,
+    /// 1 won, 0 lost, null still open.
+    pub is_won: Option<i32>,
     /// Up to two notes, pinned first, then newest.
     #[sqlx(skip)]
     pub notes: Vec<NotePreview>,

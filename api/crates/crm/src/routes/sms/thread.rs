@@ -58,8 +58,8 @@ fn thread_params(
     before_id: Option<i64>,
 ) -> Vec<Param> {
     let mut params: Vec<Param> = vec![company_id.into(), phone.into()];
-    if let Some((_, value)) = &access.clause {
-        params.push(value.clone());
+    if let Some((_, values)) = &access.clause {
+        params.extend(values.iter().cloned());
     }
     if let Some(id) = before_id {
         params.push(id.into());
@@ -276,8 +276,8 @@ pub(super) async fn thread_unread(
         user.company_id.into(),
         phone.into(),
     ];
-    if let Some((_, value)) = &access.clause {
-        params.push(value.clone());
+    if let Some((_, values)) = &access.clause {
+        params.extend(values.iter().cloned());
     }
     params.push(phone.into());
     let manual = manual_unread("r.last_read_at");
@@ -591,7 +591,7 @@ pub async fn get_thread(
 
 /// Sets the caller's read marker on a thread they can see; silently nothing
 /// otherwise, so the answer never tells which phones exist.
-async fn set_marker(
+pub(super) async fn set_marker(
     state: &AppState,
     user: &SessionUser,
     provider: SmsProvider,

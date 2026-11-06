@@ -10,15 +10,14 @@ use crate::crud::users::{email_exists, get_user_tg_info, user_has_telegram_id};
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
 use crate::libs::constants::{ERR_DB, ERR_SEND_EMAIL, OK_RESPONSE};
 use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
-use crate::libs::phone_push::{Audience, LeadKind, push_lead};
+use crate::libs::phone_push::{Audience, LeadKind, push_lead, push_lead_taken};
 use crate::libs::types::BasicResponse;
 use crate::ringcentral::api::sync_customer_to_ring_central;
 use crate::telegram::utils::extract_message;
 use crate::telegram::utils::parse_code;
-use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
+use crate::telegram::utils::{assigned_text, gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
-use common::crud::phone_app::users_with_app;
 use common::crud::scheduled_emails::schedule_templates_for_deal_list;
 use common::telegram::bot::{CallbackQuery, ChatId, Message, Update};
 use lambda_http::tracing;
@@ -50,12 +49,17 @@ Invalid message. Please send one of the following commands:
 <code>
 ";
 
+/// Edits the managers' Telegram messages about lead `lead_id` to say who has
+/// it now: each message's own text (as sent; `fallback`, the pressed
+/// message's text, for ones saved before texts were kept), then
+/// "Lead assigned to {rep_name}". The buttons go.
 async fn update_manager_lead_messages<T: Telegram>(
     pool: &MySqlPool,
     bot: &T,
     company_id: i32,
     lead_id: i32,
-    content: &str,
+    fallback: &str,
+    rep_name: &str,
 ) {
     let messages = match list_active_manager_telegram_lead_messages(pool, company_id, lead_id).await
     {
@@ -72,8 +76,10 @@ async fn update_manager_lead_messages<T: Telegram>(
     };
 
     for message in messages {
+        let base = message.text.as_deref().unwrap_or(fallback);
+        let content = assigned_text(base, rep_name);
         if let Err(error) = bot
-            .edit_message_text(message.chat_id, message.message_id, content.to_string())
+            .edit_message_text(message.chat_id, message.message_id, content)
             .await
         {
             tracing::error!(
@@ -285,7 +291,6 @@ async fn handle_assign_lead<T: Telegram>(
     let former_message = extract_message(&message).unwrap_or_default();
 
     let user_name = tg_info.name.unwrap_or_else(|| "Unknown".to_string());
-    let full_content = format!("{former_message}\n\nLead assigned to {user_name}");
 
     let list_id = get_default_list_id_from_company_id(pool, position.company_id)
         .await
@@ -302,7 +307,15 @@ async fn handle_assign_lead<T: Telegram>(
             return internal_error(ERR_DB);
         }
     };
-    update_manager_lead_messages(pool, bot, position.company_id, lead_id, &full_content).await;
+    update_manager_lead_messages(
+        pool,
+        bot,
+        position.company_id,
+        lead_id,
+        &former_message,
+        &user_name,
+    )
+    .await;
     if result.created {
         schedule_templates_for_deal_list(
             pool,
@@ -333,13 +346,28 @@ async fn handle_assign_lead<T: Telegram>(
         Audience::Rep(position.user_id),
     )
     .await;
-    // A rep with the app gets it there only.
-    if users_with_app(pool, position.company_id, &[position.user_id])
-        .await
-        .contains(&position.user_id)
-    {
-        return OK_RESPONSE;
-    }
+    // The managers' phones hear who has it, as their Telegram messages did.
+    let assigner: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE telegram_id = ? AND company_id = ? AND is_deleted = 0 LIMIT 1",
+    )
+    .bind(message.chat.id.0)
+    .bind(position.company_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(?error, lead_id, "Assigning manager not looked up");
+        None
+    });
+    let except = std::iter::once(position.user_id).chain(assigner).collect();
+    push_lead_taken(
+        position.company_id,
+        i64::from(lead_id),
+        Some(deal_id),
+        except,
+    )
+    .await;
+    // Leads go to the app and to Telegram both: the app does not replace
+    // Telegram for them.
     if let Some(telegram_id) = tg_info.telegram_id {
         let final_message = format!("You were assigned a lead. Click here: \n{lead_link}");
         return bot
@@ -931,6 +959,67 @@ mod local_tests {
     }
 
     #[test_db::test]
+    async fn a_rep_with_the_app_still_gets_the_assigned_lead_in_telegram(pool: MySqlPool) {
+        let sales_id = positioned_user(&pool, 1, 1, 123).await;
+        positioned_user(&pool, 1, 2, 789).await;
+        // The rep's phone has the Granite Phone app (it gets the push too).
+        let session = sqlx::query(
+            "INSERT INTO device_sessions
+               (user_id, company_id, token_hash, device_name, platform, app_version,
+                created_at, last_seen_at, expires_at)
+             VALUES (?, 1, SHA2(UUID(), 256), 'Test phone', 'android', '1.0.0',
+                     UTC_TIMESTAMP() - INTERVAL 1 DAY, UTC_TIMESTAMP() - INTERVAL 1 MINUTE,
+                     UTC_TIMESTAMP() + INTERVAL 11 MONTH)",
+        )
+        .bind(sales_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        sqlx::query(
+            "INSERT INTO phone_devices
+               (device_session_id, user_id, company_id, platform, device_name, push_token)
+             VALUES (?, ?, 1, 'android', 'Test phone', 'push-token')",
+        )
+        .bind(session)
+        .bind(sales_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (_, bot) = send_lead(&pool).await;
+
+        let sent_options = bot.clone().sent.lock().unwrap().clone()[0]
+            .clone()
+            .2
+            .unwrap();
+        let option = match sent_options.inline_keyboard[0][0].clone().kind {
+            InlineKeyboardButtonKind::CallbackData(data) => data,
+            InlineKeyboardButtonKind::Url(_) => unreachable!(),
+        };
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(456),
+            message: Some(generate_message(1, "hello")),
+            data: Some(option),
+        };
+        let res = handle_callback(cb, &pool, &bot).await;
+        assert_eq!(res.0, StatusCode::OK);
+        assert_eq!(get_all_deals(&pool).await[0].user_id, Some(sales_id));
+
+        // Leads go to the app and to Telegram both.
+        let to_rep: Vec<String> = bot
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.0 == 123)
+            .map(|entry| entry.1.clone())
+            .collect();
+        assert_eq!(to_rep.len(), 1, "{to_rep:?}");
+        assert!(to_rep[0].contains("You were assigned a lead"));
+    }
+
+    #[test_db::test]
     async fn test_callback_broadcasts_assignment_to_all_manager_messages(pool: MySqlPool) {
         use crate::crud::telegram_messages::list_active_manager_telegram_lead_messages;
 
@@ -990,8 +1079,17 @@ mod local_tests {
         let edited_pairs: Vec<(i64, i32)> = edited.iter().map(|entry| (entry.0, entry.1)).collect();
         assert_eq!(edited_pairs, expected_pairs);
 
-        let expected_text = format!("{original_text}\n\nLead assigned to Alex Sales");
-        assert!(edited.iter().all(|entry| entry.2 == expected_text));
+        // Each message keeps its own text as sent (the pressed one's for a
+        // message saved without it), then says who has the lead.
+        for entry in &edited {
+            let kept = persisted
+                .iter()
+                .find(|message| (message.chat_id, message.message_id) == (entry.0, entry.1))
+                .and_then(|message| message.text.clone())
+                .unwrap_or_else(|| original_text.to_string());
+            assert_eq!(entry.2, format!("{kept}\n\nLead assigned to Alex Sales"));
+        }
+        assert!(persisted.iter().all(|message| message.text.is_some()));
 
         let assigned_notice = bot
             .sent

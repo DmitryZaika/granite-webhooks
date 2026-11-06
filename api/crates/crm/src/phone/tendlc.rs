@@ -234,37 +234,6 @@ pub struct TenDlcBrandDraft {
     pub stock_exchange: Option<StockExchange>,
     /// `PUBLIC_PROFIT` only: the business contact email Telnyx requires.
     pub business_contact_email: String,
-    /// The IRS letter that gave the business its EIN, as read when it was
-    /// uploaded (`POST .../tendlc/ein-letter`); null before. TCR matches the
-    /// legal name, EIN and address to the IRS's records exactly, so they
-    /// must be as on the letter. Read-only: a save keeps the stored one.
-    pub ein_letter: Option<TenDlcEinLetter>,
-}
-
-/// The IRS letter that gave the business its EIN (CP 575, or the 147C that
-/// confirms it), as read from the uploaded file. Only what it says is kept,
-/// not the file.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", default)]
-pub struct TenDlcEinLetter {
-    /// Which letter: `CP575` or `147C`.
-    pub kind: String,
-    /// The file's name as uploaded.
-    pub file_name: String,
-    /// When it was uploaded (RFC 3339, UTC).
-    pub uploaded_at: String,
-    /// The legal name on the letter (its first name line), as written.
-    pub legal_name: String,
-    /// The EIN on the letter (`12-3456789`).
-    pub ein: String,
-    /// The letter's street address line, as written.
-    pub street: String,
-    /// The letter's city.
-    pub city: String,
-    /// The letter's state, 2 letters.
-    pub state: String,
-    /// The letter's ZIP code.
-    pub postal_code: String,
 }
 
 /// How the business texts (the 10DLC campaign). Any field may be empty
@@ -495,36 +464,6 @@ pub fn gives_link(text: &str, link: &str) -> bool {
     !core.is_empty() && text.to_lowercase().contains(&core)
 }
 
-/// Text compared the way the IRS's records are: case and spacing aside,
-/// every word and its punctuation as written.
-fn same_text(ours: &str, theirs: &str) -> bool {
-    let words = |text: &str| {
-        text.split_whitespace()
-            .map(str::to_uppercase)
-            .collect::<Vec<_>>()
-    };
-    words(ours) == words(theirs)
-}
-
-/// The business has an EIN from the IRS (a US company, public company or
-/// non-profit): TCR matches the brand to the IRS's letter.
-pub fn needs_ein_letter(brand: &TenDlcBrandDraft) -> bool {
-    brand.country == "US"
-        && matches!(
-            brand.entity_type,
-            Some(EntityType::PrivateProfit | EntityType::PublicProfit | EntityType::NonProfit)
-        )
-}
-
-/// The brand without what is never sent to Telnyx (the IRS letter): to tell
-/// whether the brand Telnyx has changed.
-pub fn brand_as_sent(brand: &TenDlcBrandDraft) -> TenDlcBrandDraft {
-    TenDlcBrandDraft {
-        ein_letter: None,
-        ..brand.clone()
-    }
-}
-
 /// The form as saved: text trimmed, the phone as E.164 when it is a US or
 /// Canada number, codes upper case, keyword lists `A,B`, empty samples
 /// dropped, sub use cases only for the use cases that have them.
@@ -564,7 +503,6 @@ pub fn normalized(draft: &TenDlcDraft) -> TenDlcDraft {
             stock_symbol: brand.stock_symbol.trim().to_uppercase(),
             stock_exchange: brand.stock_exchange,
             business_contact_email: trim(&brand.business_contact_email),
-            ein_letter: brand.ein_letter.clone(),
         },
         campaign: TenDlcCampaignDraft {
             usecase,
@@ -797,66 +735,6 @@ fn brand_problems(brand: &TenDlcBrandDraft, problems: &mut Vec<TenDlcProblem>) {
                 "Enter the business contact email (needed for public companies).",
             ));
         }
-    }
-    letter_problems(brand, problems);
-}
-
-/// What differs from the IRS letter, once one is uploaded: TCR leaves a
-/// brand unverified for good when its legal name, EIN or address is not
-/// written as the IRS has it ("Street" for "St" is enough).
-fn letter_problems(brand: &TenDlcBrandDraft, problems: &mut Vec<TenDlcProblem>) {
-    let Some(letter) = &brand.ein_letter else {
-        return;
-    };
-    if brand.country != "US" {
-        return;
-    }
-    if tax_id(&brand.ein, "US") != tax_id(&letter.ein, "US") {
-        problems.push(problem(
-            "brand.ein",
-            format!(
-                "Your IRS letter gives the EIN {}: enter it exactly.",
-                letter.ein
-            ),
-        ));
-    }
-    for (field, name, ours, theirs) in [
-        (
-            "brand.companyName",
-            "legal name",
-            &brand.company_name,
-            &letter.legal_name,
-        ),
-        (
-            "brand.street",
-            "street address",
-            &brand.street,
-            &letter.street,
-        ),
-        ("brand.city", "city", &brand.city, &letter.city),
-        ("brand.state", "state", &brand.state, &letter.state),
-    ] {
-        if !same_text(ours, theirs) {
-            problems.push(problem(
-                field,
-                format!("Enter the {name} exactly as on your IRS letter: \"{theirs}\"."),
-            ));
-        }
-    }
-    let zip = |code: &str| {
-        code.chars()
-            .filter(char::is_ascii_digit)
-            .take(5)
-            .collect::<String>()
-    };
-    if zip(&brand.postal_code) != zip(&letter.postal_code) {
-        problems.push(problem(
-            "brand.postalCode",
-            format!(
-                "Enter the ZIP code as on your IRS letter: \"{}\".",
-                letter.postal_code
-            ),
-        ));
     }
 }
 
@@ -1202,25 +1080,11 @@ fn campaign_problems(
 /// opt out; links and phone numbers declared both ways; no link shorteners;
 /// a sample per kind of texts; the answers to opting in, HELP and STOP as
 /// Telnyx's code 611 has them; the business named in the description; the
-/// opt-in page and privacy policy in the message flow), and the legal
-/// details as on the IRS letter once one is uploaded. Empty when it is
+/// opt-in page and privacy policy in the message flow). Empty when it is
 /// complete.
 pub fn problems(draft: &TenDlcDraft) -> Vec<TenDlcProblem> {
-    problems_with_letter(draft, false)
-}
-
-/// [`problems`], and the IRS letter itself when `letter_needed` (the server
-/// reads letters: an AI is set up) and the business has an EIN from the IRS.
-pub fn problems_with_letter(draft: &TenDlcDraft, letter_needed: bool) -> Vec<TenDlcProblem> {
     let mut problems = Vec::new();
     brand_problems(&draft.brand, &mut problems);
-    if letter_needed && needs_ein_letter(&draft.brand) && draft.brand.ein_letter.is_none() {
-        problems.push(problem(
-            "brand.einLetter",
-            "Upload your IRS EIN letter (CP 575, or the 147C that replaces it): carriers check \
-             the legal name, EIN and address against it.",
-        ));
-    }
     campaign_problems(
         &draft.campaign,
         &business_names(&draft.brand),
@@ -1783,20 +1647,6 @@ mod tests {
         normalized(&draft)
     }
 
-    fn letter() -> TenDlcEinLetter {
-        TenDlcEinLetter {
-            kind: "CP575".into(),
-            file_name: "cp575.pdf".into(),
-            uploaded_at: "2026-10-29T12:00:00Z".into(),
-            legal_name: "ACME STONE LLC".into(),
-            ein: "12-3456789".into(),
-            street: "100 MAIN ST".into(),
-            city: "INDIANAPOLIS".into(),
-            state: "IN".into(),
-            postal_code: "46204-1234".into(),
-        }
-    }
-
     fn messages(draft: &TenDlcDraft) -> Vec<(String, String)> {
         problems(draft)
             .into_iter()
@@ -2018,57 +1868,6 @@ mod tests {
             "see acmestone.com",
             "https://acmestone.com/quote"
         ));
-    }
-
-    #[test]
-    fn the_legal_details_must_be_as_on_the_irs_letter() {
-        let mut draft = complete();
-        // Needed once the server reads letters, for businesses with an EIN.
-        assert_eq!(
-            problems_with_letter(&draft, true)
-                .iter()
-                .map(|problem| problem.field.as_str())
-                .collect::<Vec<_>>(),
-            ["brand.einLetter"]
-        );
-        assert!(problems_with_letter(&draft, false).is_empty());
-        draft.brand.entity_type = Some(EntityType::Government);
-        assert!(problems_with_letter(&draft, true).is_empty());
-        draft.brand.entity_type = Some(EntityType::PrivateProfit);
-        // Case and spacing aside, as the IRS writes them.
-        draft.brand.company_name = "acme  stone llc".into();
-        draft.brand.ein_letter = Some(letter());
-        assert!(problems_with_letter(&normalized(&draft), true).is_empty());
-        draft.brand.company_name = "Acme Stone, LLC".into();
-        draft.brand.ein = "98-7654321".into();
-        draft.brand.street = "100 Main Street".into();
-        draft.brand.postal_code = "46205".into();
-        assert_eq!(
-            messages(&normalized(&draft)),
-            [
-                (
-                    "brand.ein".to_string(),
-                    "Your IRS letter gives the EIN 12-3456789: enter it exactly.".to_string()
-                ),
-                (
-                    "brand.companyName".to_string(),
-                    "Enter the legal name exactly as on your IRS letter: \"ACME STONE LLC\"."
-                        .to_string()
-                ),
-                (
-                    "brand.street".to_string(),
-                    "Enter the street address exactly as on your IRS letter: \"100 MAIN ST\"."
-                        .to_string()
-                ),
-                (
-                    "brand.postalCode".to_string(),
-                    "Enter the ZIP code as on your IRS letter: \"46204-1234\".".to_string()
-                ),
-            ]
-        );
-        // Never sent to Telnyx: not a change of the brand.
-        assert_eq!(brand_as_sent(&draft.brand).ein_letter, None);
-        assert!(brand_body(&draft.brand, "h").get("einLetter").is_none());
     }
 
     #[test]

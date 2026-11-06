@@ -16,6 +16,10 @@ struct FeatureRow {
     telnyx_sms: bool,
     auto_sale: bool,
     auto_unscheduled_jobs: bool,
+    auto_invoice: bool,
+    quote_invoice_sync: bool,
+    auto_project: bool,
+    sale_event_templates: bool,
 }
 
 /// `company c` columns plus the platform-wide rollout defaults
@@ -73,7 +77,15 @@ pub async fn company_features(
                          WHERE t.company_id = c.id AND t.enabled <> 0
                            AND COALESCE(TRIM(t.messaging_profile_id), '') <> '') AS telnyx_sms,
                 c.auto_sale <> 0 AS auto_sale,
-                c.auto_unscheduled_jobs <> 0 AS auto_unscheduled_jobs
+                c.auto_unscheduled_jobs <> 0 AS auto_unscheduled_jobs,
+                c.auto_invoice <> 0 AS auto_invoice,
+                c.quote_invoice_sync <> 0 AS quote_invoice_sync,
+                c.auto_project <> 0 AS auto_project,
+                EXISTS (SELECT 1 FROM quote_sale_event_templates st
+                          JOIN calendars sc ON sc.id = st.calendar_id
+                                           AND sc.company_id = st.company_id
+                                           AND sc.deleted_at IS NULL
+                         WHERE st.company_id = c.id) AS sale_event_templates
            FROM company c
            {ROLLOUT_JOINS}
           WHERE c.id = ?",
@@ -103,6 +115,10 @@ pub async fn company_features(
             telnyx_sms: false,
             auto_sale: false,
             auto_unscheduled_jobs: false,
+            auto_invoice: false,
+            quote_invoice_sync: false,
+            auto_project: false,
+            sale_event_templates: false,
         },
         |row| CompanyFeatures {
             quickbooks_enabled: row.quickbooks_enabled,
@@ -117,6 +133,10 @@ pub async fn company_features(
             telnyx_sms: row.telnyx_sms,
             auto_sale: row.auto_sale,
             auto_unscheduled_jobs: row.auto_unscheduled_jobs,
+            auto_invoice: row.auto_invoice,
+            quote_invoice_sync: row.quote_invoice_sync,
+            auto_project: row.auto_project,
+            sale_event_templates: row.sale_event_templates,
         },
     ))
 }

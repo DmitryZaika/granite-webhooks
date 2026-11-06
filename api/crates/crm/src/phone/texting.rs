@@ -134,17 +134,14 @@ pub async fn inbox_lines(
         .collect())
 }
 
-/// SQL over `telnyx_sms s`: a text copied for `rep` when they moved to
-/// Telnyx (`crate::routes::sms::moves`); binds the rep's user id.
-fn rep_copy() -> String {
-    format!(
-        "s.agent = ? AND COALESCE(s.idempotency_key, '') REGEXP '{}'",
-        crate::sms_provider::COPY_KEY
-    )
-}
+/// SQL over `telnyx_sms s`: a text of `rep`'s, on any line: tagged with
+/// their user id (theirs, or copied for them when they moved to Telnyx,
+/// `crate::routes::sms::moves`) or sent by them. Binds the rep's user id as
+/// text, then as a number.
+const REP_ROWS: &str = "(s.agent = ? OR s.sender_user_id = ?)";
 
 /// The customer phones (thread keys) that texted or were texted from
-/// `lines`, and those of `rep`'s texts copied from their earlier provider.
+/// `lines`, and those of `rep`'s own texts ([`REP_ROWS`]).
 pub async fn line_threads(
     pool: &MySqlPool,
     company_id: i32,
@@ -166,11 +163,15 @@ pub async fn line_threads(
         ));
     }
     if rep.is_some() {
-        parts.push(format!(
+        // idx_sms_agent_threads and idx_telnyx_sms_sender_user.
+        parts.push(
             "SELECT s.phone_digits FROM telnyx_sms s
-              WHERE s.company_id = ? AND {} AND s.phone_digits IS NOT NULL",
-            rep_copy()
-        ));
+              WHERE s.company_id = ? AND s.agent = ? AND s.phone_digits IS NOT NULL
+             UNION
+             SELECT s.phone_digits FROM telnyx_sms s
+              WHERE s.sender_user_id = ? AND s.company_id = ? AND s.phone_digits IS NOT NULL"
+                .to_string(),
+        );
     }
     if parts.is_empty() {
         return Ok(Vec::new());
@@ -185,13 +186,17 @@ pub async fn line_threads(
         }
     }
     if let Some(rep) = rep {
-        query = query.bind(company_id).bind(rep.to_string());
+        query = query
+            .bind(company_id)
+            .bind(rep.to_string())
+            .bind(rep)
+            .bind(company_id);
     }
     query.fetch_all(pool).await
 }
 
-/// The thread `phone` has a row on one of `lines`, or one of `rep`'s
-/// copied texts.
+/// The thread `phone` has a row on one of `lines`, or one of `rep`'s own
+/// texts ([`REP_ROWS`]).
 pub async fn thread_on_lines(
     pool: &MySqlPool,
     company_id: i32,
@@ -208,7 +213,7 @@ pub async fn thread_on_lines(
         ));
     }
     if rep.is_some() {
-        parts.push(format!("({})", rep_copy()));
+        parts.push(REP_ROWS.to_string());
     }
     if parts.is_empty() {
         return Ok(false);
@@ -228,7 +233,7 @@ pub async fn thread_on_lines(
         }
     }
     if let Some(rep) = rep {
-        query = query.bind(rep.to_string());
+        query = query.bind(rep.to_string()).bind(rep);
     }
     Ok(query.fetch_optional(pool).await?.is_some())
 }
@@ -535,8 +540,9 @@ impl Delivery<'_> {
         .bind(e164_digits(&self.to).unwrap_or_default())
         .bind(&message.text)
         .bind(key)
-        .bind(self.sms.user_id.to_string())
-        .bind(self.sms.user_id)
+        // User 0: nobody sent it (a forwarded text).
+        .bind((self.sms.user_id > 0).then(|| self.sms.user_id.to_string()))
+        .bind((self.sms.user_id > 0).then_some(self.sms.user_id))
         .bind(self.sms.company_id)
         .bind(stored_time(Utc::now()))
         .bind(&line10)
@@ -824,6 +830,20 @@ fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         .ok()
 }
 
+/// An inbound file as it is stored: a picture compressed as the CRM
+/// compresses uploads (`compress_for_storage`), with its new type; anything
+/// else, or a picture that already fits, as it came.
+pub async fn stored_file(bytes: Vec<u8>, content_type: String) -> (Vec<u8>, String) {
+    if crate::images::sniff(&bytes).is_none() {
+        return (bytes, content_type);
+    }
+    let source = bytes.clone();
+    match tokio::task::spawn_blocking(move || crate::images::compress_for_storage(&source)).await {
+        Ok(Some(stored)) => (stored.bytes, stored.content_type.to_string()),
+        _ => (bytes, content_type),
+    }
+}
+
 /// Copies an inbound MMS's files from Telnyx (their links expire) into our
 /// bucket (`sms-attachments/<company>/tx-<row>/`), as the row's attachments.
 /// A file already copied (a redelivered webhook) is kept as it is; a file
@@ -869,6 +889,7 @@ pub async fn copy_inbound_media(
             .filter(|kind| !kind.is_empty())
             .or(served_type)
             .unwrap_or_else(|| "application/octet-stream".into());
+        let (bytes, content_type) = stored_file(bytes, content_type).await;
         let is_image = content_type.starts_with("image/");
         let (width, height) = if is_image {
             dimensions(&bytes).map_or((None, None), |(w, h)| (Some(w), Some(h)))
@@ -945,14 +966,15 @@ pub async fn receive(
     let (Some(customer10), Some(line10)) = (last10(&from), last10(&to)) else {
         return Ok(None);
     };
-    let number_id: Option<i32> = sqlx::query_scalar(
-        "SELECT id FROM telnyx_numbers WHERE company_id = ? AND last10 = ? LIMIT 1",
+    let number: Option<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, forward_texts_to FROM telnyx_numbers
+          WHERE company_id = ? AND last10 = ? LIMIT 1",
     )
     .bind(company_id)
     .bind(&line10)
     .fetch_optional(pool)
     .await?;
-    let Some(number_id) = number_id else {
+    let Some((number_id, forward_texts_to)) = number else {
         tracing::warn!(
             company_id,
             "Telnyx text to a number that is not the company's: ignored"
@@ -995,6 +1017,12 @@ pub async fn receive(
     }
     // Copied on the first delivery; a redelivery fills in what failed.
     copy_inbound_media(state, company_id, sms_id, payload).await?;
+    // Sent on once (its key), also when a redelivery finds it not sent yet.
+    if let Some(target) = forward_texts_to.as_deref().and_then(to_e164)
+        && target != from
+    {
+        forward_text(state, company_id, number_id, sms_id, &from, &target, &text).await;
+    }
     // The phones of the line's users hear about it (with its files stored).
     if new && texting_setup(pool, company_id).await?.is_some() {
         let key = super::texts::ThreadKey {
@@ -1004,6 +1032,117 @@ pub async fn receive(
         super::texts::notify_inbound(state, company_id, &key, sms_id).await;
     }
     Ok(Some(Received { sms_id, new }))
+}
+
+/// "(317) 555-0101" for a US or Canada number, else the number as it is.
+fn display_number(e164: &str) -> String {
+    last10(e164).filter(|_| is_nanp(e164)).map_or_else(
+        || e164.to_string(),
+        |d| format!("({}) {}-{}", &d[..3], &d[3..6], &d[6..]),
+    )
+}
+
+/// A stored file of an inbound text, as it is sent on.
+#[derive(sqlx::FromRow)]
+struct StoredFile {
+    s3_key: String,
+    url: String,
+    content_type: String,
+    filename: String,
+    width: Option<i32>,
+    height: Option<i32>,
+}
+
+/// What a forwarded text says: who sent it, then their text.
+fn forwarded_body(from: &str, name: Option<&str>, text: &str) -> String {
+    let number = display_number(from);
+    let sender = match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("{name} {number}"),
+        None => number,
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        format!("Text from {sender}")
+    } else {
+        format!("Text from {sender}: {text}")
+    }
+}
+
+/// Sends an inbound text to a number with `forward_texts_to` on to that
+/// number, from the number itself (its files too), with the sender's name
+/// and number in front. Once per inbound text (its idempotency key); a
+/// failure is logged with ids only and the text stays in the CRM.
+async fn forward_text(
+    state: &AppState,
+    company_id: i32,
+    number_id: i32,
+    sms_id: i64,
+    from: &str,
+    target: &str,
+    text: &str,
+) {
+    let pool = &state.pool;
+    let line: Option<CallerId> = match sqlx::query_as(
+        "SELECT id AS number_id, e164, label, CAST(kind AS CHAR) AS kind
+           FROM telnyx_numbers WHERE id = ? AND company_id = ?",
+    )
+    .bind(number_id)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(line) => line,
+        Err(err) => {
+            tracing::error!(company_id, sms_id, error = %err, "forwarded text: line not read");
+            return;
+        }
+    };
+    let Some(line) = line else { return };
+    let customer10 = last10(from).unwrap_or_default();
+    let name = crate::routes::sms::thread::customer_by_phone(
+        pool,
+        SmsProvider::Telnyx,
+        company_id,
+        &customer10,
+    )
+    .await
+    .ok()
+    .flatten()
+    .and_then(|customer| customer.name);
+    let files: Vec<StoredFile> = sqlx::query_as(
+        "SELECT s3_key, s3_url AS url, content_type, filename, width, height
+           FROM telnyx_sms_attachments WHERE telnyx_sms_id = ? ORDER BY position",
+    )
+    .bind(sms_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let attachments = files
+        .into_iter()
+        .map(|file| OutgoingSmsFile {
+            s3_key: file.s3_key,
+            url: file.url,
+            content_type: file.content_type,
+            filename: file.filename,
+            width: file.width,
+            height: file.height,
+        })
+        .collect();
+    let sms = OutgoingSms {
+        provider: "telnyx".into(),
+        company_id,
+        // Nobody sent it: stored without a sender.
+        user_id: 0,
+        agent_id: String::new(),
+        phone_digits: target.trim_start_matches('+').to_string(),
+        text: forwarded_body(from, name.as_deref(), text),
+        attachments,
+        is_automated: true,
+        idempotency_key: Some(format!("forward:{sms_id}")),
+    };
+    if let Err(failure) = deliver(state, &line, &sms).await {
+        tracing::warn!(company_id, sms_id, error = %failure.error, "text not forwarded");
+    }
 }
 
 /// The side effects of a new inbound text; each is best effort (logged
@@ -1157,9 +1296,70 @@ pub async fn record_status(
     Ok(true)
 }
 
+/// Texts asked about in one run of [`recheck_statuses`].
+const RECHECK_BATCH: i64 = 20;
+
+/// Asks Telnyx again about the texts we sent that have no final status yet
+/// (their report may never have come), so a text that did not go out shows
+/// as failed. A text is asked about 5 minutes after it was sent, then every
+/// 15 minutes, for 3 days; none after `deadline`. How many Telnyx answered.
+pub async fn recheck_statuses(
+    state: &AppState,
+    deadline: std::time::Instant,
+) -> sqlx::Result<usize> {
+    if !state.telnyx.is_enabled() {
+        return Ok(0);
+    }
+    let due: Vec<(i32, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT company_id, telnyx_id FROM telnyx_sms
+          WHERE direction = 'outbound' AND telnyx_id IS NOT NULL AND company_id IS NOT NULL
+            AND status <> 'failed'
+            AND (delivery_status IS NULL OR delivery_status IN ('queued', 'sending', 'sent'))
+            AND created_date > CURRENT_TIMESTAMP - INTERVAL 3 DAY
+            AND TIMESTAMPDIFF(MINUTE, created_date, CURRENT_TIMESTAMP) >= 5
+            AND MOD(TIMESTAMPDIFF(MINUTE, created_date, CURRENT_TIMESTAMP), 15) = 5
+          ORDER BY id LIMIT {RECHECK_BATCH}"
+    )))
+    .fetch_all(&state.pool)
+    .await?;
+    let mut answered = 0;
+    for (company_id, telnyx_id) in due {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        let mut payload = match state.telnyx.get_message(&telnyx_id).await {
+            Ok(payload) => payload,
+            Err(err) => {
+                tracing::warn!(company_id, error = %err, "Telnyx text status not read");
+                continue;
+            }
+        };
+        payload.id = Some(telnyx_id);
+        record_status(&state.pool, company_id, "message.sent", &payload, None).await?;
+        answered += 1;
+    }
+    Ok(answered)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forwarded_texts_say_who_sent_them() {
+        assert_eq!(
+            forwarded_body("+13175550101", None, " Hi there "),
+            "Text from (317) 555-0101: Hi there"
+        );
+        assert_eq!(
+            forwarded_body("+13175550101", Some("Anna Lee"), "Hi"),
+            "Text from Anna Lee (317) 555-0101: Hi"
+        );
+        assert_eq!(
+            forwarded_body("+13175550101", Some(" "), ""),
+            "Text from (317) 555-0101"
+        );
+    }
 
     fn file(name: &str, content_type: &str) -> OutgoingSmsFile {
         OutgoingSmsFile {

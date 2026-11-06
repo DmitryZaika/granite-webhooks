@@ -62,6 +62,8 @@ pub struct Maps {
 struct MatrixElement {
     condition: Option<String>,
     distance_meters: Option<f64>,
+    #[serde(default)]
+    duration: Value,
 }
 
 impl Maps {
@@ -149,6 +151,37 @@ impl Maps {
             cache.insert(cache_key, miles);
         }
         miles
+    }
+
+    /// Driving minutes (rounded up, at least 1) from `from` to the address
+    /// `to` in today's traffic, or `None` when there is no route, no key, or
+    /// Google fails. Not cached: the crew moves.
+    pub async fn driving_minutes(&self, from: Point, to: &str) -> Option<i64> {
+        let key = self.key.as_ref()?;
+        let response = self
+            .http
+            .post(&*self.url)
+            .header("X-Goog-Api-Key", &**key)
+            .header("X-Goog-FieldMask", "duration,condition")
+            .json(&json!({
+                "origins": [{ "waypoint": { "location": { "latLng": {
+                    "latitude": from.lat, "longitude": from.lng } } } }],
+                "destinations": [{ "waypoint": { "address": to } }],
+                "travelMode": "DRIVE",
+                "routingPreference": "TRAFFIC_AWARE",
+            }))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?;
+        let elements: Vec<MatrixElement> = response.json().await.ok()?;
+        let element = elements
+            .first()
+            .filter(|element| element.condition.as_deref() == Some("ROUTE_EXISTS"))?;
+        let seconds = seconds(&element.duration)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Some(((seconds / 60.0).ceil() as i64).max(1))
     }
 }
 

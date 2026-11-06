@@ -39,6 +39,8 @@ pub const SHOP_WORKER: i32 = 4;
 pub const EXTERNAL_MARKETING: i32 = 7;
 pub const CHECK_IN: i32 = 8;
 pub const SUPER_ADMIN: i32 = 9;
+/// Texts the company's notices (surveys, bookings) from their line.
+pub const SCHEDULING_MANAGER: i32 = 13;
 /// Every position id there is (`POSITIONS`).
 const POSITIONS: [i32; 11] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
@@ -490,6 +492,9 @@ pub struct UserForm {
     pub has_cloudtalk_api: bool,
     /// Their company has `RingCentral`.
     pub has_ringcentral_api: bool,
+    /// Other live Scheduling Managers of their company: at 0 the form warns
+    /// before it takes the position off them (survey texts stop).
+    pub other_scheduling_managers: i64,
 }
 
 async fn position_companies(
@@ -568,6 +573,16 @@ pub async fn get(
         sql.fetch_all(pool).await?
     };
     let features = company_features(pool, edited.company_id).await?;
+    let other_scheduling_managers: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT u.id) FROM users_positions up
+           JOIN users u ON u.id = up.user_id AND u.is_deleted = 0
+          WHERE up.company_id = ? AND up.position_id = ? AND u.id <> ?",
+    )
+    .bind(edited.company_id)
+    .bind(SCHEDULING_MANAGER)
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
     Ok(Json(UserForm {
         user: edited,
         positions,
@@ -577,6 +592,7 @@ pub async fn get(
         logged_in_is_superuser: user.is_superuser,
         has_cloudtalk_api: features.cloudtalk,
         has_ringcentral_api: features.ringcentral,
+        other_scheduling_managers,
     }))
 }
 

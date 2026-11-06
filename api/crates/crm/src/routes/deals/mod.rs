@@ -4,7 +4,7 @@
 //! - `GET    /v1/deal-lists`                      → stages (of a group, or all)
 //! - `GET    /v1/deal-lists/{id}/recipients`      → emails of the caller's customers in a stage
 //! - `GET    /v1/deals`                           → the caller's board cards of a group
-//! - `POST   /v1/deals`                           → create (or reuse the open deal)
+//! - `POST   /v1/deals`                           → create (always a new deal)
 //! - `POST   /v1/deals/reorder`                   → save a drag on the board
 //! - `GET    /v1/deals/by-customer`               → a customer's deals with previews
 //! - `GET    /v1/deals/{id}`, `PATCH`, `DELETE`   → one deal

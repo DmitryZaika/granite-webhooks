@@ -22,6 +22,8 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(shell))
 }
 
+const SALES_REP: i32 = 1;
+const SALES_MANAGER: i32 = 2;
 const SHOP_MANAGER: i32 = 3;
 const MANAGER: i32 = 5;
 const INSTALLER: i32 = 6;
@@ -29,6 +31,8 @@ const CHECK_IN: i32 = 8;
 const MARKETING: i32 = 7;
 const SHOP_WORKER: i32 = 4;
 const TEMPLATE_MAKER: i32 = 11;
+const INVENTORY_MANAGER: i32 = 12;
+const SCHEDULING_MANAGER: i32 = 13;
 
 /// The company requests act in, for the header.
 #[derive(Debug, Serialize, ToSchema)]
@@ -74,12 +78,16 @@ pub struct AppShell {
     pub portal: Option<String>,
     /// That portal's start page.
     pub portal_home: Option<String>,
-    /// The sections of the app the user reaches, when a sectioned position
-    /// (Inventory Manager, Scheduling Manager) limits them: keys such as
-    /// `inventory`, `inventory_admin`, `customers`, `schedule`
-    /// (`GET /v1/company/position-sections` lists them all). The API refuses
-    /// the rest. Null when they reach the whole app.
+    /// The tabs the user's positions open, when the company limits them
+    /// (Position access): keys such as `stones`, `customers`, `schedule`,
+    /// `admin_stones` (`GET /v1/company/position-sections` lists them all).
+    /// The Admin switch still opens every admin page. Null when nothing is
+    /// limited.
     pub sections: Option<Vec<String>>,
+    /// The skills the user's positions give them (Position access):
+    /// `sell_slabs`, `edit_transactions`, `edit_quotes`, `plan_schedule`, `see_readiness`.
+    /// Null when they have every skill (admins always do).
+    pub skills: Option<Vec<String>>,
     /// The company has CloudTalk.
     pub has_cloudtalk_api: bool,
     /// The company has RingCentral.
@@ -103,6 +111,9 @@ pub struct AppShell {
     pub can_manage_billing: bool,
     /// Holds the Shop Manager position in the company.
     pub is_shop_manager: bool,
+    /// Projects is on and the caller's position has a Projects board (admin,
+    /// Manager, Sales Manager, Shop Manager, sales rep).
+    pub has_projects_board: bool,
     /// Holds Template in the company (their portal is their own schedule).
     pub is_template_maker: bool,
     /// May send documents for signature.
@@ -238,9 +249,12 @@ pub async fn shell(
         crate::routes::onboarding::team::capabilities(pool, home.unwrap_or(user.company_id))
             .await?;
     let portal = portal(&user, user_is_super_admin, &all);
-    let sections = crate::auth::sections::user_access(pool, &user, &rows)
+    let sections = crate::auth::sections::user_tabs(pool, &user, &rows)
         .await?
-        .keys();
+        .map(|keys| keys.into_iter().map(ToString::to_string).collect());
+    let skills = crate::auth::skills::user_skills(pool, &user, &rows)
+        .await
+        .map(|keys| keys.into_iter().map(ToString::to_string).collect());
     let sms_images_enabled = !std::env::var("SMS_IMAGES_ENABLED").is_ok_and(|value| {
         matches!(
             value.trim().to_lowercase().as_str(),
@@ -273,6 +287,7 @@ pub async fn shell(
         portal_home: portal.as_ref().map(|(_, home)| home.clone()),
         portal: portal.map(|(name, _)| name),
         sections,
+        skills,
         has_cloudtalk_api: features.cloudtalk,
         has_ringcentral_api: features.ringcentral,
         has_telnyx_api: features.telnyx,
@@ -283,6 +298,17 @@ pub async fn shell(
         can_manage_company: user.is_superuser || here(MANAGER),
         can_manage_billing: here(MANAGER),
         is_shop_manager: here(SHOP_MANAGER),
+        has_projects_board: user.is_admin
+            || [
+                SALES_REP,
+                SALES_MANAGER,
+                SHOP_MANAGER,
+                MANAGER,
+                INVENTORY_MANAGER,
+                SCHEDULING_MANAGER,
+            ]
+            .into_iter()
+            .any(here),
         is_template_maker: here(TEMPLATE_MAKER),
         user_signature_access: user.is_signature_available,
         user_ai_promises,

@@ -4,6 +4,9 @@
 //!   linking the customer to its `QuickBooks` customer on first use
 //! - `POST /v1/customers/{id}/qbo-invoices` → a new invoice (a quote's
 //!   Create invoice)
+//! - `POST /v1/customers/{id}/qbo-invoices/split` → a quote's invoice
+//!   split into several, and `GET /v1/qbo/invoice-split` the company's
+//!   usual split
 //! - `GET`/`PUT /v1/customers/{id}/qbo-invoices/{invoice_id}` → one
 //!   invoice for the editor, and saving it
 //! - `GET /v1/customers/{id}/qbo-invoices/{invoice_id}/pdf` → its PDF
@@ -14,6 +17,8 @@
 //! - `GET /v1/qbo/class-sales` → the "Sales by Class" report (admins)
 //! - `GET /v1/me/qbo-sales` → the rep's sales this month, and
 //!   `/customers` the customers behind them
+//! - `PUT /v1/company/sales-goal` → a Manager or Sales Manager sets the
+//!   company's monthly goal
 //!
 //! Replaces the Remix `api.quickbooks.*` and `api.employee.qbo-*` routes.
 
@@ -23,6 +28,7 @@ pub mod invoice;
 pub mod products;
 pub mod rules;
 pub mod sales;
+pub mod split;
 
 use crate::auth::session::SessionUser;
 use crate::auth::{AdminUser, EmployeeUser};
@@ -37,16 +43,19 @@ use axum::extract::{Path, Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
 use invoice::{
-    Address, EditableInvoice, InvoiceSummary, Line, create_payload, editable, summary, text,
-    update_payload,
+    Address, Classes, EditableInvoice, InvoiceSummary, Line, create_payload, editable, summary,
+    text, update_payload,
 };
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::{BTreeSet, HashMap};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(customer_invoices, create_invoice))
+        .routes(routes!(split::create_split))
+        .routes(routes!(split::split_template))
         .routes(routes!(get_invoice, update_invoice))
         .routes(routes!(customer_invoice_pdf))
         .routes(routes!(invoice_pdf))
@@ -60,6 +69,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(sales::my_sales))
         .routes(routes!(sales::my_customers))
+        .routes(routes!(sales::set_company_goal))
         .routes(routes!(class_sales::class_sales))
 }
 
@@ -281,6 +291,53 @@ async fn resolve_qbo_id(
     ))
 }
 
+/// The numbers `count` new invoices get when the company numbers its own
+/// invoices (`QuickBooks`' "Custom transaction numbers"; `QuickBooks` leaves
+/// an invoice made through the API without a number then). `None` when
+/// `QuickBooks` numbers them itself, or no number could be worked out: the
+/// invoices are still made.
+pub(super) async fn new_doc_numbers(
+    state: &AppState,
+    access: &Access,
+    count: usize,
+) -> Option<Vec<String>> {
+    let custom = match state
+        .qbo
+        .query(access, "select * from Preferences", "Preferences")
+        .await
+    {
+        Ok(rows) => rows
+            .first()
+            .is_some_and(|prefs| prefs["SalesFormsPrefs"]["CustomTxnNumbers"] == json!(true)),
+        Err(err) => {
+            tracing::warn!(error = %err, "QuickBooks preferences not read; invoice left unnumbered");
+            return None;
+        }
+    };
+    if !custom {
+        return None;
+    }
+    let recent = match state
+        .qbo
+        .query(
+            access,
+            "select DocNumber from Invoice orderby MetaData.CreateTime desc maxresults 100",
+            "Invoice",
+        )
+        .await
+    {
+        Ok(rows) => rows
+            .iter()
+            .filter_map(|row| text(&row["DocNumber"]))
+            .collect::<Vec<_>>(),
+        Err(err) => {
+            tracing::warn!(error = %err, "QuickBooks invoice numbers not read; invoice left unnumbered");
+            return None;
+        }
+    };
+    invoice::next_doc_numbers(&recent, count)
+}
+
 async fn invoices_for(
     state: &AppState,
     access: &Access,
@@ -453,6 +510,10 @@ pub struct InvoiceCreate {
     /// The lines the editor opened with: what the rep changed in them is
     /// kept for the next drafts to learn from.
     pub draft: Option<Vec<Line>>,
+    /// Each line's part of the quote: the classes the rep gives them
+    /// start the rep's next invoices.
+    #[serde(default)]
+    pub parts: Option<Vec<split::Part>>,
 }
 
 /// Create a QuickBooks invoice for a customer
@@ -486,59 +547,22 @@ pub async fn create_invoice(
     JsonBody(input): JsonBody<InvoiceCreate>,
 ) -> ApiResult<Json<EditableInvoice>> {
     refuse_installer(&state, &user).await?;
-    let company_id = user.company_id;
-    if let Some(quote_id) = input.quote_id {
-        // A quote may be invoiced again (e.g. its invoice was deleted in
-        // QuickBooks); it keeps the newest invoice's id.
-        let quote: Option<i32> = sqlx::query_scalar(
-            "SELECT id FROM quotes
-              WHERE id = ? AND company_id = ? AND customer_id = ? AND deleted_at IS NULL",
-        )
-        .bind(quote_id)
-        .bind(company_id)
-        .bind(customer_id)
-        .fetch_optional(&state.pool)
-        .await?;
-        if quote.is_none() {
-            return Err(ApiError::Denied(
-                "This quote is not one of this customer's.".into(),
-            ));
-        }
-    }
-    let row = customer(&state, company_id, customer_id).await?;
-    let access = state
-        .qbo
-        .access(&state.pool, company_id)
-        .await
-        .map_err(qbo_error)?;
-    let qbo_id = qbo_customer_for(
-        &state,
-        &access,
-        company_id,
-        customer_id,
-        &row,
-        input.invoice.bill_addr.as_ref(),
-    )
-    .await?;
-    let class = match input
-        .invoice
-        .class_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        Some(name) => Some(class_id(&state, &access, name).await?),
-        None => None,
-    };
-    let class_per_line = class.is_some() && class_per_line(&state, &access).await;
-    let payload = create_payload(
-        &qbo_id,
+    let ready = prepare(&state, &user, customer_id, input.quote_id, &input.invoice).await?;
+    let mut payload = create_payload(
+        &ready.qbo_id,
         &input.invoice,
-        row.email.as_deref(),
-        class.as_deref(),
-        class_per_line,
+        ready.email.as_deref(),
+        &ready.classes,
     )
     .map_err(ApiError::BadRequest)?;
+    let access = ready.access;
+    if let Some(number) = new_doc_numbers(&state, &access, 1)
+        .await
+        .and_then(|numbers| numbers.into_iter().next())
+    {
+        payload["DocNumber"] = json!(number);
+    }
+    let company_id = user.company_id;
     let created = state
         .qbo
         .post(&access, "invoice", &payload)
@@ -573,7 +597,109 @@ pub async fn create_invoice(
         // The invoice is made; only the lesson is lost.
         tracing::error!(error = %err, "invoice draft outcomes not kept");
     }
+    if let Some(parts) = &input.parts {
+        split::remember(
+            &state.pool,
+            &user,
+            input.quote_id,
+            &input.invoice,
+            std::slice::from_ref(&invoice),
+            &[],
+            parts,
+        )
+        .await;
+    }
     Ok(Json(invoice))
+}
+
+/// What a new invoice for a customer needs: the token, the customer's
+/// `QuickBooks` customer (matched or created), their email, and the class
+/// ids of the invoice and of its lines.
+pub(crate) struct Prepared {
+    pub access: Access,
+    pub qbo_id: String,
+    pub email: Option<String>,
+    pub classes: Classes,
+}
+
+/// Checks the quote is the customer's and gets what a new invoice needs.
+pub(crate) async fn prepare(
+    state: &AppState,
+    user: &SessionUser,
+    customer_id: i32,
+    quote_id: Option<i32>,
+    invoice: &EditableInvoice,
+) -> ApiResult<Prepared> {
+    let company_id = user.company_id;
+    if let Some(quote_id) = quote_id {
+        // A quote may be invoiced again (e.g. its invoice was deleted in
+        // QuickBooks); it keeps the newest invoice's id.
+        let quote: Option<i32> = sqlx::query_scalar(
+            "SELECT id FROM quotes
+              WHERE id = ? AND company_id = ? AND customer_id = ? AND deleted_at IS NULL",
+        )
+        .bind(quote_id)
+        .bind(company_id)
+        .bind(customer_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        if quote.is_none() {
+            return Err(ApiError::Denied(
+                "This quote is not one of this customer's.".into(),
+            ));
+        }
+    }
+    let row = customer(state, company_id, customer_id).await?;
+    let access = state
+        .qbo
+        .access(&state.pool, company_id)
+        .await
+        .map_err(qbo_error)?;
+    let qbo_id = qbo_customer_for(
+        state,
+        &access,
+        company_id,
+        customer_id,
+        &row,
+        invoice.bill_addr.as_ref(),
+    )
+    .await?;
+    let named = |name: Option<&str>| {
+        name.map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(String::from)
+    };
+    let invoice_class = named(invoice.class_name.as_deref());
+    let line_classes: BTreeSet<String> = invoice
+        .lines
+        .iter()
+        .filter(|line| line.detail_type == "SalesItemLineDetail")
+        .filter_map(|line| named(line.class_name.as_deref()))
+        .collect();
+    let per_line = (invoice_class.is_some() || !line_classes.is_empty())
+        && class_per_line(state, &access).await;
+    let invoice_class = match invoice_class {
+        Some(name) => Some(class_id(state, &access, &name).await?),
+        None => None,
+    };
+    // A company with one class per invoice cannot give a line its own.
+    let mut by_name = HashMap::new();
+    if per_line {
+        for name in line_classes {
+            let id = class_id(state, &access, &name).await?;
+            by_name.insert(name, id);
+        }
+    }
+    Ok(Prepared {
+        access,
+        qbo_id,
+        email: row.email,
+        classes: Classes {
+            invoice: invoice_class,
+            per_line,
+            by_name,
+        },
+    })
 }
 
 /// Whether the company sets classes on each line rather than on the invoice.
@@ -744,7 +870,11 @@ async fn save(
         .qbo
         .post(access, "invoice", &payload)
         .await
-        .map_err(qbo_error)
+        .map_err(|err| match &err {
+            // A stale version stays `Upstream` so the caller retries it.
+            QboError::Status { body, .. } if body.contains("\"code\":\"5010\"") => qbo_error(err),
+            _ => qbo_refusal(err),
+        })
 }
 
 /// Save a customer's QuickBooks invoice
@@ -1014,6 +1144,8 @@ pub struct QboItems {
     pub items: Vec<QboItem>,
     /// The active classes' full names, by name.
     pub classes: Vec<String>,
+    /// The company sets classes on each line, so a line can have its own.
+    pub class_per_line: bool,
 }
 
 /// List QuickBooks products and services
@@ -1087,7 +1219,12 @@ async fn company_items(state: &AppState, company_id: i32) -> ApiResult<QboItems>
         .filter_map(|row| text(&row["FullyQualifiedName"]).or_else(|| text(&row["Name"])))
         .collect();
     classes.sort_by_key(|name| name.to_lowercase());
-    Ok(QboItems { items, classes })
+    let class_per_line = class_per_line(state, &access).await;
+    Ok(QboItems {
+        items,
+        classes,
+        class_per_line,
+    })
 }
 
 /// Query of `GET /v1/qbo/invoices/recent`.

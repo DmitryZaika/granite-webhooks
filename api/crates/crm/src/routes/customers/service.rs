@@ -2,8 +2,15 @@
 //! reassignment audit trail and the open deal of an assigned customer.
 
 use crate::error::ApiError;
+use crate::phone::calls::SALES_MANAGER_POSITION;
+use crate::phone::crm_push::{
+    LeadKind, push_lead_logged, push_leads_changed_logged, push_manager_lead, sales_managers,
+};
 use crate::phone::numbers::last10;
 use crate::routes::deals::service::{enter_stage, sync_drip};
+use crate::state::AppState;
+use crate::telegram::Bot;
+use crate::webhooks_client::OutgoingEmail;
 use chrono::{DateTime, Utc};
 use lambda_http::tracing;
 use sqlx::{MySql, MySqlConnection, MySqlPool, Transaction};
@@ -22,6 +29,11 @@ pub const BUILTIN_SOURCES: &[&str] = &[
     "check-list",
     "user-input",
 ];
+/// `c` (`customers`) is a walk-in: the built-in walk-in source, or one of the
+/// company's own sources ticked as a walk-in (`customer_sources.is_walkin`).
+pub const WALKIN_SOURCE: &str = "(c.source = 'check-in' OR c.source IN \
+     (SELECT ws.source_key FROM customer_sources ws \
+       WHERE ws.company_id = c.company_id AND ws.is_walkin = 1))";
 /// `positions.id` of a sales rep.
 pub const SALES_REP_POSITION: i32 = 1;
 /// Name and `created_by` of the Moraware quote import's shared customer: the
@@ -369,6 +381,216 @@ pub async fn record_lead_manager_assignment(
         at,
     )
     .await
+}
+
+/// What the managers' lead message says once the lead has a rep: its text,
+/// then "Lead assigned to …", as the webhooks Lambda edits it when a manager
+/// presses a rep's button in Telegram.
+pub fn assigned_text(base: &str, rep_name: &str) -> String {
+    format!("{base}\n\nLead assigned to {rep_name}")
+}
+
+/// What the leads bot tells the rep, word for word as when a manager
+/// assigns the lead in Telegram.
+pub fn rep_assigned_text(lead_link: &str) -> String {
+    format!("You were assigned a lead. Click here: \n{lead_link}")
+}
+
+/// What the leads bot tells the rep a customer was moved to from another
+/// rep (the customer's Edit page or its Sales rep picker).
+pub fn rep_reassigned_text(customer_name: &str, lead_link: &str) -> String {
+    format!("You were reassigned the customer {customer_name}. Click here: \n{lead_link}")
+}
+
+/// `actor` gave sales rep `rep` customer `customer_id` (a lead) with open
+/// deal `deal_id` in the app: everyone hears it as when a manager presses
+/// the rep's button in Telegram. The rep gets a `lead` push (`assigned`) and
+/// the leads bot's "You were assigned a lead. Click here:" with the link (an
+/// email with it when they have no Telegram); nothing for a rep who assigned
+/// themselves. With `reassigned` (the customer's name, when they were moved
+/// from another rep) it says "You were reassigned the customer
+/// {name}. Click here:" instead. The sales managers' Telegram messages about the lead are
+/// edited to "Lead assigned to {rep}", and the other managers' phones get a
+/// `taken` push. Every other phone of the company (the actor's own included)
+/// gets the quiet `leads` push, so the lead leaves "Waiting for a sales rep"
+/// everywhere at once. Best effort: the assignment is saved already, so
+/// failures are logged.
+pub async fn notify_assigned_rep(
+    state: &AppState,
+    company_id: i32,
+    customer_id: i32,
+    rep: i32,
+    actor: i32,
+    deal_id: i64,
+    reassigned: Option<&str>,
+) {
+    let target: Result<Option<(Option<i64>, String, Option<String>)>, sqlx::Error> =
+        sqlx::query_as(
+            "SELECT telegram_id, email, name FROM users
+              WHERE id = ? AND company_id = ? AND is_deleted = 0",
+        )
+        .bind(rep)
+        .bind(company_id)
+        .fetch_optional(&state.pool)
+        .await;
+    let (chat_id, email, name) = match target {
+        Ok(Some(target)) => target,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(?error, rep, customer_id, "assigned lead: rep not looked up");
+            return;
+        }
+    };
+    let rep_name = name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Unknown");
+    update_manager_lead_messages(state, company_id, customer_id, rep_name).await;
+    let mut managers = match sales_managers(&state.pool, company_id).await {
+        Ok(managers) => managers,
+        Err(error) => {
+            tracing::warn!(?error, customer_id, "assigned lead: managers not looked up");
+            Vec::new()
+        }
+    };
+    managers.retain(|id| *id != rep && *id != actor);
+    if let Err(error) = push_manager_lead(
+        state,
+        company_id,
+        &managers,
+        LeadKind::Taken,
+        customer_id,
+        Some(deal_id),
+    )
+    .await
+    {
+        tracing::warn!(?error, customer_id, "assigned lead: managers' push failed");
+    }
+    let mut told = managers;
+    if rep != actor {
+        told.push(rep);
+    }
+    push_leads_changed_logged(state, company_id, &told).await;
+
+    if rep == actor {
+        return;
+    }
+    push_lead_logged(
+        state,
+        company_id,
+        &[rep],
+        LeadKind::Assigned,
+        customer_id,
+        Some(deal_id),
+    )
+    .await;
+    let lead_link = format!("{}/employee/deals/edit/{deal_id}/project", state.app_url);
+    let (text, headline, subject) = match reassigned {
+        Some(customer) => (
+            rep_reassigned_text(customer, &lead_link),
+            format!("You were reassigned the customer {customer}. Click here:"),
+            "Customer reassigned",
+        ),
+        None => (
+            rep_assigned_text(&lead_link),
+            "You were assigned a lead. Click here:".to_string(),
+            "Lead assigned",
+        ),
+    };
+    if let Some(chat_id) = chat_id {
+        state.telegram.send_text(Bot::Leads, chat_id, &text).await;
+        return;
+    }
+    let connect_telegram_link = format!("{}/link-telegram-both", state.app_url);
+    let body = format!(
+        r"
+    {headline}
+    {lead_link}
+
+    To get lead alerts in Telegram, connect Telegram in the CRM:
+    {connect_telegram_link}
+    "
+    );
+    let message = OutgoingEmail {
+        from_name: None,
+        from_address: common::amazon::email::DEFAULT_NOREPLY_EMAIL_ADDRESS.to_string(),
+        to: vec![email],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: subject.to_string(),
+        body,
+        signature: None,
+        reply_to: Vec::new(),
+        in_reply_to: None,
+        references: Vec::new(),
+        attachments: Vec::new(),
+        transactional: true,
+    };
+    if let Err(error) = state.webhooks.send_email(&message).await {
+        tracing::warn!(?error, rep, customer_id, "assigned lead: email not sent");
+    }
+}
+
+/// Edits the sales managers' Telegram lead messages about `customer_id` (the
+/// new lead's, a repeat's) to their text and "Lead assigned to {rep_name}",
+/// buttons gone, as a Telegram assignment does. A message saved before
+/// texts were kept keeps its text; its buttons become one saying who has it.
+async fn update_manager_lead_messages(
+    state: &AppState,
+    company_id: i32,
+    customer_id: i32,
+    rep_name: &str,
+) {
+    let messages: Result<Vec<(i64, i32, Option<String>)>, sqlx::Error> = sqlx::query_as(
+        "SELECT DISTINCT tlm.chat_id, tlm.message_id, tlm.text
+           FROM telegram_lead_messages tlm
+           JOIN users u ON u.telegram_id = tlm.chat_id AND u.company_id = tlm.company_id
+           JOIN users_positions up ON up.user_id = u.id AND up.position_id = ?
+          WHERE tlm.company_id = ? AND tlm.customer_id = ? AND tlm.deleted_at IS NULL",
+    )
+    .bind(SALES_MANAGER_POSITION)
+    .bind(company_id)
+    .bind(customer_id)
+    .fetch_all(&state.pool)
+    .await;
+    let messages = match messages {
+        Ok(messages) => messages,
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                customer_id,
+                "assigned lead: Telegram messages not read"
+            );
+            return;
+        }
+    };
+    let label = format!("Lead assigned to {rep_name}");
+    for (chat_id, message_id, text) in messages {
+        let message_id = i64::from(message_id);
+        match text.as_deref() {
+            Some(text) => {
+                state
+                    .telegram
+                    .edit_text(
+                        Bot::Leads,
+                        chat_id,
+                        message_id,
+                        &assigned_text(text, rep_name),
+                    )
+                    .await;
+            }
+            None => {
+                let rows = [vec![
+                    serde_json::json!({ "text": label, "callback_data": "assigned" }),
+                ]];
+                state
+                    .telegram
+                    .edit_buttons(Bot::Leads, chat_id, message_id, &rows)
+                    .await;
+            }
+        }
+    }
 }
 
 /// `ensureOpenDealForCustomer`: the customer's deals move to `sales_rep`;

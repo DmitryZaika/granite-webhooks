@@ -7,6 +7,7 @@ pub mod calls;
 pub mod customers;
 pub mod deals;
 pub mod emails;
+pub mod projects;
 pub mod sms;
 pub mod stats;
 pub mod templates;

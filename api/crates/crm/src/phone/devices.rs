@@ -196,8 +196,17 @@ impl Default for PushBudget {
 
 /// One push to one phone: whether FCM accepted it. A phone whose app is
 /// gone (`UNREGISTERED`) loses its token; other failures are logged.
-async fn push_one(state: &AppState, target: &PushTarget, data: &BTreeMap<String, String>) -> bool {
-    match state.push.send(&target.push_token, data, true).await {
+async fn push_one(
+    state: &AppState,
+    target: &PushTarget,
+    data: &BTreeMap<String, String>,
+    high_priority: bool,
+) -> bool {
+    match state
+        .push
+        .send(&target.push_token, data, high_priority)
+        .await
+    {
         Ok(Delivery::Sent) => true,
         Ok(Delivery::Unregistered) => {
             let cleared = sqlx::query(
@@ -248,9 +257,57 @@ pub async fn push_to_users(
     crate::sql::push_in(&mut query, "pd.user_id", user_ids);
     query.push(" ORDER BY pd.id");
     let targets: Vec<PushTarget> = query.build_query_as().fetch_all(&state.pool).await?;
-    let sends = join_all(targets.iter().map(|target| push_one(state, target, data)));
+    Ok(push_targets(state, &targets, data, true).await)
+}
+
+/// Pushes `data` quietly to a company's phones.
+///
+/// Normal priority, to every signed-in phone of `company_id` with a push
+/// token but those of `except_user_ids`: a refresh that shows nothing (the
+/// app refetches what it names). The number of phones FCM accepted it for.
+pub async fn push_to_company(
+    state: &AppState,
+    company_id: i32,
+    except_user_ids: &[i32],
+    data: &BTreeMap<String, String>,
+) -> sqlx::Result<usize> {
+    if !state.push.is_enabled() {
+        return Ok(0);
+    }
+    let mut query = sqlx::QueryBuilder::new(format!(
+        "SELECT CAST(pd.id AS SIGNED) AS id, pd.push_token
+           FROM phone_devices pd
+           JOIN device_sessions ds ON ds.id = pd.device_session_id
+          WHERE pd.push_token IS NOT NULL AND {LIVE_DEVICE} AND pd.company_id = "
+    ));
+    query.push_bind(company_id);
+    if !except_user_ids.is_empty() {
+        query.push(" AND pd.user_id NOT IN (");
+        let mut separated = query.separated(", ");
+        for id in except_user_ids {
+            separated.push_bind(*id);
+        }
+        query.push(")");
+    }
+    query.push(" ORDER BY pd.id");
+    let targets: Vec<PushTarget> = query.build_query_as().fetch_all(&state.pool).await?;
+    Ok(push_targets(state, &targets, data, false).await)
+}
+
+/// Sends `data` to `targets` all at once, for [`PUSH_BUDGET`] at most.
+async fn push_targets(
+    state: &AppState,
+    targets: &[PushTarget],
+    data: &BTreeMap<String, String>,
+    high_priority: bool,
+) -> usize {
+    let sends = join_all(
+        targets
+            .iter()
+            .map(|target| push_one(state, target, data, high_priority)),
+    );
     let budget = state.extensions.get_or_default::<PushBudget>().0;
-    let sent = tokio::time::timeout(budget, sends).await.map_or_else(
+    tokio::time::timeout(budget, sends).await.map_or_else(
         |_| {
             tracing::warn!(
                 phones = targets.len(),
@@ -259,6 +316,5 @@ pub async fn push_to_users(
             0
         },
         |results| results.into_iter().filter(|sent| *sent).count(),
-    );
-    Ok(sent)
+    )
 }

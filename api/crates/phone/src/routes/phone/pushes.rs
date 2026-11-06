@@ -9,7 +9,10 @@ use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
-use crate::phone::crm_push::{LeadKind, push_lead, push_notification, sales_managers};
+use crate::phone::crm_push::{
+    LeadKind, push_lead, push_leads_changed_logged, push_manager_lead, push_notification,
+    sales_managers,
+};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -37,6 +40,10 @@ pub struct LeadPush {
     /// when left out.
     #[serde(default)]
     pub user_id: Option<i32>,
+    /// Sales managers not told (no `user_id` only): for `taken`, the rep
+    /// and the manager who assigned the lead.
+    #[serde(default)]
+    pub except_user_ids: Vec<i32>,
 }
 
 /// How many phones were told.
@@ -86,8 +93,17 @@ pub async fn push_notification_route(
 /// Telegram: to the sales rep `user_id`, else to every sales manager of the
 /// company (linked to Telegram or not). Pushed as data `{granite: "1",
 /// type: "lead", kind, customerId, dealId}` (`dealId` left out when the lead
-/// has no deal yet): ids only. Nothing is pushed (`pushed: 0`) for another
+/// has no deal yet): ids only. The managers' new and repeated leads also
+/// carry `assign: "1"` (tapping opens the Assign a sales rep sheet). A
+/// `taken` push tells the managers (but `except_user_ids`) that the lead
+/// was assigned, as its Telegram message is edited. Nothing is pushed (`pushed: 0`) for another
 /// company's or a deleted customer. Calling it again pushes again.
+///
+/// A managers' push (no `user_id`) but `quote` also sends every other phone
+/// of the company, the rep and the manager who assigned it included, a quiet
+/// `{granite: "1", type: "leads"}` push (not counted in `pushed`): it shows
+/// nothing and makes the app refetch its lead inbox, so a lead assigned in
+/// Telegram leaves "Waiting for a sales rep" on every phone at once.
 #[crate::openapi::path(
     post,
     path = "/v1/phone/pushes/lead",
@@ -107,18 +123,47 @@ pub async fn push_lead_route(
     _caller: JobCaller,
     JsonBody(body): JsonBody<LeadPush>,
 ) -> ApiResult<Json<PushSent>> {
-    let users = match body.user_id {
-        Some(user_id) => vec![user_id],
-        None => sales_managers(&state.pool, body.company_id).await?,
+    let pushed = match body.user_id {
+        Some(user_id) => {
+            push_lead(
+                &state,
+                body.company_id,
+                &[user_id],
+                body.kind,
+                body.customer_id,
+                body.deal_id,
+            )
+            .await?
+        }
+        None => {
+            let mut managers = sales_managers(&state.pool, body.company_id).await?;
+            managers.retain(|id| !body.except_user_ids.contains(id));
+            let pushed = push_manager_lead(
+                &state,
+                body.company_id,
+                &managers,
+                body.kind,
+                body.customer_id,
+                body.deal_id,
+            )
+            .await?;
+            if body.kind != LeadKind::Quote && lead_of(&state, &body).await? {
+                push_leads_changed_logged(&state, body.company_id, &managers).await;
+            }
+            pushed
+        }
     };
-    let pushed = push_lead(
-        &state,
-        body.company_id,
-        &users,
-        body.kind,
-        body.customer_id,
-        body.deal_id,
-    )
-    .await?;
     Ok(Json(PushSent { pushed }))
+}
+
+/// The push names a live customer of its company (else nobody is told).
+async fn lead_of(state: &AppState, body: &LeadPush) -> sqlx::Result<bool> {
+    let found: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(body.customer_id)
+    .bind(body.company_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(found.is_some())
 }

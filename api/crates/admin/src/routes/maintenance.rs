@@ -119,6 +119,60 @@ pub struct Condition {
     pub hours_done: f64,
 }
 
+/// A condition as read, with the usage and time it ran since its hours
+/// were last set.
+#[derive(Debug, Clone, FromRow)]
+struct ConditionRow {
+    id: i32,
+    maintenance_sub_item_id: i32,
+    condition_type: String,
+    interval_value: f64,
+    next_due_date: String,
+    hours_done: f64,
+    hours_per_day: Option<f64>,
+    days_per_month: Option<f64>,
+    seconds_since: Option<i64>,
+}
+
+impl ConditionRow {
+    fn into_condition(self) -> Condition {
+        let hours_done = if self.condition_type == "hours" {
+            accrued_hours(
+                self.hours_done,
+                self.interval_value,
+                self.seconds_since.unwrap_or(0),
+                Usage {
+                    hours_per_day: self.hours_per_day,
+                    days_per_month: self.days_per_month,
+                },
+            )
+        } else {
+            self.hours_done
+        };
+        Condition {
+            id: self.id,
+            maintenance_sub_item_id: self.maintenance_sub_item_id,
+            condition_type: self.condition_type,
+            interval_value: self.interval_value,
+            next_due_date: self.next_due_date,
+            hours_done,
+        }
+    }
+}
+
+/// Hours used now: the hours last set plus the average use since then
+/// (hours/day × days/month ÷ 30 a calendar day), at most the interval, to
+/// one decimal.
+fn accrued_hours(set: f64, interval: f64, seconds_since: i64, usage: Usage) -> f64 {
+    let Some(per_day) = usage.per_calendar_day() else {
+        return set;
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let days = seconds_since.max(0) as f64 / 86_400.0;
+    let done = (set + per_day * days).min(interval.max(set));
+    (done * 10.0).round() / 10.0
+}
+
 /// A check done.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
 pub struct Completion {
@@ -194,17 +248,27 @@ pub async fn list(
     .bind(company)
     .fetch_all(pool)
     .await?;
-    let conditions = sqlx::query_as(
-        "SELECT id, maintenance_sub_item_id, CAST(condition_type AS CHAR) AS condition_type,
-                CAST(interval_value AS DOUBLE) AS interval_value,
-                DATE_FORMAT(next_due_date, '%Y-%m-%d') AS next_due_date,
-                CAST(hours_done AS DOUBLE) AS hours_done
-           FROM maintenance_conditions WHERE company_id = ? AND deleted_at IS NULL
-          ORDER BY id ASC",
+    // `updated_at` moves only when hours are set: on adding, completing, or
+    // recording hours, so the time since then is time the hours ran.
+    let rows: Vec<ConditionRow> = sqlx::query_as(
+        "SELECT mc.id, mc.maintenance_sub_item_id,
+                CAST(mc.condition_type AS CHAR) AS condition_type,
+                CAST(mc.interval_value AS DOUBLE) AS interval_value,
+                DATE_FORMAT(mc.next_due_date, '%Y-%m-%d') AS next_due_date,
+                CAST(mc.hours_done AS DOUBLE) AS hours_done,
+                CAST(COALESCE(si.hours_per_day, mi.hours_per_day) AS DOUBLE) AS hours_per_day,
+                CAST(COALESCE(si.days_per_month, mi.days_per_month) AS DOUBLE) AS days_per_month,
+                TIMESTAMPDIFF(SECOND, mc.updated_at, CURRENT_TIMESTAMP) AS seconds_since
+           FROM maintenance_conditions mc
+           JOIN maintenance_sub_items si ON si.id = mc.maintenance_sub_item_id
+           JOIN maintenance_items mi ON mi.id = si.maintenance_item_id
+          WHERE mc.company_id = ? AND mc.deleted_at IS NULL
+          ORDER BY mc.id ASC",
     )
     .bind(company)
     .fetch_all(pool)
     .await?;
+    let conditions = rows.into_iter().map(ConditionRow::into_condition).collect();
     let completions = sqlx::query_as(
         "SELECT mc.id, mc.maintenance_sub_item_id, mc.completed_at, mc.notes,
                 u.name AS completed_by_name
@@ -627,32 +691,62 @@ fn valid_check(input: &CheckInput) -> Result<(String, Option<String>, String), A
     Ok((name, notes, unit))
 }
 
-/// Writes the check's conditions, due from today.
+/// Hours the check's hour condition has used so far (as the page shows
+/// them), or 0 without one.
+async fn hours_so_far(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    company_id: i32,
+    check_id: i32,
+    usage: Usage,
+) -> Result<f64, sqlx::Error> {
+    let row: Option<(f64, f64, Option<i64>)> = sqlx::query_as(
+        "SELECT CAST(hours_done AS DOUBLE), CAST(interval_value AS DOUBLE),
+                TIMESTAMPDIFF(SECOND, updated_at, CURRENT_TIMESTAMP)
+           FROM maintenance_conditions
+          WHERE maintenance_sub_item_id = ? AND company_id = ? AND deleted_at IS NULL
+            AND condition_type = 'hours'
+          LIMIT 1",
+    )
+    .bind(check_id)
+    .bind(company_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.map_or(0.0, |(set, interval, seconds)| {
+        accrued_hours(set, interval, seconds.unwrap_or(0), usage)
+    }))
+}
+
+/// Writes the check's conditions, due from today; an hour condition starts
+/// at `hours_done`.
 async fn insert_conditions(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     company_id: i32,
     check_id: i32,
     conditions: &[ConditionInput],
     usage: Usage,
+    hours_done: f64,
 ) -> Result<(), ApiError> {
     let today = today();
     for condition in conditions {
-        let due = if condition.kind == "days" {
-            add_days(today, condition.interval_value)
+        let (due, done) = if condition.kind == "days" {
+            (add_days(today, condition.interval_value), 0.0)
         } else {
-            hours_due(today, condition.interval_value, 0.0, usage)
-                .ok_or_else(|| bad("Could not calculate due date"))?
+            let done = hours_done.min(condition.interval_value);
+            let due = hours_due(today, condition.interval_value, done, usage)
+                .ok_or_else(|| bad("Could not calculate due date"))?;
+            (due, done)
         };
         sqlx::query(
             "INSERT INTO maintenance_conditions
                (company_id, maintenance_sub_item_id, condition_type, interval_value, next_due_date, hours_done)
-             VALUES (?, ?, ?, ?, ?, 0)",
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(company_id)
         .bind(check_id)
         .bind(&condition.kind)
         .bind(condition.interval_value)
         .bind(due)
+        .bind(done)
         .execute(&mut **tx)
         .await?;
     }
@@ -727,7 +821,7 @@ pub async fn create_check(
     .await?
     .last_insert_id();
     let id = i32::try_from(id).unwrap_or(i32::MAX);
-    insert_conditions(&mut tx, user.company_id, id, &input.conditions, usage).await?;
+    insert_conditions(&mut tx, user.company_id, id, &input.conditions, usage, 0.0).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(CreatedCheck { id })))
 }
@@ -789,7 +883,11 @@ pub async fn update_check(
     if input.conditions.iter().any(|c| c.kind == "hours") && usage.per_calendar_day().is_none() {
         return Err(bad(HOURS_NEED_USAGE));
     }
+    // Hours used so far at the usage before this save; the new conditions
+    // keep them instead of starting over.
+    let before = check_usage(&state, user.company_id, id).await?.usage();
     let mut tx = state.pool.begin().await?;
+    let hours_done = hours_so_far(&mut tx, user.company_id, id, before).await?;
     sqlx::query(
         "UPDATE maintenance_sub_items SET name = ?, notes = ?, hours_per_day = ?, days_per_month = ?,
                 starting_hours = ?, usage_unit = ?, updated_at = CURRENT_TIMESTAMP
@@ -813,7 +911,15 @@ pub async fn update_check(
     .bind(user.company_id)
     .execute(&mut *tx)
     .await?;
-    insert_conditions(&mut tx, user.company_id, id, &input.conditions, usage).await?;
+    insert_conditions(
+        &mut tx,
+        user.company_id,
+        id,
+        &input.conditions,
+        usage,
+        hours_done,
+    )
+    .await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1182,6 +1288,27 @@ mod tests {
 
     fn day(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn hours_count_up_by_average_daily_use() {
+        let usage = Usage {
+            hours_per_day: Some(5.0),
+            days_per_month: Some(21.0),
+        };
+        // 5 * 21 / 30 = 3.5 hours a calendar day.
+        assert!((accrued_hours(0.0, 50.0, 10 * 86_400, usage) - 35.0).abs() < 1e-9);
+        // From the hours last entered.
+        assert!((accrued_hours(10.0, 50.0, 2 * 86_400, usage) - 17.0).abs() < 1e-9);
+        // Never past the interval; a reading above it stays as entered.
+        assert!((accrued_hours(0.0, 50.0, 100 * 86_400, usage) - 50.0).abs() < 1e-9);
+        assert!((accrued_hours(60.0, 50.0, 86_400, usage) - 60.0).abs() < 1e-9);
+        // Without both usage numbers nothing is added.
+        let none = Usage {
+            hours_per_day: Some(3.0),
+            days_per_month: None,
+        };
+        assert!((accrued_hours(4.0, 50.0, 30 * 86_400, none) - 4.0).abs() < 1e-9);
     }
 
     #[test]

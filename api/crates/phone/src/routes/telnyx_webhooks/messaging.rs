@@ -48,7 +48,7 @@ const UNKNOWN_STATUS_RETRY_SECS: i64 = 120;
         (status = 200, description = "Taken"),
         (status = 400, description = "Not a messaging event", body = ErrorBody),
         (status = 401, description = "No valid Telnyx signature", body = ErrorBody),
-        (status = 403, description = "The messaging profile is not the company's", body = ErrorBody),
+        (status = 403, description = "An inbound text through a messaging profile that is not the company's", body = ErrorBody),
         (status = 404, description = "No company has this webhook token", body = ErrorBody),
         (status = 409, description = "A status about a text whose send is still being recorded (Telnyx sends it again)", body = ErrorBody),
         (status = 503, description = "Telnyx signatures are not set up on the server (`TELNYX_PUBLIC_KEY`)", body = ErrorBody),
@@ -66,10 +66,16 @@ pub async fn messaging(
     let hook: MessagingWebhook = serde_json::from_slice(&body)
         .map_err(|_| ApiError::BadRequest("Not a Telnyx messaging event".into()))?;
     let event = hook.data;
-    if let (Some(ours), Some(theirs)) = (
-        config.messaging_profile_id.as_deref(),
-        event.payload.messaging_profile_id.as_deref(),
-    ) && ours != theirs
+    // An inbound text must come through the company's own profile. A status
+    // report is only taken for a text the company sent (its Telnyx id), so
+    // it is kept whatever profile Telnyx names: a refused one left a failed
+    // text looking sent.
+    if event.event_type == "message.received"
+        && let (Some(ours), Some(theirs)) = (
+            config.messaging_profile_id.as_deref(),
+            event.payload.messaging_profile_id.as_deref(),
+        )
+        && ours != theirs
     {
         return Err(refused(&config, "messaging", "messaging profile"));
     }

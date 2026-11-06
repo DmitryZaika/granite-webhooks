@@ -105,6 +105,12 @@ pub struct ScheduleEvent {
     /// Email for this event only; null uses the customer's.
     #[sqlx(default)]
     pub contact_email: Option<String>,
+    /// A second phone for this event; automated texts go to both.
+    #[sqlx(default)]
+    pub contact_phone_2: Option<String>,
+    /// A second email for this event; automated emails go to both.
+    #[sqlx(default)]
+    pub contact_email_2: Option<String>,
     /// The crew's progress: `on_my_way`, `arrived` or `completed`.
     #[sqlx(default)]
     pub crew_status: Option<String>,
@@ -120,6 +126,11 @@ pub struct ScheduleEvent {
     /// The customer got the On my way message.
     #[sqlx(default)]
     pub customer_told: bool,
+    /// Added by the CRM on its own when a quote was sold (Mark as Sold's
+    /// jobs and extra events), not by a person: show it as made by the
+    /// system. `created_user_id` is then whoever sold it.
+    #[sqlx(default)]
+    pub automated: bool,
     /// Its QuickBooks invoice (only when QuickBooks is connected).
     #[sqlx(skip)]
     pub qbo_invoice: Option<EventInvoice>,
@@ -161,15 +172,17 @@ pub async fn events(
     ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     MultiQuery(query): MultiQuery<EventsQuery>,
 ) -> ApiResult<Json<ScheduleEvents>> {
-    load_events(&state, user.company_id, &query, Scope::Board(user.id))
+    let own = super::own_events_only(&state.pool, &user).await?;
+    load_events(&state, user.company_id, &query, Scope::Board(user.id, own))
         .await
         .map(Json)
 }
 
 /// Which events of the company a range read returns.
 enum Scope {
-    /// The whole board, less the calendars hidden from this viewer.
-    Board(i32),
+    /// The whole board, less the calendars hidden from this viewer; with an
+    /// id, only the events that person made or is assigned to.
+    Board(i32, Option<i32>),
     /// Only the events assigned to this person, whatever calendar they are on.
     AssignedTo(i32),
 }
@@ -186,9 +199,9 @@ async fn load_events(
             "The range ends before it starts".into(),
         ));
     }
-    let (viewer, assigned) = match scope {
-        Scope::Board(viewer) => (Some(viewer), None),
-        Scope::AssignedTo(person) => (None, Some(person)),
+    let (viewer, own, assigned) = match scope {
+        Scope::Board(viewer, own) => (Some(viewer), own, None),
+        Scope::AssignedTo(person) => (None, None, Some(person)),
     };
     let start = query.start.naive_utc();
     let end = query.end.naive_utc();
@@ -202,7 +215,8 @@ async fn load_events(
                 NULLIF(TRIM(e.recurrence_exdates), '') AS recurrence_exdates,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
                 c.name AS customer_name, u.name AS created_user_name,
-                e.contact_phone, e.contact_email, e.crew_status,
+                e.quote_id IS NOT NULL AS automated,
+                e.contact_phone, e.contact_email, e.contact_phone_2, e.contact_email_2, e.crew_status,
                 DATE_FORMAT(e.on_my_way_at, '%Y-%m-%dT%H:%i:%sZ') AS on_my_way_at,
                 DATE_FORMAT(e.arrived_at, '%Y-%m-%dT%H:%i:%sZ') AS arrived_at,
                 DATE_FORMAT(e.completed_at, '%Y-%m-%dT%H:%i:%sZ') AS completed_at,
@@ -217,6 +231,7 @@ async fn load_events(
                    WHERE h.calendar_id = e.calendar_id AND h.company_id = u.company_id
                      AND h.user_id = ?))
             AND (? IS NULL OR e.assigned_user_id = ?)
+            AND (? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)
             AND (
               (NULLIF(TRIM(e.rrule), '') IS NULL
                 AND e.start_date <= ? AND e.end_date >= ?)
@@ -231,47 +246,65 @@ async fn load_events(
     .bind(viewer)
     .bind(assigned)
     .bind(assigned)
+    .bind(own)
+    .bind(own)
+    .bind(own)
     .bind(end)
     .bind(start)
     .bind(end)
     .bind(start)
     .fetch_all(&state.pool)
     .await?;
-    let features =
-        crate::routes::company::queries::company_features(&state.pool, company_id).await?;
-    let quickbooks_connected = features.quickbooks_enabled && features.quickbooks_connected;
-    if quickbooks_connected && !events.is_empty() {
-        let mut sql = sqlx::QueryBuilder::<sqlx::MySql>::new(
-            "SELECT event_id, qbo_invoice_id, qbo_invoice_number FROM event_qbo_invoices
-              WHERE company_id = ",
-        );
-        sql.push_bind(company_id).push(" AND event_id IN (");
-        let mut ids = sql.separated(", ");
-        for event in &events {
-            ids.push_bind(event.id);
-        }
-        sql.push(")");
-        let rows: Vec<(i32, String, Option<String>)> =
-            sql.build_query_as().fetch_all(&state.pool).await?;
-        let invoices: HashMap<i32, EventInvoice> = rows
-            .into_iter()
-            .map(|(event, id, number)| (event, EventInvoice { id, number }))
-            .collect();
-        for event in &mut events {
-            event.qbo_invoice = invoices.get(&event.id).cloned();
-        }
-    }
+    let quickbooks_connected = attach_invoices(state, company_id, &mut events).await?;
     Ok(ScheduleEvents {
         events,
         quickbooks_connected,
     })
 }
 
+/// Puts their QuickBooks invoices on the events when the company's
+/// QuickBooks is on and connected; says whether it is.
+async fn attach_invoices(
+    state: &AppState,
+    company_id: i32,
+    events: &mut [ScheduleEvent],
+) -> ApiResult<bool> {
+    let features =
+        crate::routes::company::queries::company_features(&state.pool, company_id).await?;
+    let quickbooks_connected = features.quickbooks_enabled && features.quickbooks_connected;
+    if !quickbooks_connected || events.is_empty() {
+        return Ok(quickbooks_connected);
+    }
+    let mut sql = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT event_id, qbo_invoice_id, qbo_invoice_number FROM event_qbo_invoices
+          WHERE company_id = ",
+    );
+    sql.push_bind(company_id).push(" AND event_id IN (");
+    let mut ids = sql.separated(", ");
+    for event in events.iter() {
+        ids.push_bind(event.id);
+    }
+    sql.push(")");
+    let rows: Vec<(i32, String, Option<String>)> =
+        sql.build_query_as().fetch_all(&state.pool).await?;
+    let invoices: HashMap<i32, EventInvoice> = rows
+        .into_iter()
+        .map(|(event, id, number)| (event, EventInvoice { id, number }))
+        .collect();
+    for event in events.iter_mut() {
+        event.qbo_invoice = invoices.get(&event.id).cloned();
+    }
+    Ok(quickbooks_connected)
+}
+
 /// Events waiting for their day
 ///
 /// The company's unscheduled events (kept off the calendar until someone
-/// picks the date), oldest first, with their customers' names. Events of
-/// calendars hidden for the caller are left out.
+/// picks the date), oldest first, with their customers' names and, while
+/// QuickBooks is on and connected, their QuickBooks invoices (so an edit
+/// that sends `qbo_invoice` back keeps the link). Their dates are only when
+/// they were made. Events of calendars hidden for the caller are left out.
+/// Give one a day with `PUT /v1/events/{id}` and `unscheduled: false`.
 #[crate::openapi::path(
     get,
     path = "/v1/schedule/unscheduled",
@@ -289,7 +322,8 @@ pub async fn unscheduled(
     State(state): State<AppState>,
     ShopOrEmployeeUser(user): ShopOrEmployeeUser,
 ) -> ApiResult<Json<Vec<ScheduleEvent>>> {
-    let events = sqlx::query_as(
+    let own = super::own_events_only(&state.pool, &user).await?;
+    let mut events: Vec<ScheduleEvent> = sqlx::query_as(
         "SELECT e.id, e.title, e.description, e.location,
                 DATE_FORMAT(e.start_date, '%Y-%m-%dT%H:%i:%sZ') AS start_date,
                 DATE_FORMAT(e.end_date, '%Y-%m-%dT%H:%i:%sZ') AS end_date,
@@ -297,7 +331,8 @@ pub async fn unscheduled(
                 e.calendar_id, NULL AS rrule, NULL AS recurrence_until,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
                 c.name AS customer_name, u.name AS created_user_name,
-                e.contact_phone, e.contact_email
+                e.quote_id IS NOT NULL AS automated,
+                e.contact_phone, e.contact_email, e.contact_phone_2, e.contact_email_2
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c
@@ -307,12 +342,17 @@ pub async fn unscheduled(
                   SELECT 1 FROM calendar_hidden_users h
                    WHERE h.calendar_id = e.calendar_id AND h.company_id = u.company_id
                      AND h.user_id = ?))
+            AND (? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)
           ORDER BY e.created_date, e.id",
     )
     .bind(user.company_id)
     .bind(user.id)
+    .bind(own)
+    .bind(own)
+    .bind(own)
     .fetch_all(&state.pool)
     .await?;
+    attach_invoices(&state, user.company_id, &mut events).await?;
     Ok(Json(events))
 }
 

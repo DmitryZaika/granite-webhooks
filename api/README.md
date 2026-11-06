@@ -187,6 +187,23 @@ and against Stripe's test mode in `tests/admin/billing_stripe_live.rs` when
 `STRIPE_WEBHOOK_SECRET`, `STRIPE_BILLING_PLANS` (`price|Name|cents,...`) or
 `STRIPE_PRICE_ID`.
 
+### Payments page (Stripe)
+
+`routes/payments.rs` serves the payments page (`apps/payments` in the CRM
+repo, `payments.granite-manager.com`; dev: `dev-payments.granite-manager.com`):
+a company opens its signed link (`?c=<company id>.<HMAC>`), subscribes monthly
+through Stripe Checkout at `company.subscription_price_cents` (default $800,
+read when it subscribes) and manages the subscription in Stripe's billing
+portal; superusers see every company's status and last payment
+(`GET /v1/superuser/payments`). The api creates the Stripe customer and saves
+it in `company.stripe_customer_id` before the first checkout, so no webhook is
+needed; everything else is read from Stripe. It never changes CRM access and
+is separate from `company_billing` above. Env: `STRIPE_SECRET_KEY`,
+`PAYMENTS_LINK_SECRET` (changing it invalidates every link) and
+`PAYMENTS_APP_URL` (default `https://payments.granite-manager.com`). Tested
+against a fake Stripe in `tests/admin/payments.rs` and against Stripe's test
+mode in `tests/admin/payments_stripe_live.rs` (`STRIPE_TEST_SECRET_KEY`).
+
 ### Uploads and storage
 
 Images go straight from the browser to the bucket with a presigned PUT
@@ -474,7 +491,7 @@ app's `X-Granite-Device` token), `telnyx.rs`, `push.rs` (FCM), `phone/`
 | Routes | For |
 |---|---|
 | `POST /v1/auth/device-sessions`, `DELETE /v1/auth/device-sessions/current`, `/v1/me/devices*` | the app's sign-in and signed-in phones (device token; `/v1/me/devices` takes the cookie too) |
-| `/v1/phone/*` | the app (device token): bootstrap, devices and login JWTs, settings, contacts, Recents, notes, Call via my cell, 911 alerts, problem reports, the Texts tab (`/v1/phone/texts*`, `phone/texts.rs`) |
+| `/v1/phone/*` | the app (device token): bootstrap, devices and login JWTs, settings, contacts, contact groups (`/v1/phone/contact-groups*`: the company's, shared by its users; hiding one from Contacts' top is per user), Recents, notes, Call via my cell, 911 alerts, problem reports, the Texts tab (`/v1/phone/texts*`, `phone/texts.rs`) |
 | `/v1/emails*`, `/v1/schedule*`, `/v1/events*`, `GET /v1/me/schedule` (`auth::DEVICE_ROUTES`) | the CRM routes the app shows natively: they take the device token in place of the cookie, with the user's CRM rights. Installers and template makers (`PhoneUser.portal` `installer` / `template`, the `/v1/app/shell` rule) get only their own schedule in the app and never register for calls |
 | `/v1/phone/web/*`, `PUT /v1/phone/calls/recording` | the CRM's phone dock (cookie): the browser registers as a phone of its own (`platform = 'web'`, `device_sessions.web_session_id` = the cookie's session), gets login JWTs (the app's limits), says while it is connected (`presence`: only then it rings), declines; the Record button of a live call (also the app's). Call via my cell and cell verification take the cookie too |
 | `/v1/phone/admin/numbers*`, `/v1/phone/admin/devices*` | company admins (cookie): numbers and who they ring, importing them from Telnyx, signing phones out |
@@ -588,6 +605,8 @@ Environment (set by hand on `granite-api(-dev)` and `granite-api-stream(-dev)`):
   that set none.
 - Tests only: `TELNYX_API_BASE` and `FCM_BASE_URL` point at stand-ins.
 - Used too: `ASSEMBLYAI_API_KEY` and `OPEN_AI_SECRET_KEY` (AI notes),
+  `ANTHROPIC_API_KEY` (Claude runs the 10DLC AI check; without it marking
+  a registration ready skips the check),
   `LAMBDA_KEY` (the job), `STORAGE_*` (the bucket's credentials).
 
 Telnyx portal, per company. First save the company's Telnyx setup on the

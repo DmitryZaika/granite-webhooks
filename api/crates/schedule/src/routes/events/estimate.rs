@@ -2,7 +2,7 @@
 //! customer's confirmation, and the appointment reminders.
 //! Remix: `api.schedule-estimate.ts`.
 
-use super::history::{History, record};
+use super::history::{History, record, record_customer_message};
 use super::notify::{Booking, Channel, NotifyKind, customer_email, customer_phone, notify_booking};
 use super::reminders::{self, Appointment};
 use super::writes::{EventInput, check};
@@ -203,12 +203,24 @@ pub async fn book(
             user_id: user.id,
             customer_email: typed_email,
             customer_phone: None,
+            customer_phone_2: None,
+            customer_email_2: None,
             start: event.start.and_utc(),
             end: event.end.and_utc(),
             location: event.location,
         },
     )
     .await?;
+    if let Some(channel) = channel {
+        record_customer_message(
+            pool,
+            event_id,
+            user.company_id,
+            channel == Channel::Sms,
+            "Booking confirmation",
+        )
+        .await;
+    }
 
     let appointment = Appointment {
         event_id,

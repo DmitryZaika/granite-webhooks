@@ -23,6 +23,7 @@ use crate::followups::js::{js_len, js_slice, trim};
 use crate::followups::prompt::FollowupTimelineMessage;
 use crate::followups::send_window::FollowupChannel;
 use crate::openapi::ToSchema;
+use crate::routes::ai::compose_catalog::load_catalog;
 use crate::routes::ai::conversation_reply::REPLY_FALLBACK_MODEL;
 use crate::routes::ai::reply_context;
 use crate::routes::sms::provider::valid_thread_phone;
@@ -66,17 +67,19 @@ Rules:
 - Return ONLY the text to append. Never repeat, rewrite, or restart the draft or its current sentence.
 - If the draft ends mid-word, finish THAT word first, keeping the letters already typed (no leading space). If it ends after a full word, start with a space.
 - Stay consistent with the conversation and the rep's tone. Never invent prices, dates, or facts not in the context.
-- Name a stone color or a price only when it is in this customer's QUOTES, CUSTOMER / PROJECT INFO or CONVERSATION. Never take one from the rep's messages to other customers or from general knowledge, and never list price levels or tiers: stop and let the rep type them.
+- Name a stone color or a price only when it is in this customer's QUOTES, CUSTOMER / PROJECT INFO, CONVERSATION or DRAFT, or in STONES for a stone named there or one the customer asked for. Never take one from the rep's messages to other customers or from general knowledge, never suggest other stones from STONES unasked, and never list price levels or tiers: stop and let the rep type them.
+- STONES has each displayed stone's material, colors, price per sq ft (and the price quotes charge when it differs), slab size in inches and what is in stock now. PRICE LIST has what a new quote charges for edges, cutouts, fabrication and installation. Use them exactly; a price in this customer's QUOTES wins over both. For a stone priced by the slab with no quote price let the rep type the price; never say we have a sold out stone.
 - When the rep is about to share the inventory / stones page, use the exact customer page URL from CUSTOMER / PROJECT INFO.
 - When the rep asks the customer for their measurements or sends them a link to send us their sizes, use the exact Customer quote URL from CUSTOMER / PROJECT INFO.
 - When the message needs the rep's name, the rep's phone number or the company address, use them from SALES REP and COMPANY.
 - If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now. Follow the GREETING line: with GREETING: NONE (an SMS or email with them earlier today) never start with "Hi", "Hey" or "Hello" and never use the customer's name; start with the content.
 - Never repeat or rephrase something the rep already said in the CONVERSATION. If the rep's last message is still unanswered, don't ask its question again: add something new (a different angle, an offer, a next step) or return an empty string.
+- Reply only to what the customer said since the rep's last message. A promise, plan or fact the rep already gave (a replacement, a date, a price) is never said again, not even reworded: open with a short reaction to the customer's newest words and stop.
 - Use the customer's name at most once in a message. Write plainly like the rep: no "I hope this finds you well", "Just following up", "I wanted to reach out", no em dashes.
 - Stop once the point is made. Never tack on an extra offer, a promise to follow up or send something, or "let me know if you have any questions" unless the rep's own messages end that way: reps delete these more than anything else.
 - Sound like the rep's notes (HOW … WRITES) and RECENT MESSAGES BY THE REP: their length, wording, greeting, and the name they introduce themselves with (it can differ from SALES REP).
 - If the DRAFT is empty and the customer has not written to us yet, suggest the whole message (1–3 short sentences) built from CUSTOMER / PROJECT INFO: who the rep is and the company (unless already said on this channel), what the customer asked for, and one question that moves the project forward.
-- When the customer asked something, answer it with the facts in CUSTOMER / PROJECT INFO and QUOTES (the sink, color, edge, price, what is included). Only when a fact is not there may the rep say they'll check.
+- When the customer asked something, answer it with the facts in CUSTOMER / PROJECT INFO, QUOTES, STONES and PRICE LIST (the sink, color, edge, price, availability, slab size, what is included). Only when a fact is not there may the rep say they'll check.
 - If nothing useful fits, return an empty string.
 Examples (DRAFT → your output):
 "I'll be soo" → "n, see you Friday at 5:00."
@@ -105,6 +108,8 @@ pub struct ComposeContext {
     rep_voice: Vec<String>,
     /// The customer's quotes, formatted (empty: none).
     quotes: String,
+    /// The company's stones and price list, formatted (empty: none).
+    catalog: String,
 }
 
 /// Recently gathered threads (`warm` fills it).
@@ -209,6 +214,15 @@ pub fn format_rep_notes_block(
         rep_name.to_uppercase(),
         lines.join("\n")
     )
+}
+
+/// The system message: the rules, then the company's stones and price list.
+/// Both are the same for every thread of the company, so the model caches them.
+pub fn build_system_prompt(catalog: &str) -> String {
+    if trim(catalog).is_empty() {
+        return COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT.to_string();
+    }
+    format!("{COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT}\n\n{}", trim(catalog))
 }
 
 /// What the model is asked (`buildComposeAutocompleteUserPrompt`).
@@ -379,6 +393,111 @@ pub fn normalize_completion(raw: &str, draft: &str) -> String {
     text
 }
 
+/// The rep's newest messages a suggestion is checked against for repeats.
+const REPEAT_CHECK_MESSAGES: usize = 6;
+/// A suggested sentence with at least this share of its words in one of the rep's messages
+/// says it again.
+const REPEAT_SHARE: f64 = 0.6;
+/// Sentences with fewer words than this are not checked ("Thank you!").
+const REPEAT_MIN_WORDS: usize = 3;
+/// Words that say nothing about what a sentence means.
+const FILLER_WORDS: &[&str] = &[
+    "the", "and", "for", "you", "your", "our", "are", "was", "were", "will", "we'll", "i'll",
+    "i'm", "we're", "it's", "that", "this", "with", "have", "has", "had", "can", "not", "but",
+    "all", "any", "out", "get", "got", "just", "they", "them", "their", "its", "too", "very",
+    "also", "about", "from", "into", "what", "when", "then", "there", "here", "would", "could",
+    "should", "let", "know", "sure",
+];
+
+/// The words of `text` that carry its meaning, cut to their first 6 letters so "replace"
+/// and "replacing" match.
+fn meaning_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '’'))
+        .map(|w| w.replace('’', "'"))
+        .map(|w| w.trim_matches('\'').to_string())
+        .filter(|w| w.chars().count() >= 3 && !FILLER_WORDS.contains(&w.as_str()))
+        .map(|w| w.chars().take(6).collect())
+        .collect()
+}
+
+/// `completion` in sentences, each with its own ending and following space.
+fn sentences(completion: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let bytes: Vec<(usize, char)> = completion.char_indices().collect();
+    for (i, &(_, c)) in bytes.iter().enumerate() {
+        let next = bytes.get(i + 1).map(|&(_, n)| n);
+        if matches!(c, '.' | '!' | '?') && next.is_none_or(char::is_whitespace) {
+            let end = bytes
+                .iter()
+                .skip(i + 1)
+                .find(|&&(_, n)| !n.is_whitespace())
+                .map_or(completion.len(), |&(next_at, _)| next_at);
+            out.push(&completion[start..end]);
+            start = end;
+        }
+    }
+    if start < completion.len() {
+        out.push(&completion[start..]);
+    }
+    out
+}
+
+/// Whether `sentence` says again what one of the rep's `said` messages said.
+fn says_again(sentence: &str, said: &[Vec<String>]) -> bool {
+    let words = meaning_words(sentence);
+    if words.len() < REPEAT_MIN_WORDS {
+        return false;
+    }
+    said.iter().any(|message| {
+        let shared = words.iter().filter(|w| message.contains(w)).count();
+        // Word counts of a text message: far below where f64 loses precision.
+        #[allow(clippy::cast_precision_loss)]
+        let share = shared as f64 / words.len() as f64;
+        share >= REPEAT_SHARE
+    })
+}
+
+/// The suggestion without the sentences that repeat what the rep already told the customer.
+///
+/// The model does it although told not to. The first sentence of a typed draft can't be left
+/// out on its own: then nothing is suggested.
+pub fn drop_repeated_sentences(
+    completion: &str,
+    draft: &str,
+    timeline: &[FollowupTimelineMessage],
+) -> String {
+    let said: Vec<Vec<String>> = timeline
+        .iter()
+        .rev()
+        .filter(|m| m.direction == crate::followups::timeline::Direction::Outbound)
+        .take(REPEAT_CHECK_MESSAGES)
+        .map(|m| meaning_words(&m.text))
+        .collect();
+    if said.is_empty() || completion.trim().is_empty() {
+        return completion.to_string();
+    }
+    let parts = sentences(completion);
+    let mut kept = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        // The first part finishes the draft's own sentence: judged with what was typed.
+        let whole = if i == 0 && !draft.is_empty() {
+            format!("{}{part}", draft.rsplit(['.', '!', '?']).next().unwrap_or(draft))
+        } else {
+            (*part).to_string()
+        };
+        if says_again(&whole, &said) {
+            if i == 0 && !draft.is_empty() {
+                return String::new();
+            }
+            continue;
+        }
+        kept.push_str(part);
+    }
+    kept.trim_end().to_string()
+}
+
 /// Whose thread the composer is in.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ComposeTarget {
@@ -537,6 +656,7 @@ async fn load_context(
         }
         None => String::new(),
     };
+    let catalog = load_catalog(&state.pool, user.company_id).await;
     let context = ComposeContext {
         profile: format!("{}\n{quote_page}", gathered.profile),
         timeline: trim_timeline(&gathered.timeline, TIMELINE_MAX_CHARS),
@@ -549,6 +669,7 @@ async fn load_context(
             .unwrap_or_default(),
         rep_voice: gathered.rep_voice.examples,
         quotes,
+        catalog,
     };
     let contexts = state.extensions.get_or_default::<ComposeContexts>();
     let mut cache = contexts
@@ -675,23 +796,16 @@ pub async fn autocomplete(
     } else {
         MAX_OUTPUT_TOKENS
     };
-    let thread_key = thread
-        .customer_id
-        .map(|id| id.to_string())
-        .or_else(|| thread.customer_email.clone())
-        .or_else(|| thread.phone_digits.clone())
-        .unwrap_or_default();
+    let system = build_system_prompt(&context.catalog);
     let chat = |model| {
         let mut chat = Chat::new(model)
-            .message("system", COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT)
+            .message("system", &system)
             .message("user", &prompt)
             .max_tokens(Some(max_tokens));
         // Reasoning used up the cap and left the reply empty; none is needed.
         chat.reasoning_effort = Some("none");
-        chat.prompt_cache_key = Some(format!(
-            "compose-autocomplete:{}:{thread_key}",
-            user.company_id
-        ));
+        // One key per company, so every thread reuses the cached stone list.
+        chat.prompt_cache_key = Some(format!("compose-autocomplete:{}", user.company_id));
         chat
     };
     let raw = match state.ai.chat(&state.pool, caller, &chat(MINI_MODEL)).await {
@@ -704,8 +818,9 @@ pub async fn autocomplete(
         result => result,
     }
     .map_err(ai_failed)?;
+    let completion = normalize_completion(&raw, &request.draft);
     Ok(Json(Completion {
-        completion: normalize_completion(&raw, &request.draft),
+        completion: drop_repeated_sentences(&completion, &request.draft, &context.timeline),
     }))
 }
 
@@ -933,6 +1048,51 @@ pub async fn learn(
 mod tests {
     use super::*;
 
+    fn sms(direction: crate::followups::timeline::Direction, text: &str) -> FollowupTimelineMessage {
+        FollowupTimelineMessage {
+            at: "2026-11-06T16:00:00Z".into(),
+            channel: FollowupChannel::Sms,
+            direction,
+            text: text.into(),
+            from_email: None,
+            from_phone: None,
+        }
+    }
+
+    #[test]
+    fn a_suggestion_does_not_say_again_what_the_rep_said() {
+        use crate::followups::timeline::Direction::{Inbound, Outbound};
+        let timeline = [
+            sms(Inbound, "Unfortunately the one countertop in half bath was damaged."),
+            sms(
+                Outbound,
+                "I’m sorry about the damage. We’ll replace the half bath countertop as soon as possible.",
+            ),
+            sms(Inbound, "Thank you. The install went very well. They did great job."),
+        ];
+        // The owner's case: the opening stays, the repeated promise goes.
+        assert_eq!(
+            drop_repeated_sentences(
+                "Thank you, I’m glad the installation went well. We’ll take care of replacing the half bath countertop as soon as possible.",
+                "",
+                &timeline,
+            ),
+            "Thank you, I’m glad the installation went well."
+        );
+        // Something new stays whole.
+        let new = "Glad to hear it! I'll send the warranty papers today.";
+        assert_eq!(drop_repeated_sentences(new, "", &timeline), new);
+        // Short replies are never cut.
+        assert_eq!(drop_repeated_sentences("Thank you!", "", &timeline), "Thank you!");
+        // Finishing a typed sentence that repeats: nothing to suggest.
+        assert_eq!(
+            drop_repeated_sentences(" the half bath countertop as soon as possible.", "We'll replace", &timeline),
+            ""
+        );
+        // No messages from the rep: nothing to compare with.
+        assert_eq!(drop_repeated_sentences(new, "", &timeline[..1]), new);
+    }
+
     #[test]
     fn completions_are_cleaned_like_the_crm() {
         assert_eq!(
@@ -1018,6 +1178,7 @@ mod tests {
             rep_notes: vec!["Opens with 'Hey'".into()],
             rep_voice: Vec::new(),
             quotes: String::new(),
+            catalog: String::new(),
         };
         let prompt = build_user_prompt(
             FollowupChannel::Sms,
@@ -1037,6 +1198,7 @@ mod tests {
                 rep_notes: Vec::new(),
                 rep_voice: Vec::new(),
                 quotes: String::new(),
+                catalog: String::new(),
                 ..context
             },
             "",
@@ -1059,6 +1221,7 @@ mod tests {
             rep_notes: Vec::new(),
             rep_voice: Vec::new(),
             quotes: String::new(),
+            catalog: String::new(),
         };
         let prompt = build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "x");
         assert!(prompt.contains("SALES REP: Dema\n"));
@@ -1095,6 +1258,7 @@ mod tests {
             rep_notes: Vec::new(),
             rep_voice: Vec::new(),
             quotes: String::new(),
+            catalog: String::new(),
         };
         let prompt = build_user_prompt(
             FollowupChannel::Email,
@@ -1161,6 +1325,7 @@ mod tests {
             company_name: None,
             company_address: None,
             quotes: String::new(),
+            catalog: String::new(),
             rep_notes: Vec::new(),
             rep_voice: vec!["Hey Simon, this is Dima with Granite Depot.".into()],
         };
@@ -1190,5 +1355,16 @@ mod tests {
             "Hey Edward! How would you like to pay the deposit: card or Zelle?"
         ));
         assert!(!is_edit_of("", "Hi"));
+    }
+
+    #[test]
+    fn the_catalog_follows_the_rules_in_the_system_message() {
+        assert_eq!(build_system_prompt(" "), COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT);
+        assert_eq!(
+            build_system_prompt("STONES (…):\n- Viraldi (quartz): $65/sq ft, sold out\n"),
+            format!(
+                "{COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT}\n\nSTONES (…):\n- Viraldi (quartz): $65/sq ft, sold out"
+            )
+        );
     }
 }

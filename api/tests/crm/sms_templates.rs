@@ -215,3 +215,60 @@ async fn owners_and_admins_edit_and_delete(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NOT_FOUND);
 }
+
+#[test_db::test(seed)]
+async fn templates_keep_their_files(pool: MySqlPool) {
+    with_cloudtalk(&pool).await;
+    let (server, _storage) = common::server_with_storage(pool.clone());
+    let picture = json!({
+        "s3_key": "sms-attachments/100/m/promo.jpg",
+        "content_type": "image/jpeg",
+        "filename": "promo.jpg",
+        "width": 800,
+        "height": 600,
+    });
+    server
+        .post("/v1/sms-templates")
+        .with_session(sessions::REP)
+        .json(&json!({
+            "name": "Other company's",
+            "body": "Hi",
+            "attachments": [{ "s3_key": "sms-attachments/101/m/promo.jpg", "content_type": "image/jpeg" }],
+        }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let created: Value = server
+        .post("/v1/sms-templates")
+        .with_session(sessions::REP)
+        .json(&json!({ "name": "Promo", "body": "Hi", "attachments": [picture] }))
+        .await
+        .json();
+    let id = created["id"].as_i64().unwrap();
+    assert_eq!(
+        created["attachments"][0]["s3_key"],
+        "sms-attachments/100/m/promo.jpg"
+    );
+    assert_eq!(created["attachments"][0]["filename"], "promo.jpg");
+    assert!(
+        created["attachments"][0]["url"]
+            .as_str()
+            .unwrap()
+            .ends_with("/sms-attachments/100/m/promo.jpg")
+    );
+
+    // Left out keeps them; an empty list removes them.
+    let kept: Value = server
+        .put(&format!("/v1/sms-templates/{id}"))
+        .with_session(sessions::REP)
+        .json(&json!({ "name": "Promo", "body": "Hello" }))
+        .await
+        .json();
+    assert_eq!(kept["attachments"].as_array().unwrap().len(), 1);
+    let cleared: Value = server
+        .put(&format!("/v1/sms-templates/{id}"))
+        .with_session(sessions::REP)
+        .json(&json!({ "name": "Promo", "body": "Hello", "attachments": [] }))
+        .await
+        .json();
+    assert_eq!(cleared["attachments"], json!([]));
+}

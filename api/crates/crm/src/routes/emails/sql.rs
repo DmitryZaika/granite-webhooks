@@ -457,6 +457,33 @@ pub fn list_search(search: &str, extra: Option<Sql>) -> Sql {
     )
 }
 
+/// An `ORDER BY` key for [`list_search`]'s rows: 0 when the subject, an
+/// address or `extra` (a customer's addresses) matches, 1 for a hit only in
+/// the text. Empty when the term is.
+pub fn header_match(search: &str, extra: Option<Sql>) -> Sql {
+    let term = normalize_search_term(search);
+    if term.is_empty() {
+        return Sql::default();
+    }
+    let escaped = term
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let like = format!("%{escaped}%");
+    let esc = " ESCAPE '\\\\'";
+    let mut args: Vec<Arg> = (0..3).map(|_| Arg::from(like.clone())).collect();
+    let extra = extra.unwrap_or_default();
+    args.extend(extra.args);
+    Sql::new(
+        format!(
+            "CASE WHEN e.subject LIKE ?{esc} OR e.sender_email LIKE ?{esc} \
+             OR e.receiver_email LIKE ?{esc}{} THEN 0 ELSE 1 END",
+            extra.sql
+        ),
+        args,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

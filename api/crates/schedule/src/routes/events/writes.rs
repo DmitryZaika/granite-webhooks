@@ -88,6 +88,15 @@ pub struct EventInput {
     #[serde(default, deserialize_with = "crate::serde_helpers::double_option")]
     #[schema(value_type = Option<String>)]
     pub contact_email: Option<Option<String>>,
+    /// A second phone for this event; every automated text goes to both.
+    /// Empty or null clears it, leave out to keep it.
+    #[serde(default, deserialize_with = "crate::serde_helpers::double_option")]
+    #[schema(value_type = Option<String>)]
+    pub contact_phone_2: Option<Option<String>>,
+    /// A second email for this event; every automated email goes to both.
+    #[serde(default, deserialize_with = "crate::serde_helpers::double_option")]
+    #[schema(value_type = Option<String>)]
+    pub contact_email_2: Option<Option<String>>,
     /// Link or unlink the QuickBooks invoice; leave out to keep it.
     #[serde(default)]
     pub qbo_invoice: Option<EventInvoice>,
@@ -106,6 +115,9 @@ pub struct EventInput {
     /// leave out to keep the saved choice.
     #[serde(default)]
     pub picked_notification_flow_ids: Option<Vec<i32>>,
+    /// Create only: the project this template or installation is for.
+    #[serde(default)]
+    pub project_id: Option<i32>,
 }
 
 /// `POST /v1/events`.
@@ -153,6 +165,8 @@ pub struct Checked<'a> {
     /// `None` keeps the saved value; `Some(None)` clears it.
     pub contact_phone: Option<Option<&'a str>>,
     pub contact_email: Option<Option<&'a str>>,
+    pub contact_phone_2: Option<Option<&'a str>>,
+    pub contact_email_2: Option<Option<&'a str>>,
 }
 
 fn bad(message: &str) -> ApiError {
@@ -201,6 +215,20 @@ pub fn check<'a>(input: &'a EventInput) -> ApiResult<Checked<'a>> {
     {
         return Err(bad("Email must be 255 characters or less"));
     }
+    let contact_phone_2 = contact(&input.contact_phone_2);
+    if contact_phone_2
+        .flatten()
+        .is_some_and(|phone| length(phone) > 50)
+    {
+        return Err(bad("Second phone must be 50 characters or less"));
+    }
+    let contact_email_2 = contact(&input.contact_email_2);
+    if contact_email_2
+        .flatten()
+        .is_some_and(|email| length(email) > 255)
+    {
+        return Err(bad("Second email must be 255 characters or less"));
+    }
     let calendar_id = input
         .calendar_id
         .filter(|id| *id > 0)
@@ -245,6 +273,8 @@ pub fn check<'a>(input: &'a EventInput) -> ApiResult<Checked<'a>> {
         end,
         contact_phone,
         contact_email,
+        contact_phone_2,
+        contact_email_2,
     })
 }
 
@@ -403,8 +433,8 @@ async fn copy_records(
         .await;
     }
     sqlx::query(
-        "INSERT INTO event_images (event_id, company_id, url, created_by)
-         SELECT ?, company_id, url, created_by FROM event_images
+        "INSERT INTO event_images (event_id, company_id, url, created_by, for_customer)
+         SELECT ?, company_id, url, created_by, for_customer FROM event_images
           WHERE event_id = ? AND company_id = ? AND deleted_at IS NULL ORDER BY created_at, id",
     )
     .bind(event_id)
@@ -486,6 +516,18 @@ pub async fn create(
     let event = check(&input)?;
     check_calendar(pool, user.company_id, event.calendar_id).await?;
     let customer = check_customer(pool, user.company_id, &input).await?;
+    let project = match input.project_id.filter(|id| *id > 0) {
+        Some(project) => {
+            let found: Option<i32> =
+                sqlx::query_scalar("SELECT id FROM projects WHERE id = ? AND company_id = ?")
+                    .bind(project)
+                    .bind(user.company_id)
+                    .fetch_optional(pool)
+                    .await?;
+            Some(found.ok_or_else(|| ApiError::BadRequest("No such project".into()))?)
+        }
+        None => None,
+    };
     let assignee = match input.assigned_user_id.filter(|id| *id > 0) {
         Some(id) => Some(id),
         None => board::sole_template_maker(pool, event.calendar_id).await?,
@@ -493,8 +535,9 @@ pub async fn create(
     let id = sqlx::query(
         "INSERT INTO events (title, description, location, start_date, end_date, all_day,
             unscheduled, color, status, notes, created_user_id, assigned_user_id, sale_id,
-            customer_id, calendar_id, rrule, recurrence_until, contact_phone, contact_email)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            customer_id, calendar_id, rrule, recurrence_until, contact_phone, contact_email,
+            contact_phone_2, contact_email_2, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(event.title)
     .bind(event.description)
@@ -515,6 +558,9 @@ pub async fn create(
     .bind(event.recurrence_until)
     .bind(event.contact_phone.flatten())
     .bind(event.contact_email.flatten())
+    .bind(event.contact_phone_2.flatten())
+    .bind(event.contact_email_2.flatten())
+    .bind(project)
     .execute(pool)
     .await?
     .last_insert_id();
@@ -626,7 +672,9 @@ pub async fn update(
             all_day = ?, unscheduled = ?, color = ?, status = ?, notes = ?, assigned_user_id = ?,
             sale_id = ?, customer_id = IF(?, ?, customer_id), calendar_id = ?, rrule = ?,
             recurrence_until = ?, contact_phone = IF(?, ?, contact_phone),
-            contact_email = IF(?, ?, contact_email), updated_date = CURRENT_TIMESTAMP
+            contact_email = IF(?, ?, contact_email),
+            contact_phone_2 = IF(?, ?, contact_phone_2),
+            contact_email_2 = IF(?, ?, contact_email_2), updated_date = CURRENT_TIMESTAMP
           WHERE id = ?",
     )
     .bind(event.title)
@@ -650,6 +698,10 @@ pub async fn update(
     .bind(event.contact_phone.flatten())
     .bind(event.contact_email.is_some())
     .bind(event.contact_email.flatten())
+    .bind(event.contact_phone_2.is_some())
+    .bind(event.contact_phone_2.flatten())
+    .bind(event.contact_email_2.is_some())
+    .bind(event.contact_email_2.flatten())
     .bind(id)
     .execute(pool)
     .await?;

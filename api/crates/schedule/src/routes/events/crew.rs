@@ -11,18 +11,21 @@
 //! event's day: moving it to another day clears them (`clear`).
 
 use crate::auth::CurrentUser;
+use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::maps::Point;
 use crate::openapi::ToSchema;
+use crate::phone::crm_push::push_notification_logged;
 use crate::routes::events::history::{History, record};
 use crate::routes::schedule::company_address;
-use crate::routes::schedule::notifications::{Channel, send_on_my_way};
+use crate::routes::schedule::notifications::{Channel, send_on_complete, send_on_my_way};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
+use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 
@@ -158,7 +161,7 @@ fn message_error(code: &str) -> &'static str {
         }
         "no_customer" => "The job has no customer",
         "sms_unavailable" => "Texting is not set up for this company",
-        "no_sms_sender" => "No office manager has a texting line",
+        "no_sms_sender" => "No Scheduling Manager has a texting line",
         "no_phone" => "The customer has no phone number",
         "no_email" => "The customer has no email",
         "unfilled_variables" => {
@@ -196,12 +199,89 @@ async fn move_status(
     Ok(done.rows_affected() == 1)
 }
 
+/// Who hears that an installation is done, and about whom.
+#[derive(sqlx::FromRow)]
+struct InstalledJob {
+    rep_id: Option<i32>,
+    customer_id: Option<i32>,
+    customer_name: Option<String>,
+    deal_id: Option<u64>,
+}
+
+/// An installation (an Installations calendar job) was just completed: its
+/// sales rep (the sale's seller, else the deal's owner, else the customer's
+/// sales rep) gets a bell notification and a phone push, unless the company
+/// turned it off (Admin > Schedule) or the rep tapped Completed themselves.
+async fn tell_rep_installed(
+    state: &AppState,
+    event_id: i32,
+    by: &SessionUser,
+) -> Result<(), sqlx::Error> {
+    let pool = &state.pool;
+    let job: Option<InstalledJob> = sqlx::query_as(
+        "SELECT CAST(COALESCE(sr.id, dr.id, cr.id) AS SIGNED) AS rep_id,
+                CAST(c.id AS SIGNED) AS customer_id,
+                NULLIF(TRIM(c.name), '') AS customer_name,
+                CAST(d.id AS UNSIGNED) AS deal_id
+           FROM events e
+           JOIN company co ON co.id = ? AND co.notify_rep_on_install_complete <> 0
+           JOIN calendars cal ON cal.id = e.calendar_id AND cal.company_id = co.id
+            AND cal.slug = 'installations'
+           LEFT JOIN sales s ON s.id = e.sale_id AND s.company_id = co.id
+           LEFT JOIN customers c ON c.id = COALESCE(e.customer_id, s.customer_id)
+            AND c.company_id = co.id AND c.deleted_at IS NULL
+           LEFT JOIN deals d ON d.id = s.deal_id AND d.deleted_at IS NULL
+           LEFT JOIN users sr ON sr.id = s.seller_id AND sr.company_id = co.id
+            AND sr.is_deleted = 0
+           LEFT JOIN users dr ON dr.id = d.user_id AND dr.company_id = co.id
+            AND dr.is_deleted = 0
+           LEFT JOIN users cr ON cr.id = c.sales_rep AND cr.company_id = co.id
+            AND cr.is_deleted = 0
+          WHERE e.id = ?",
+    )
+    .bind(by.company_id)
+    .bind(event_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(job) = job else {
+        return Ok(());
+    };
+    // The bell lists it only with a customer, so without one nobody is told.
+    let (Some(rep_id), Some(customer_id)) =
+        (job.rep_id.filter(|rep| *rep != by.id), job.customer_id)
+    else {
+        return Ok(());
+    };
+    let customer = job.customer_name.as_deref().unwrap_or("Your customer");
+    let message: String = format!("{customer} is installed")
+        .chars()
+        .take(255)
+        .collect();
+    let notification_id = sqlx::query(
+        "INSERT INTO notifications
+                (user_id, customer_id, deal_id, message, notification_type, actor_name, due_at)
+         VALUES (?, ?, ?, ?, 'installation_completed', ?, NOW())",
+    )
+    .bind(rep_id)
+    .bind(customer_id)
+    .bind(job.deal_id)
+    .bind(&message)
+    .bind(by.name.as_deref())
+    .execute(pool)
+    .await?
+    .last_insert_id();
+    push_notification_logged(state, i64::try_from(notification_id).unwrap_or_default()).await;
+    Ok(())
+}
+
 /// Tap On my way or Completed
 ///
 /// On my way (today's jobs, before arriving) marks the job and tells the
 /// customer once with the company's On my way message: a text, or an email
 /// when the company cannot text. The status is saved even when the message
-/// cannot go; `message_error` says why. Completed marks the job done. For the
+/// cannot go; `message_error` says why. Completed marks the job done; on an
+/// installation its sales rep is told (unless Admin > Schedule turned it
+/// off). For the
 /// job's installer or template maker, or an admin.
 #[crate::openapi::path(
     post,
@@ -268,6 +348,17 @@ pub async fn set_status(
                     &History::new(id, user.company_id, "updated", by).message("Completed"),
                 )
                 .await;
+                if let Err(error) = tell_rep_installed(&state, id, &user).await {
+                    tracing::warn!(
+                        ?error,
+                        event = id,
+                        "could not tell the rep the job is installed"
+                    );
+                }
+                // Flow steps set to go out when the job is completed.
+                if let Err(error) = send_on_complete(&state, id).await {
+                    tracing::warn!(?error, event = id, "could not send the completed texts");
+                }
             }
             Ok(Json(CrewStatusSaved {
                 status: CrewStatus::Completed,

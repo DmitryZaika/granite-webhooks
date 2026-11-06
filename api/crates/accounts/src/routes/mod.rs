@@ -11,3 +11,4 @@ pub mod me;
 pub mod onboarding;
 pub mod teach_mode;
 pub mod users;
+pub mod web_link;

@@ -235,6 +235,81 @@ async fn admins_pick_the_day_weeks_start_on(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn everyone_sees_every_event(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO events (id, title, start_date, end_date, created_user_id, assigned_user_id) VALUES
+           (9790, 'Rita made', '2026-06-10 15:00:00', '2026-06-10 16:00:00', 100, NULL),
+           (9791, 'For Rita', '2026-06-11 15:00:00', '2026-06-11 16:00:00', 102, 100),
+           (9792, 'Ada only', '2026-06-12 15:00:00', '2026-06-12 16:00:00', 102, NULL),
+           (9793, 'Waiting', '2026-06-12 15:00:00', '2026-06-12 15:00:00', 102, NULL);
+         UPDATE events SET unscheduled = 1 WHERE id = 9793;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    let june = |session: &'static str| {
+        let request = server
+            .get("/v1/schedule/events?start=2026-06-01T00:00:00Z&end=2026-06-30T23:59:59Z")
+            .with_session(session);
+        async move { common::ids(&request.await.json::<Value>()["events"]) }
+    };
+    let waiting = |session: &'static str| {
+        let request = server.get("/v1/schedule/unscheduled").with_session(session);
+        async move { common::ids(&request.await.json::<Value>()) }
+    };
+    // Owner's rule: everyone sees every event, whatever their position.
+    for session in [sessions::REP, sessions::MANAGER, sessions::ADMIN] {
+        assert_eq!(june(session).await, [9790, 9791, 9792]);
+        assert_eq!(waiting(session).await, [9793]);
+    }
+}
+
+#[test_db::test(seed)]
+async fn waiting_events_bring_their_invoices(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO events (id, title, start_date, end_date, created_user_id, status) VALUES
+           (9795, 'Waiting install', '2026-06-12 15:00:00', '2026-06-12 15:00:00', 100, 'ready'),
+           (9796, 'Waiting template', '2026-06-13 15:00:00', '2026-06-13 15:00:00', 100, NULL);
+         UPDATE events SET unscheduled = 1 WHERE id IN (9795, 9796);
+         INSERT INTO event_qbo_invoices (event_id, company_id, qbo_invoice_id, qbo_invoice_number, created_by)
+           VALUES (9795, 100, '1042', 'INV-1042', 100);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    let waiting = || async {
+        server
+            .get("/v1/schedule/unscheduled")
+            .with_session(sessions::REP)
+            .await
+            .json::<Value>()
+    };
+    // QuickBooks off: no invoices.
+    let off = waiting().await;
+    assert_eq!(common::ids(&off), [9795, 9796]);
+    assert_eq!(off[0]["qbo_invoice"], Value::Null);
+    assert_eq!(off[0]["status"], "ready");
+    sqlx::query(
+        "UPDATE company SET quickbooks_enabled = 1, qbo_realm_id = '123',
+                qbo_access_token = 'a', qbo_refresh_token = 'r',
+                qbo_access_expires = 1, qbo_refresh_expires = 2
+          WHERE id = 100",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Connected: an edit that sends the invoice back keeps the link.
+    let on = waiting().await;
+    assert_eq!(
+        on[0]["qbo_invoice"],
+        json!({ "id": "1042", "number": "INV-1042" })
+    );
+    assert_eq!(on[1]["qbo_invoice"], Value::Null);
+}
+
+#[test_db::test(seed)]
 async fn the_shop_sees_the_schedule(pool: MySqlPool) {
     let server = server(pool.clone());
     let april = "/v1/schedule/events?start=2026-04-01T00:00:00Z&end=2026-04-30T23:59:59Z";
@@ -250,11 +325,13 @@ async fn the_shop_sees_the_schedule(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
-    server
-        .get(april)
-        .with_session(sessions::VIEWER)
-        .await
-        .assert_status_ok();
+    // A shop worker sees everyone's events, not only their own.
+    let events = server.get(april).with_session(sessions::VIEWER).await;
+    events.assert_status_ok();
+    assert_eq!(
+        common::ids(&events.json::<Value>()["events"]),
+        [9712, 9710, 9711]
+    );
 }
 
 #[test_db::test(seed)]
@@ -287,4 +364,28 @@ async fn each_user_picks_their_own_week_start_and_clock(pool: MySqlPool) {
     let admin = settings(sessions::ADMIN).await;
     assert_eq!(admin["week_starts_on"], "sunday");
     assert_eq!(admin["time_24h"], false);
+}
+
+#[test_db::test(seed)]
+async fn settings_name_the_color_a_user_adds_most(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let favorite = |session: &'static str| {
+        let request = server.get("/v1/schedule/settings").with_session(session);
+        async move { request.await.json::<Value>()["favorite_color"].clone() }
+    };
+    assert_eq!(favorite(sessions::REP).await, Value::Null);
+    sqlx::raw_sql(
+        "INSERT INTO events (id, title, start_date, end_date, created_user_id, color, created_date) VALUES
+           (9720, 'A', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 'green', NOW()),
+           (9721, 'B', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 'green', NOW()),
+           (9722, 'C', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 'red', NOW()),
+           (9723, 'Old', '2026-01-10 15:00:00', '2026-01-10 16:00:00', 100, 'red', NOW() - INTERVAL 200 DAY),
+           (9724, 'Old', '2026-01-10 15:00:00', '2026-01-10 16:00:00', 100, 'red', NOW() - INTERVAL 200 DAY),
+           (9725, 'Other', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 106, 'pink', NOW());",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Events of the last 90 days count; older ones and other users' do not.
+    assert_eq!(favorite(sessions::REP).await, "green");
 }

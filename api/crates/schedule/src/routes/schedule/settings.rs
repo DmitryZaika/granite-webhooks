@@ -2,7 +2,8 @@
 //! own (the schedule's settings button).
 //!
 //! - `GET /v1/schedule/settings` → the day the caller's weeks start on, their
-//!   12- or 24-hour times and the calendar the Schedule estimate button books on
+//!   12- or 24-hour times, the calendar the Schedule estimate button books on
+//!   and the label color they use most
 //! - `PUT /v1/schedule/settings` → an admin changes the company's
 //! - `PUT /v1/schedule/settings/me` → a user changes their own
 
@@ -39,6 +40,12 @@ pub struct ScheduleSettings {
     /// one an admin picked, else the built-in Estimates calendar (null when
     /// there is neither).
     pub estimates_calendar_id: Option<i32>,
+    /// The label color the caller gave most of the events they added in the
+    /// last 90 days (null when none): a new event starts with it.
+    pub favorite_color: Option<String>,
+    /// The job's sales rep is told when the installer taps Completed on an
+    /// installation (Admin > Schedule; on unless an admin turned it off).
+    pub notify_rep_on_install_complete: bool,
 }
 
 /// `PUT /v1/schedule/settings`: only the fields sent change.
@@ -50,6 +57,9 @@ pub struct ScheduleSettingsInput {
     /// A calendar of the caller's company.
     #[serde(default)]
     pub estimates_calendar_id: Option<i32>,
+    /// Tell the sales rep when the installer taps Completed on an installation.
+    #[serde(default)]
+    pub notify_rep_on_install_complete: Option<bool>,
 }
 
 /// The calendar estimates are booked on: the one an admin picked while it
@@ -70,11 +80,26 @@ pub async fn estimates_calendar_id(
     .await
 }
 
+/// The color the user gave most of the events they added in the last 90
+/// days; the latest wins a tie.
+async fn favorite_color(pool: &MySqlPool, user_id: i32) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT color FROM events
+          WHERE created_user_id = ? AND created_date >= NOW() - INTERVAL 90 DAY
+            AND COALESCE(TRIM(color), '') <> ''
+          GROUP BY color ORDER BY COUNT(*) DESC, MAX(id) DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Get the schedule settings
 ///
 /// The day the caller's schedule starts its weeks on (their own choice, else
 /// the company's: Sunday unless an admin picked Monday), whether they show
-/// 24-hour times, and the calendar estimates are booked on.
+/// 24-hour times, the calendar estimates are booked on, and the label color
+/// they use most.
 #[crate::openapi::path(
     get,
     path = "/v1/schedule/settings",
@@ -91,12 +116,14 @@ pub async fn settings(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
 ) -> ApiResult<Json<ScheduleSettings>> {
-    let company_monday: Option<bool> =
-        sqlx::query_scalar("SELECT schedule_week_starts_monday <> 0 FROM company WHERE id = ?")
-            .bind(user.company_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let company_monday = company_monday.unwrap_or(false);
+    let company: Option<(bool, bool)> = sqlx::query_as(
+        "SELECT schedule_week_starts_monday <> 0, notify_rep_on_install_complete <> 0
+           FROM company WHERE id = ?",
+    )
+    .bind(user.company_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (company_monday, notify_rep_on_install_complete) = company.unwrap_or((false, true));
     let own: Option<(Option<bool>, bool)> = sqlx::query_as(
         "SELECT schedule_week_starts_monday <> 0, schedule_time_24h <> 0 FROM users WHERE id = ?",
     )
@@ -116,13 +143,16 @@ pub async fn settings(
         company_week_starts_on: week_start(company_monday),
         time_24h,
         estimates_calendar_id: estimates_calendar_id(&state.pool, user.company_id).await?,
+        favorite_color: favorite_color(&state.pool, user.id).await?,
+        notify_rep_on_install_complete,
     }))
 }
 
 /// Set the schedule settings
 ///
-/// Saves the day the company's schedule starts its weeks on and the calendar
-/// estimates are booked on, for everyone.
+/// Saves the day the company's schedule starts its weeks on, the calendar
+/// estimates are booked on, and whether the sales rep is told when the
+/// installer taps Completed on an installation, for everyone.
 #[crate::openapi::path(
     put,
     path = "/v1/schedule/settings",
@@ -156,6 +186,13 @@ pub async fn set_settings(
         }
         sqlx::query("UPDATE company SET estimates_calendar_id = ? WHERE id = ?")
             .bind(calendar_id)
+            .bind(user.company_id)
+            .execute(&state.pool)
+            .await?;
+    }
+    if let Some(on) = input.notify_rep_on_install_complete {
+        sqlx::query("UPDATE company SET notify_rep_on_install_complete = ? WHERE id = ?")
+            .bind(on)
             .bind(user.company_id)
             .execute(&state.pool)
             .await?;

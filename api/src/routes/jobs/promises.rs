@@ -25,16 +25,13 @@ pub struct PromisesRun {
     pub promises: usize,
     /// Due promises the reps were reminded of.
     pub reminded: usize,
-    /// Morning lists sent.
-    pub digests: usize,
 }
 
 /// Read reps' calls and messages for promises
 ///
 /// For the reps AI promises is on for: reminds them of promises that came
 /// due, closes the tasks they finished in the CRM (a quote saved or emailed,
-/// a document sent to sign, an event on the schedule, a call), sends their
-/// morning list (once a day from 8 AM their time), queues their calls, texts
+/// a document sent to sign, an event on the schedule, a call), queues their calls, texts
 /// and emails of the last 3 days not read yet, then reads up to 4 (a call is
 /// transcribed first): saves what the rep promised the customer and by when,
 /// closes the open promises it keeps, adds the quote work the customer gave
@@ -59,6 +56,5 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
         queued: run.queued,
         promises: run.promises,
         reminded: run.reminded,
-        digests: run.digests,
     }))
 }

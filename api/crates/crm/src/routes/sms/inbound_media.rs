@@ -10,6 +10,7 @@ use crate::auth::job::JobCaller;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
+use crate::phone::texting::stored_file;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -142,20 +143,21 @@ pub async fn store_inbound_media(
                     continue;
                 }
             };
-        let is_image = file.content_type.starts_with("image/");
+        let (bytes, content_type) = stored_file(bytes, file.content_type.clone()).await;
+        let is_image = content_type.starts_with("image/");
         let (width, height) = if is_image {
             dimensions(&bytes).map_or((None, None), |(w, h)| (Some(w), Some(h)))
         } else {
             (None, None)
         };
-        let ext = extension(&file.content_type);
+        let ext = extension(&content_type);
         let key = format!(
             "sms-attachments/{}/rc-{}/{}.{ext}",
             body.company_id,
             body.message_id,
             uuid::Uuid::new_v4()
         );
-        if let Err(error) = state.storage.put(&key, bytes, &file.content_type).await {
+        if let Err(error) = state.storage.put(&key, bytes, &content_type).await {
             tracing::error!(
                 company_id = body.company_id,
                 ?error,
@@ -174,7 +176,7 @@ pub async fn store_inbound_media(
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(body.sms_id)
-        .bind(&file.content_type)
+        .bind(&content_type)
         .bind(filename)
         .bind(&key)
         .bind(url)

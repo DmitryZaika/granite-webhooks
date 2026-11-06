@@ -26,6 +26,47 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{MySql, QueryBuilder};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
+
+/// How long a rep's `RingCentral` call log is reused between bell polls.
+/// Every open tab polls each minute, and each read counts against the rep's
+/// own `RingCentral` limit (about ten a minute), which their contacts share
+/// (`common::telephony::ringcentral_contacts`).
+const RINGCENTRAL_CALLS_TTL: Duration = Duration::from_secs(180);
+
+/// Call-log rows by company and extension, with when they were read.
+type RingCentralCalls = HashMap<(i32, String), (Instant, Arc<Vec<serde_json::Value>>)>;
+static RINGCENTRAL_CALLS: LazyLock<Mutex<RingCentralCalls>> = LazyLock::new(Mutex::default);
+
+/// The extension's call log since `from`, read at most once per
+/// [`RINGCENTRAL_CALLS_TTL`] by this instance.
+async fn ringcentral_calls_cached(
+    state: &AppState,
+    company_id: i32,
+    extension: &str,
+    from: &str,
+) -> Arc<Vec<serde_json::Value>> {
+    use crate::routes::users::call_activity::company_ringcentral_calls;
+    let key = (company_id, extension.to_string());
+    let cached = RINGCENTRAL_CALLS.lock().ok().and_then(|cache| {
+        cache
+            .get(&key)
+            .filter(|(read_at, _)| read_at.elapsed() < RINGCENTRAL_CALLS_TTL)
+            .map(|(_, records)| Arc::clone(records))
+    });
+    if let Some(records) = cached {
+        return records;
+    }
+    let records =
+        Arc::new(company_ringcentral_calls(state, company_id, Some(extension), from).await);
+    if let Ok(mut cache) = RINGCENTRAL_CALLS.lock() {
+        cache.retain(|_, (read_at, _)| read_at.elapsed() < RINGCENTRAL_CALLS_TTL);
+        cache.insert(key, (Instant::now(), Arc::clone(&records)));
+    }
+    records
+}
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -334,6 +375,10 @@ pub struct NotificationItem {
     /// The deal an activity notification is about (the phone app opens it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deal_id: Option<i64>,
+    /// The customer an activity notification is about (the phone app opens
+    /// their card when there is no deal).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer_id: Option<i32>,
 }
 
 /// `GET /v1/notifications`.
@@ -358,9 +403,13 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "activity_edited" => "Edited an Activity",
         "activity_deleted" => "Deleted an Activity",
         "activity_deadline_reminder" => "Activity Reminder",
+        "project_task_assigned" => "Gave You a Task",
+        "project_task_reminder" => "Task Due",
+        "project_task_done" => "Finished Your Task",
         "estimate_appointment_reminder" => "In-Home Estimate Reminder",
         "installation_appointment_reminder" => "Installation Reminder",
         "template_appointment_reminder" => "Template Appointment Reminder",
+        "installation_completed" => "Installation Completed",
         "note_added" => "Added a Note",
         "note_edited" => "Edited a Note",
         "note_deleted" => "Deleted a Note",
@@ -382,9 +431,10 @@ fn type_title(kind: &str) -> Option<&'static str> {
     })
 }
 
-/// AI promises' notifications (`crate::promises`): a promise came due, the
-/// morning list, and an approval got no reply. They may name a customer but
-/// no deal, and open the rep's promise list.
+/// AI promises' notifications (`crate::promises`): a promise came due, and an
+/// approval got no reply; the morning list (`ai_promise_digest`) is no longer
+/// sent nor listed, its old rows keep their heading. They may name a customer
+/// but no deal, and open the rep's promise list.
 const PROMISE_DUE: &str = "ai_promise_due";
 const PROMISE_DIGEST: &str = "ai_promise_digest";
 /// Something sent for a customer's approval got no reply in a day.
@@ -422,6 +472,8 @@ struct EmailRow {
 struct ActivityRow {
     id: i64,
     deal_id: Option<i64>,
+    /// A project task's notification.
+    project_id: Option<i32>,
     /// `None` only for a 911 alert.
     customer_id: Option<i32>,
     message: String,
@@ -514,6 +566,7 @@ async fn unread_email(
                 type_title: None,
                 action_label: None,
                 deal_id: None,
+                customer_id: None,
             }
         })
         .collect())
@@ -527,27 +580,42 @@ async fn activity(
     only: Option<i64>,
 ) -> Result<Vec<NotificationItem>, sqlx::Error> {
     let rows: Vec<ActivityRow> = sqlx::query_as(
-        "SELECT CAST(n.id AS SIGNED) AS id, CAST(n.deal_id AS SIGNED) AS deal_id, c.id AS customer_id, n.message,
+        "SELECT CAST(n.id AS SIGNED) AS id, CAST(n.deal_id AS SIGNED) AS deal_id,
+                pr.id AS project_id, c.id AS customer_id, n.message,
                 c.name AS customer_name, n.notification_type, n.actor_name,
                 -- A deadline reminder happens at its deadline, not when it was scheduled.
-                DATE_FORMAT(CASE WHEN n.notification_type = 'activity_deadline_reminder'
+                DATE_FORMAT(CASE WHEN n.notification_type IN ('activity_deadline_reminder',
+                                                              'project_task_reminder')
                                  THEN n.due_at ELSE n.created_at END,
                             '%Y-%m-%dT%H:%i:%sZ') AS created_at
            FROM notifications n
            LEFT JOIN deals d ON d.id = n.deal_id AND d.deleted_at IS NULL
-           LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, n.customer_id)
+           LEFT JOIN projects pr ON pr.id = n.project_id
+           LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, pr.customer_id, n.customer_id)
           WHERE n.user_id = ? AND n.is_done = 0 AND (? IS NULL OR n.id = ?)
-            -- On a live deal, except 911 alerts, the texting registration's,
-            -- number ports' and AI promises' (they name no deal).
-            AND ((d.id IS NOT NULL AND c.id IS NOT NULL)
+            -- On a live deal or a project, except 911 alerts, the texting
+            -- registration's, number ports' and AI promises' (they name no
+            -- deal), and a finished installation of a customer without a deal.
+            -- The morning list (ai_promise_digest) is no longer sent or shown.
+            -- A scheduled message's outcome shows with or without a deal.
+            AND (((d.id IS NOT NULL OR pr.id IS NOT NULL) AND c.id IS NOT NULL)
+                 OR (n.notification_type = 'installation_completed' AND c.id IS NOT NULL
+                     AND c.deleted_at IS NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
-                                            'phone_port', 'ai_promise_due', 'ai_promise_digest',
-                                            'ai_promise_approval'))
+                                            'phone_port', 'ai_promise_due',
+                                            'ai_promise_approval', 'delayed_message_sent',
+                                            'delayed_message_failed'))
+            -- A project task's reminder shows while the task is open.
+            AND (COALESCE(n.notification_type, '') <> 'project_task_reminder' OR EXISTS (
+                  SELECT 1 FROM project_activities pa
+                   WHERE pa.id = n.project_task_id AND pa.deleted_at IS NULL
+                     AND pa.completed_at IS NULL))
             -- Signature status is emailed to the sender, so it is not listed here.
             AND (n.notification_type IS NULL OR n.notification_type NOT IN
                  ('signature_viewed', 'signature_signed', 'signature_declined'))
             -- Deadline reminders stay until dismissed or the activity is completed.
-            AND CASE WHEN n.notification_type = 'activity_deadline_reminder'
+            AND CASE WHEN n.notification_type IN ('activity_deadline_reminder',
+                                                  'project_task_reminder')
                      THEN n.due_at <= UTC_TIMESTAMP()
                      ELSE n.due_at <= NOW() END
             AND (n.notification_type != 'activity_deadline_reminder' OR EXISTS (
@@ -576,6 +644,10 @@ async fn activity(
                 _ if promise => PROMISES_HREF.to_string(),
                 _ if kind == Some(TENDLC_READY) => TENDLC_READY_HREF.to_string(),
                 _ if texting || port => E911_ALERT_HREF.to_string(),
+                _ if row.project_id.is_some() => format!(
+                    "/employee/projects/edit/{}",
+                    row.project_id.unwrap_or_default()
+                ),
                 (Some(deal), _) => format!("/employee/deals/edit/{deal}/project"),
                 (None, Some(customer)) => format!("/employee/customers/info/{customer}/documents"),
                 (None, None) => E911_ALERT_HREF.to_string(),
@@ -609,6 +681,7 @@ async fn activity(
                 customer_name: (!alert && !texting && !port).then_some(customer),
                 action_label: None,
                 deal_id: row.deal_id.filter(|_| !(alert || texting || port)),
+                customer_id: row.customer_id.filter(|_| !(alert || texting || port)),
             }
         })
         .collect())
@@ -687,6 +760,7 @@ async fn telnyx_calls(
                 }),
                 action_label: None,
                 deal_id: None,
+                customer_id: None,
             }
         })
         .collect())
@@ -717,6 +791,7 @@ async fn billing(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>
             type_title: None,
             action_label: Some(row.action_label),
             deal_id: None,
+            customer_id: None,
         })
         .collect())
 }
@@ -725,7 +800,7 @@ async fn billing(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>
 /// `CloudTalk` line and `RingCentral` extension.
 async fn missed_calls(state: &AppState, user: &SessionUser) -> Vec<NotificationItem> {
     use crate::routes::users::call_activity::{
-        CallActivity, activity, agent_calls, company_ringcentral_calls, ringcentral_activity,
+        CallActivity, activity, agent_calls, name_customers, ringcentral_activity,
     };
     let present = |value: &Option<String>| {
         value
@@ -751,20 +826,23 @@ async fn missed_calls(state: &AppState, user: &SessionUser) -> Vec<NotificationI
             return Vec::new();
         };
         let from = since.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        company_ringcentral_calls(state, user.company_id, Some(&extension), &from)
+        ringcentral_calls_cached(state, user.company_id, &extension, &from)
             .await
             .iter()
             .map(|record| ringcentral_activity(record, user.id, ""))
             .collect::<Vec<CallActivity>>()
     };
     let (cloudtalk, ringcentral) = tokio::join!(cloudtalk, ringcentral);
-    cloudtalk
+    let mut calls: Vec<CallActivity> = cloudtalk
         .into_iter()
         .chain(ringcentral)
         .filter(|call| call.action == "Missed a call")
         .take(30)
-        .map(|call| missed_call_item(&call))
-        .collect()
+        .collect();
+    // The customer's name from our records, not the carrier's caller-ID label
+    // (on a database error the calls still list, by number).
+    let _ = name_customers(&state.pool, user.company_id, &mut calls).await;
+    calls.iter().map(missed_call_item).collect()
 }
 
 fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) -> NotificationItem {
@@ -777,6 +855,13 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
     let external = call.contact.clone().unwrap_or_default();
     let digits: String = external.chars().filter(char::is_ascii_digit).collect();
     let digits = &digits[digits.len().saturating_sub(10)..];
+    // RingCentral's own name for a number not in our records is the carrier's
+    // caller-ID label (`WIRELESS CALLER`, `INDIANAPOLIS IN`): show the number.
+    let name = if ringcentral && call.customer_id.is_none() {
+        None
+    } else {
+        call.customer_name.clone()
+    };
     let started = call.created_at.as_str();
     // CloudTalk sends `2026-05-01 10:00:00` (UTC), RingCentral RFC 3339.
     let sent_at = chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S")
@@ -794,7 +879,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
         } else {
             format!("call-{}", call.call_id)
         },
-        title: call.customer_name.clone().unwrap_or_else(|| {
+        title: name.clone().unwrap_or_else(|| {
             if external.is_empty() {
                 "Unknown caller".into()
             } else {
@@ -816,7 +901,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
         kind: NotificationKind::Call,
         notification_type: None,
         actor_name: None,
-        customer_name: call.customer_name.clone(),
+        customer_name: name,
         type_title: Some(if call.is_voicemail {
             format!("{provider} voicemail")
         } else {
@@ -824,6 +909,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
         }),
         action_label: None,
         deal_id: None,
+        customer_id: None,
     }
 }
 
@@ -897,7 +983,8 @@ pub async fn list(
 /// Get one activity notification
 ///
 /// The caller's own due activity notification `notif-<id>`, as
-/// `GET /v1/notifications` lists it, with the deal it opens (`deal_id`).
+/// `GET /v1/notifications` lists it, with the deal it opens (`deal_id`),
+/// else its customer (`customer_id`).
 /// The phone app reads it for a `notification` push, which names only the
 /// id. 404 for another user's, a dismissed one, or one `GET
 /// /v1/notifications` would not list.

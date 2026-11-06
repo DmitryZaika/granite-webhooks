@@ -874,3 +874,77 @@ async fn managers_switch_sold_quote_jobs_in_unscheduled(pool: MySqlPool) {
         .json();
     assert_eq!(features["auto_unscheduled_jobs"], true);
 }
+
+#[test_db::test(seed)]
+async fn managers_switch_invoice_on_sold_quote(pool: MySqlPool) {
+    let Setup { server, .. } = setup(&pool, false, false).await;
+    let on = || async {
+        let on: bool =
+            sqlx::query_scalar("SELECT auto_invoice <> 0 FROM company WHERE id = 100")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        on
+    };
+    // Off by default; a rep and a non-manager admin may not switch it.
+    assert!(!on().await);
+    for session in [sessions::REP, sessions::ADMIN] {
+        server
+            .put("/v1/company/auto-invoice")
+            .with_session(session)
+            .json(&json!({ "enabled": true }))
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+    admin_manages(&pool).await;
+    server
+        .put("/v1/company/auto-invoice")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "enabled": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(on().await);
+    let features: Value = server
+        .get("/v1/company/features")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(features["auto_invoice"], true);
+}
+
+#[test_db::test(seed)]
+async fn managers_switch_quote_invoice_sync(pool: MySqlPool) {
+    let Setup { server, .. } = setup(&pool, false, false).await;
+    let on = || async {
+        let on: bool =
+            sqlx::query_scalar("SELECT quote_invoice_sync <> 0 FROM company WHERE id = 100")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        on
+    };
+    // Off by default; a rep and a non-manager admin may not switch it.
+    assert!(!on().await);
+    for session in [sessions::REP, sessions::ADMIN] {
+        server
+            .put("/v1/company/quote-invoice-sync")
+            .with_session(session)
+            .json(&json!({ "enabled": true }))
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+    admin_manages(&pool).await;
+    server
+        .put("/v1/company/quote-invoice-sync")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "enabled": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(on().await);
+    let features: Value = server
+        .get("/v1/company/features")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(features["quote_invoice_sync"], true);
+}

@@ -4,6 +4,7 @@
 //! - `POST   /v1/customer-sources`      → add one (admins)
 //! - `PUT    /v1/customer-sources/{id}` → rename (admins)
 //! - `DELETE /v1/customer-sources/{id}` → hide a custom one (admins)
+//! - `PUT    /v1/customer-sources/{id}/walk-in` → count a custom one as a walk-in (admins)
 //!
 //! Replaces the Remix `api.customer-sources` route.
 
@@ -24,6 +25,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, create))
         .routes(routes!(rename, delete))
+        .routes(routes!(set_walk_in))
 }
 
 /// A customer source.
@@ -37,6 +39,16 @@ pub struct CustomerSource {
     pub label: String,
     /// Built in: can be renamed but not deleted.
     pub is_system: bool,
+    /// Counts as a walk-in (Walk-in filter, walk-in statistics). The
+    /// built-in walk-in always does, whatever this says.
+    pub is_walkin: bool,
+}
+
+/// Body of `PUT /v1/customer-sources/{id}/walk-in`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct WalkIn {
+    /// Whether the source's customers count as walk-ins.
+    pub walk_in: bool,
 }
 
 /// Body of `POST /v1/customer-sources` and `PUT /v1/customer-sources/{id}`.
@@ -110,7 +122,8 @@ pub async fn list(
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<Vec<CustomerSource>>> {
     let sources = sqlx::query_as(
-        "SELECT CAST(id AS SIGNED) AS id, source_key, label, is_system <> 0 AS is_system FROM customer_sources
+        "SELECT CAST(id AS SIGNED) AS id, source_key, label, is_system <> 0 AS is_system,
+                is_walkin <> 0 AS is_walkin FROM customer_sources
           WHERE company_id = ? AND deleted_at IS NULL
           ORDER BY is_system DESC, label ASC",
     )
@@ -267,6 +280,47 @@ pub async fn delete(
         ));
     }
     sqlx::query("UPDATE customer_sources SET deleted_at = NOW() WHERE id = ?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Count a customer source as a walk-in
+///
+/// Its customers show under the Customers list's Walk-in filter and in the
+/// walk-in statistics, like the built-in walk-in (for a second showroom).
+#[crate::openapi::path(
+    put,
+    path = "/v1/customer-sources/{id}/walk-in",
+    operation_id = "set_customer_source_walk_in",
+    tag = "customers",
+    params(("id" = i32, Path, description = "Source id")),
+    request_body = WalkIn,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 400, description = "A built-in source", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such source in the caller's company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn set_walk_in(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<WalkIn>,
+) -> ApiResult<StatusCode> {
+    let (_, is_system) = find(&state.pool, user.company_id, id).await?;
+    if is_system {
+        return Err(ApiError::BadRequest(
+            "Built-in sources can't be marked as walk-ins.".into(),
+        ));
+    }
+    sqlx::query("UPDATE customer_sources SET is_walkin = ? WHERE id = ?")
+        .bind(input.walk_in)
         .bind(id)
         .execute(&state.pool)
         .await?;

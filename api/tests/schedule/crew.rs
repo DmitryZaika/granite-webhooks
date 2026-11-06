@@ -68,7 +68,8 @@ async fn server(pool: &MySqlPool) -> (TestServer, Arc<Mutex<Vec<OutgoingEmail>>>
     let base = format!("http://{address}");
     let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
         .with_webhooks(WebhooksClient::new(Some(&base), Some("key")))
-        .with_maps(Maps::new(Some("key"), &format!("{base}/matrix"), &base));
+        .with_maps(Maps::new(Some("key"), &format!("{base}/matrix"), &base))
+        .with_job_key("job-secret");
     (TestServer::new(app(state)), emails)
 }
 
@@ -328,4 +329,201 @@ async fn moving_a_job_to_another_day_clears_the_crew_status(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(crew_status(&pool, 9901).await, None);
+}
+
+async fn rep_notices(pool: &MySqlPool) -> Vec<(i32, Option<i32>, String)> {
+    sqlx::query_as(
+        "SELECT user_id, customer_id, message FROM notifications
+          WHERE notification_type = 'installation_completed' ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+#[test_db::test(seed)]
+async fn completing_an_installation_tells_its_sales_rep_unless_turned_off(pool: MySqlPool) {
+    jobs(&pool).await;
+    let (server, _) = server(&pool).await;
+    let complete = |id: i32| {
+        server
+            .post(&format!("/v1/events/{id}/crew-status"))
+            .with_session(sessions::MANAGER)
+            .json(&json!({ "status": "completed" }))
+    };
+    let on: Value = server
+        .get("/v1/schedule/settings")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(on["notify_rep_on_install_complete"], true);
+
+    // Alice's rep (100) hears once, even when Completed is tapped twice.
+    complete(9900).await.assert_status_ok();
+    complete(9900).await.assert_status_ok();
+    let notices = rep_notices(&pool).await;
+    assert_eq!(notices.len(), 1);
+    let (user, customer, message) = &notices[0];
+    assert_eq!((*user, *customer), (100, Some(1000)));
+    assert_eq!(message, "Alice Lead is installed");
+    let bell: Value = server
+        .get("/v1/notifications")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    let item = bell["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["notification_type"] == "installation_completed")
+        .expect("the bell lists it");
+    assert_eq!(item["type_title"], "Installation Completed");
+    assert_eq!(item["message"], "Alice Lead is installed");
+
+    // A job without a customer has no rep to tell.
+    complete(9901).await.assert_status_ok();
+    assert_eq!(rep_notices(&pool).await.len(), 1);
+
+    // Admin > Schedule turns it off.
+    server
+        .put("/v1/schedule/settings")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "notify_rep_on_install_complete": false }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let off: Value = server
+        .get("/v1/schedule/settings")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(off["notify_rep_on_install_complete"], false);
+    sqlx::query("UPDATE events SET crew_status = NULL, completed_at = NULL WHERE id = 9900")
+        .execute(&pool)
+        .await
+        .unwrap();
+    complete(9900).await.assert_status_ok();
+    assert_eq!(rep_notices(&pool).await.len(), 1);
+}
+
+#[test_db::test(seed)]
+async fn a_completed_step_goes_out_when_the_crew_taps_completed(pool: MySqlPool) {
+    jobs(&pool).await;
+    let (server, emails) = server(&pool).await;
+    let template: Value = server
+        .post("/v1/schedule/notifications/templates")
+        .with_session(sessions::ADMIN)
+        .json(&json!({
+            "name": "Thanks", "kind": "reminder", "channel": "email",
+            "subject": "Thank you", "body": "Hi {{customer.first_name}}, your job is done.",
+        }))
+        .await
+        .json();
+    server
+        .post("/v1/schedule/notifications/flows")
+        .with_session(sessions::ADMIN)
+        .json(&json!({
+            "calendar_id": 9890, "name": "Done", "is_default": true, "is_active": true,
+            "steps": [{
+                "template_id": template["id"], "offset_value": 1, "offset_unit": "hours",
+                "direction": "completed", "send_time": null,
+            }],
+        }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let settings: Value = server
+        .get("/v1/schedule/notifications")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(settings["flows"][0]["steps"][0]["direction"], "completed");
+
+    // The clock never sends it.
+    server
+        .post("/v1/jobs/appointment-reminders")
+        .add_header("Authorization", "job-secret")
+        .await
+        .assert_status_ok();
+    assert!(emails.lock().unwrap().is_empty());
+
+    // Completed sends it at once, and only once.
+    let complete = || {
+        server
+            .post("/v1/events/9900/crew-status")
+            .with_session(sessions::MANAGER)
+            .json(&json!({ "status": "completed" }))
+    };
+    complete().await.assert_status_ok();
+    complete().await.assert_status_ok();
+    sqlx::query("UPDATE events SET crew_status = NULL, completed_at = NULL WHERE id = 9900")
+        .execute(&pool)
+        .await
+        .unwrap();
+    complete().await.assert_status_ok();
+    let sent = emails.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].subject, "Thank you");
+    assert_eq!(sent[0].body, "<p>Hi Alice, your job is done.</p>");
+    let noted: Vec<String> = sqlx::query_scalar(
+        "SELECT message FROM event_history WHERE event_id = 9900 AND action = 'customer_message'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        noted,
+        ["Email sent to the customer: Thanks (when completed)"]
+    );
+}
+
+#[test_db::test(seed)]
+async fn admins_see_where_the_crew_last_was(pool: MySqlPool) {
+    jobs(&pool).await;
+    let (server, _) = server(&pool).await;
+    let crew = || {
+        server
+            .get("/v1/schedule/crew-positions")
+            .with_session(sessions::ADMIN)
+    };
+
+    // Before the phone sends anything the installer is listed without a position.
+    let before = crew().await.json::<Value>();
+    let installer = before
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|person| person["user_id"] == 101)
+        .unwrap()
+        .clone();
+    assert_eq!(installer["role"], "installer");
+    assert!(installer["latitude"].is_null());
+    assert!(installer["recorded_at"].is_null());
+
+    // At the first job's address.
+    let job_lat = SHOP_LAT + 5.02 / MILES_PER_DEGREE;
+    server
+        .post("/v1/me/location")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "latitude": job_lat, "longitude": LNG, "accuracy_m": 10.0 }))
+        .await
+        .assert_status_ok();
+    let after = crew().await.json::<Value>();
+    let installer = after
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|person| person["user_id"] == 101)
+        .unwrap();
+    assert_eq!(installer["latitude"], job_lat);
+    assert_eq!(installer["longitude"], LNG);
+    assert!(installer["recorded_at"].is_string());
+    assert_eq!(installer["at_shop"], false);
+    assert_eq!(installer["place_event_id"], 9900);
+    assert_eq!(installer["place_title"], "Install");
+
+    // Only admins see it.
+    server
+        .get("/v1/schedule/crew-positions")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
 }

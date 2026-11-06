@@ -7,9 +7,8 @@ use super::schemas::{
     SuggestionRow,
 };
 use super::sql::{
-    Arg, Mailbox, Sql, client_read_at, company_scope, customer_name_by_email, list_search,
-    normalize_search_term, normalized, receiver_condition, sender_condition, thread_in_inbox,
-    unread_incoming,
+    Arg, Mailbox, Sql, client_read_at, company_scope, customer_name_by_email, header_match,
+    list_search, normalize_search_term, normalized, receiver_condition, sender_condition,
 };
 use sqlx::MySqlPool;
 
@@ -214,6 +213,9 @@ pub async fn list_page(
     };
     let mut emails: Vec<MailboxRow> = list.query_as().fetch_all(pool).await?;
     fill_display_names(pool, &mut emails).await?;
+    if is_inbox {
+        mark_unread_threads(pool, mailbox, &mut emails).await?;
+    }
 
     let total: i64 = Sql::new(
         format!("SELECT COUNT(DISTINCT e.thread_id) FROM emails e WHERE {where_thread_match}"),
@@ -231,39 +233,59 @@ pub async fn list_page(
     })
 }
 
+/// Sets `thread_unread` on the rows of the threads the badge and the folder
+/// counts call unread ([`unread_inbox`]), so the app never decides it alone.
+async fn mark_unread_threads(
+    pool: &MySqlPool,
+    mailbox: &Mailbox,
+    rows: &mut [MailboxRow],
+) -> Result<(), sqlx::Error> {
+    let mut threads: Vec<String> = rows.iter().filter_map(|r| r.thread_id.clone()).collect();
+    threads.sort_unstable();
+    threads.dedup();
+    if threads.is_empty() {
+        return Ok(());
+    }
+    let unread = unread_inbox(mailbox);
+    let marks = vec!["?"; threads.len()].join(",");
+    let mut args = unread.args;
+    args.extend(threads.into_iter().map(Arg::from));
+    let unread_ids: std::collections::HashSet<String> = Sql::new(
+        format!(
+            "SELECT DISTINCT e.thread_id {} AND e.thread_id IN ({marks})",
+            unread.sql
+        ),
+        args,
+    )
+    .query_scalar::<String>()
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
+    for row in rows {
+        row.thread_unread = row
+            .thread_id
+            .as_ref()
+            .is_some_and(|id| unread_ids.contains(id));
+    }
+    Ok(())
+}
+
 /// Inbox unread threads, trash threads and drafts of the caller.
 pub async fn folder_counts(
     pool: &MySqlPool,
     mailbox: &Mailbox,
 ) -> Result<FolderCounts, sqlx::Error> {
-    let scope = company_scope("e", mailbox.company_id);
-    let unread = unread_incoming("e", mailbox);
-    let in_inbox = thread_in_inbox("e", mailbox);
-    let mut args: Vec<Arg> = vec![mailbox.company_id.into()];
-    args.extend(scope.args.clone());
-    args.extend(unread.args);
-    args.extend(in_inbox.args);
+    let unread = unread_inbox(mailbox);
     let inbox_unread: i64 = Sql::new(
-        format!(
-            "SELECT COUNT(DISTINCT e.thread_id) FROM emails e
-             LEFT JOIN deals d ON d.id = COALESCE(
-               e.deal_id,
-               (SELECT MAX(td.deal_id) FROM emails td
-                WHERE td.thread_id = e.thread_id AND td.deleted_at IS NULL AND td.is_draft = 0
-                  AND td.deal_id IS NOT NULL AND (td.company_id = ? OR td.company_id IS NULL))
-             ) AND d.deleted_at IS NULL
-             WHERE e.deleted_at IS NULL AND e.is_draft = 0 AND e.thread_id IS NOT NULL
-               AND e.employee_read_at IS NULL AND {scope} AND {unread} AND {in_inbox}",
-            scope = scope.sql,
-            unread = unread.sql,
-            in_inbox = in_inbox.sql
-        ),
-        args,
+        format!("SELECT COUNT(DISTINCT e.thread_id) {}", unread.sql),
+        unread.args,
     )
     .query_scalar()
     .fetch_one(pool)
     .await?;
 
+    let scope = company_scope("e", mailbox.company_id);
     let receiver = receiver_condition("e", mailbox);
     let mut args = scope.args.clone();
     args.extend(receiver.args);
@@ -298,8 +320,9 @@ pub async fn folder_counts(
 /// Suggestions per conversation, newest first.
 const SUGGEST_LIMIT: usize = 8;
 
-/// Typeahead for the mailbox search: the newest matching message of up to
-/// 8 conversations, in the given folder (`searchEmailSuggestions`).
+/// Typeahead for the mailbox search: the best matching message (subject,
+/// address or customer name before text), newest first, of up to 8
+/// conversations, in the given folder (`searchEmailSuggestions`).
 #[allow(clippy::too_many_lines)]
 pub async fn suggestions(
     pool: &MySqlPool,
@@ -333,6 +356,7 @@ pub async fn suggestions(
     } else {
         None
     };
+    let header = header_match(&term, extra.clone());
     let search = list_search(&term, extra);
     if search.sql.is_empty() {
         return Ok(Vec::new());
@@ -424,6 +448,8 @@ pub async fn suggestions(
         ordered.extend(search.args);
         args = ordered;
     }
+    args.extend(header.args);
+    // Subject, address or customer-name hits first, then hits in the text; newest first in each.
     let rows: Vec<SuggestionRow> = Sql::new(
         format!(
             "SELECT e.thread_id, e.subject, e.body, e.sent_at, e.sender_email, e.receiver_email,
@@ -432,11 +458,12 @@ pub async fn suggestions(
              LEFT JOIN users s ON e.sender_user_id = s.id
              LEFT JOIN users r ON e.receiver_email = r.email
              WHERE {where_sql}{} AND e.thread_id IS NOT NULL
-             ORDER BY e.sent_at DESC, e.id DESC
+             ORDER BY {}, e.sent_at DESC, e.id DESC
              LIMIT {fetch}",
             name("e.sender_email"),
             name("e.receiver_email"),
-            search.sql
+            search.sql,
+            header.sql
         ),
         args,
     )

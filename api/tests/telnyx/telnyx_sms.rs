@@ -347,6 +347,59 @@ async fn an_inbound_text_is_stored_once_and_stops_flows_and_moves_the_deal(pool:
 }
 
 #[test_db::test(seed)]
+async fn a_text_to_a_forwarding_number_is_sent_on_once(pool: MySqlPool) {
+    let setup = setup(&pool).await;
+    sqlx::query("UPDATE telnyx_numbers SET forward_texts_to = '+13175550188' WHERE id = 9703")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let event = inbound(
+        "in-fw",
+        "+13175550177",
+        "+13175550153",
+        "Call me back",
+        json!([]),
+    );
+    setup.hook(&event).await.assert_status_ok();
+    // Telnyx sends it again: it is not sent on twice.
+    setup.hook(&event).await.assert_status_ok();
+    assert_eq!(
+        setup.stub.messages(),
+        [json!({
+            "from": "+13175550153", "to": "+13175550188",
+            "text": "Text from (317) 555-0177: Call me back",
+            "messaging_profile_id": "profile-100",
+            "webhook_url": format!("https://api.test/v1/webhooks/telnyx/{}/messaging", webhook_token(100)),
+        })]
+    );
+    let stored = rows(&pool).await;
+    assert_eq!(stored.len(), 2);
+    let sent = &stored[1];
+    assert_eq!(
+        (
+            sent.direction.as_str(),
+            sent.status.as_str(),
+            sent.agent.as_deref(),
+            sent.number_id,
+            sent.is_automated
+        ),
+        ("outbound", "sent", None, Some(9703), true)
+    );
+    // A text from the forward number itself is not sent back to it.
+    setup
+        .hook(&inbound(
+            "in-fw-2",
+            "+13175550188",
+            "+13175550153",
+            "test",
+            json!([]),
+        ))
+        .await
+        .assert_status_ok();
+    assert_eq!(setup.stub.messages().len(), 1);
+}
+
+#[test_db::test(seed)]
 async fn an_inbound_mms_keeps_its_files(pool: MySqlPool) {
     let setup = setup(&pool).await;
     let media = json!([{ "url": format!("{}/media/slab.png", setup.stub.base()),
@@ -580,15 +633,16 @@ async fn a_failed_delivery_marks_the_text_failed(pool: MySqlPool) {
         )
         .await
         .assert_status_ok();
-    setup
-        .hook(&status(
-            "message.finalized",
-            "msg-1",
-            "delivery_failed",
-            json!([{ "code": "40002", "title": "Blocked as spam" }]),
-        ))
-        .await
-        .assert_status_ok();
+    // Reported under another messaging profile than the company's stored
+    // one: still our text (its Telnyx id), so taken.
+    let mut failed = status(
+        "message.finalized",
+        "msg-1",
+        "delivery_failed",
+        json!([{ "code": "40002", "title": "Blocked as spam" }]),
+    );
+    failed["data"]["payload"]["messaging_profile_id"] = json!("profile-other");
+    setup.hook(&failed).await.assert_status_ok();
     let row = rows(&pool).await.remove(0);
     assert_eq!(
         (

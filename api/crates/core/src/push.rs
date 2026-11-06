@@ -51,6 +51,7 @@ fn apns(data: &BTreeMap<String, String>) -> Value {
             match field("kind") {
                 Some("repeat") => "Repeated lead",
                 Some("assigned") => "Lead assigned to you",
+                Some("taken") => "Lead assigned",
                 Some("quote") => "Online quote finished",
                 _ => "New lead",
             },
@@ -77,10 +78,33 @@ fn apns(data: &BTreeMap<String, String>) -> Value {
     if let Some(body) = body {
         alert["body"] = Value::String(body);
     }
+    let mut headers = json!({ "apns-push-type": "alert", "apns-priority": "10" });
+    if let Some(id) = collapse_id(data) {
+        headers["apns-collapse-id"] = Value::String(id);
+    }
     json!({
-        "headers": { "apns-push-type": "alert", "apns-priority": "10" },
+        "headers": headers,
         "payload": { "aps": { "alert": alert, "sound": "default", "mutable-content": 1 } },
     })
+}
+
+/// The alert a new one takes the place of on an iPhone, as Android's app
+/// replaces its notification: a manager's new lead and its "Lead assigned"
+/// share one, a repeated lead has its own, and the maintenance checks are one
+/// alert. Everything else stacks.
+fn collapse_id(data: &BTreeMap<String, String>) -> Option<String> {
+    match data.get("type").map(String::as_str) {
+        Some("lead") => {
+            let customer = data.get("customerId")?;
+            match data.get("kind").map(String::as_str) {
+                Some("new" | "taken") => Some(format!("lead-new-{customer}")),
+                Some("repeat") => Some(format!("lead-repeat-{customer}")),
+                _ => None,
+            }
+        }
+        Some("maintenance") => Some("maintenance".to_string()),
+        _ => None,
+    }
 }
 
 /// FCM's API root.
@@ -643,6 +667,31 @@ zVwmY+zvp0zIX68RsO90kuxb
             alert(&with("e911_alert", &[]))["body"],
             "Someone in your company dialed 911. Open Granite Phone for details."
         );
+        // As Android replaces them: a lead's "Lead assigned" takes the place
+        // of its new-lead alert, and the maintenance checks are one alert.
+        let collapse =
+            |data: &BTreeMap<String, String>| apns(data)["headers"]["apns-collapse-id"].clone();
+        assert_eq!(
+            collapse(&with("lead", &[("kind", "new"), ("customerId", "7")])),
+            "lead-new-7"
+        );
+        assert_eq!(
+            collapse(&with("lead", &[("kind", "taken"), ("customerId", "7")])),
+            "lead-new-7"
+        );
+        assert_eq!(
+            collapse(&with("lead", &[("kind", "repeat"), ("customerId", "7")])),
+            "lead-repeat-7"
+        );
+        assert_eq!(
+            collapse(&with("lead", &[("kind", "assigned"), ("customerId", "7")])),
+            Value::Null
+        );
+        assert_eq!(
+            collapse(&with("maintenance", &[("count", "3")])),
+            "maintenance"
+        );
+        assert_eq!(collapse(&with("text", &[])), Value::Null);
         // Revoked (and a type this server doesn't word) stays a background push.
         let revoked = apns(&with("revoked", &[]));
         assert_eq!(revoked["headers"]["apns-push-type"], "background");

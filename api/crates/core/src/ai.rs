@@ -642,6 +642,26 @@ async fn log_image(
     }
 }
 
+/// A `chat` row of `ai_usage_log` for another provider (Claude): `tokens`
+/// are (all input, the input read from cache, output).
+pub async fn log_chat(
+    pool: &MySqlPool,
+    caller: Caller<'_>,
+    model: &str,
+    tokens: Option<(u32, u32, u32)>,
+    error: Option<&str>,
+    duration_ms: u32,
+) {
+    let usage = tokens.map(|(input, cached, output)| Usage {
+        prompt_tokens: input,
+        completion_tokens: output,
+        prompt_tokens_details: Some(CachedTokens {
+            cached_tokens: Some(cached),
+        }),
+    });
+    log(pool, caller, model, usage, error, duration_ms).await;
+}
+
 /// One `ai_usage_log` row; a failure to log is only traced.
 async fn log(
     pool: &MySqlPool,

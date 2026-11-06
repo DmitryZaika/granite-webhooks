@@ -30,11 +30,13 @@ use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
-    self, SaleDeal, load_company_quote, mark_quote_sold, pricing_for_quote,
-    quote_for_contract_file, with_current_sink_models,
+    self, ExtraEventPick, SaleDeal, SaleJobs, load_company_quote, mark_quote_sold,
+    pricing_for_quote, quote_for_contract_file, with_current_sink_models,
 };
 use crate::routes::created::CreatedId;
 use crate::routes::customers::service::IMPORT_PLACEHOLDER;
+use crate::routes::emails::attachment_token;
+use crate::routes::emails::schemas::SendAttachment;
 use crate::routes::emails::thread::sending_address;
 use crate::routes::quote_extras::load_catalog;
 use crate::routes::quote_forms;
@@ -43,7 +45,7 @@ use crate::routes::quote_price_lists::{default_id, find as find_price_list, list
 use crate::routes::templates::order;
 use crate::routes::templates::schemas::{OrderingMode, OrderingType};
 use crate::state::AppState;
-use crate::webhooks_client::OutgoingEmail;
+use crate::webhooks_client::{OutgoingAttachment, OutgoingEmail};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -408,10 +410,11 @@ pub async fn create_quote(
         phone_2: Option<String>,
         email: Option<String>,
         sales_rep: Option<i32>,
+        company_name: Option<String>,
     }
     let customer: Option<Customer> = sqlx::query_as(
         "SELECT c.name, c.address, c.city, c.state, c.postal_code, c.phone, c.phone_2, ce.email,
-                c.sales_rep
+                c.sales_rep, c.company_name
            FROM customers c
            LEFT JOIN customers_emails ce ON ce.id = c.email_id AND ce.customer_id = c.id
           WHERE c.id = ? AND c.company_id = ?",
@@ -511,12 +514,18 @@ pub async fn create_quote(
     .bind(chosen.as_ref().and_then(|(row, _)| row.current_revision_id))
     .bind(expiration_days)
     .bind(doc.to_string())
-    .bind(full_address(
-        customer.address.as_deref(),
-        customer.city.as_deref(),
-        customer.state.as_deref(),
-        customer.postal_code.as_deref(),
-    ))
+    // A company customer's address is its office, not the job site: leave the
+    // quote's address empty.
+    .bind(if copy(customer.company_name.as_deref()).is_some() {
+        None
+    } else {
+        full_address(
+            customer.address.as_deref(),
+            customer.city.as_deref(),
+            customer.state.as_deref(),
+            customer.postal_code.as_deref(),
+        )
+    })
     .bind(copy(customer.phone.as_deref()).or_else(|| copy(customer.phone_2.as_deref())))
     .bind(copy(customer.email.as_deref()))
     .execute(&state.pool)
@@ -1865,12 +1874,44 @@ pub struct Sale {
     /// Index of the color option sold.
     pub option: i32,
     /// The customer's deal to mark won (none: the quote's own deal, else the
-    /// customer's latest open or won one).
+    /// customer's latest open one; never a won or lost one).
     #[serde(default)]
     pub deal_id: Option<i64>,
     /// Make a new won deal instead of using an existing one.
     #[serde(default)]
     pub new_deal: bool,
+    /// Status of the template job it adds to Unscheduled: `ready` (default) or
+    /// `not_ready`. The installation job is always `not_ready`.
+    #[serde(default)]
+    pub job_status: Option<String>,
+    /// Notes on the template job it adds to Unscheduled.
+    #[serde(default)]
+    pub template_notes: Option<String>,
+    /// Notes on the installation job it adds to Unscheduled.
+    #[serde(default)]
+    pub install_notes: Option<String>,
+    /// Full Height Backsplash (higher than 15"): also adds a "FH Backsplash"
+    /// template and installation job, both `not_ready`.
+    #[serde(default)]
+    pub full_height_backsplash: bool,
+    /// Extra events to add (Mark as Sold › Extra events): the event templates
+    /// ticked (`GET /v1/quote-sale-events`), each with optional notes. Each
+    /// adds one unscheduled, `not_ready` event on its template's calendar,
+    /// whether or not the company adds template and installation jobs. Left
+    /// out or empty: none. Unknown template ids are skipped.
+    #[serde(default)]
+    pub extra_events: Vec<SaleExtraEvent>,
+}
+
+/// An extra event ticked in Mark as Sold.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SaleExtraEvent {
+    /// The event template (`GET /v1/quote-sale-events`).
+    pub template_id: i32,
+    /// Notes on the event (trimmed; blank: none).
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// What selling did.
@@ -1883,7 +1924,10 @@ pub struct SaleResult {
 /// Mark a quote sold
 ///
 /// The quote keeps the option sold and its deal is won with that option's
-/// total (a won deal is made when the customer has none).
+/// total (a won deal is made when the customer has none). With the company's
+/// Jobs to Unscheduled switch on, it adds the template and installation jobs
+/// to the schedule's Unscheduled list; each of `extra_events` adds one more
+/// event there. Selling a quote again adds no events.
 #[crate::openapi::path(
     post,
     path = "/v1/quotes/{id}/sale",
@@ -1912,6 +1956,15 @@ pub async fn mark_sold(
             "Pick the option that was sold.".into(),
         ));
     }
+    let template_ready = match input.job_status.as_deref() {
+        None | Some("ready") => true,
+        Some("not_ready") => false,
+        Some(_) => {
+            return Err(ApiError::BadRequest(
+                "Pick Ready or Not ready for the template.".into(),
+            ));
+        }
+    };
     let sold = mark_quote_sold(
         &state.pool,
         id,
@@ -1923,6 +1976,20 @@ pub async fn mark_sold(
             (false, Some(deal)) => SaleDeal::Existing(deal),
             (false, None) => SaleDeal::Auto,
         },
+        &SaleJobs {
+            template_ready,
+            template_notes: input.template_notes,
+            install_notes: input.install_notes,
+            full_height_backsplash: input.full_height_backsplash,
+            extra_events: input
+                .extra_events
+                .into_iter()
+                .map(|extra| ExtraEventPick {
+                    template_id: extra.template_id,
+                    notes: extra.notes,
+                })
+                .collect(),
+        },
     )
     .await?
     .ok_or(ApiError::NotFound)?;
@@ -1933,7 +2000,9 @@ pub async fn mark_sold(
 
 /// Undo a sale
 ///
-/// The quote is active again (no option, no signature) and its deal reopens.
+/// The quote is active again (no option, no signature), its deal reopens and
+/// the template and installation jobs and extra events the sale added are
+/// deleted.
 #[crate::openapi::path(
     delete,
     path = "/v1/quotes/{id}/sale",
@@ -1964,6 +2033,7 @@ pub async fn undo_sale(
     .bind(user.company_id)
     .execute(&state.pool)
     .await?;
+    quote_pricing::remove_waiting_jobs(&state.pool, id, user.company_id).await?;
     if let Some(deal) = row.deal_id {
         sqlx::query(
             "UPDATE deals SET is_won = NULL, lost_reason = NULL, updated_at = CURRENT_TIMESTAMP
@@ -2303,6 +2373,10 @@ pub struct QuoteEmail {
     /// The template used (counts toward the default).
     #[serde(default)]
     pub template_id: Option<i32>,
+    /// Files sent with the email, each uploaded by the caller
+    /// (`POST /v1/uploads`, folder `emails`, with its `token`).
+    #[serde(default)]
+    pub attachments: Vec<SendAttachment>,
 }
 
 fn escape(text: &str) -> String {
@@ -2361,6 +2435,29 @@ pub async fn email_quote(
             "Recipient and subject are required.".into(),
         ));
     }
+    if input.attachments.len() > 20 {
+        return Err(ApiError::BadRequest(
+            "At most 20 attachments per email.".into(),
+        ));
+    }
+    // Only files the caller uploaded: any other URL could be another company's.
+    if let Some(attachment) = input.attachments.iter().find(|a| {
+        !attachment_token::verify(&state.session_secret, &a.url, user.id, a.token.as_deref())
+    }) {
+        return Err(ApiError::BadRequest(format!(
+            "Attachment is not available: {}",
+            attachment.filename
+        )));
+    }
+    let attachments: Vec<OutgoingAttachment> = input
+        .attachments
+        .iter()
+        .map(|a| OutgoingAttachment {
+            filename: a.filename.clone(),
+            content_type: a.content_type.trim().to_lowercase(),
+            url: a.url.clone(),
+        })
+        .collect();
     // The link exists before filling so `{{quote.link}}` can use it.
     let portal = ensure_portal_token(&state.pool, &quote).await?;
     let email_token = token()?;
@@ -2484,7 +2581,7 @@ pub async fn email_quote(
         reply_to: vec![user.email.clone()],
         in_reply_to: None,
         references: Vec::new(),
-        attachments: Vec::new(),
+        attachments,
         transactional: true,
     };
     if let Err(error) = state.webhooks.send_email(&email).await {

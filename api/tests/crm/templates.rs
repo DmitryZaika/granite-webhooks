@@ -483,10 +483,6 @@ async fn admins_make_company_templates_that_send_automatically(pool: MySqlPool) 
             drip("X", Some(100), Some(9000), "company"),
             "delay too long",
         ),
-        (
-            drip("X", Some(100), Some(1), "personal"),
-            "personal template",
-        ),
     ] {
         let res = server
             .post("/v1/email-templates")

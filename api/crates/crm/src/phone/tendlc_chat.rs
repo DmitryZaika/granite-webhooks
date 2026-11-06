@@ -80,7 +80,6 @@ Step 1. Business (\"Carriers check these against public records: use your exact 
 - Business name = brand.displayName: the name customers know them by (DBA); every text must name it. At most {NAME_CHARS} characters.
 - Legal name = brand.companyName: exactly as the IRS has it for the EIN (CP 575 letter, or the 147C letter the IRS sends on request). A mismatch with the EIN is the most common reason the registry fails the business.
 - Tax id (EIN) = brand.ein: 9 digits like 12-3456789; Canada: the 9-digit business number.
-- IRS EIN letter = brand.einLetter: US businesses with an EIN (private, public, non-profit) upload the CP 575 (or 147C) as a PDF or photo; Granite Manager reads its legal name, EIN and address, and the form then requires the Legal name, Tax id, Street address, City, State and ZIP exactly as on the letter (case and spacing aside: \"Street\" for \"St\" is a mismatch), because the registry leaves a brand unverified for good when they differ.
 - Country of registration = brand.country: US or CA only.
 - Contact: Business phone (US or Canada number), Business email, Website (starts with https://, must open and show the business name; not parked or under construction), Contact first/last name (optional).
 - Business address: Street address, City, State or province (2 letters), ZIP or postal code; as on the tax records, no PO boxes.
@@ -233,8 +232,7 @@ async fn company_context(pool: &MySqlPool, company_id: i32) -> sqlx::Result<Stri
 /// The form on screen, its step and what blocks marking it ready.
 fn screen_context(draft: &TenDlcDraft, step: &str) -> String {
     let form = serde_json::to_string_pretty(draft).unwrap_or_default();
-    // The helper runs on an AI, so the server reads IRS letters.
-    let problems = form::problems_with_letter(draft, true);
+    let problems = form::problems(draft);
     let mut text = format!(
         "The form on the user's screen now (step {}):\n```json\n{form}\n```\n",
         step_title(step)

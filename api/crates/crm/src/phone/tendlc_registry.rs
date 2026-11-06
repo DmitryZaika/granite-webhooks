@@ -116,10 +116,9 @@ fn failed(err: &TenDlcError, what: &'static str) -> RegistryError {
     }
 }
 
-/// 400 naming the first thing missing, when the form is not complete (the
-/// IRS letter too when `letter_needed`: the server reads letters).
-pub fn complete(draft: &TenDlcDraft, letter_needed: bool) -> Result<(), RegistryError> {
-    match tendlc::problems_with_letter(draft, letter_needed).first() {
+/// 400 naming the first thing missing, when the form is not complete.
+pub fn complete(draft: &TenDlcDraft) -> Result<(), RegistryError> {
+    match tendlc::problems(draft).first() {
         Some(problem) => Err(RegistryError::Invalid(format!(
             "The registration is not complete: {}",
             problem.message
@@ -539,7 +538,7 @@ pub async fn send(state: &AppState, company_id: i32, actor: i32) -> Result<Row, 
         return Err(RegistryError::Conflict("It is with Telnyx already.".into()));
     }
     let draft = row.draft();
-    complete(&draft, state.ai.is_enabled())?;
+    complete(&draft)?;
     if let Some(why) = ai_check::blocks_sending(state, &row, actor).await? {
         return Err(RegistryError::Conflict(why));
     }
@@ -675,7 +674,7 @@ pub async fn resend(
         ));
     }
     let draft = row.draft();
-    complete(&draft, state.ai.is_enabled())?;
+    complete(&draft)?;
     if let Some(why) = ai_check::blocks_sending(state, &row, actor).await? {
         return Err(RegistryError::Conflict(why));
     }
@@ -706,10 +705,7 @@ async fn send_again(
     // A refusal after something was taken is kept on the registration.
     let mut refusal: Option<RegistryError> = None;
     let brand_id = row.telnyx_brand_id.clone().unwrap_or_default();
-    let brand_changed = row
-        .sent_brand()
-        .is_none_or(|sent| tendlc::brand_as_sent(&sent) != tendlc::brand_as_sent(&draft.brand));
-    if brand_changed || row.brand_failed() {
+    if row.sent_brand().as_ref() != Some(&draft.brand) || row.brand_failed() {
         match telnyx
             .update_brand(&brand_id, &brand_body(&draft.brand, &hook))
             .await
@@ -1005,7 +1001,7 @@ pub async fn assign_numbers(
             "A send is in progress. Try again in a minute.".into(),
         ));
     }
-    let run = assign_locked(state, &row, &campaign_id, &numbers, actor).await;
+    let run = assign_locked(state, &row, &campaign_id, &numbers, Some(actor)).await;
     unlock(pool, row.id).await?;
     let run = run?;
     audit(
@@ -1025,7 +1021,7 @@ async fn assign_locked(
     row: &Row,
     campaign_id: &str,
     numbers: &[String],
-    actor: i32,
+    actor: Option<i32>,
 ) -> Result<AssignRun, RegistryError> {
     let pool = &state.pool;
     let existing: HashMap<String, (String, String)> =
@@ -1063,7 +1059,7 @@ async fn assign_locked(
                     campaign_id,
                     &status,
                     assignment.failure_reasons.as_deref(),
-                    Some(actor),
+                    actor,
                 )
                 .await?;
             }
@@ -1082,7 +1078,7 @@ async fn assign_locked(
                     campaign_id,
                     "FAILED_ASSIGNMENT",
                     Some(&reason),
-                    Some(actor),
+                    actor,
                 )
                 .await?;
             }
@@ -1287,6 +1283,99 @@ pub struct JobRun {
     pub refreshed: usize,
     /// Number assignments read again from Telnyx.
     pub numbers_refreshed: usize,
+    /// Numbers sent to their company's approved campaign by themselves.
+    pub numbers_assigned: usize,
+}
+
+/// Every active number of a company with an approved campaign that has no
+/// assignment to that campaign yet (a number added on the Phone page or
+/// ported in from RingCentral after the approval) is assigned to it, so its
+/// texts are not blocked as unregistered (Telnyx 40010). A failed
+/// assignment is not retried here: the superuser's Assign button does that.
+async fn assign_new_numbers(state: &AppState, deadline: Instant) -> sqlx::Result<usize> {
+    let pool = &state.pool;
+    let companies: Vec<i32> = sqlx::query_scalar(
+        "SELECT DISTINCT r.company_id FROM tendlc_registrations r
+           JOIN company c ON c.id = r.company_id AND c.deleted_at IS NULL
+           JOIN telnyx_numbers n ON n.company_id = r.company_id AND n.active = 1
+           LEFT JOIN tendlc_numbers t ON t.company_id = r.company_id AND t.e164 = n.e164
+                                      AND t.campaign_id = r.telnyx_campaign_id
+          WHERE r.status = 'approved' AND r.telnyx_campaign_id IS NOT NULL AND t.id IS NULL
+          ORDER BY r.company_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut assigned = 0;
+    for company_id in companies {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let Some(row) = tendlc::load(pool, company_id).await? else {
+            continue;
+        };
+        let Some(campaign_id) = row.telnyx_campaign_id.clone() else {
+            continue;
+        };
+        let numbers: Vec<String> = sqlx::query_scalar(
+            "SELECT n.e164 FROM telnyx_numbers n
+               LEFT JOIN tendlc_numbers t ON t.company_id = n.company_id AND t.e164 = n.e164
+                                          AND t.campaign_id = ?
+              WHERE n.company_id = ? AND n.active = 1 AND t.id IS NULL ORDER BY n.id",
+        )
+        .bind(&campaign_id)
+        .bind(company_id)
+        .fetch_all(pool)
+        .await?;
+        // Assigned on Telnyx already (in its portal, say): only recorded.
+        let mut unassigned = Vec::with_capacity(numbers.len());
+        for e164 in numbers {
+            match state.telnyx.number_campaign(&e164).await {
+                Ok(Some(found)) if found.campaign_id.as_deref() == Some(campaign_id.as_str()) => {
+                    let status = found
+                        .assignment_status
+                        .unwrap_or_else(|| "PENDING_ASSIGNMENT".into());
+                    save_number(
+                        pool,
+                        &row,
+                        &e164,
+                        &campaign_id,
+                        &status,
+                        found.failure_reasons.as_deref(),
+                        None,
+                    )
+                    .await?;
+                }
+                _ => unassigned.push(e164),
+            }
+        }
+        let numbers = unassigned;
+        if numbers.is_empty() || !lock(pool, row.id).await? {
+            continue;
+        }
+        let run = assign_locked(state, &row, &campaign_id, &numbers, None).await;
+        unlock(pool, row.id).await?;
+        match run {
+            Ok(run) => {
+                assigned += run.assigned;
+                audit(
+                    pool,
+                    company_id,
+                    None,
+                    "tendlc_numbers_assigned",
+                    row.id,
+                    &json!({ "assigned": run.assigned, "failed": run.failed, "automatic": true }),
+                )
+                .await?;
+            }
+            Err(RegistryError::Database(err)) => return Err(err),
+            Err(err) => tracing::warn!(
+                kind = err.kind(),
+                company = company_id,
+                "numbers not assigned"
+            ),
+        }
+    }
+    Ok(assigned)
 }
 
 /// The phone job's 10DLC step: reads sent registrations from Telnyx again
@@ -1339,6 +1428,9 @@ pub async fn run_job(state: &AppState, deadline: Instant) -> sqlx::Result<JobRun
             Err(RegistryError::Database(err)) => return Err(err),
             Err(err) => tracing::warn!(kind = err.kind(), registration = id, "10DLC not refreshed"),
         }
+    }
+    if Instant::now() < deadline {
+        run.numbers_assigned = assign_new_numbers(state, deadline).await?;
     }
     let pending: Vec<(i64, i32, String, Option<DateTime<Utc>>)> =
         sqlx::query_as(sqlx::AssertSqlSafe(format!(

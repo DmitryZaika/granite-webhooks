@@ -4,3 +4,4 @@
 pub mod cloudtalk;
 pub mod ringcentral;
 pub mod ringcentral_auth;
+pub mod ringcentral_contacts;

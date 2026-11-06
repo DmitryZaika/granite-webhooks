@@ -213,8 +213,8 @@ pub async fn stage_history(
 
 /// Create a deal
 ///
-/// Puts the customer in `list_id`. When the customer already has an open
-/// deal, that deal is updated and moved instead (`created: false`). The deal
+/// Puts the customer in `list_id` as a new deal, even when the customer
+/// already has one: existing deals are never changed. The deal
 /// belongs to the customer's sales rep, or the caller when there is none; a
 /// caller who is a sales rep becomes the rep of a customer without one. Drip
 /// emails and SMS of the stage are scheduled for lead customers, and the
@@ -226,7 +226,7 @@ pub async fn stage_history(
     tag = "deals",
     request_body = DealCreate,
     responses(
-        (status = 201, description = "Deal created or reused", body = DealCreated),
+        (status = 201, description = "Deal created", body = DealCreated),
         (status = 400, description = "Unknown stage or customer, malformed body", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
@@ -271,65 +271,30 @@ pub async fn create(
             input.customer_id
         )));
     };
-    // Only pipeline deals are reused: the board hides closed ones.
-    let open_deal: Option<(i64, i32)> = sqlx::query_as(
-        "SELECT CAST(id AS SIGNED), list_id FROM deals
-         WHERE customer_id = ? AND deleted_at IS NULL AND is_won IS NULL
-         ORDER BY id LIMIT 1",
+    // Always a new deal: the customer's existing deals stay as they are.
+    let result = sqlx::query(
+        "INSERT INTO deals (customer_id, amount, title, status, list_id, position, user_id, is_won, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(input.customer_id)
-    .fetch_optional(&mut *tx)
+    .bind(input.amount)
+    .bind(&input.title)
+    .bind(&stage_name)
+    .bind(input.list_id)
+    .bind(position)
+    .bind(customer_rep.unwrap_or(user.id))
+    .bind(is_won)
+    .bind(&created_by)
+    .execute(&mut *tx)
     .await?;
-
-    let (deal_id, created, moved) = if let Some((deal_id, previous_list)) = open_deal {
-        // An empty amount or title keeps the stored one: a create must not wipe the open deal.
-        sqlx::query(
-            "UPDATE deals SET amount = COALESCE(?, amount), title = COALESCE(NULLIF(?, ''), title),
-             status = ?, list_id = ?, position = ?, is_won = ?
-             WHERE id = ?",
-        )
-        .bind(input.amount)
-        .bind(&input.title)
-        .bind(&stage_name)
-        .bind(input.list_id)
-        .bind(position)
-        .bind(is_won)
-        .bind(deal_id)
-        .execute(&mut *tx)
-        .await?;
-        let moved = previous_list != input.list_id;
-        if moved {
-            service::enter_stage(&mut tx, deal_id, input.list_id).await?;
-        }
-        (deal_id, false, moved)
-    } else {
-        let result = sqlx::query(
-            "INSERT INTO deals (customer_id, amount, title, status, list_id, position, user_id, is_won, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(input.customer_id)
-        .bind(input.amount)
-        .bind(&input.title)
-        .bind(&stage_name)
-        .bind(input.list_id)
-        .bind(position)
-        .bind(customer_rep.unwrap_or(user.id))
-        .bind(is_won)
-        .bind(&created_by)
-        .execute(&mut *tx)
-        .await?;
-        let deal_id = i64::try_from(result.last_insert_id()).unwrap_or_default();
-        service::enter_stage(&mut tx, deal_id, input.list_id).await?;
-        (deal_id, true, false)
-    };
+    let deal_id = i64::try_from(result.last_insert_id()).unwrap_or_default();
+    service::enter_stage(&mut tx, deal_id, input.list_id).await?;
     if is_won == Some(1) {
         service::won_leaves_first_stage(&mut tx, deal_id).await?;
     }
     tx.commit().await?;
 
-    if created || moved {
-        service::sync_drip(&state.pool, deal_id, input.list_id, created).await?;
-    }
+    service::sync_drip(&state.pool, deal_id, input.list_id, true).await?;
 
     if customer_rep.is_none() {
         let is_sales_rep: Option<i32> = sqlx::query_scalar(
@@ -358,6 +323,8 @@ pub async fn create(
                 .execute(&state.pool)
                 .await?;
             }
+            // The lead has a rep now: off "Waiting for a sales rep" on every phone.
+            crate::phone::crm_push::push_leads_changed_logged(&state, user.company_id, &[]).await;
         }
     }
 
@@ -365,7 +332,7 @@ pub async fn create(
         StatusCode::CREATED,
         Json(DealCreated {
             id: deal_id,
-            created,
+            created: true,
         }),
     ))
 }
@@ -620,6 +587,14 @@ pub async fn set_outcome(
             .execute(&state.pool)
             .await?;
             service::won_leaves_first_stage(&mut *state.pool.acquire().await?, id).await?;
+            // Sold: the job goes to Projects.
+            crate::routes::projects::service::start_for_won_deal(
+                &state.pool,
+                user.company_id,
+                id,
+                Some(user.id),
+            )
+            .await;
         }
         DealStatus::Lost => {
             let reason = body

@@ -16,6 +16,7 @@ use crate::phone_common;
 use api::ai::Ai;
 use api::app;
 use api::auth::cookie::SessionData;
+use api::claude::Claude;
 use api::phone::PhoneConfig;
 use api::state::AppState;
 use api::telnyx::Telnyx;
@@ -579,7 +580,7 @@ async fn managers_fill_it_in_save_drafts_and_mark_it_ready(pool: MySqlPool) {
     assert_eq!(first["status"], "draft");
     assert_eq!(
         first["actions"],
-        json!({ "edit": true, "markReady": false })
+        json!({ "edit": true, "markReady": false, "sendAnyway": false })
     );
     let brand = &first["draft"]["brand"];
     assert_eq!(brand["displayName"], "Acme Stone");
@@ -1467,8 +1468,8 @@ async fn the_bell_lists_texting_registration_notices(pool: MySqlPool) {
 
 // ----------------------------------------------------------- the AI check
 
-/// The AI check's stand-ins: Acme's website (`/site/...`), OpenAI
-/// (`/openai/chat`, answering from a queue) and the email service
+/// The AI check's stand-ins: Acme's website (`/site/...`), Claude
+/// (`/anthropic/messages`, answering from a queue) and the email service
 /// (`/hooks/email/send`).
 #[derive(Clone, Default)]
 struct CheckFake {
@@ -1526,7 +1527,7 @@ impl CheckFake {
             };
         }
         let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        if path == "/openai/chat" {
+        if path == "/anthropic/messages" {
             self.requests.lock().unwrap().push(json);
             let answer = {
                 let mut answers = self.answers.lock().unwrap();
@@ -1536,9 +1537,13 @@ impl CheckFake {
                 answers.remove(0)
             };
             return Json(json!({
-                "model": "stand-in",
-                "choices": [{ "message": { "content": answer.to_string() }, "finish_reason": "stop" }],
-                "usage": { "prompt_tokens": 1000, "completion_tokens": 100 },
+                "model": "claude-opus-5-5",
+                "content": [
+                    { "type": "thinking", "thinking": "", "signature": "sig-1" },
+                    { "type": "text", "text": answer.to_string() },
+                ],
+                "stop_reason": "end_turn",
+                "usage": { "input_tokens": 1000, "output_tokens": 100 },
             }))
             .into_response();
         }
@@ -1564,7 +1569,10 @@ async fn check_server(pool: &MySqlPool) -> (TestServer, CheckFake, String) {
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let base = format!("http://{address}");
     let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
-        .with_ai(Ai::new(Some("ai-key"), &format!("{base}/openai/chat")))
+        .with_claude(Claude::new(
+            Some("claude-key"),
+            &format!("{base}/anthropic/messages"),
+        ))
         .with_webhooks(WebhooksClient::new(
             Some(&format!("{base}/hooks")),
             Some("hooks-key"),
@@ -1625,25 +1633,6 @@ fn ai_answer(summary: &str, changed: &[(&str, Value)]) -> Value {
     json!({ "summary": summary, "checks": checks })
 }
 
-/// What the AI reads off Acme's IRS letter.
-fn irs_letter() -> Value {
-    json!({ "isIrsEinLetter": true, "kind": "CP575", "legalName": "ACME STONE LLC",
-            "ein": "12-3456789", "street": "100 MAIN ST", "city": "INDIANAPOLIS", "state": "IN",
-            "postalCode": "46204", "unreadable": "" })
-}
-
-/// Mark uploads Acme's IRS letter; the AI reads `read` off it.
-async fn upload_letter(server: &TestServer, fake: &CheckFake, read: Value) -> TestResponse {
-    fake.answer_with(read);
-    server
-        .post("/v1/phone/admin/tendlc/ein-letter")
-        .with_session(sessions::MANAGER)
-        .json(
-            &json!({ "file": "data:application/pdf;base64,JVBERi0xLjQK", "fileName": "cp575.pdf" }),
-        )
-        .await
-}
-
 async fn run_checks(server: &TestServer) -> Value {
     let run = server
         .post("/v1/jobs/tendlc-checks")
@@ -1659,101 +1648,6 @@ async fn email_of(pool: &MySqlPool, user: i32) -> String {
         .fetch_one(pool)
         .await
         .unwrap()
-}
-
-#[test_db::test(seed)]
-async fn the_irs_letter_sets_the_legal_details(pool: MySqlPool) {
-    setup(&pool).await;
-    let (server, fake, _) = check_server(&pool).await;
-    // Nothing saved yet: nothing to put it on.
-    server
-        .post("/v1/phone/admin/tendlc/ein-letter")
-        .with_session(sessions::MANAGER)
-        .json(&json!({ "file": "data:application/pdf;base64,JVBERi0xLjQK" }))
-        .await
-        .assert_status(StatusCode::BAD_REQUEST);
-    // With an AI on the server, a business with an EIN must upload it.
-    let saved: Value = save_form(&server, sessions::MANAGER, &form()).await.json();
-    assert_eq!(problem_fields(&saved), ["brand.einLetter"]);
-    server
-        .post("/v1/phone/admin/tendlc/ready")
-        .with_session(sessions::MANAGER)
-        .await
-        .assert_status(StatusCode::BAD_REQUEST);
-
-    // Not an IRS letter, or not a file the AI reads: refused, nothing kept.
-    let mut other = irs_letter();
-    other["isIrsEinLetter"] = json!(false);
-    other["kind"] = json!("other");
-    let refused = upload_letter(&server, &fake, other).await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
-    assert!(
-        refused.json::<Value>()["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("This is not an IRS EIN letter")
-    );
-    server
-        .post("/v1/phone/admin/tendlc/ein-letter")
-        .with_session(sessions::MANAGER)
-        .json(&json!({ "file": "data:image/heic;base64,AAAA" }))
-        .await
-        .assert_status(StatusCode::BAD_REQUEST);
-
-    // A clear CP 575: the form must have its details exactly.
-    let mut read = irs_letter();
-    read["street"] = json!("100 MAIN STREET");
-    let uploaded = upload_letter(&server, &fake, read).await;
-    uploaded.assert_status_ok();
-    let uploaded: Value = uploaded.json();
-    let letter = &uploaded["draft"]["brand"]["einLetter"];
-    assert_eq!(letter["legalName"], "ACME STONE LLC");
-    assert_eq!(letter["ein"], "12-3456789");
-    assert_eq!(letter["fileName"], "cp575.pdf");
-    assert_eq!(
-        uploaded["problems"],
-        json!([{ "field": "brand.street",
-                 "message": "Enter the street address exactly as on your IRS letter: \"100 MAIN STREET\"." }])
-    );
-    // The AI got the file itself.
-    let asked = fake.requests().last().cloned().unwrap();
-    assert_eq!(
-        asked["messages"][1]["content"][1]["file"]["file_data"],
-        "data:application/pdf;base64,JVBERi0xLjQK"
-    );
-
-    // A save keeps the letter as read, whatever the form sends.
-    let mut fixed = form();
-    fixed["brand"]["street"] = json!("100 Main Street");
-    fixed["brand"]["einLetter"] = json!({ "legalName": "SOMEONE ELSE" });
-    let saved: Value = save_form(&server, sessions::MANAGER, &fixed).await.json();
-    assert_eq!(
-        saved["draft"]["brand"]["einLetter"]["legalName"],
-        "ACME STONE LLC"
-    );
-    assert_eq!(saved["problems"], json!([]));
-
-    // Superusers upload one too.
-    fake.answer_with(irs_letter());
-    let review: Value = server
-        .post("/v1/superuser/companies/100/tendlc/ein-letter")
-        .with_session(sessions::SUPER_ADMIN)
-        .json(&json!({ "file": "data:image/png;base64,iVBORw0KGgo=" }))
-        .await
-        .json();
-    assert_eq!(
-        review["registration"]["draft"]["brand"]["einLetter"]["street"],
-        "100 MAIN ST"
-    );
-    assert_eq!(problem_fields(&review["registration"]), ["brand.street"]);
-    assert_eq!(
-        audit_actions(&pool)
-            .await
-            .iter()
-            .filter(|(_, action)| action == "tendlc_ein_letter")
-            .count(),
-        2
-    );
 }
 
 #[test_db::test(seed)]
@@ -1776,9 +1670,6 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     let mark = email_of(&pool, 101).await;
     let sam = email_of(&pool, 103).await;
     save_form(&server, sessions::MANAGER, &form)
-        .await
-        .assert_status_ok();
-    upload_letter(&server, &fake, irs_letter())
         .await
         .assert_status_ok();
 
@@ -1833,13 +1724,22 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     ));
     let run = run_checks(&server).await;
     assert_eq!(run["processed"], 1);
-    // The letter's reading, then the check's two answers.
     let requests = fake.requests();
-    assert_eq!(requests.len(), 3);
-    let requests = &requests[1..];
-    assert_eq!(requests[0]["model"], api::ai::LARGE_MODEL);
-    assert_eq!(requests[0]["response_format"]["type"], "json_schema");
-    let read = requests[0]["messages"][1]["content"].as_str().unwrap();
+    assert_eq!(requests.len(), 2);
+    // Claude Opus 5.5 checks it, thinking hard.
+    assert_eq!(requests[0]["model"], "claude-opus-5-5");
+    assert_eq!(requests[0]["output_config"]["effort"], "high");
+    assert_eq!(
+        requests[0]["output_config"]["format"]["type"],
+        "json_schema"
+    );
+    assert!(
+        requests[0]["system"]
+            .as_str()
+            .unwrap()
+            .contains("10DLC texting registration")
+    );
+    let read = requests[0]["messages"][0]["content"].as_str().unwrap();
     // The pages as read: the form's fields and words, no scripts; nothing
     // code found on them.
     assert!(
@@ -1850,13 +1750,29 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     assert!(read.contains("We may share your information"), "{read}");
     assert!(!read.contains("track("), "{read}");
     assert!(read.contains("\"facts\": []"), "{read}");
+    // The answer is sent back as it came, its thinking too.
     let sent_back = requests[1]["messages"].as_array().unwrap();
-    assert_eq!(sent_back.len(), 4);
+    assert_eq!(sent_back.len(), 3);
+    assert_eq!(sent_back[1]["content"][0]["signature"], "sig-1");
     assert!(
-        sent_back[3]["content"]
+        sent_back[2]["content"]
             .as_str()
             .unwrap()
             .contains("`website`")
+    );
+    // Each call is logged.
+    let logged: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT model, success FROM ai_usage_log WHERE feature = 'tendlc_check' ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        logged,
+        [
+            ("claude-opus-5-5".to_string(), true),
+            ("claude-opus-5-5".to_string(), true),
+        ]
     );
 
     let after: Value = server
@@ -2009,7 +1925,7 @@ async fn the_ai_checks_the_form_and_pages_before_the_superusers_get_it(pool: MyS
     assert_eq!(changed["status"], "draft");
     assert_eq!(changed["actions"]["markReady"], true);
     assert_eq!(run_checks(&server).await["processed"], 0);
-    assert_eq!(fake.requests().len(), 5);
+    assert_eq!(fake.requests().len(), 4);
 }
 
 #[test_db::test(seed)]
@@ -2048,14 +1964,11 @@ async fn code_finds_what_the_pages_miss_whatever_the_ai_says(pool: MySqlPool) {
     save_form(&server, sessions::MANAGER, &form)
         .await
         .assert_status_ok();
-    upload_letter(&server, &fake, irs_letter())
-        .await
-        .assert_status_ok();
     ready(&server, &form).await;
     // The AI passes everything.
     fake.answer_with(ai_answer("Everything is in order.", &[]));
     assert_eq!(run_checks(&server).await["processed"], 1);
-    let read = fake.requests()[1]["messages"][1]["content"]
+    let read = fake.requests()[0]["messages"][0]["content"]
         .as_str()
         .unwrap()
         .to_string();
@@ -2103,6 +2016,121 @@ async fn code_finds_what_the_pages_miss_whatever_the_ai_says(pool: MySqlPool) {
         "Phone: (317) 555-0100\nEmail: office@acmestone.test\nAddress: 100 Main St, \
          Indianapolis, IN 46204"
     );
+}
+
+#[test_db::test(seed)]
+async fn the_manager_sends_it_anyway_when_the_ai_is_wrong(pool: MySqlPool) {
+    setup(&pool).await;
+    let (server, fake, base) = check_server(&pool).await;
+    fake.page("/quote", QUOTE_PAGE);
+    fake.page("/privacy", PRIVACY_PAGE);
+    fake.page("/terms", TERMS_PAGE);
+    fake.page("/", HOME_PAGE);
+    let mut form = form();
+    form["brand"]["website"] = json!(format!("{base}/site/"));
+    form["campaign"]["optinFormLink"] = json!(format!("{base}/site/quote"));
+    form["campaign"]["privacyPolicyLink"] = json!(format!("{base}/site/privacy"));
+    form["campaign"]["termsAndConditionsLink"] = json!(format!("{base}/site/terms"));
+    form["campaign"]["messageFlow"] = json!(format!(
+        "Customers ask for a quote on our quote form at {base}/site/quote and agree to texts from \
+         Acme Stone. Privacy policy: {base}/site/privacy"
+    ));
+    save_form(&server, sessions::MANAGER, &form)
+        .await
+        .assert_status_ok();
+    let send_anyway = || {
+        server
+            .post("/v1/phone/admin/tendlc/send-anyway")
+            .with_session(sessions::MANAGER)
+    };
+    // The AI asked for nothing yet: refused.
+    send_anyway().await.assert_status(StatusCode::BAD_REQUEST);
+    let marked = ready(&server, &form).await;
+    assert_eq!(marked["actions"]["sendAnyway"], false);
+
+    fake.answer_with(ai_answer(
+        "One change is needed.",
+        &[(
+            "privacy_no_sharing",
+            json!({ "status": "fail", "evidence": "We may share your information with marketing partners.",
+                    "note": "", "fixes": [{
+                        "location": "page:privacyPolicy",
+                        "problem": "Carriers require the policy to say phone numbers are never shared for marketing.",
+                        "current": "We may share your information with marketing partners.",
+                        "replacement": "No mobile information will be shared with third parties or affiliates for marketing or promotional purposes.",
+                    }] }),
+        )],
+    ));
+    assert_eq!(run_checks(&server).await["processed"], 1);
+    let changes: Value = server
+        .get("/v1/phone/admin/tendlc")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(changes["aiCheck"]["status"], "changes");
+    assert_eq!(changes["actions"]["sendAnyway"], true);
+    let mark = email_of(&pool, 101).await;
+    assert!(
+        fake.emails()
+            .iter()
+            .any(|(to, _, body)| to == &mark && body.contains("Send anyway"))
+    );
+
+    // Mark is sure the AI is wrong: ready as it is, and the superusers get
+    // the AI's changes to look at.
+    let sent = send_anyway().await;
+    sent.assert_status_ok();
+    let sent: Value = sent.json();
+    assert_eq!(sent["status"], "ready");
+    assert_eq!(sent["aiCheck"]["status"], "overridden");
+    assert_eq!(
+        sent["aiCheck"]["fixes"][0]["location"],
+        "page:privacyPolicy"
+    );
+    assert_eq!(sent["actions"]["sendAnyway"], false);
+    assert_eq!(sent["actions"]["markReady"], false);
+    let told = bell(&pool, "tendlc_ready").await;
+    assert!(!told.is_empty());
+    assert!(told.iter().all(|(_, message)| message
+        == "Acme Stone sent its texting registration (10DLC) on although the AI check asked for \
+            changes: look at them before sending it to Telnyx."));
+    let sam = email_of(&pool, 103).await;
+    let to_sam = fake
+        .emails()
+        .into_iter()
+        .find(|(to, _, _)| to == &sam)
+        .expect("Sam is emailed");
+    assert_eq!(
+        to_sam.1,
+        "[Granite Manager] Acme Stone is ready, though the AI check asked for changes"
+    );
+    assert!(
+        to_sam
+            .2
+            .contains("We may share your information with marketing partners.")
+    );
+    assert!(
+        audit_actions(&pool)
+            .await
+            .iter()
+            .any(|(_, action)| action == "tendlc_ai_check_overridden")
+    );
+    // Days later, the AI check still does not hold a superuser's send (it
+    // fails here only because Telnyx is not set up), nor runs again.
+    sql(
+        &pool,
+        "UPDATE tendlc_registrations SET ai_checked_at = UTC_TIMESTAMP() - INTERVAL 2 DAY
+          WHERE company_id = 100",
+    )
+    .await;
+    let send = superuser_post(&server, "send", &json!({})).await;
+    assert_ne!(send.status_code(), StatusCode::CONFLICT, "{}", send.text());
+    assert_eq!(
+        review(&server).await["registration"]["aiCheck"]["status"],
+        "overridden"
+    );
+    // Again: nothing left to override.
+    send_anyway().await.assert_status(StatusCode::BAD_REQUEST);
 }
 
 /// The API with an AI on a stand-in that streams `pieces` as its answer;

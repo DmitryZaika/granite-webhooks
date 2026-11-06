@@ -7,7 +7,8 @@
 
 use super::invoice::{number, text};
 use crate::auth::EmployeeUser;
-use crate::error::{ApiResult, ErrorBody};
+use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
 use crate::qbo::{Access, QboError, escape};
 use crate::state::AppState;
@@ -16,7 +17,7 @@ use axum::extract::State;
 use chrono::{Datelike, Duration, NaiveDate};
 use chrono_tz::America::Indiana::Indianapolis;
 use lambda_http::tracing;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -263,6 +264,100 @@ async fn classes(state: &AppState, access: &Access) -> Result<Vec<Class>, QboErr
     Ok(resolve_parents(classes))
 }
 
+/// `positions.id` of a Sales Manager and a Manager.
+const GOAL_SETTER_POSITIONS: [i32; 2] = [2, 5];
+
+/// `company.monthly_sales_goal` is DECIMAL(12, 2).
+const MAX_COMPANY_GOAL: f64 = 10_000_000_000.0;
+
+async fn company_goal(state: &AppState, company_id: i32) -> Result<Option<f64>, sqlx::Error> {
+    let goal: Option<Option<f64>> = sqlx::query_scalar(
+        "SELECT CAST(monthly_sales_goal AS DOUBLE) FROM company
+         WHERE id = ? AND monthly_sales_goal > 0",
+    )
+    .bind(company_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(goal.flatten())
+}
+
+/// The user is a Sales Manager or Manager of the company.
+async fn sets_company_goal(
+    state: &AppState,
+    user_id: i32,
+    company_id: i32,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users_positions
+                       WHERE user_id = ? AND company_id = ? AND position_id IN (?, ?))",
+    )
+    .bind(user_id)
+    .bind(company_id)
+    .bind(GOAL_SETTER_POSITIONS[0])
+    .bind(GOAL_SETTER_POSITIONS[1])
+    .fetch_one(&state.pool)
+    .await
+}
+
+/// `PUT /v1/company/sales-goal` body.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateCompanyGoal {
+    /// The goal each month; null clears it.
+    pub monthly_sales_goal: Option<f64>,
+}
+
+/// The company's monthly sales goal.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CompanyGoal {
+    /// Null when not set.
+    pub monthly_sales_goal: Option<f64>,
+}
+
+/// Set the company's monthly sales goal
+///
+/// A Manager or Sales Manager sets the goal every employee sees on the
+/// `QuickBooks` sales widget's Company view. Null clears it.
+#[crate::openapi::path(
+    put,
+    path = "/v1/company/sales-goal",
+    operation_id = "set_company_sales_goal",
+    tag = "quickbooks",
+    request_body = UpdateCompanyGoal,
+    responses(
+        (status = 200, description = "The goal as saved", body = CompanyGoal),
+        (status = 400, description = "Goal out of range", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a Manager or Sales Manager", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn set_company_goal(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    JsonBody(body): JsonBody<UpdateCompanyGoal>,
+) -> ApiResult<Json<CompanyGoal>> {
+    if !user.is_superuser && !sets_company_goal(&state, user.id, user.company_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if let Some(amount) = body.monthly_sales_goal {
+        // Rounds to 0.00 below half a cent, which would read back as "not set".
+        if !amount.is_finite() || !(0.005..MAX_COMPANY_GOAL).contains(&amount) {
+            return Err(ApiError::BadRequest(
+                "monthly_sales_goal must be above 0 and below 10000000000".into(),
+            ));
+        }
+    }
+    sqlx::query("UPDATE company SET monthly_sales_goal = ROUND(?, 2) WHERE id = ?")
+        .bind(body.monthly_sales_goal)
+        .bind(user.company_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(CompanyGoal {
+        monthly_sales_goal: company_goal(&state, user.company_id).await?,
+    }))
+}
+
 async fn rep_name(state: &AppState, user_id: i32) -> Result<String, sqlx::Error> {
     let name: Option<Option<String>> =
         sqlx::query_scalar("SELECT name FROM users WHERE id = ? AND is_deleted = 0")
@@ -288,6 +383,12 @@ pub struct RepSales {
     pub status: SalesStatus,
     /// The rep's classes' sales this month.
     pub amount: Option<f64>,
+    /// The whole company's sales this month (the report's grand total).
+    pub company_amount: Option<f64>,
+    /// The company's monthly sales goal, when a manager set one.
+    pub company_goal: Option<f64>,
+    /// The caller may set the company goal (a Manager or Sales Manager).
+    pub can_set_company_goal: bool,
     /// Currency code.
     pub currency: Option<String>,
     /// First day of the report.
@@ -309,6 +410,9 @@ impl RepSales {
         Self {
             status,
             amount: None,
+            company_amount: None,
+            company_goal: None,
+            can_set_company_goal: false,
             currency: None,
             start_period: None,
             end_period: None,
@@ -378,9 +482,16 @@ pub async fn my_sales(
         .filter(|row| matches_rep(&row.name, &name))
         .filter_map(|row| row.amount)
         .sum();
+    let company_amount = report
+        .total
+        .unwrap_or_else(|| report.rows.iter().filter_map(|row| row.amount).sum());
     Ok(Json(RepSales {
         status: SalesStatus::Ok,
         amount: Some(amount),
+        company_amount: Some(company_amount),
+        company_goal: company_goal(&state, user.company_id).await?,
+        can_set_company_goal: user.is_superuser
+            || sets_company_goal(&state, user.id, user.company_id).await?,
         currency: Some(currency(&report)),
         start_period: Some(
             report

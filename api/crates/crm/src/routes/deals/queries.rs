@@ -511,7 +511,7 @@ pub async fn customer_deals(
 ) -> Result<Vec<CustomerDeal>, sqlx::Error> {
     let select =
         "SELECT CAST(d.id AS SIGNED) AS id, d.title, d.status, CAST(d.amount AS CHAR) AS amount,
-                         dl.name AS list_name
+                         dl.name AS list_name, d.is_won
                   FROM deals d
                   JOIN customers c ON c.id = d.customer_id
                   LEFT JOIN deals_list dl ON dl.id = d.list_id
