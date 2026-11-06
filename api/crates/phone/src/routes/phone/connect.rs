@@ -620,11 +620,15 @@ pub async fn buy_number(
             "Your company has {MAX_COMPANY_NUMBERS} numbers, the most it can buy here. Ask the Granite Manager team for more."
         )));
     }
-    let owner: Option<i32> =
-        sqlx::query_scalar("SELECT company_id FROM telnyx_numbers WHERE e164 = ?")
-            .bind(&e164)
-            .fetch_optional(pool)
-            .await?;
+    // A number this company deleted may be bought back.
+    let owner: Option<i32> = sqlx::query_scalar(
+        "SELECT company_id FROM telnyx_numbers
+          WHERE e164 = ? AND (released_at IS NULL OR company_id <> ?)",
+    )
+    .bind(&e164)
+    .bind(user.company_id)
+    .fetch_optional(pool)
+    .await?;
     if owner.is_some() {
         return Err(ApiError::Conflict(
             "That number is in Granite Manager already.".into(),
@@ -657,9 +661,21 @@ pub async fn buy_number(
         ));
     }
     let mut tx = pool.begin().await?;
+    let revived = sqlx::query(
+        "UPDATE telnyx_numbers
+            SET released_at = NULL, active = 1, telnyx_number_id = NULL, label = '',
+                kind = 'direct', no_answer_action = 'voicemail', forward_to = NULL,
+                greeting = NULL, forward_only = 0, forward_texts_to = NULL
+          WHERE e164 = ? AND company_id = ? AND released_at IS NOT NULL",
+    )
+    .bind(&e164)
+    .bind(user.company_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
     let inserted = sqlx::query(
-        "INSERT IGNORE INTO telnyx_numbers (company_id, e164, last10, label, kind)
-         VALUES (?, ?, ?, '', 'direct')",
+        "INSERT IGNORE INTO telnyx_numbers (company_id, e164, last10, label, kind, no_answer_action)
+         VALUES (?, ?, ?, '', 'direct', 'voicemail')",
     )
     .bind(user.company_id)
     .bind(&e164)
@@ -684,7 +700,7 @@ pub async fn buy_number(
         "number_bought",
         &format!("number:{id}"),
         &json!({ "e164": e164, "orderId": order.id, "status": order.status,
-                 "added": inserted.rows_affected() == 1 }),
+                 "added": inserted.rows_affected() == 1 || revived == 1 }),
     )
     .await?;
     tx.commit().await?;

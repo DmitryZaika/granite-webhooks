@@ -22,6 +22,8 @@ use crate::routes::sms::moves::{self, Kind};
 use crate::routes::sms::provider::SmsProvider;
 use crate::serde_helpers::{js_date, js_date_required};
 use crate::state::AppState;
+use crate::telnyx::TelnyxError;
+use crate::telnyx::porting::PortingError;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -235,7 +237,7 @@ pub(super) async fn company_numbers(
         "SELECT id, e164, label, CAST(kind AS CHAR) AS kind,
                 CAST(no_answer_action AS CHAR) AS no_answer_action, forward_to, greeting,
                 active <> 0 AS active, forward_only <> 0 AS forward_only, forward_texts_to
-           FROM telnyx_numbers WHERE company_id = ?
+           FROM telnyx_numbers WHERE company_id = ? AND released_at IS NULL
           ORDER BY FIELD(kind, 'main', 'shared', 'direct'), label, id",
     )
     .bind(company_id)
@@ -571,6 +573,97 @@ pub async fn update_admin_number(
     Ok(Json(saved))
 }
 
+/// Delete a phone number
+///
+/// Releases the number at Telnyx, so the company stops paying for it (it
+/// can't be taken back), and takes it off the company's numbers: it rings
+/// nobody and nobody can call from it. Its calls and texts stay. A number
+/// Telnyx no longer has is just taken off. 404 when the company has no such
+/// number, 503 when Telnyx is not set up on the server, 502 when Telnyx
+/// fails (nothing changes). Written to the phone audit log. Company admins
+/// (and super admins, superusers) only.
+#[crate::openapi::path(
+    delete,
+    path = "/v1/phone/admin/numbers/{id}",
+    operation_id = "delete_phone_admin_number",
+    tag = "phone",
+    params(("id" = i32, Path, description = "The number (`AdminNumber.id`)")),
+    responses(
+        (status = 204, description = "Released and taken off"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such number in the caller's company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+        (status = 502, description = "Telnyx failed; try again", body = ErrorBody),
+        (status = 503, description = "Telnyx is not set up on the server", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete_admin_number(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+) -> ApiResult<StatusCode> {
+    let pool = &state.pool;
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT e164, telnyx_number_id FROM telnyx_numbers
+          WHERE id = ? AND company_id = ? AND released_at IS NULL",
+    )
+    .bind(id)
+    .bind(user.company_id)
+    .fetch_optional(pool)
+    .await?;
+    let (e164, telnyx_id) = row.ok_or(ApiError::NotFound)?;
+    let telnyx_id = match telnyx_id.filter(|id| !id.is_empty()) {
+        Some(telnyx_id) => Some(telnyx_id),
+        None => state
+            .telnyx
+            .find_account_number(&e164)
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "Telnyx number lookup failed");
+                match err {
+                    PortingError::NotConfigured => {
+                        ApiError::Unavailable("Calling is not set up on the server.".into())
+                    }
+                    _ => ApiError::Upstream("Telnyx did not take the request. Try again.".into()),
+                }
+            })?
+            .map(|number| number.id),
+    };
+    if let Some(telnyx_id) = &telnyx_id {
+        match state.telnyx.release_number(telnyx_id).await {
+            // 404: Telnyx doesn't have it any more.
+            Ok(()) | Err(TelnyxError::Status { status: 404, .. }) => {}
+            Err(err) => return Err(telnyx_failed(&err, "release number")),
+        }
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE telnyx_numbers SET active = 0, released_at = NOW()
+          WHERE id = ? AND company_id = ?",
+    )
+    .bind(id)
+    .bind(user.company_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM telnyx_number_users WHERE number_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    audit(
+        &mut *tx,
+        user.company_id,
+        user.id,
+        "number_released",
+        &format!("number:{id}"),
+        &json!({ "e164": e164, "telnyxNumberId": telnyx_id }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// After a number's users changed: those who could call from a direct line
 /// keep it as a line of theirs, so their texts on it follow them, and those who may
 /// call from it now get their texts from other providers copied to Telnyx
@@ -604,7 +697,7 @@ async fn follow_number(
 ///
 /// Reads the numbers assigned to the company's TeXML app in Telnyx and adds
 /// the ones that are missing here as unassigned direct lines (no label,
-/// the AI Assistant when nobody answers); numbers already here are left as
+/// voicemail when nobody answers); numbers already here are left as
 /// they are. Returns how many were added and the company's numbers. 400
 /// when Telnyx is not set up for the company (no TeXML app saved), 503
 /// when Telnyx is not set up on the server, 502 when Telnyx fails. Company
@@ -684,6 +777,20 @@ pub(super) async fn import_numbers(
                 .await?;
         match owner {
             Some(owner) if owner == company_id => {
+                // A number deleted here that is on Telnyx again comes back.
+                imported += sqlx::query(
+                    "UPDATE telnyx_numbers
+                        SET released_at = NULL, active = 1, telnyx_number_id = ?, label = '',
+                            kind = 'direct', no_answer_action = 'voicemail', forward_to = NULL,
+                            greeting = NULL, forward_only = 0, forward_texts_to = NULL
+                      WHERE e164 = ? AND company_id = ? AND released_at IS NOT NULL",
+                )
+                .bind(telnyx_id)
+                .bind(e164)
+                .bind(company_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
                 sqlx::query(
                     "UPDATE telnyx_numbers SET telnyx_number_id = ?
                       WHERE e164 = ? AND company_id = ? AND telnyx_number_id IS NULL",
@@ -698,8 +805,8 @@ pub(super) async fn import_numbers(
             None => {
                 imported += sqlx::query(
                     "INSERT IGNORE INTO telnyx_numbers
-                       (company_id, e164, last10, telnyx_number_id, label, kind)
-                     VALUES (?, ?, ?, ?, '', 'direct')",
+                       (company_id, e164, last10, telnyx_number_id, label, kind, no_answer_action)
+                     VALUES (?, ?, ?, ?, '', 'direct', 'voicemail')",
                 )
                 .bind(company_id)
                 .bind(e164)

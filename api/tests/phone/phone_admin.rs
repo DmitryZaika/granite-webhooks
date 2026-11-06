@@ -345,7 +345,7 @@ async fn numbers_are_imported_from_the_texml_app(pool: MySqlPool) {
             &new["active"],
             &new["assignments"]
         ),
-        (&json!(""), &json!("ai"), &json!(true), &json!([]))
+        (&json!(""), &json!("voicemail"), &json!(true), &json!([]))
     );
     let telnyx_ids: Vec<(String, Option<String>, i32)> = sqlx::query_as(
         "SELECT e164, telnyx_number_id, company_id FROM telnyx_numbers
@@ -406,6 +406,81 @@ async fn numbers_are_imported_from_the_texml_app(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .assert_status(StatusCode::FORBIDDEN);
+}
+
+#[test_db::test(seed)]
+async fn deleting_a_number_releases_it_at_telnyx(pool: MySqlPool) {
+    enable_calling(&pool, 100, "").await;
+    numbers(&pool).await;
+    let (server, stubs) = phone_server(pool.clone()).await;
+    // Rita's line is on Telnyx; the sales line is not any more.
+    stubs.add_telnyx_number("num-rita", "+13175550162");
+    server
+        .delete("/v1/phone/admin/numbers/9903")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .delete("/v1/phone/admin/numbers/9903")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(
+        stubs
+            .telnyx_paths()
+            .contains(&"DELETE /phone_numbers/num-rita".to_string())
+    );
+    stubs.clear_telnyx();
+    server
+        .delete("/v1/phone/admin/numbers/9902")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(
+        !stubs
+            .telnyx_paths()
+            .iter()
+            .any(|path| path.starts_with("DELETE"))
+    );
+    // Gone from the list; the rows stay (their calls and texts keep them),
+    // off and released, with nobody on them.
+    let listed = server
+        .get("/v1/phone/admin/numbers")
+        .with_session(sessions::ADMIN)
+        .await
+        .json::<Value>();
+    let left: Vec<i64> = listed["numbers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|number| number["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(left, [9901]);
+    let rows: Vec<(i32, bool, bool)> = sqlx::query_as(
+        "SELECT id, active <> 0, released_at IS NOT NULL FROM telnyx_numbers
+          WHERE id IN (9902, 9903) ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, [(9902, false, true), (9903, false, true)]);
+    let users: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM telnyx_number_users WHERE number_id IN (9902, 9903)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(users, 0);
+    let log = audit_log(&pool, 100).await;
+    assert_eq!(log.last().unwrap().1, "number_released");
+    // Once only, and never another company's number.
+    for id in [9903, 9904] {
+        server
+            .delete(&format!("/v1/phone/admin/numbers/{id}"))
+            .with_session(sessions::ADMIN)
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
 }
 
 #[test_db::test(seed)]
