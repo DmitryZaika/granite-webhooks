@@ -262,12 +262,12 @@ async fn sent_address(sent: &Sent) -> String {
 
 #[test_db::test(seed)]
 async fn managers_hear_once_when_survey_texts_cannot_go_out(pool: MySqlPool) {
-    // Acme texts through CloudTalk; Mark (101) is its office manager, with no
+    // Acme texts through CloudTalk; Mark (101) is its Scheduling Manager, with no
     // CloudTalk line yet. Alice's checklist (9000) is due.
     sqlx::raw_sql(
         "DELETE FROM emails WHERE message_id LIKE 'checklist-survey-%';
          UPDATE company SET cloudtalk_access_key = 'k', cloudtalk_access_secret = 's' WHERE id = 100;
-         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 10, 100);
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 13, 100);
          UPDATE checklists SET created_at = UTC_TIMESTAMP() - INTERVAL 30 HOUR WHERE id = 9000;",
     )
     .execute(&pool)
@@ -305,7 +305,7 @@ async fn managers_hear_once_when_survey_texts_cannot_go_out(pool: MySqlPool) {
         assert!(
             down[0]
                 .body
-                .contains("No Office Manager has a CloudTalk line")
+                .contains("No Scheduling Manager has a CloudTalk line")
         );
     }
     assert!(sent.texts.lock().unwrap().is_empty());

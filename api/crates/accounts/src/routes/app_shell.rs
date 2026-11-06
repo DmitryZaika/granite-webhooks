@@ -26,7 +26,6 @@ const SALES_REP: i32 = 1;
 const SALES_MANAGER: i32 = 2;
 const SHOP_MANAGER: i32 = 3;
 const MANAGER: i32 = 5;
-const OFFICE_MANAGER: i32 = 10;
 const INSTALLER: i32 = 6;
 const CHECK_IN: i32 = 8;
 const MARKETING: i32 = 7;
@@ -113,7 +112,7 @@ pub struct AppShell {
     /// Holds the Shop Manager position in the company.
     pub is_shop_manager: bool,
     /// Projects is on and the caller's position has a Projects board (admin,
-    /// Manager, Sales Manager, Office Manager, Shop Manager, sales rep).
+    /// Manager, Sales Manager, Shop Manager, sales rep).
     pub has_projects_board: bool,
     /// Holds Template in the company (their portal is their own schedule).
     pub is_template_maker: bool,
@@ -305,7 +304,6 @@ pub async fn shell(
                 SALES_MANAGER,
                 SHOP_MANAGER,
                 MANAGER,
-                OFFICE_MANAGER,
                 INVENTORY_MANAGER,
                 SCHEDULING_MANAGER,
             ]

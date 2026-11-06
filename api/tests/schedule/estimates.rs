@@ -114,7 +114,7 @@ async fn the_office_manager_texts_the_confirmation(pool: MySqlPool) {
     sqlx::raw_sql(
         "UPDATE company SET cloudtalk_access_key = 'k', cloudtalk_access_secret = 's' WHERE id = 100;
          UPDATE users SET cloudtalk_agent_id = '5101', cloudtalk_phone_number = '3175550999' WHERE id = 101;
-         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 10, 100);",
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 13, 100);",
     )
     .execute(&pool)
     .await
