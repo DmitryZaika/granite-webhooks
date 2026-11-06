@@ -12,8 +12,8 @@ use crate::phone_common;
 use axum::http::StatusCode;
 use common::{WithSession, sessions};
 use phone_common::{
-    HEADER, add_session, enable_calling, phone_server, phone_server_with, revoke_session, sql,
-    token,
+    HEADER, add_phone, add_session, enable_calling, phone_server, phone_server_with,
+    revoke_session, sql, token,
 };
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
@@ -1368,4 +1368,111 @@ async fn the_own_invoice_editor_makes_a_quotes_invoice_with_its_device_token(poo
         .with_session(sessions::REP)
         .await
         .assert_status_ok();
+}
+
+#[test_db::test(seed)]
+async fn the_deal_edit_saves_its_customer_and_reassigns_the_sales_rep_with_its_device_token(
+    pool: MySqlPool,
+) {
+    // Rita (100) and Mark (101, the sales manager) have the app. Alice Lead
+    // (1000) is Rita's, with her deals 8000, 8004 and 8007.
+    add_phone(&pool, 330, 100, 100).await;
+    add_phone(&pool, 331, 101, 100).await;
+    sql(
+        &pool,
+        "INSERT INTO customer_sources (company_id, source_key, label, is_system)
+         VALUES (100, 'leads', 'Leads', 1), (100, 'Home show', 'Home show', 0)",
+    )
+    .await;
+    let (server, stubs) = phone_server(pool.clone()).await;
+
+    // The Source list of the website's customer form.
+    let sources = server
+        .get("/v1/customer-sources")
+        .add_header(HEADER, token(330))
+        .await;
+    sources.assert_status_ok();
+    let sources: Vec<Value> = sources.json();
+    let keys: Vec<&Value> = sources.iter().map(|row| &row["source_key"]).collect();
+    assert_eq!(keys, [&json!("leads"), &json!("Home show")], "{sources:?}");
+
+    // Rita's phone saves the deal's customer as the website's Edit Customer
+    // does, giving Alice to Mark.
+    server
+        .put("/v1/customers/1000")
+        .add_header(HEADER, token(330))
+        .json(&json!({
+            "name": "Alice Lead",
+            "phone": "317-555-0100",
+            "phone_2": null,
+            "emails": ["alice@example.com", "alice.new@example.com"],
+            "address": "9 Oak St",
+            "your_message": "Wants it before Christmas",
+            "company_name": null,
+            "source": "Home show",
+            "sales_rep": 101
+        }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let customer: Value = server
+        .get("/v1/customers/1000")
+        .add_header(HEADER, token(331))
+        .await
+        .json();
+    assert_eq!(customer["sales_rep"], 101);
+    assert_eq!(customer["sales_rep_name"], "Mark Manager");
+    assert_eq!(customer["address"], "9 Oak St");
+    assert_eq!(customer["source"], "Home show");
+    assert_eq!(customer["phone_2"], Value::Null);
+    assert_eq!(customer["your_message"], "Wants it before Christmas");
+    assert_eq!(
+        customer["emails"],
+        json!(["alice@example.com", "alice.new@example.com"])
+    );
+    // Mark has her deals now, and his phone is told (Rita gave it: hers is not).
+    let left_with_rita: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM deals WHERE customer_id = 1000 AND deleted_at IS NULL AND user_id = 100",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(left_with_rita, 0);
+    let leads: Vec<Value> = stubs
+        .pushes()
+        .into_iter()
+        .filter(|push| push["data"]["type"] == "lead")
+        .collect();
+    assert_eq!(leads.len(), 1, "{leads:?}");
+    assert_eq!(leads[0]["token"], "push-331");
+    assert_eq!(leads[0]["data"]["kind"], "assigned");
+    assert_eq!(leads[0]["data"]["customerId"], "1000");
+    // The audit trail says who moved it.
+    let moved: Option<String> = sqlx::query_scalar(
+        "SELECT reassigned_to FROM customers_history WHERE customer_id = 1000
+          ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(moved.as_deref(), Some("Mark Manager"));
+
+    // Everything else about a customer stays with the CRM session: 403, so
+    // the phone is not signed out.
+    for (method, path) in [
+        ("DELETE", "/v1/customers/1000"),
+        ("POST", "/v1/customers"),
+        ("PUT", "/v1/customers/1000/temperature"),
+        ("POST", "/v1/customer-sources"),
+    ] {
+        let request = match method {
+            "DELETE" => server.delete(path),
+            "POST" => server.post(path),
+            _ => server.put(path),
+        };
+        request
+            .add_header(HEADER, token(330))
+            .json(&json!({ "name": "X", "source": "leads", "temperature": "hot" }))
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
 }
