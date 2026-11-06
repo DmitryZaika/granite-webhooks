@@ -462,3 +462,66 @@ async fn a_scheduled_text_that_went_out_is_pushed_to_the_senders_app(pool: MySql
         .await
         .assert_status_ok();
 }
+
+#[test_db::test(seed)]
+async fn a_customer_moved_to_another_rep_on_its_edit_page_says_reassigned(pool: MySqlPool) {
+    use crate::common::{WithSession, sessions};
+    use api::telegram::TelegramBots;
+    let (telegram, chats) = telegram_stub().await;
+    let (server, _stubs) = phone_common::phone_server_with(pool.clone(), |state| {
+        state.with_telegram(TelegramBots::new(
+            Some("111:leads"),
+            Some("222:notes"),
+            &telegram,
+        ))
+    })
+    .await;
+    sql(&pool, "UPDATE users SET telegram_id = 5557 WHERE id = 107").await;
+
+    // Mark moves Alice Lead from Rita to Dina on Alice's Edit page.
+    server
+        .put("/v1/customers/1000")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "name": "Alice Lead", "source": "leads", "sales_rep": 107 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let deal: i64 = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM deals
+          WHERE customer_id = 1000 AND deleted_at IS NULL AND user_id = 107 ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let to_dina = |chats: &std::sync::Mutex<Vec<(String, Value)>>| -> Vec<Value> {
+        chats
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, body)| path == "bot111:leads/sendMessage" && body["chat_id"] == 5557)
+            .map(|(_, body)| body["text"].clone())
+            .collect()
+    };
+    assert_eq!(
+        to_dina(&chats),
+        [json!(format!(
+            "You were reassigned the customer Alice Lead. Click here: \nhttps://crm.test/employee/deals/edit/{deal}/project"
+        ))]
+    );
+
+    // A customer with no rep yet is still "assigned a lead".
+    server
+        .put("/v1/customers/1001")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "name": "Bob Unassigned", "source": "check-in", "sales_rep": 107 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let texts = to_dina(&chats);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(
+        texts[1]
+            .as_str()
+            .unwrap()
+            .starts_with("You were assigned a lead. Click here: \n"),
+        "{texts:?}"
+    );
+}
