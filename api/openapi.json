@@ -30864,7 +30864,7 @@
           "quotes"
         ],
         "summary": "List the extra events a quote's sale can add to the schedule",
-        "description": "Returns the company's event templates (Admin > Quotes > Automation), in\nthe order they were added: the checkboxes under Mark as Sold › Extra\nevents. One starts ticked when the quote has a line of one of its\n`trigger_extra_ids` extras. Pass the ticked ones as `extra_events` to\n`POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left\nout. Any employee may read them; admins change them with\n`POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.",
+        "description": "Returns the company's event templates (Admin > Quotes > Automation), in\nthe order they were added: the checkboxes under Mark as Sold › Extra\nevents. One starts ticked when the quote has a line of one of its\n`trigger_extra_ids` extras, or one of its `trigger_options`. Pass the ticked ones as `extra_events` to\n`POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left\nout. Any employee may read them; admins change them with\n`POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.",
         "operationId": "list_quote_sale_events",
         "responses": {
           "200": {
@@ -94303,7 +94303,8 @@
           "calendar_name",
           "title_variable",
           "title_text",
-          "trigger_extra_ids"
+          "trigger_extra_ids",
+          "trigger_options"
         ],
         "properties": {
           "id": {
@@ -94334,7 +94335,14 @@
               "type": "integer",
               "format": "int64"
             },
-            "description": "Catalog extras (`GET /v1/quote-extras` ids) that tick this event in\nMark as Sold when the quote has one of them (a line whose `catalogId`\nis one of these). Empty: the seller ticks it by hand."
+            "description": "Catalog extras (`GET /v1/quote-extras` ids) that tick this event in\nMark as Sold when the quote has one of them (a line whose `catalogId`\nis one of these, any option). Empty: the seller ticks it by hand."
+          },
+          "trigger_options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TriggerOption"
+            },
+            "description": "Single options of catalog extras that tick this event in Mark as Sold\nwhen the quote has a line of that extra with that option (its\n`catalogId` and `optionId`)."
           }
         }
       },
@@ -94365,6 +94373,13 @@
               "format": "int64"
             },
             "description": "Catalog extras (`GET /v1/quote-extras` ids) that tick this event in\nMark as Sold when the quote has one. Ids not in the company's catalog\nare dropped. Default none."
+          },
+          "trigger_options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TriggerOption"
+            },
+            "description": "Single options of catalog extras that tick this event in Mark as Sold\nwhen the quote has one. Options not in the company's catalog are\ndropped. Default none."
           }
         },
         "additionalProperties": false
@@ -105076,6 +105091,26 @@
           "Failed",
           "Skipped"
         ]
+      },
+      "TriggerOption": {
+        "type": "object",
+        "description": "One option of a catalog extra (`arrOptions[].id` of a `GET /v1/quote-extras` item).",
+        "required": [
+          "extra_id",
+          "option_id"
+        ],
+        "properties": {
+          "extra_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The catalog extra."
+          },
+          "option_id": {
+            "type": "string",
+            "description": "The option's id in that extra."
+          }
+        },
+        "additionalProperties": false
       },
       "UnpricedModel": {
         "type": "object",
