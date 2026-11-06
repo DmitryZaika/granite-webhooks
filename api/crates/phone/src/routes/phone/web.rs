@@ -25,6 +25,7 @@ use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
 use crate::phone::availability::Availability;
 use crate::phone::company::{self, CompanyConfig, RecordingMode};
+use crate::phone::contacts::{self, Coworker};
 use crate::phone::devices::{self, CREDENTIAL_DAYS, LIVE_DEVICE};
 use crate::phone::lines::{self, CallerId, default_caller_id};
 use crate::phone::revoke::{RevokeReason, revoke_device_session};
@@ -72,6 +73,9 @@ pub struct WebPhoneBootstrap {
     pub settings: PhoneSettings,
     /// Whether calls ring the user now (Do not disturb, working hours).
     pub availability: Availability,
+    /// The company's other users with a phone number, by name: the
+    /// phone's Contacts tab lists them to call.
+    pub coworkers: Vec<Coworker>,
 }
 
 /// Body of `POST /v1/phone/web/devices`.
@@ -218,6 +222,7 @@ pub async fn web_bootstrap(
         .is_some_and(|config| config.calling_on() && config.credential_connection_id.is_some());
     let caller_ids = lines::caller_ids(pool, user.company_id, user.id).await?;
     let stored = settings::load(pool, user.id, user.company_id).await?;
+    let coworkers = contacts::coworkers(pool, user.company_id, user.id).await?;
     let now = Utc::now();
     Ok(Json(WebPhoneBootstrap {
         server_time: now,
@@ -230,6 +235,7 @@ pub async fn web_bootstrap(
         settings: stored.wire(&caller_ids),
         availability: stored.availability(now),
         caller_ids,
+        coworkers,
     }))
 }
 
