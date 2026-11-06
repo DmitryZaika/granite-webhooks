@@ -116,20 +116,15 @@ pub async fn list(
         .collect())
 }
 
-/// The company's saved `provider` calls since `from` whose rep (`Cdr.user_id`,
-/// or for `RingCentral` the `Ringcentral.extension` the job saves too) is one
-/// of `agents`, newest first, at most `limit`.
-pub async fn list_by_agents(
+/// The company's saved `provider` calls since `from`, newest first, at most
+/// `limit`.
+pub async fn list_since(
     pool: &MySqlPool,
     company_id: i32,
     provider: &str,
-    agents: &[String],
     from: DateTime<Utc>,
     limit: i64,
 ) -> Result<Vec<Value>, sqlx::Error> {
-    if agents.is_empty() {
-        return Ok(Vec::new());
-    }
     let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(
         "SELECT CAST(item AS CHAR) FROM provider_calls WHERE company_id = ",
     );
@@ -138,16 +133,7 @@ pub async fn list_by_agents(
         .push(" AND provider = ")
         .push_bind(provider)
         .push(" AND started_at >= ")
-        .push_bind(from.naive_utc())
-        .push(
-            " AND COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(item, '$.Ringcentral.extension')), ''),
-                           JSON_UNQUOTE(JSON_EXTRACT(item, '$.Cdr.user_id'))) IN (",
-        );
-    let mut each = builder.separated(", ");
-    for agent in agents {
-        each.push_bind(agent.as_str());
-    }
-    each.push_unseparated(")");
+        .push_bind(from.naive_utc());
     builder
         .push(" ORDER BY started_at DESC LIMIT ")
         .push_bind(limit.max(1));
