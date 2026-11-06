@@ -385,3 +385,33 @@ async fn a_lead_assigned_from_the_phone_reaches_the_rep_in_the_app_and_in_telegr
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+#[test_db::test(seed)]
+async fn a_manager_marks_a_lead_invalid_from_the_phone(pool: MySqlPool) {
+    let (server, _) = phone_server(pool.clone()).await;
+    add_phone(&pool, 1, 100, 100).await;
+    add_phone(&pool, 2, 101, 100).await;
+    let mark = |n: u32| {
+        server
+            .put("/v1/customers/1001/invalid")
+            .add_header(HEADER, token(n))
+            .json(&json!({ "reason": "Looking for unrelated service" }))
+    };
+
+    // Rita, a rep, may not (as on the web); Mark, the sales manager, may.
+    mark(1).await.assert_status(StatusCode::FORBIDDEN);
+    mark(2).await.assert_status(StatusCode::NO_CONTENT);
+    let reason: Option<String> =
+        sqlx::query_scalar("SELECT invalid_lead FROM customers WHERE id = 1001")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(reason.as_deref(), Some("Looking for unrelated service"));
+    let live: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM deals WHERE customer_id = 1001 AND deleted_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(live, 0);
+}
