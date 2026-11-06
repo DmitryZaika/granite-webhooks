@@ -142,6 +142,18 @@ struct RepIds {
     lines: Vec<String>,
 }
 
+/// The caller's own agent ids and numbers on `provider` (see [`RepIds`]),
+/// for the calls that follow the same user-or-number rule as texts.
+pub async fn own_ids(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    user: &SessionUser,
+) -> Result<(Vec<String>, Vec<String>), sqlx::Error> {
+    let company_lines = company_lines(pool, provider, user.company_id).await?;
+    let ids = rep_ids(pool, provider, user, SmsScope::Mine, None, &company_lines).await?;
+    Ok((ids.agents, ids.lines))
+}
+
 /// The caller's ids, or with `scope=all` those of the rep whose agent id is
 /// `filter_agent`.
 async fn rep_ids(

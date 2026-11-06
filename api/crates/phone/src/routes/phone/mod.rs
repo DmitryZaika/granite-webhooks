@@ -88,6 +88,7 @@ mod port_loa;
 mod porting;
 mod pushes;
 mod recording;
+mod ringcentral_calls;
 mod settings;
 mod superuser;
 mod support;
@@ -128,6 +129,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(contacts::contact_card))
         .routes(routes!(contacts::add_contact_phone))
         .routes(routes!(calls::list_calls))
+        .routes(routes!(ringcentral_calls::list_ringcentral_calls))
         .routes(routes!(calls::get_call, calls::hide_call))
         .routes(routes!(calls::mark_calls_seen))
         .routes(routes!(calls::call_stats))
