@@ -2218,7 +2218,7 @@
           "customers"
         ],
         "summary": "List my lead notifications",
-        "description": "The leads assigned to me in the last 14 days; for a sales manager or an\nadmin, also the company's leads of the last 14 days that have no rep yet\nand the sales reps to give them to (with this month's lead count each).",
+        "description": "The leads assigned to me in the last 14 days; for a sales manager or an\nadmin, also the company's leads of the last 14 days that have no rep yet\nand the sales reps to give them to (with this month's lead count each).\nEveryone also gets `team`: each sales rep of the company and the leads\ngiven to them this month.",
         "operationId": "lead_inbox",
         "responses": {
           "200": {
@@ -2640,7 +2640,7 @@
           "customers"
         ],
         "summary": "Delete a customer",
-        "description": "Hides the customer (soft delete) and removes it from the telephony\naddress books. A customer with live deals needs `cascade_deals=true`,\nwhich hides the deals too. Admins and sales managers only.",
+        "description": "Hides the customer (soft delete) and removes it from the telephony\naddress books. A customer with live deals needs `cascade_deals=true`,\nwhich hides the deals too. Admins, sales managers and managers only.",
         "operationId": "delete_customer",
         "parameters": [
           {
@@ -2678,7 +2678,7 @@
             }
           },
           "403": {
-            "description": "Caller is neither an admin nor a sales manager",
+            "description": "Caller is neither an admin, a sales manager nor a manager",
             "content": {
               "application/json": {
                 "schema": {
@@ -4251,6 +4251,98 @@
         ]
       }
     },
+    "/v1/customer-sources/{id}/walk-in": {
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Count a customer source as a walk-in",
+        "description": "Its customers show under the Customers list's Walk-in filter and in the\nwalk-in statistics, like the built-in walk-in (for a second showroom).",
+        "operationId": "set_customer_source_walk_in",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "A built-in source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such source in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/public/customer-view/{company_id}/{view_id}": {
       "get": {
         "tags": [
@@ -4494,6 +4586,82 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/ViewProject"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/schedule": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "List the customer's appointments",
+        "description": "Their templates, installations, estimates and other visits, by start:\nwaiting-for-a-date ones last. Repeating events are left out. Needs a\nverified visitor.",
+        "operationId": "list_customer_view_schedule",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The appointments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ViewAppointment"
                   }
                 }
               }
@@ -4974,6 +5142,322 @@
         "responses": {
           "204": {
             "description": "Dropped"
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/contact": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Get who the customer deals with",
+        "description": "Their sales rep's name, email and phone, and the company. Needs a\nverified visitor.",
+        "operationId": "get_customer_view_contact",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The contact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewContact"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/documents": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "List the customer's documents",
+        "description": "The contracts sent to them for signature (sent, opened or signed; not\ndrafts, declined or expired ones) and the quotes emailed to them, newest\nfirst. Needs a verified visitor.",
+        "operationId": "list_customer_view_documents",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The documents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ViewDocument"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/documents/{id}": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Open one of the customer's contracts",
+        "description": "The PDF of a contract sent to this customer: signed once they signed it,\nelse as sent. Opened in a browser tab: errors are plain text. Needs a\nverified visitor.",
+        "operationId": "open_customer_view_document",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signature request id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The PDF",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "302": {
+            "description": "Over 4 MB: redirect to a presigned link"
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page, or not this customer's contract",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The document could not be downloaded",
+            "content": {
+              "text/plain": {}
+            }
+          },
+          "503": {
+            "description": "The file cannot be read right now",
+            "content": {
+              "text/plain": {}
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/crew/{event_id}": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Where the crew is",
+        "description": "Only while the crew of this customer's visit is on the way (they tapped\n**On my way** and have not arrived) and their phone reported in the last\n30 minutes; otherwise 404. Needs a verified visitor.",
+        "operationId": "get_customer_view_crew",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "event_id",
+            "in": "path",
+            "description": "The visit (event id)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The crew",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewCrew"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page, or the crew is not on the way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -16182,6 +16666,1253 @@
         ]
       }
     },
+    "/v1/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "The board",
+        "description": "The caller's projects, as columns of the stages they work on: everything\nfor admins, Managers and Sales Managers; Awaiting Template to In\nFabrication for Office Managers; Templated onward for Shop Managers; their\nown for sales reps.",
+        "operationId": "list_projects",
+        "parameters": [
+          {
+            "name": "view",
+            "in": "query",
+            "description": "`active` (default), `completed` or `cancelled`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "description": "An owner's user id, or `unassigned`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Title, customer or address contains this.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hold",
+            "in": "query",
+            "description": "Only projects on hold.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "description": "Include archived projects.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page of 100.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectsBoard"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller's position has no Projects board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Projects is off for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/payments": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Projects' payments",
+        "description": "Whether each asked project is paid, from its customer's `QuickBooks`\ninvoices. Projects the caller doesn't see are left out; with `QuickBooks`\nnot connected, all are.",
+        "operationId": "list_project_payments",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "description": "Project ids (`ids=1&ids=2`), at most 200.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPayments"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Projects is off for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "A project's page",
+        "description": "The project, its tasks, notes, files, stage history, appointments and the\ncustomer's transactions it may link to. Anyone with an open task on it may\nopen it too.",
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectWorkspace"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see, or Projects is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a project",
+        "description": "Deletes the project for good, with its tasks, notes, files and history.\nIts calendar events and the deal stay. Admins, Managers and Sales Managers.",
+        "operationId": "delete_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only Managers and Sales Managers delete projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project in the company, or Projects is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/actions": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Act on a project",
+        "description": "Moves it forward, links its transaction, confirms payment, picks the\nowner, puts it on hold, cancels, archives, or corrects its stage or\npayment with a reason. A stale `version` gets a 409 saying to refresh.",
+        "operationId": "act_on_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The project after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad date, missing reason, or a move with its own button",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller's position can't do this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since the page loaded, or not possible now (the message says why)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/project": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "A deal's project",
+        "description": "The won deal's project, if any, and whether the caller may start one.",
+        "operationId": "get_deal_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deal's project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealProject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Projects is off for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Start a deal's project",
+        "description": "Turns a won deal into a project (Awaiting Template). Won deals start one\non their own; this is for deals won before Projects was on. Answers the\nexisting project when the deal has one.",
+        "operationId": "create_deal_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deal's project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConvertedDeal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller's position can't start projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such deal the caller may see, or Projects is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The deal is lost",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/tasks": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Add a task",
+        "description": "A task on the project for anyone in the company (or nobody). The person\ngets a notification now and, with a due date, another when it is due (9 AM\nstore time on a date with no time).",
+        "operationId": "create_project_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty name, bad date or priority, or someone outside the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/tasks/{task_id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a task",
+        "description": "Its creator or a project manager.",
+        "operationId": "delete_project_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the task's creator or a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such task the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Complete or reopen a task",
+        "description": "Its creator, the person it is for, or a project manager. A done task's\ndue reminder leaves the bell; reopening brings it back.",
+        "operationId": "update_project_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the task's creator, its person or a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such task the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/notes": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Add a note",
+        "description": "A note on the project, for everyone who can open it.",
+        "operationId": "create_project_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty note",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/notes/{note_id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a note",
+        "description": "Its author or a project manager.",
+        "operationId": "delete_production_project_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "note_id",
+            "in": "path",
+            "description": "Note id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the note's author or a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such note the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/files": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Attach files",
+        "description": "Files already uploaded with `POST /v1/uploads` (folder `deals`).",
+        "operationId": "attach_project_files",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewProjectFiles"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Attached"
+          },
+          "400": {
+            "description": "No files, or a URL that isn't the company's upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/projects/{id}/files/{file_id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a file",
+        "description": "Whoever attached it or a project manager.",
+        "operationId": "delete_project_file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "description": "File id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the file's uploader or a manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such file the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/calendars": {
       "get": {
         "tags": [
@@ -19523,6 +21254,68 @@
         ]
       }
     },
+    "/v1/email-attachments/{id}/open": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Open an attachment",
+        "description": "Redirects to the stored file through a link signed now (valid an hour),\nwhatever kind of file it is. Use this for links people tap: the\n`signed_url` in a conversation dies an hour after the conversation was\nloaded. Pictures for an `<img>` go through `/preview` instead (HEIC\nbecomes a JPEG there).",
+        "operationId": "open_email_attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Attachment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the file"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attachment the caller may read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/emails/{id}/conversation": {
       "get": {
         "tags": [
@@ -19979,7 +21772,7 @@
           "templates"
         ],
         "summary": "Create an email template",
-        "description": "`scope: company` (admins only) makes it the whole company's; otherwise\nit is the caller's own. A company template may send automatically:\n`lead_list_id` + `hour_delay` schedule it for deals entering that list.",
+        "description": "`scope: company` (admins only) makes it the whole company's; otherwise\nit is the caller's own. Either may send automatically: `lead_list_id` +\n`hour_delay` schedule it for deals entering that list — a company\ntemplate for the reps who use the company's automations, a personal one\nfor the caller's own deals once they use their own\n(`PUT /v1/me/lead-automation`).",
         "operationId": "create_email_template",
         "requestBody": {
           "content": {
@@ -20033,7 +21826,7 @@
             }
           },
           "409": {
-            "description": "Another company template sends on this list after this delay",
+            "description": "Another template of the same owner sends on this list after this delay",
             "content": {
               "application/json": {
                 "schema": {
@@ -20066,7 +21859,7 @@
           "templates"
         ],
         "summary": "Edit an email template",
-        "description": "The caller's own templates, and (admins) the company's, whose automation\n(`lead_list_id`, `hour_delay`) it sets too; removing the automation calls\noff the template's pending sends.",
+        "description": "The caller's own templates, and (admins) the company's, with their\nautomation (`lead_list_id`, `hour_delay`; `sales_rep_ids` only for a\ncompany template); removing the automation calls off the template's\npending sends.",
         "operationId": "update_email_template",
         "parameters": [
           {
@@ -20142,7 +21935,7 @@
             }
           },
           "409": {
-            "description": "Another company template sends on this list after this delay",
+            "description": "Another template of the same owner sends on this list after this delay",
             "content": {
               "application/json": {
                 "schema": {
@@ -20788,7 +22581,7 @@
           "templates"
         ],
         "summary": "Create an SMS template",
-        "description": "`scope: company` (admins only) makes it the company's, and only a\ncompany template can drip; otherwise it is the caller's own. It goes\nlast.",
+        "description": "`scope: company` (admins only) makes it the company's; otherwise it is\nthe caller's own. Either can drip (`drip`): a company template for the\nreps who use the company's automations, a personal one for the caller's\ndeals once they use their own (`PUT /v1/me/lead-automation`). It goes\nlast.",
         "operationId": "create_sms_template",
         "requestBody": {
           "content": {
@@ -20865,7 +22658,7 @@
           "templates"
         ],
         "summary": "Edit an SMS template",
-        "description": "The caller's own template, or (admins) a company one. Leaving out\n`lead_list_id` / `hour_delay` keeps the drip; a template that stops\ndripping cancels its pending drip texts.",
+        "description": "The caller's own template, or (admins) a company one. Leaving out\n`drip` keeps the drip; a template that stops dripping cancels its\npending drip texts.",
         "operationId": "update_sms_template",
         "parameters": [
           {
@@ -21002,6 +22795,138 @@
           },
           "404": {
             "description": "No such template the caller may change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/lead-automation": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Get whose automations the caller's deals get",
+        "description": "`company` (the default): when a deal of the caller lands on a list (e.g.\nNot Contacted Yet), the company's automated email and SMS templates for\nthat list go out (Admin › Automations; those naming no sales reps, or\nnaming the caller). `own`: only the caller's own automated templates do —\npersonal templates with a `lead_list_id` (`GET /v1/email-templates`,\n`GET /v1/sms-templates`, `scope: personal`).",
+        "operationId": "get_lead_automation",
+        "responses": {
+          "200": {
+            "description": "The caller's choice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadAutomation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Choose whose automations the caller's deals get",
+        "description": "`company` or `own` (see `GET /v1/me/lead-automation`). Changing it calls\noff the pending automatic sends of the side left behind (the company's on\nthe caller's deals, or the caller's own); deals already on a list get\nnothing new, the choice applies to deals that land on a list from now on.\nReturns the saved choice.",
+        "operationId": "set_lead_automation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadAutomation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadAutomation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
             "content": {
               "application/json": {
                 "schema": {
@@ -28939,7 +30864,7 @@
           "quotes"
         ],
         "summary": "List the extra events a quote's sale can add to the schedule",
-        "description": "Returns the company's event templates (Admin > Quotes > Automation), in\nthe order they were added: the checkboxes under Mark as Sold › Extra\nevents. One starts ticked when the quote has a line of one of its\n`trigger_extra_ids` extras. Pass the ticked ones as `extra_events` to\n`POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left\nout. Any employee may read them; admins change them with\n`POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.",
+        "description": "Returns the company's event templates (Admin > Quotes > Automation), in\nthe order they were added: the checkboxes under Mark as Sold › Extra\nevents. One starts ticked when the quote has a line of one of its\n`trigger_extra_ids` extras, or one of its `trigger_options`. Pass the ticked ones as `extra_events` to\n`POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left\nout. Any employee may read them; admins change them with\n`POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.",
         "operationId": "list_quote_sale_events",
         "responses": {
           "200": {
@@ -29204,6 +31129,182 @@
           },
           "404": {
             "description": "No such template in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/invoice-sync": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get a quote's invoice sync",
+        "description": "The quote's invoice kept in step with it; null when it has none.",
+        "operationId": "get_quote_invoice_sync",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/InvoiceSync"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Link a quote's invoice to the quote",
+        "description": "Saves the quote's invoice and how it is kept in step: after it is created\nwith \"Keep in sync with the quote\" ticked, after each sync (the new\n`source_hash`), and with `enabled` off to stop. A quote has one; saving\nreplaces it.",
+        "operationId": "save_quote_invoice_sync",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceSync"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Invalid kind, invoice ids, hash or detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote in the caller's company",
             "content": {
               "application/json": {
                 "schema": {
@@ -31530,7 +33631,7 @@
           "commissions"
         ],
         "summary": "List base pay",
-        "description": "Every rep's base pay schedules.",
+        "description": "The base pay schedules: one person's, or everyone's with a position.",
         "operationId": "list_commission_base_pay",
         "responses": {
           "200": {
@@ -31588,7 +33689,7 @@
           "commissions"
         ],
         "summary": "Add base pay",
-        "description": "A rep's base pay: an amount every week, two weeks or month from the\nfirst payday (monthly: on that day of the month), until an optional last\nday. It shows in the paychecks on those days.",
+        "description": "A base pay for one person or for everyone with a position: an amount\nevery week, two weeks or month from the first payday (monthly: on that\nday of the month), until an optional last day. It shows in the paychecks\non those days; a person's own base pay replaces their position's.",
         "operationId": "create_commission_base_pay",
         "requestBody": {
           "content": {
@@ -31817,7 +33918,7 @@
           "commissions"
         ],
         "summary": "List commissions",
-        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) signed\nquotes with what they earn, and the paychecks: paid commissions, monthly\ngoal bonuses and base pay per payroll date.",
+        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) signed\nquotes with what they earn, and the paychecks: paid commissions, monthly\ngoal bonuses (by what was sold in the CRM that month) and base pay (their\nown, or their positions') per payroll date.",
         "operationId": "list_commissions",
         "parameters": [
           {
@@ -32231,6 +34332,102 @@
           },
           "403": {
             "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/feature-sales": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List feature sales",
+        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) sold quotes\nin the dates, each with the dollars of every extra on its accepted option,\nworked out from the quote as it is now.",
+        "operationId": "list_feature_sales",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`mine` (default) or `company` (admins).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First sold day (YYYY-MM-DD); none: no limit.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last sold day (YYYY-MM-DD); none: no limit.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sold quotes' extras",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureSales"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown scope or bad date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, or not an admin for `company`",
             "content": {
               "application/json": {
                 "schema": {
@@ -35301,7 +37498,9 @@
               "enum": [
                 "all",
                 "in_progress",
-                "finished"
+                "finished",
+                "sold",
+                "cut"
               ]
             }
           },
@@ -37375,7 +39574,7 @@
           "schedule"
         ],
         "summary": "Search events",
-        "description": "The company's events where every word of `q` is in the title, customer's\nname, location, description or notes; with `calendar_ids`, only those\ncalendars' events.\n\nSmart order: the caller's own first (assigned to or made by them, or for\ntheir customer), then title or customer-name hits before hits only in the\nplace or notes, then the nearest to now; unscheduled ones last.",
+        "description": "The company's events where every word of `q` is in the title, customer's\nname, location, description or notes; with `calendar_ids`, only those\ncalendars' events.\n\nA word of 4+ letters also finds a title or customer name that has it with\none typo (\"deborh\" finds \"Deborah\").\n\nSmart order: the caller's own first (for their customer or assigned to\nthem), then ones they only made (a scheduler makes everyone's), then the\nrest. In each: a title or customer-name word starting with the search,\nthen containing it, then hits only in the place or notes, then typo\nhits; open jobs before ones the crew finished; then the nearest to now,\nupcoming before past (past distance counts double); unscheduled last.",
         "operationId": "search_events",
         "parameters": [
           {
@@ -37818,7 +40017,7 @@
           "schedule"
         ],
         "summary": "Post files in an event's comments",
-        "description": "Files already uploaded with `POST /v1/uploads` (folder `events`).",
+        "description": "Files already uploaded with `POST /v1/uploads` (folder `events`). With\n`for_customer` they are job photos the customer also sees.",
         "operationId": "add_event_photos",
         "parameters": [
           {
@@ -38338,7 +40537,7 @@
           "schedule"
         ],
         "summary": "The event's project",
-        "description": "The sale the event's project view shows: the event's own, else its\ncustomer's latest sale that is not cancelled.",
+        "description": "The sales the event's project view shows: the event's own sale, else the\ncustomer's sales at the event's address, with the other sales at that\naddress. A customer with one project lends it when there is no street to\ncompare; a builder's other jobs never show.",
         "operationId": "get_event_sale",
         "parameters": [
           {
@@ -46850,6 +49049,83 @@
         ]
       }
     },
+    "/v1/company/sales-goal": {
+      "put": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Set the company's monthly sales goal",
+        "description": "A Manager or Sales Manager sets the goal every employee sees on the\n`QuickBooks` sales widget's Company view. Null clears it.",
+        "operationId": "set_company_sales_goal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompanyGoal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The goal as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyGoal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Goal out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager or Sales Manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/qbo/class-sales": {
       "get": {
         "tags": [
@@ -47487,7 +49763,7 @@
           "jobs"
         ],
         "summary": "Read reps' calls and messages for promises",
-        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, closes the tasks they finished in the CRM (a quote saved or emailed,\na document sent to sign, an event on the schedule, a call), sends their\nmorning list (once a day from 8 AM their time), queues their calls, texts\nand emails of the last 3 days not read yet, then reads up to 4 (a call is\ntranscribed first): saves what the rep promised the customer and by when,\ncloses the open promises it keeps, adds the quote work the customer gave\nthem to that customer's one quote task, and writes the text or email that\nkeeps each promise a message can keep, in the rep's own style.",
+        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, closes the tasks they finished in the CRM (a quote saved or emailed,\na document sent to sign, an event on the schedule, a call), queues their calls, texts\nand emails of the last 3 days not read yet, then reads up to 4 (a call is\ntranscribed first): saves what the rep promised the customer and by when,\ncloses the open promises it keeps, adds the quote work the customer gave\nthem to that customer's one quote task, and writes the text or email that\nkeeps each promise a message can keep, in the rep's own style.",
         "operationId": "run_promises",
         "responses": {
           "200": {
@@ -50648,6 +52924,170 @@
         ]
       }
     },
+    "/v1/company/quote-invoice-sync": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch keeping invoices in sync with their quote",
+        "description": "Admin › Quotes › Automation \"Automatically synchronize quote with\ninvoices\". When on, an invoice created from a quote starts with \"Keep in\nsync with the quote\" ticked: when the quote changes, the invoice is\nrebuilt from it (`quote_invoice_sync` in `GET /v1/company/features`,\n`PUT /v1/quotes/{id}/invoice-sync`).",
+        "operationId": "save_company_quote_invoice_sync",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteInvoiceSyncInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/auto-project": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Switch starting a project on a sale",
+        "description": "Admin › Quotes › Automation \"Project on a sale\". When on, marking a deal\nwon or a quote sold starts its project in Projects (`auto_project` in\n`GET /v1/company/features`). Off, projects are added by hand.",
+        "operationId": "save_company_auto_project",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoProjectInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/company/api-token-email": {
       "post": {
         "tags": [
@@ -51351,7 +53791,7 @@
           "company"
         ],
         "summary": "List position access",
-        "description": "Every section of the app, and for Inventory Manager and Scheduling\nManager the sections they open in the company, their defaults and\nwhether the company changed them. Someone who holds only these positions\nreaches only their sections (with several, all of them together); any\nother position except the portal ones keeps the whole app. Superusers and\ncompany managers (admins with the Manager position); superusers may pass\n`company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
+        "description": "Every tab of the app, and for each position the company may change (all\nbut Super Admin and the portal ones: Shop Worker, Installer, Marketing,\nWalk-in, Template Guy) the tabs it opens, its defaults and whether the\ncompany changed them. Someone with several positions gets all their tabs\ntogether. By default every position opens the whole main app, except\nInventory Manager and Scheduling Manager. The Admin switch still opens\nevery admin page; an admin tab opens that page to someone without it.\nEvery skill too, and each position's: by default every position sells\nslabs and works with transactions and quotes, and only Scheduling Manager\nplans the schedule; the Admin switch keeps every skill. Superusers and\ncompany managers (admins with the Manager position);\nsuperusers may pass `company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
         "operationId": "list_position_sections",
         "parameters": [
           {
@@ -51367,7 +53807,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The sections and each position's",
+            "description": "The tabs and each position's",
             "content": {
               "application/json": {
                 "schema": {
@@ -51419,14 +53859,14 @@
         "tags": [
           "company"
         ],
-        "summary": "Save a position's sections",
-        "description": "Replaces the sections the position opens in the company, from then on\nfor every user holding it (their next request). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
+        "summary": "Save a position's tabs",
+        "description": "Replaces the tabs the position opens in the company, and its skills\n(null: the defaults), from then on for every user holding it (their next\nrequest). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
         "operationId": "save_position_sections",
         "parameters": [
           {
             "name": "position_id",
             "in": "path",
-            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
             "required": true,
             "schema": {
               "type": "integer",
@@ -51459,7 +53899,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Not a sectioned position, or an unknown section",
+            "description": "A position whose tabs can't be changed, or an unknown tab or skill",
             "content": {
               "application/json": {
                 "schema": {
@@ -51509,14 +53949,14 @@
         "tags": [
           "company"
         ],
-        "summary": "Reset a position's sections",
-        "description": "The position opens its default sections again in the company.",
+        "summary": "Reset a position's tabs",
+        "description": "The position opens its default tabs, with its default skills, again in\nthe company.",
         "operationId": "reset_position_sections",
         "parameters": [
           {
             "name": "position_id",
             "in": "path",
-            "description": "12 Inventory Manager, 13 Scheduling Manager",
+            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
             "required": true,
             "schema": {
               "type": "integer",
@@ -51539,7 +53979,7 @@
             "description": "Back to the defaults"
           },
           "400": {
-            "description": "Not a sectioned position",
+            "description": "A position whose tabs can't be changed",
             "content": {
               "application/json": {
                 "schema": {
@@ -51547,6 +53987,68 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/position-sections/reviewed": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Mark position access reviewed",
+        "description": "A Manager opened Position access: the setup checklist's \"Adjust\npermissions\" is done for the company (`company.permissions_reviewed_at`,\nkept from the first time).",
+        "operationId": "mark_position_access_reviewed",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked"
           },
           "401": {
             "description": "No valid session",
@@ -53943,6 +56445,109 @@
         ]
       }
     },
+    "/v1/auth/web-link": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Get a link that opens a CRM page signed in",
+        "description": "For the Granite Phone app: returns a link to `path` on the caller's CRM\nhost that signs the phone's browser in as the caller on the way. Open it\nat once (the API's base URL + `link_path`): it works for `expires_in`\nseconds, and only while this phone stays signed in. Device token only.",
+        "operationId": "create_web_link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebLinkInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The path is not a page of the CRM's host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/web-link/{token}": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Open a CRM page signed in",
+        "description": "Follows a link from `POST /v1/auth/web-link`: redirects (303) to its page\non the company's CRM host, with a session cookie for the link's user. A\nbrowser already signed in as that user keeps its session; otherwise a new\none starts, as signing in with the password does. An expired or changed\nlink, or one whose phone was signed out since, redirects to the CRM's\nsign-in page instead. Takes no other credentials.",
+        "operationId": "open_web_link",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token of the link",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "To the page signed in, or to the sign-in page when the link no longer works"
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/phone/bootstrap": {
       "get": {
         "tags": [
@@ -55202,6 +57807,53 @@
         ]
       }
     },
+    "/v1/phone/calls/ringcentral": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "List my `RingCentral` calls",
+        "description": "The caller's `RingCentral` calls of the last 30 days, newest first: those\nof an extension of theirs, now or ever, and those to or from a number of\ntheirs, now or ever (the rule texts follow). Each is named after our\ncustomer with that number. Empty when the company has no `RingCentral`\nor it can't be read. Device token only.",
+        "operationId": "list_ringcentral_calls",
+        "responses": {
+          "200": {
+            "description": "The caller's RingCentral calls",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RingCentralCalls"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
     "/v1/phone/calls/{id}": {
       "get": {
         "tags": [
@@ -56314,6 +58966,87 @@
         ]
       }
     },
+    "/v1/phone/texts/messages/{id}": {
+      "delete": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Delete a text that failed",
+        "description": "Removes one of my lines' outbound texts that was not delivered (status\n`failed`), with its files: it never reached the other person, so the\nconversation no longer shows it. The app deletes the failed text it sends\nagain, so it is never sent twice. 409 for a text that went out (or is\nstill going), 404 for one not on my lines. Device token only.",
+        "operationId": "delete_failed_phone_text",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The text's id (a text's `id`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`texting_disabled`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a text of my lines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The text did not fail: only a failed text can be deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
     "/v1/phone/texts/media/{id}": {
       "get": {
         "tags": [
@@ -56633,7 +59366,7 @@
           "phone"
         ],
         "summary": "Change a phone number",
-        "description": "Saves the whole number: label, kind (`direct`, `shared`, `main`), what a\ncall nobody answers does (`ai`, `voicemail`, `forward` with `forwardTo`,\na US or Canada number), the voicemail greeting, whether it is active, and\nwho it rings and who may call from it (the list replaces the current\none; every user must be a live user of the company, else 400). Returns\nthe number as saved. The change is written to the phone audit log.\nCompany admins (and super admins, superusers) only.",
+        "description": "Saves the whole number: label, kind (`direct`, `shared`, `main`), what a\ncall nobody answers does (`ai`, `voicemail`, `forward` with `forwardTo`,\na US or Canada number), the voicemail greeting, whether it is active,\nforward only (`forwardOnly`: it rings nobody and every call goes to\n`forwardTo`), where its texts are sent on (`forwardTextsTo`), and\nwho it rings and who may call from it (the list replaces the current\none; every user must be a live user of the company, else 400). A number\nmay not forward to itself (400). Returns\nthe number as saved. The change is written to the phone audit log.\nCompany admins (and super admins, superusers) only.",
         "operationId": "update_phone_admin_number",
         "parameters": [
           {
@@ -59964,7 +62697,7 @@
           "phone"
         ],
         "summary": "Push a lead alert to phones",
-        "description": "Called by the `webhooks` Lambda (job key) as it sends a lead alert to\nTelegram: to the sales rep `user_id`, else to every sales manager of the\ncompany (linked to Telegram or not). Pushed as data `{granite: \"1\",\ntype: \"lead\", kind, customerId, dealId}` (`dealId` left out when the lead\nhas no deal yet): ids only. Nothing is pushed (`pushed: 0`) for another\ncompany's or a deleted customer. Calling it again pushes again.",
+        "description": "Called by the `webhooks` Lambda (job key) as it sends a lead alert to\nTelegram: to the sales rep `user_id`, else to every sales manager of the\ncompany (linked to Telegram or not). Pushed as data `{granite: \"1\",\ntype: \"lead\", kind, customerId, dealId}` (`dealId` left out when the lead\nhas no deal yet): ids only. The managers' new and repeated leads also\ncarry `assign: \"1\"` (tapping opens the Assign a sales rep sheet). A\n`taken` push tells the managers (but `except_user_ids`) that the lead\nwas assigned, as its Telegram message is edited. Nothing is pushed (`pushed: 0`) for another\ncompany's or a deleted customer. Calling it again pushes again.",
         "operationId": "push_lead",
         "requestBody": {
           "content": {
@@ -62603,7 +65336,7 @@
           "telnyx-webhooks"
         ],
         "summary": "Answer an incoming call",
-        "description": "Telnyx's TeXML app voice URL, fetched when someone calls one of the\ncompany's numbers (`To`). First the company's spam and blocked numbers\n(`GET /v1/phone/admin/call-blocking`): a trusted number is never\nblocked; a hidden number (when the company blocks those), a blocked\nnumber or area code, or likely spam (STIR/SHAKEN validation failed, or\nTelnyx's call screening says `SPAM LIKELY`; when the company blocks spam\nor sends it to voicemail) is logged as blocked and hears the\nannouncement then a hang-up, is rejected, or goes to voicemail without\nringing anyone; blocked calls get no missed-call push. Otherwise the\ncall is logged (`ringing`; the customer is the company's newest live\ncustomer with the caller's number; `spamLikely` when the caller-ID check\nsays so) and answered with TeXML: \"This call may be recorded.\" when the\ncompany records incoming calls, then a `<Dial>` ringing every signed-in\nphone of the users whose part of the call is to ring (not Do not\ndisturb, no forward of all calls, their first matching incoming call\nrule, else their working hours; the main line only while the company is\nopen), with `dial-result` as its action, a `leg-status` callback per\nphone, the `whisper` announcement for users who turned it on, and the\nnumber called as the caller ID when every one of them chose to see it.\nOn a user's own direct line their forward, voicemail or message rule\ntakes the whole call (no missed-call push). When no phone can ring it\ngoes straight on: the cells of users with cell fallback on, else the\nnumber's no-answer action (AI Assistant, voicemail or forward) and a\n`missed_call` push. A repeated request answers the same call again. An\ninternal error answers the fallback TeXML (`<Redirect>`). 403 when the\nnumber, account or connection is not the token's company's.",
+        "description": "Telnyx's TeXML app voice URL, fetched when someone calls one of the\ncompany's numbers (`To`). First the company's spam and blocked numbers\n(`GET /v1/phone/admin/call-blocking`): a trusted number is never\nblocked; a hidden number (when the company blocks those), a blocked\nnumber or area code, or likely spam (STIR/SHAKEN validation failed, or\nTelnyx's call screening says `SPAM LIKELY`; when the company blocks spam\nor sends it to voicemail) is logged as blocked and hears the\nannouncement then a hang-up, is rejected, or goes to voicemail without\nringing anyone; blocked calls get no missed-call push. Otherwise the\ncall is logged (`ringing`; the customer is the company's newest live\ncustomer with the caller's number; `spamLikely` when the caller-ID check\nsays so) and answered with TeXML: \"This call may be recorded.\" when the\ncompany records incoming calls, then a `<Dial>` ringing every signed-in\nphone of the users whose part of the call is to ring (not Do not\ndisturb, no forward of all calls, their first matching incoming call\nrule, else their working hours; the main line only while the company is\nopen), with `dial-result` as its action, a `leg-status` callback per\nphone, the `whisper` announcement for users who turned it on, and the\nnumber called as the caller ID when every one of them chose to see it.\nOn a user's own direct line their forward, voicemail or message rule\ntakes the whole call (no missed-call push). A forward-only number rings\nnobody: the call goes straight to its forward number (no recording\nnotice, no missed-call push; voicemail when the number has none). When no phone can ring it\ngoes straight on: the cells of users with cell fallback on, else the\nnumber's no-answer action (AI Assistant, voicemail or forward) and a\n`missed_call` push. A repeated request answers the same call again. An\ninternal error answers the fallback TeXML (`<Redirect>`). 403 when the\nnumber, account or connection is not the token's company's.",
         "operationId": "answer_telnyx_inbound_call",
         "parameters": [
           {
@@ -65859,6 +68592,7 @@
           "kind",
           "noAnswerAction",
           "active",
+          "forwardOnly",
           "assignments"
         ],
         "properties": {
@@ -65900,6 +68634,17 @@
           "active": {
             "type": "boolean",
             "description": "In use: an inactive number rings nobody and is nobody's caller ID."
+          },
+          "forwardOnly": {
+            "type": "boolean",
+            "description": "Forward only: it rings nobody, every call goes to `forwardTo`."
+          },
+          "forwardTextsTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where texts to the number are sent on (from the number, with the\nsender's number in front), E.164; null = they stay in the CRM."
           },
           "assignments": {
             "type": "array",
@@ -66580,6 +69325,7 @@
           "can_manage_company",
           "can_manage_billing",
           "is_shop_manager",
+          "has_projects_board",
           "is_template_maker",
           "user_signature_access",
           "user_ai_promises",
@@ -66637,7 +69383,17 @@
             "items": {
               "type": "string"
             },
-            "description": "The sections of the app the user reaches, when a sectioned position\n(Inventory Manager, Scheduling Manager) limits them: keys such as\n`inventory`, `inventory_admin`, `customers`, `schedule`\n(`GET /v1/company/position-sections` lists them all). The API refuses\nthe rest. Null when they reach the whole app."
+            "description": "The tabs the user's positions open, when the company limits them\n(Position access): keys such as `stones`, `customers`, `schedule`,\n`admin_stones` (`GET /v1/company/position-sections` lists them all).\nThe Admin switch still opens every admin page. Null when nothing is\nlimited."
+          },
+          "skills": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The skills the user's positions give them (Position access):\n`sell_slabs`, `edit_transactions`, `edit_quotes`, `plan_schedule`.\nNull when they have every skill (admins always do)."
           },
           "has_cloudtalk_api": {
             "type": "boolean",
@@ -66681,6 +69437,10 @@
           "is_shop_manager": {
             "type": "boolean",
             "description": "Holds the Shop Manager position in the company."
+          },
+          "has_projects_board": {
+            "type": "boolean",
+            "description": "Projects is on and the caller's position has a Projects board (admin,\nManager, Sales Manager, Office Manager, Shop Manager, sales rep)."
           },
           "is_template_maker": {
             "type": "boolean",
@@ -67125,6 +69885,20 @@
           }
         }
       },
+      "AutoProjectInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/auto-project`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: marking a deal won or a quote sold starts its project."
+          }
+        },
+        "additionalProperties": false
+      },
       "AutoSaleInput": {
         "type": "object",
         "description": "Body of `PUT /v1/company/auto-sale`.",
@@ -67260,11 +70034,9 @@
       },
       "BasePay": {
         "type": "object",
-        "description": "A rep's base pay (`commission_base_pay`): `amount` every week, two weeks\nor month from the first payday, until an optional last day.",
+        "description": "A rep's base pay (`commission_base_pay`): `amount` every week, two weeks\nor month from the first payday, until an optional last day. It is one\nperson's (`user_id`) or everyone's with a position (`position_id`); a\nperson's own base pay replaces their position's.",
         "required": [
           "id",
-          "userId",
-          "rep",
           "amount",
           "frequency",
           "startDate"
@@ -67276,13 +70048,27 @@
             "description": "Base pay id."
           },
           "userId": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "The rep."
+            "description": "One person's base pay."
           },
           "rep": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Their name."
+          },
+          "positionId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Or the base pay of everyone with this position."
           },
           "amount": {
             "type": "number",
@@ -67308,18 +70094,28 @@
       },
       "BasePayInput": {
         "type": "object",
-        "description": "A rep's base pay as an admin sets it.",
+        "description": "A base pay as an admin sets it: for one person or for a position.",
         "required": [
-          "userId",
           "amount",
           "frequency",
           "startDate"
         ],
         "properties": {
           "userId": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "The rep (an employee of the company)."
+            "description": "One person (an employee of the company)…"
+          },
+          "positionId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "…or everyone with this position; exactly one of the two."
           },
           "amount": {
             "type": "number",
@@ -67962,42 +70758,25 @@
       },
       "Calendar": {
         "type": "object",
-        "description": "A calendar of the company's schedule.",
+        "description": "A calendar its appointments go on.",
         "required": [
           "id",
-          "name",
-          "color",
-          "is_system",
-          "is_hidden"
+          "slug",
+          "name"
         ],
         "properties": {
           "id": {
             "type": "integer",
             "format": "int32",
-            "description": "Calendar id; events reference it."
+            "description": "Its id."
+          },
+          "slug": {
+            "type": "string",
+            "description": "`templates` or `installations`."
           },
           "name": {
             "type": "string",
-            "description": "Display name."
-          },
-          "color": {
-            "type": "string",
-            "description": "Color name used on the schedule (e.g. `blue`)."
-          },
-          "slug": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`templates`, `installations` or `estimates` for the built-in\ncalendars every company has; null for calendars the company added."
-          },
-          "is_system": {
-            "type": "boolean",
-            "description": "A built-in calendar (it cannot be renamed or deleted)."
-          },
-          "is_hidden": {
-            "type": "boolean",
-            "description": "Hidden from everyone's schedule (only `all=true` lists these)."
+            "description": "Its name."
           }
         }
       },
@@ -70402,6 +73181,8 @@
           "auto_sale",
           "auto_unscheduled_jobs",
           "auto_invoice",
+          "quote_invoice_sync",
+          "auto_project",
           "sale_event_templates"
         ],
         "properties": {
@@ -70456,6 +73237,14 @@
           "auto_invoice": {
             "type": "boolean",
             "description": "Marking a quote sold opens its QuickBooks invoice, filled from the sold\noption; confirming it creates the invoice in QuickBooks (Admin › Quotes ›\nAutomation, `PUT /v1/company/auto-invoice`)."
+          },
+          "quote_invoice_sync": {
+            "type": "boolean",
+            "description": "A new invoice from a quote starts with \"Keep in sync with the quote\"\nticked (Admin › Quotes › Automation,\n`PUT /v1/company/quote-invoice-sync`)."
+          },
+          "auto_project": {
+            "type": "boolean",
+            "description": "Marking a deal won or a quote sold starts its project in Projects\n(Admin › Quotes › Automation \"Project on a sale\",\n`PUT /v1/company/auto-project`)."
           },
           "sale_event_templates": {
             "type": "boolean",
@@ -70530,6 +73319,20 @@
               "$ref": "#/components/schemas/FrameSupplier"
             },
             "description": "Suppliers of its faucets."
+          }
+        }
+      },
+      "CompanyGoal": {
+        "type": "object",
+        "description": "The company's monthly sales goal.",
+        "properties": {
+          "monthly_sales_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Null when not set."
           }
         }
       },
@@ -71875,6 +74678,25 @@
             "type": "integer",
             "format": "int64",
             "description": "Call-ins' deals."
+          }
+        }
+      },
+      "ConvertedDeal": {
+        "type": "object",
+        "description": "`POST /v1/deals/{id}/project`.",
+        "required": [
+          "project_id",
+          "created"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The project it belongs to."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "False when the deal had a project already."
           }
         }
       },
@@ -73478,7 +76300,8 @@
           "id",
           "source_key",
           "label",
-          "is_system"
+          "is_system",
+          "is_walkin"
         ],
         "properties": {
           "id": {
@@ -73497,6 +76320,10 @@
           "is_system": {
             "type": "boolean",
             "description": "Built in: can be renamed but not deleted."
+          },
+          "is_walkin": {
+            "type": "boolean",
+            "description": "Counts as a walk-in (Walk-in filter, walk-in statistics). The\nbuilt-in walk-in always does, whatever this says."
           }
         }
       },
@@ -73899,7 +76726,8 @@
           "emails-per-month",
           "sms-per-month",
           "daily-sales",
-          "available-inventory"
+          "available-inventory",
+          "feature-sales"
         ]
       },
       "DayCut": {
@@ -74004,7 +76832,7 @@
           },
           "walk_in": {
             "$ref": "#/components/schemas/ConversionCount",
-            "description": "Walk-in customers (`source = check-in`)."
+            "description": "Walk-in customers: `source = check-in` or a source ticked as a walk-in."
           },
           "call_in": {
             "$ref": "#/components/schemas/ConversionCount",
@@ -74487,6 +77315,27 @@
             ],
             "format": "int32",
             "description": "Give the deal to another customer of the company."
+          }
+        }
+      },
+      "DealProject": {
+        "type": "object",
+        "description": "`GET /v1/deals/{id}/project`.",
+        "required": [
+          "can_convert"
+        ],
+        "properties": {
+          "project_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The deal's project, if it has one."
+          },
+          "can_convert": {
+            "type": "boolean",
+            "description": "Projects are on for the company and the caller may create one."
           }
         }
       },
@@ -75521,7 +78370,7 @@
       },
       "Drip": {
         "type": "object",
-        "description": "When a company template sends itself.",
+        "description": "When a template sends itself.",
         "properties": {
           "lead_list_id": {
             "type": [
@@ -75560,7 +78409,7 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "Sales reps whose deals get it; empty: every rep's. Left out keeps the\ntemplate's reps."
+            "description": "Company templates: sales reps whose deals get it; empty: every\nrep's. Left out keeps the template's reps. Ignored for a personal\ntemplate, which goes to its owner's deals."
           }
         }
       },
@@ -75846,6 +78695,13 @@
               "null"
             ],
             "description": "BCC of the invoice email (set on a new invoice only)."
+          },
+          "email_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Whether `QuickBooks` emailed it: `EmailSent`, `NeedToSend` or\n`NotSet` (read only)."
           }
         }
       },
@@ -76198,7 +79054,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Company templates: the deal list whose deals get it automatically."
+            "description": "The deal list whose deals get it automatically: a company template\ngoes to the reps who use the company's automations, a personal one to\nits owner's deals when they use their own. Null: never automatic."
           },
           "hour_delay": {
             "type": [
@@ -76301,7 +79157,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Company templates only: send it automatically when a deal enters\nthis list (with `hour_delay`); null for no automation."
+            "description": "Send it automatically when a deal enters this list (with\n`hour_delay`); null for no automation. A personal template sends for\nits owner's deals once they use their own automations\n(`PUT /v1/me/lead-automation`)."
           },
           "hour_delay": {
             "type": [
@@ -76320,7 +79176,7 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "With `lead_list_id`: sales reps whose deals get it; empty: every\nrep's. Left out keeps the template's reps."
+            "description": "Company templates with `lead_list_id`: sales reps whose deals get\nit; empty: every rep's. Left out keeps the template's reps. Ignored\nfor a personal template."
           }
         },
         "additionalProperties": false
@@ -77005,6 +79861,14 @@
               "format": "int32"
             },
             "description": "Its calendar's other notification flows picked for this event;\nleave out to keep the saved choice."
+          },
+          "project_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Create only: the project this template or installation is for."
           }
         }
       },
@@ -77100,6 +79964,9 @@
       "EventSale": {
         "type": "object",
         "description": "`GET /v1/events/{id}/sale`.",
+        "required": [
+          "sale_ids"
+        ],
         "properties": {
           "sale_id": {
             "type": [
@@ -77107,7 +79974,15 @@
               "null"
             ],
             "format": "int32",
-            "description": "The event's own sale, else its customer's latest; null when neither."
+            "description": "The project's newest sale (it holds the notes); null when none."
+          },
+          "sale_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Every sale of the project, newest first: one per area when they were\nsold apart."
           }
         }
       },
@@ -77353,6 +80228,68 @@
             "type": "number",
             "format": "double",
             "description": "Total cost (USD)."
+          }
+        }
+      },
+      "FeatureSale": {
+        "type": "object",
+        "description": "One sold quote's extras.",
+        "required": [
+          "quoteId",
+          "rep",
+          "features"
+        ],
+        "properties": {
+          "quoteId": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The quote."
+          },
+          "userId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The rep: its salesperson, else who made it."
+          },
+          "rep": {
+            "type": "string",
+            "description": "Their name (\"Unassigned\" when none)."
+          },
+          "signedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was sold or signed (YYYY-MM-DD)."
+          },
+          "features": {
+            "type": "object",
+            "description": "Dollars of each extra on the accepted option (`waterfall`, `miter`,\n`phantom_seam`, `custom_edge`, `support`, `faucet`, `soap_dispenser`).",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "FeatureSales": {
+        "type": "object",
+        "description": "Sold quotes' extras.",
+        "required": [
+          "rows"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeatureSale"
+            },
+            "description": "Sold quotes with at least one extra, newest first."
           }
         }
       },
@@ -79469,7 +82406,7 @@
       },
       "InboxRep": {
         "type": "object",
-        "description": "A sales rep a manager can give a lead to.",
+        "description": "A sales rep of the company and their lead count this month.",
         "required": [
           "id",
           "month_leads"
@@ -79477,13 +82414,15 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The sales rep's user id (`PUT /v1/customers/{id}/sales-rep` takes it)."
           },
           "name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Their name (null when the account has none)."
           },
           "month_leads": {
             "type": "integer",
@@ -80407,6 +83346,48 @@
           }
         }
       },
+      "InvoiceSync": {
+        "type": "object",
+        "description": "A quote's invoice and how it is kept in step with the quote.",
+        "required": [
+          "option_index",
+          "kind",
+          "invoice_ids",
+          "detail",
+          "source_hash",
+          "enabled"
+        ],
+        "properties": {
+          "option_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The quote option invoiced."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`qbo` (`QuickBooks` invoices) or `own` (`/v1/invoices`)."
+          },
+          "invoice_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`QuickBooks` invoice ids in order (several for a split), or the own\ninvoice's id."
+          },
+          "detail": {
+            "type": "object",
+            "description": "What rebuilding needs, as the CRM sent it (a split's shares, each\ninvoice's priced lines by part, what was emailed)."
+          },
+          "source_hash": {
+            "type": "string",
+            "description": "The quote's invoice lines when the invoice was last made or synced."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Off: the invoice is no longer changed with the quote."
+          }
+        }
+      },
       "InvoiceUpdate": {
         "type": "object",
         "description": "Body of `PUT /v1/customers/{id}/qbo-invoices/{invoice_id}`.",
@@ -80745,6 +83726,28 @@
           }
         }
       },
+      "LeadAutomation": {
+        "type": "object",
+        "description": "The caller's automation choice; also the body of `PUT /v1/me/lead-automation`.",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/LeadAutomationMode",
+            "description": "`company` or `own`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LeadAutomationMode": {
+        "type": "string",
+        "description": "Whose automated templates a sales rep's deals get.",
+        "enum": [
+          "company",
+          "own"
+        ]
+      },
       "LeadCard": {
         "type": "object",
         "description": "A lead's card.",
@@ -80775,7 +83778,8 @@
           "is_manager",
           "unassigned",
           "assigned",
-          "reps"
+          "reps",
+          "team"
         ],
         "properties": {
           "is_manager": {
@@ -80801,7 +83805,14 @@
             "items": {
               "$ref": "#/components/schemas/InboxRep"
             },
-            "description": "The company's sales reps (managers)."
+            "description": "The company's sales reps to assign a lead to (managers only; empty\nfor a sales rep)."
+          },
+          "team": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxRep"
+            },
+            "description": "Every sales rep of the company with the leads given to them this\nmonth (since the 1st, server time), sorted by name. Filled in for\neveryone, a sales rep too, so they can compare their count with the\nteam's; the same numbers as `reps`."
           }
         }
       },
@@ -80875,6 +83886,7 @@
           "new",
           "repeat",
           "assigned",
+          "taken",
           "quote"
         ]
       },
@@ -81029,6 +84041,14 @@
             ],
             "format": "int32",
             "description": "Who is told: this user (the sales rep); the company's sales managers\nwhen left out."
+          },
+          "except_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Sales managers not told (no `user_id` only): for `taken`, the rep\nand the manager who assigned the lead."
           }
         }
       },
@@ -81429,6 +84449,49 @@
           }
         },
         "additionalProperties": false
+      },
+      "LinkableSale": {
+        "type": "object",
+        "description": "A transaction of the customer the project may link to.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its id."
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The transaction price."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The job address."
+          },
+          "installed_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was installed, UTC ISO."
+          },
+          "paid_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was paid, UTC ISO."
+          }
+        }
       },
       "ListResponse": {
         "oneOf": [
@@ -82940,6 +86003,47 @@
         },
         "additionalProperties": false
       },
+      "NewProjectFile": {
+        "type": "object",
+        "description": "One file uploaded with `POST /v1/uploads` (folder `deals`).",
+        "required": [
+          "url",
+          "name"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Where it was uploaded."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "contentType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MIME type."
+          }
+        }
+      },
+      "NewProjectFiles": {
+        "type": "object",
+        "description": "Body of `POST /v1/projects/{id}/files`.",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewProjectFile"
+            },
+            "description": "Its files."
+          }
+        }
+      },
       "NewQuestion": {
         "type": "object",
         "description": "Body of `POST /v1/teach-mode/questions`.",
@@ -83095,7 +86199,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Drip",
-                "description": "Company templates only."
+                "description": "When it sends itself; left out: never."
               },
               {
                 "type": "null"
@@ -83313,6 +86417,19 @@
               "null"
             ],
             "description": "Author name; null for comments by non-admins."
+          }
+        }
+      },
+      "NoteInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/projects/{id}/notes`.",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The text."
           }
         }
       },
@@ -83932,6 +87049,17 @@
           "active": {
             "type": "boolean",
             "description": "In use."
+          },
+          "forwardOnly": {
+            "type": "boolean",
+            "description": "Forward only: it rings nobody and every call goes to `forwardTo`\n(needed then). Left out = false."
+          },
+          "forwardTextsTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where texts to the number are sent on: a US or Canada number (E.164\nor 10 digits); null or empty = nowhere."
           },
           "assignments": {
             "type": "array",
@@ -85516,6 +88644,16 @@
           }
         }
       },
+      "PaymentStatus": {
+        "type": "string",
+        "description": "How much of a project's invoices is paid.",
+        "enum": [
+          "none",
+          "unpaid",
+          "partial",
+          "paid"
+        ]
+      },
       "Payout": {
         "type": "object",
         "description": "Commissions paid to the rep, or not after all.",
@@ -85656,6 +88794,63 @@
               "null"
             ],
             "description": "Where it went, masked."
+          }
+        }
+      },
+      "Permissions": {
+        "type": "object",
+        "description": "What the caller may do with projects.",
+        "required": [
+          "viewAll",
+          "convert",
+          "production",
+          "markPaid",
+          "manage",
+          "delete"
+        ],
+        "properties": {
+          "viewAll": {
+            "type": "boolean",
+            "description": "Sees every project."
+          },
+          "convert": {
+            "type": "boolean",
+            "description": "Turns deals into projects (their own, or any for managers)."
+          },
+          "production": {
+            "type": "boolean",
+            "description": "Moves projects forward, links transactions, books appointments."
+          },
+          "markPaid": {
+            "type": "boolean",
+            "description": "Confirms payment."
+          },
+          "manage": {
+            "type": "boolean",
+            "description": "Cancels, puts on hold, archives, corrects stages, picks the owner."
+          },
+          "delete": {
+            "type": "boolean",
+            "description": "Deletes a project for good (admins, Managers, Sales Managers)."
+          }
+        }
+      },
+      "Person": {
+        "type": "object",
+        "description": "Someone in the company.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
           }
         }
       },
@@ -85931,6 +89126,11 @@
             "type": "integer",
             "description": "10DLC number assignments read again from Telnyx; left out when none.",
             "minimum": 0
+          },
+          "tendlc_numbers_assigned": {
+            "type": "integer",
+            "description": "Numbers assigned to their company's approved 10DLC campaign by themselves; left out when none.",
+            "minimum": 0
           }
         }
       },
@@ -86136,6 +89336,10 @@
               "type": "string"
             },
             "description": "Files uploaded to the `events` folder (`POST /v1/uploads`)."
+          },
+          "for_customer": {
+            "type": "boolean",
+            "description": "Job photos the customer sees on their own page (the job card's\nPhotos button). Default: only inside the event."
           }
         }
       },
@@ -88010,6 +91214,7 @@
         "description": "`GET /v1/company/position-sections`.",
         "required": [
           "sections",
+          "skills",
           "positions"
         ],
         "properties": {
@@ -88018,14 +91223,21 @@
             "items": {
               "$ref": "#/components/schemas/SectionInfo"
             },
-            "description": "Every section, in the order to show them."
+            "description": "Every tab, in the order to show them: the main app, then admin pages."
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillInfo"
+            },
+            "description": "Every skill, in the order to show them."
           },
           "positions": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PositionSections"
             },
-            "description": "Each sectioned position. My Account and Report a Bug always stay open."
+            "description": "Each position whose tabs the company may change. My Account and\nReport a Bug always stay open."
           }
         }
       },
@@ -88045,32 +91257,48 @@
       },
       "PositionSections": {
         "type": "object",
-        "description": "One sectioned position in the company.",
+        "description": "One position whose tabs the company may change.",
         "required": [
           "position_id",
           "sections",
           "default_sections",
+          "skills",
+          "default_skills",
           "customized"
         ],
         "properties": {
           "position_id": {
             "type": "integer",
             "format": "int32",
-            "description": "`positions.id`: 12 Inventory Manager, 13 Scheduling Manager."
+            "description": "`positions.id`: 1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office\nManager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager."
           },
           "sections": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "The sections it opens in this company, in [`SectionInfo`] order."
+            "description": "The tabs it opens in this company, in [`SectionInfo`] order."
           },
           "default_sections": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "The sections it opens in a company that has not changed it."
+            "description": "The tabs it opens in a company that has not changed it."
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its skills in this company, in [`SkillInfo`] order."
+          },
+          "default_skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its skills in a company that has not changed them."
           },
           "customized": {
             "type": "boolean",
@@ -88090,7 +91318,17 @@
             "items": {
               "type": "string"
             },
-            "description": "Section keys the position opens (may be empty: then only My Account)."
+            "description": "Tab keys the position opens (may be empty: then only My Account)."
+          },
+          "skills": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Skill keys it has (may be empty); null or left out: the default\nskills, which follow later changes to the defaults."
           }
         },
         "additionalProperties": false
@@ -88733,6 +91971,322 @@
           }
         }
       },
+      "ProjectAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Move forward (production).",
+            "required": [
+              "version",
+              "stage",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "stage": {
+                "$ref": "#/components/schemas/Stage",
+                "description": "The stage."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "stage"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Link the customer's transaction.",
+            "required": [
+              "version",
+              "saleId",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "saleId": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The transaction."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "link-sale"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Confirm full payment on this date (ISO).",
+            "required": [
+              "version",
+              "date",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "date": {
+                "type": "string",
+                "description": "The date, ISO."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "paid"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pick the owner (null: nobody).",
+            "required": [
+              "version",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "ownerId": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "The owner; null for nobody."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "assign"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Put on hold or take off hold (managers).",
+            "required": [
+              "version",
+              "onHold",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "onHold": {
+                "type": "boolean",
+                "description": "On hold (true) or not."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "hold"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Cancel, with a reason (managers).",
+            "required": [
+              "version",
+              "reason",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "reason": {
+                "type": "string",
+                "description": "Why, for a correction or cancel."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "cancel"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Archive a finished or cancelled project, or bring it back (managers).",
+            "required": [
+              "version",
+              "archived",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "archived": {
+                "type": "boolean",
+                "description": "Archived (true) or back on the board."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "archive"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Change or clear the payment date, with a reason.",
+            "required": [
+              "version",
+              "reason",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "date": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The date, ISO."
+              },
+              "reason": {
+                "type": "string",
+                "description": "Why, for a correction or cancel."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "correct-payment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The shop finished fabricating it (production).",
+            "required": [
+              "version",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "fabricated"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Move back, with a reason (managers).",
+            "required": [
+              "version",
+              "stage",
+              "reason",
+              "intent"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The project's version as the page has it; a stale page gets a 409."
+              },
+              "stage": {
+                "$ref": "#/components/schemas/Stage",
+                "description": "The stage."
+              },
+              "reason": {
+                "type": "string",
+                "description": "Why, for a correction or cancel."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "correct"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Body of `POST /v1/projects/{id}/actions`. `version` is the project's as\nthe page has it: a stale page gets a 409."
+      },
+      "ProjectAppointment": {
+        "type": "object",
+        "description": "The next template or installation appointment.",
+        "required": [
+          "id",
+          "project_id",
+          "kind",
+          "title",
+          "start_date",
+          "unscheduled"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its id."
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The project it belongs to."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`templates` or `installations` (the calendar)."
+          },
+          "title": {
+            "type": "string",
+            "description": "The event title."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "When it starts, UTC ISO."
+          },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Waiting for a date on the schedule (`start_date` means nothing yet)."
+          }
+        }
+      },
       "ProjectCustomer": {
         "type": "object",
         "description": "One customer of the family.",
@@ -88855,45 +92409,80 @@
           }
         }
       },
-      "ProjectNote": {
+      "ProjectFile": {
         "type": "object",
-        "description": "A note on the project.",
+        "description": "A file on a project.",
         "required": [
           "id",
-          "audience",
-          "content",
-          "created_at",
-          "own"
+          "name",
+          "url",
+          "content_type",
+          "created_by",
+          "created_at"
         ],
         "properties": {
           "id": {
             "type": "integer",
             "format": "int32",
-            "description": "The note."
+            "description": "Its id."
           },
-          "audience": {
+          "name": {
             "type": "string",
-            "description": "`installers`, `sales_rep` or `everyone`."
+            "description": "Its name."
+          },
+          "url": {
+            "type": "string",
+            "description": "A URL the browser can open."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "MIME type."
+          },
+          "created_by": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Who made it."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was made, UTC ISO."
+          }
+        }
+      },
+      "ProjectNote": {
+        "type": "object",
+        "description": "A note on a project.",
+        "required": [
+          "id",
+          "content",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its id."
           },
           "content": {
             "type": "string",
             "description": "The text."
           },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "description": "When it was written."
-          },
           "created_by": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Who made it."
+          },
+          "author": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Author's name."
+            "description": "Its author's name."
           },
-          "own": {
-            "type": "boolean",
-            "description": "Whether the caller wrote it (only they can delete it)."
+          "created_at": {
+            "type": "string",
+            "description": "When it was made, UTC ISO."
           }
         }
       },
@@ -88914,6 +92503,63 @@
               "null"
             ],
             "description": "`installers`, `sales_rep` or `everyone` (the default)."
+          }
+        }
+      },
+      "ProjectPayment": {
+        "type": "object",
+        "description": "One project's payment.",
+        "required": [
+          "project_id",
+          "status",
+          "balance",
+          "total"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The project it belongs to."
+          },
+          "status": {
+            "$ref": "#/components/schemas/PaymentStatus",
+            "description": "Paid in full, partly, not at all, or no invoice."
+          },
+          "balance": {
+            "type": "number",
+            "format": "double",
+            "description": "What is still owed."
+          },
+          "total": {
+            "type": "number",
+            "format": "double",
+            "description": "The invoices' total."
+          }
+        }
+      },
+      "ProjectPayments": {
+        "type": "object",
+        "description": "`GET /v1/projects/payments`.",
+        "required": [
+          "connected",
+          "payments",
+          "moved"
+        ],
+        "properties": {
+          "connected": {
+            "type": "boolean",
+            "description": "False when `QuickBooks` is not connected or did not answer: then no\nproject has an answer."
+          },
+          "payments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectPayment"
+            },
+            "description": "The asked projects the caller sees."
+          },
+          "moved": {
+            "type": "boolean",
+            "description": "A project became paid or unpaid just now: its stage may have moved,\nso the board is worth reading again."
           }
         }
       },
@@ -88967,6 +92613,236 @@
           }
         }
       },
+      "ProjectTask": {
+        "type": "object",
+        "description": "A task on a project, for anyone in the company.",
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "priority",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its id."
+          },
+          "project_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The project it belongs to."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "assigned_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Who does it; null for nobody."
+          },
+          "assigned_user_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That person's name."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Store wall time `YYYY-MM-DDTHH:MM:SS`; `T00:00:00` is a date with no time."
+          },
+          "priority": {
+            "type": "string",
+            "description": "`low`, `medium` or `high` (no longer shown; new tasks are `medium`)."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was done, UTC ISO; null while open."
+          },
+          "created_by": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Who made it."
+          },
+          "created_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its maker's name."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was made, UTC ISO."
+          }
+        }
+      },
+      "ProjectWorkspace": {
+        "type": "object",
+        "description": "`GET /v1/projects/{id}`: a project's page.",
+        "required": [
+          "project",
+          "tasks",
+          "notes",
+          "files",
+          "history",
+          "sales",
+          "people",
+          "calendars",
+          "appointments",
+          "permissions",
+          "user_id"
+        ],
+        "properties": {
+          "project": {
+            "$ref": "#/components/schemas/Project",
+            "description": "The project."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectTask"
+            },
+            "description": "Its tasks, open and done."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectNote"
+            },
+            "description": "Its notes, newest first."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectFile"
+            },
+            "description": "Its files."
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StageChange"
+            },
+            "description": "What happened, newest first."
+          },
+          "sales": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkableSale"
+            },
+            "description": "Transactions to link (empty once one is linked)."
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            },
+            "description": "Everyone in the company, to give tasks to."
+          },
+          "calendars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Calendar"
+            },
+            "description": "The Templates and Installations calendars."
+          },
+          "appointments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectAppointment"
+            },
+            "description": "Every appointment of the project, newest first."
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/Permissions",
+            "description": "What the caller may do."
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The caller's user id (to show which tasks and notes are theirs)."
+          }
+        }
+      },
+      "ProjectsBoard": {
+        "type": "object",
+        "description": "`GET /v1/projects`: the caller's board.",
+        "required": [
+          "projects",
+          "stages",
+          "owners",
+          "appointments",
+          "tasks",
+          "permissions",
+          "page",
+          "has_next"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            },
+            "description": "The projects, in board order."
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Stage"
+            },
+            "description": "The columns the caller has, in order."
+          },
+          "owners": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            },
+            "description": "People who may own a project (the owner filter)."
+          },
+          "appointments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectAppointment"
+            },
+            "description": "The next appointments of these projects."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectTask"
+            },
+            "description": "Their open tasks, the most urgent first."
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/Permissions",
+            "description": "What the caller may do."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "description": "This page, from 1.",
+            "minimum": 0
+          },
+          "has_next": {
+            "type": "boolean",
+            "description": "Another page follows."
+          }
+        }
+      },
       "PromiseEvent": {
         "type": "object",
         "description": "Something on the schedule at a time.",
@@ -89006,8 +92882,7 @@
           "processed",
           "queued",
           "promises",
-          "reminded",
-          "digests"
+          "reminded"
         ],
         "properties": {
           "processed": {
@@ -89029,11 +92904,6 @@
           "reminded": {
             "type": "integer",
             "description": "Due promises the reps were reminded of.",
-            "minimum": 0
-          },
-          "digests": {
-            "type": "integer",
-            "description": "Morning lists sent.",
             "minimum": 0
           }
         }
@@ -90733,6 +94603,20 @@
           }
         }
       },
+      "QuoteInvoiceSyncInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/quote-invoice-sync`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On: a new invoice from a quote starts with \"Keep in sync with the\nquote\" ticked."
+          }
+        },
+        "additionalProperties": false
+      },
       "QuoteList": {
         "type": "object",
         "description": "`GET /v1/quotes`.",
@@ -90968,7 +94852,8 @@
           "calendar_name",
           "title_variable",
           "title_text",
-          "trigger_extra_ids"
+          "trigger_extra_ids",
+          "trigger_options"
         ],
         "properties": {
           "id": {
@@ -90999,7 +94884,14 @@
               "type": "integer",
               "format": "int64"
             },
-            "description": "Catalog extras (`GET /v1/quote-extras` ids) that tick this event in\nMark as Sold when the quote has one of them (a line whose `catalogId`\nis one of these). Empty: the seller ticks it by hand."
+            "description": "Catalog extras (`GET /v1/quote-extras` ids) that tick this event in\nMark as Sold when the quote has one of them (a line whose `catalogId`\nis one of these, any option). Empty: the seller ticks it by hand."
+          },
+          "trigger_options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TriggerOption"
+            },
+            "description": "Single options of catalog extras that tick this event in Mark as Sold\nwhen the quote has a line of that extra with that option (its\n`catalogId` and `optionId`)."
           }
         }
       },
@@ -91030,6 +94922,13 @@
               "format": "int64"
             },
             "description": "Catalog extras (`GET /v1/quote-extras` ids) that tick this event in\nMark as Sold when the quote has one. Ids not in the company's catalog\nare dropped. Default none."
+          },
+          "trigger_options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TriggerOption"
+            },
+            "description": "Single options of catalog extras that tick this event in Mark as Sold\nwhen the quote has one. Options not in the company's catalog are\ndropped. Default none."
           }
         },
         "additionalProperties": false
@@ -91839,7 +95738,8 @@
         "type": "object",
         "description": "`GET /v1/me/qbo-sales`.",
         "required": [
-          "status"
+          "status",
+          "can_set_company_goal"
         ],
         "properties": {
           "status": {
@@ -91852,6 +95752,26 @@
             ],
             "format": "double",
             "description": "The rep's classes' sales this month."
+          },
+          "company_amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The whole company's sales this month (the report's grand total)."
+          },
+          "company_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The company's monthly sales goal, when a manager set one."
+          },
+          "can_set_company_goal": {
+            "type": "boolean",
+            "description": "The caller may set the company goal (a Manager or Sales Manager)."
           },
           "currency": {
             "type": [
@@ -91982,6 +95902,71 @@
           "doc": {
             "type": "object",
             "description": "The drawing."
+          }
+        }
+      },
+      "RingCentralCall": {
+        "type": "object",
+        "description": "One `RingCentral` call.",
+        "required": [
+          "id",
+          "direction",
+          "status",
+          "startedAt",
+          "durationSecs",
+          "otherNumber"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`RingCentral`'s call-log id."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/CallDirection"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CallStatus",
+            "description": "`answered`, `missed`, `voicemail`, `busy` or `no_answer`."
+          },
+          "startedAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "durationSecs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Talk time in seconds; 0 when nobody talked."
+          },
+          "otherNumber": {
+            "type": "string",
+            "description": "The other party's number, as `RingCentral` gives it (E.164)."
+          },
+          "customer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallCustomer",
+                "description": "Our customer with that number; null when none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "RingCentralCalls": {
+        "type": "object",
+        "description": "The caller's `RingCentral` calls.",
+        "required": [
+          "calls"
+        ],
+        "properties": {
+          "calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RingCentralCall"
+            },
+            "description": "Newest first, the last 30 days."
           }
         }
       },
@@ -94038,7 +98023,7 @@
       },
       "SectionInfo": {
         "type": "object",
-        "description": "A part of the app a position may open.",
+        "description": "A tab a position may open.",
         "required": [
           "key",
           "label",
@@ -94047,15 +98032,15 @@
         "properties": {
           "key": {
             "type": "string",
-            "description": "Stable key (`inventory`, `customers`, `schedule`, ...)."
+            "description": "Stable key (`stones`, `customers`, `schedule`, `admin_stones`, ...)."
           },
           "label": {
             "type": "string",
-            "description": "Its name on the Company page."
+            "description": "Its name on the Company page (admin tabs are listed apart)."
           },
           "admin": {
             "type": "boolean",
-            "description": "Opens admin pages (e.g. the admin inventory) without making the user\na company admin."
+            "description": "An admin page: it opens for someone without the Admin switch only\nwhen one of their positions has it (the Admin switch opens them all)."
           }
         }
       },
@@ -94771,7 +98756,8 @@
           "has_sales_tax",
           "has_quick_books",
           "quickbooks_feature_enabled",
-          "has_supplier_price_lists"
+          "has_supplier_price_lists",
+          "has_permissions"
         ],
         "properties": {
           "has_email_name": {
@@ -94829,6 +98815,10 @@
           "has_supplier_price_lists": {
             "type": "boolean",
             "description": "A supplier price list is processed."
+          },
+          "has_permissions": {
+            "type": "boolean",
+            "description": "A Manager opened Position access (Company page), or the company\nexisted before the checklist asked."
           }
         }
       },
@@ -95618,6 +99608,29 @@
           }
         }
       },
+      "SkillInfo": {
+        "type": "object",
+        "description": "A skill a position may have: something its people may do on the tabs\nthey open.",
+        "required": [
+          "key",
+          "label",
+          "description"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable key (`sell_slabs`, `edit_transactions`, `edit_quotes`,\n`plan_schedule`)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its name on the Company page."
+          },
+          "description": {
+            "type": "string",
+            "description": "What it lets people do."
+          }
+        }
+      },
       "Skipped": {
         "type": "object",
         "description": "An unscheduled event the plan left out.",
@@ -96069,7 +100082,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Company drip: the deal list that starts it."
+            "description": "Drip: the deal list that starts it; null: never automatic."
           },
           "hour_delay": {
             "type": [
@@ -96077,19 +100090,19 @@
               "null"
             ],
             "format": "int32",
-            "description": "Company drip: hours after a deal enters the list."
+            "description": "Drip: hours after a deal enters the list."
           },
           "minute_delay": {
             "type": "integer",
             "format": "int32",
-            "description": "Company drip: minutes on top of `hour_delay`, 0 to 59."
+            "description": "Drip: minutes on top of `hour_delay`, 0 to 59."
           },
           "customer_sources": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Company drip: customer sources (`customers.source`) that get it."
+            "description": "Drip: customer sources (`customers.source`) that get it."
           },
           "sales_rep_ids": {
             "type": "array",
@@ -96172,7 +100185,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Drip",
-                "description": "Company templates only; left out keeps the drip."
+                "description": "When it sends itself; left out keeps the drip."
               },
               {
                 "type": "null"
@@ -96398,6 +100411,67 @@
           }
         },
         "additionalProperties": false
+      },
+      "Stage": {
+        "type": "string",
+        "description": "Where a project is: the board's four lists, and Paid & Completed.",
+        "enum": [
+          "new",
+          "templated",
+          "fabrication",
+          "installed",
+          "completed"
+        ]
+      },
+      "StageChange": {
+        "type": "object",
+        "description": "A line of a project's history.",
+        "required": [
+          "id",
+          "to_stage",
+          "source_action",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its id."
+          },
+          "from_stage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stage before; null for the first line."
+          },
+          "to_stage": {
+            "type": "string",
+            "description": "The stage after."
+          },
+          "source_action": {
+            "type": "string",
+            "description": "What did it: `deal-handoff`, `stage-change`, `fabricated`, `template-completed`, `install-completed`, ..."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, for a correction or cancel."
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its author's name."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was made, UTC ISO."
+          }
+        }
       },
       "StageOrder": {
         "type": "object",
@@ -98404,6 +102478,41 @@
           "general_datebase"
         ]
       },
+      "TaskInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/projects/{id}/tasks`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "1 to 255 characters."
+          },
+          "assignedUserId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Who does it: anyone in the company; null for nobody."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM[:SS]` store wall time."
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`low`, `medium` (default) or `high`."
+          }
+        }
+      },
       "TaskProgress": {
         "type": "object",
         "description": "A feature tour's saved progress.",
@@ -98480,6 +102589,19 @@
               "null"
             ],
             "description": "What started the tour: `auto`, `user` or `gesture` (the first event\nthat said). Null when no event said."
+          }
+        }
+      },
+      "TaskUpdate": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/projects/{id}/tasks/{task_id}`.",
+        "required": [
+          "completed"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean",
+            "description": "Done (true) or open again (false)."
           }
         }
       },
@@ -98669,7 +102791,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The parts of the app the member's position opens in this company\n(section keys, in the Company page's order); null when they have the\nwhole app."
+            "description": "The tabs the member's positions open in this company, as the app\nshell's `sections` gives them to the member; null when they limit\nnothing."
           },
           "account_created_at": {
             "type": [
@@ -101647,6 +105769,13 @@
             ],
             "description": "Sink models, joined."
           },
+          "faucet_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Faucet models, joined."
+          },
           "status": {
             "type": "string",
             "description": "`Sold`, `Partially Cut`, `Cut`, `Installed` or `Cancelled`."
@@ -101684,6 +105813,26 @@
           "Failed",
           "Skipped"
         ]
+      },
+      "TriggerOption": {
+        "type": "object",
+        "description": "One option of a catalog extra (`arrOptions[].id` of a `GET /v1/quote-extras` item).",
+        "required": [
+          "extra_id",
+          "option_id"
+        ],
+        "properties": {
+          "extra_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The catalog extra."
+          },
+          "option_id": {
+            "type": "string",
+            "description": "The option's id in that extra."
+          }
+        },
+        "additionalProperties": false
       },
       "UnpricedModel": {
         "type": "object",
@@ -101765,6 +105914,20 @@
           }
         },
         "additionalProperties": false
+      },
+      "UpdateCompanyGoal": {
+        "type": "object",
+        "description": "`PUT /v1/company/sales-goal` body.",
+        "properties": {
+          "monthly_sales_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The goal each month; null clears it."
+          }
+        }
       },
       "UpdateSalesGoal": {
         "type": "object",
@@ -102413,6 +106576,190 @@
           }
         }
       },
+      "ViewAppointment": {
+        "type": "object",
+        "description": "One of the customer's appointments (a schedule event). Only what the\ncustomer needs: never the event's title, description or notes, which are\nthe shop's own words.",
+        "required": [
+          "id",
+          "start_date",
+          "end_date",
+          "all_day",
+          "unscheduled",
+          "photos"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Event id."
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`templates`, `installations` or `estimates` (the built-in calendars);\n`None` for any other calendar."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Start (ISO 8601, UTC). While `unscheduled` it only holds when the\nevent was added."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End (ISO 8601, UTC)."
+          },
+          "all_day": {
+            "type": "boolean",
+            "description": "The whole day, no time."
+          },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Waiting for a date: the shop has not picked the day yet."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address."
+          },
+          "crew_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who comes (the person the event is assigned to)."
+          },
+          "crew_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the crew is getting on today: `on_my_way`, `arrived` or\n`completed`."
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The crew's job photos for the customer (the job card's Photos\nbutton), oldest first. Photos in the event's comments are not here."
+          }
+        }
+      },
+      "ViewContact": {
+        "type": "object",
+        "description": "Who the customer deals with.",
+        "properties": {
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company's name."
+          },
+          "company_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company's address."
+          },
+          "rep": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ViewRep",
+                "description": "The customer's sales rep (their **Sales Rep**, else whoever sold\ntheir latest project); `None` when neither."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ViewCrew": {
+        "type": "object",
+        "description": "The crew on the way to one of the customer's visits.",
+        "required": [
+          "latitude",
+          "longitude",
+          "recorded_at"
+        ],
+        "properties": {
+          "crew_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is coming."
+          },
+          "latitude": {
+            "type": "number",
+            "format": "double",
+            "description": "Where their phone was last."
+          },
+          "longitude": {
+            "type": "number",
+            "format": "double",
+            "description": "Where their phone was last."
+          },
+          "recorded_at": {
+            "type": "string",
+            "description": "When (ISO 8601, UTC)."
+          },
+          "minutes_away": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Driving minutes from there to the visit in today's traffic; `None`\nwhen Google cannot tell."
+          }
+        }
+      },
+      "ViewDocument": {
+        "type": "object",
+        "description": "A document sent to the customer.",
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`contract` (sent for signature) or `quote`."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The signature request or the quote."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "status": {
+            "type": "string",
+            "description": "A contract's `sent`, `viewed` or `signed`; a quote's own status."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was made (ISO 8601, UTC)."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A quote's page on this site (`/quote-portal/<token>`); a contract\nopens with `.../documents/{id}`."
+          }
+        }
+      },
       "ViewGate": {
         "type": "object",
         "description": "Whether the visitor may see the page, and where a code would go.",
@@ -102511,6 +106858,83 @@
               "null"
             ],
             "description": "`Sold`, `Partially Cut`, `Cut`, `Installed` or `Cancelled`."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the work is."
+          },
+          "square_feet": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Countertop area in square feet."
+          },
+          "installed_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was installed (ISO 8601, UTC)."
+          },
+          "slab_pictures": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pictures of the customer's own slabs, comma-separated URLs."
+          },
+          "cut_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the last slab was cut, once every slab is (ISO 8601, UTC)."
+          },
+          "template_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its latest template visit with a date (ISO 8601, UTC), past or\ncoming. A visit belongs to a project by [`project_of`]."
+          },
+          "install_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its latest installation visit with a date (ISO 8601, UTC), past or\ncoming."
+          }
+        }
+      },
+      "ViewRep": {
+        "type": "object",
+        "description": "The customer's sales rep.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "email": {
+            "type": "string",
+            "description": "Work email."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their own phone, else their Granite Phone line, else their CloudTalk\nor `RingCentral` number (as the AI's emails sign)."
           }
         }
       },
@@ -102566,6 +106990,19 @@
           }
         }
       },
+      "WalkIn": {
+        "type": "object",
+        "description": "Body of `PUT /v1/customer-sources/{id}/walk-in`.",
+        "required": [
+          "walk_in"
+        ],
+        "properties": {
+          "walk_in": {
+            "type": "boolean",
+            "description": "Whether the source's customers count as walk-ins."
+          }
+        }
+      },
       "WebDeviceRegistration": {
         "type": "object",
         "description": "Body of `POST /v1/phone/web/devices`.",
@@ -102575,6 +107012,39 @@
             "description": "Shown in \"Signed-in devices\", e.g. \"Chrome on Windows\" (cut to 100\ncharacters; empty = \"Browser\")."
           }
         }
+      },
+      "WebLink": {
+        "type": "object",
+        "description": "A link that opens a CRM page signed in.",
+        "required": [
+          "link_path",
+          "expires_in"
+        ],
+        "properties": {
+          "link_path": {
+            "type": "string",
+            "description": "The link's path on this API (`/v1/auth/web-link/{token}`): open the\nAPI's base URL followed by it in the phone's browser."
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds the link works for (120)."
+          }
+        }
+      },
+      "WebLinkInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/auth/web-link`.",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The CRM page to open: a path on the company's CRM host, starting with\none `/`, e.g. `/employee/quote/12` (a quote's editor) or\n`/employee/quotes/add` (a new quote). At most 512 characters."
+          }
+        },
+        "additionalProperties": false
       },
       "WebPhone": {
         "type": "object",

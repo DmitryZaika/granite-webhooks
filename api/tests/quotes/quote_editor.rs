@@ -989,6 +989,7 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
                 "title_variable": "quote_name",
                 "title_text": "Plumbing",
                 "trigger_extra_ids": [],
+                "trigger_options": [],
             },
             {
                 "id": electric,
@@ -997,6 +998,7 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
                 "title_variable": "customer_name",
                 "title_text": "Electrical",
                 "trigger_extra_ids": [],
+                "trigger_options": [],
             },
         ])
     );
@@ -1126,4 +1128,43 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
         .assert_status_ok();
     let titles: Vec<String> = events().await.into_iter().map(|e| e.0).collect();
     assert_eq!(titles, ["Ostrom Kitchen - Plumbing"]);
+}
+
+#[test_db::test(seed)]
+async fn mark_as_sold_adds_a_project_only_when_project_on_a_sale_is_on(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    let mut added = Vec::new();
+    for on in [false, true] {
+        sqlx::query("UPDATE company SET auto_project = ? WHERE id = 100")
+            .bind(on)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let id = create(&server, json!({ "customer_id": 1004 })).await;
+        let path = format!("/v1/quotes/{id}");
+        server
+            .put(&format!("{path}/drawing"))
+            .with_session(sessions::REP)
+            .json(&json!({ "doc": doc("Ubatuba") }))
+            .await
+            .assert_status_ok();
+        server
+            .post(&format!("{path}/sale"))
+            .with_session(sessions::REP)
+            .json(&json!({ "option": 0 }))
+            .await
+            .assert_status_ok();
+        let projects: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM projects p JOIN quotes q ON q.deal_id = p.source_deal_id
+              WHERE q.id = ?",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        added.push(projects);
+    }
+    // No company Projects switch: "Project on a sale" alone decides.
+    assert_eq!(added, [0, 1]);
 }

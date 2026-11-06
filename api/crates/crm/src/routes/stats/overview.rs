@@ -9,6 +9,7 @@ use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
 use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::stats::schemas::SmsProvider;
+use crate::routes::customers::service::WALKIN_SOURCE;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -376,7 +377,7 @@ async fn deals_by_rep(
            FROM deals d
            JOIN users u ON d.user_id = u.id AND u.is_deleted = 0 AND u.company_id = ",
         won_lost("", ""),
-        won_lost(" AND c.source = 'check-in'", "_walkin"),
+        won_lost(&format!(" AND {WALKIN_SOURCE}"), "_walkin"),
         won_lost(" AND c.source = 'leads'", "_leads"),
     ));
     sql.push_bind(company).push(
@@ -446,7 +447,7 @@ async fn customers_by_rep(
 ) -> sqlx::Result<Vec<CustomersByRep>> {
     let mut sql = QueryBuilder::new(format!(
         "SELECT u.name AS rep_name,
-                CAST(SUM(CASE WHEN c.source = 'check-in' THEN 1 ELSE 0 END) AS SIGNED) AS walkin,
+                CAST(SUM(CASE WHEN {WALKIN_SOURCE} THEN 1 ELSE 0 END) AS SIGNED) AS walkin,
                 CAST(SUM(CASE WHEN c.source = 'call-in' THEN 1 ELSE 0 END) AS SIGNED) AS callin,
                 CAST(SUM(CASE WHEN c.source = 'leads' THEN 1 ELSE 0 END) AS SIGNED) AS leads,
                 CAST(SUM(CASE WHEN c.source IN ('other', 'user-input') THEN 1 ELSE 0 END) AS SIGNED) AS `manual`,
@@ -511,21 +512,21 @@ async fn conversion_metrics(
     company: i32,
     f: &Filters,
 ) -> sqlx::Result<Vec<ConversionMetrics>> {
-    let mut sql = QueryBuilder::new(
+    let mut sql = QueryBuilder::new(format!(
         "SELECT u.name AS rep_name,
                 COUNT(CASE WHEN d.is_won = 1 THEN 1 END) AS total_sold,
                 COUNT(*) AS total_created,
                 COUNT(CASE WHEN c.source = 'leads' AND d.is_won = 1 THEN 1 END) AS leads_sold_same_month,
                 COUNT(CASE WHEN c.source = 'leads' THEN 1 END) AS leads_created,
-                COUNT(CASE WHEN c.source = 'check-in' AND d.is_won = 1 THEN 1 END) AS walkin_sold_same_month,
-                COUNT(CASE WHEN c.source = 'check-in' THEN 1 END) AS walkin_created,
+                COUNT(CASE WHEN {WALKIN_SOURCE} AND d.is_won = 1 THEN 1 END) AS walkin_sold_same_month,
+                COUNT(CASE WHEN {WALKIN_SOURCE} THEN 1 END) AS walkin_created,
                 COUNT(CASE WHEN c.source = 'call-in' AND d.is_won = 1 THEN 1 END) AS callin_sold_same_month,
                 COUNT(CASE WHEN c.source = 'call-in' THEN 1 END) AS callin_created
            FROM deals d
            JOIN customers c ON d.customer_id = c.id
            JOIN deals_list dl ON d.list_id = dl.id
-           JOIN users u ON d.user_id = u.id AND u.is_deleted = 0 AND u.company_id = ",
-    );
+           JOIN users u ON d.user_id = u.id AND u.is_deleted = 0 AND u.company_id = "
+    ));
     sql.push_bind(company).push(" WHERE c.company_id = ");
     sql.push_bind(company)
         .push(" AND c.deleted_at IS NULL AND d.deleted_at IS NULL AND dl.deleted_at IS NULL");

@@ -7,6 +7,9 @@
 //! each, as the Telegram lead alert's buttons show them; assigning goes
 //! through `PUT /v1/customers/{id}/sales-rep`. The managers see every lead
 //! assigned in the window, not only their own.
+//!
+//! Everyone, a sales rep too, gets `team`: how many leads each of the
+//! company's sales reps got this month, for the screen a lead push opens.
 
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
@@ -45,10 +48,12 @@ pub struct InboxLead {
     pub deal_id: Option<i64>,
 }
 
-/// A sales rep a manager can give a lead to.
-#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+/// A sales rep of the company and their lead count this month.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct InboxRep {
+    /// The sales rep's user id (`PUT /v1/customers/{id}/sales-rep` takes it).
     pub id: i32,
+    /// Their name (null when the account has none).
     pub name: Option<String>,
     /// Leads given to them this month (the Telegram button's count).
     pub month_leads: i64,
@@ -64,8 +69,14 @@ pub struct LeadInbox {
     /// Leads given a rep in the last 14 days, newest first: mine, or the
     /// company's for a manager.
     pub assigned: Vec<InboxLead>,
-    /// The company's sales reps (managers).
+    /// The company's sales reps to assign a lead to (managers only; empty
+    /// for a sales rep).
     pub reps: Vec<InboxRep>,
+    /// Every sales rep of the company with the leads given to them this
+    /// month (since the 1st, server time), sorted by name. Filled in for
+    /// everyone, a sales rep too, so they can compare their count with the
+    /// team's; the same numbers as `reps`.
+    pub team: Vec<InboxRep>,
 }
 
 /// List my lead notifications
@@ -73,6 +84,8 @@ pub struct LeadInbox {
 /// The leads assigned to me in the last 14 days; for a sales manager or an
 /// admin, also the company's leads of the last 14 days that have no rep yet
 /// and the sales reps to give them to (with this month's lead count each).
+/// Everyone also gets `team`: each sales rep of the company and the leads
+/// given to them this month.
 #[crate::openapi::path(
     get,
     path = "/v1/customers/lead-inbox",
@@ -114,10 +127,11 @@ pub async fn lead_inbox(
         )
         .await?
     };
+    let team = reps(pool, user.company_id).await?;
     let (unassigned, reps) = if is_manager {
         (
             leads(pool, user.company_id, None, "c.created_date").await?,
-            reps(pool, user.company_id).await?,
+            team.clone(),
         )
     } else {
         (Vec::new(), Vec::new())
@@ -127,6 +141,7 @@ pub async fn lead_inbox(
         unassigned,
         assigned,
         reps,
+        team,
     }))
 }
 

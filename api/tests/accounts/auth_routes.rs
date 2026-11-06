@@ -122,10 +122,13 @@ async fn sessions_never_end_by_time(pool: MySqlPool) {
         .json(&json!({ "email": "rep@acme.test", "password": PASSWORD }))
         .await;
     login.assert_status_ok();
+    // Only the new one: the seed's sessions (aaaaaaaa-/bbbbbbbb- ids) are
+    // dated, and just as recent when the test database was just made.
     let dated: i64 = sqlx::query_scalar(
         "SELECT CAST(COUNT(*) AS SIGNED) FROM sessions
           WHERE user_id = 100 AND created_date > NOW() - INTERVAL 1 MINUTE
-            AND expiration_date IS NOT NULL",
+            AND expiration_date IS NOT NULL
+            AND id NOT LIKE 'aaaaaaaa-%' AND id NOT LIKE 'bbbbbbbb-%'",
     )
     .fetch_one(&pool)
     .await

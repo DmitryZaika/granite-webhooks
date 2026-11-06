@@ -76,8 +76,22 @@ pub struct QuoteSaleEvent {
     pub title_text: String,
     /// Catalog extras (`GET /v1/quote-extras` ids) that tick this event in
     /// Mark as Sold when the quote has one of them (a line whose `catalogId`
-    /// is one of these). Empty: the seller ticks it by hand.
+    /// is one of these, any option). Empty: the seller ticks it by hand.
     pub trigger_extra_ids: Vec<i64>,
+    /// Single options of catalog extras that tick this event in Mark as Sold
+    /// when the quote has a line of that extra with that option (its
+    /// `catalogId` and `optionId`).
+    pub trigger_options: Vec<TriggerOption>,
+}
+
+/// One option of a catalog extra (`arrOptions[].id` of a `GET /v1/quote-extras` item).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TriggerOption {
+    /// The catalog extra.
+    pub extra_id: i64,
+    /// The option's id in that extra.
+    pub option_id: String,
 }
 
 #[derive(FromRow)]
@@ -88,6 +102,7 @@ struct SaleEventRow {
     title_variable: String,
     title_text: String,
     trigger_extra_ids: Option<String>,
+    trigger_options: Option<String>,
 }
 
 impl From<SaleEventRow> for QuoteSaleEvent {
@@ -101,6 +116,10 @@ impl From<SaleEventRow> for QuoteSaleEvent {
             trigger_extra_ids: row
                 .trigger_extra_ids
                 .and_then(|ids| serde_json::from_str(&ids).ok())
+                .unwrap_or_default(),
+            trigger_options: row
+                .trigger_options
+                .and_then(|options| serde_json::from_str(&options).ok())
                 .unwrap_or_default(),
         }
     }
@@ -124,6 +143,11 @@ pub struct QuoteSaleEventInput {
     /// are dropped. Default none.
     #[serde(default)]
     pub trigger_extra_ids: Vec<i64>,
+    /// Single options of catalog extras that tick this event in Mark as Sold
+    /// when the quote has one. Options not in the company's catalog are
+    /// dropped. Default none.
+    #[serde(default)]
+    pub trigger_options: Vec<TriggerOption>,
 }
 
 /// `POST /v1/quote-sale-events`.
@@ -167,7 +191,8 @@ pub async fn sale_events(
     let rows: Vec<SaleEventRow> = sqlx::query_as(
         "SELECT t.id, t.calendar_id, c.name AS calendar_name,
                 CAST(t.title_variable AS CHAR) AS title_variable, t.title_text,
-                CAST(t.trigger_extra_ids AS CHAR) AS trigger_extra_ids
+                CAST(t.trigger_extra_ids AS CHAR) AS trigger_extra_ids,
+                CAST(t.trigger_options AS CHAR) AS trigger_options
            FROM quote_sale_event_templates t
            JOIN calendars c ON c.id = t.calendar_id AND c.company_id = t.company_id
                            AND c.deleted_at IS NULL
@@ -180,10 +205,43 @@ pub async fn sale_events(
     Ok(rows.into_iter().map(QuoteSaleEvent::from).collect())
 }
 
-/// What `check` accepted: the text trimmed, the trigger extras as JSON.
+/// What `check` accepted: the text trimmed, the trigger extras and options as JSON.
 struct Checked {
     text: String,
     triggers: String,
+    options: String,
+}
+
+/// The `arrOptions[].id`s of a catalog extra's `item_json`.
+fn option_ids(item_json: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(item_json)
+        .ok()
+        .and_then(|item| item.get("arrOptions").and_then(|o| o.as_array()).cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|option| {
+            option
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// The trigger options whose extra is in `catalog` and has that option, once each.
+fn kept_options(wanted: &[TriggerOption], catalog: &[(i64, String)]) -> Vec<TriggerOption> {
+    let mut kept: Vec<TriggerOption> = wanted
+        .iter()
+        .filter(|want| {
+            catalog.iter().any(|(id, item)| {
+                *id == want.extra_id && option_ids(item).contains(&want.option_id)
+            })
+        })
+        .cloned()
+        .collect();
+    kept.sort();
+    kept.dedup();
+    kept
 }
 
 /// The text trimmed and checked; the calendar the company's; the trigger
@@ -209,8 +267,9 @@ async fn check(
     if calendar.is_none() {
         return Err(ApiError::BadRequest("Choose a calendar".into()));
     }
-    let catalog: Vec<i64> = sqlx::query_scalar(
-        "SELECT CAST(id AS SIGNED) FROM quote_extras WHERE company_id = ? AND deleted_at IS NULL",
+    let catalog: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT CAST(id AS SIGNED), CAST(item_json AS CHAR) FROM quote_extras
+          WHERE company_id = ? AND deleted_at IS NULL",
     )
     .bind(company_id)
     .fetch_all(pool)
@@ -219,13 +278,15 @@ async fn check(
         .trigger_extra_ids
         .iter()
         .copied()
-        .filter(|id| catalog.contains(id))
+        .filter(|id| catalog.iter().any(|(extra, _)| extra == id))
         .collect();
     triggers.sort_unstable();
     triggers.dedup();
+    let options = kept_options(&input.trigger_options, &catalog);
     Ok(Checked {
         text,
         triggers: serde_json::to_string(&triggers).unwrap_or_else(|_| "[]".into()),
+        options: serde_json::to_string(&options).unwrap_or_else(|_| "[]".into()),
     })
 }
 
@@ -246,7 +307,7 @@ async fn find(pool: &MySqlPool, company_id: i32, id: i32) -> ApiResult<()> {
 /// Returns the company's event templates (Admin > Quotes > Automation), in
 /// the order they were added: the checkboxes under Mark as Sold › Extra
 /// events. One starts ticked when the quote has a line of one of its
-/// `trigger_extra_ids` extras. Pass the ticked ones as `extra_events` to
+/// `trigger_extra_ids` extras, or one of its `trigger_options`. Pass the ticked ones as `extra_events` to
 /// `POST /v1/quotes/{id}/sale`. A template whose calendar was deleted is left
 /// out. Any employee may read them; admins change them with
 /// `POST /v1/quote-sale-events` and `PUT|DELETE /v1/quote-sale-events/{id}`.
@@ -300,14 +361,16 @@ pub async fn create_sale_event(
     let checked = check(&state.pool, user.company_id, &input).await?;
     let id = sqlx::query(
         "INSERT INTO quote_sale_event_templates
-           (company_id, calendar_id, title_variable, title_text, trigger_extra_ids, created_by)
-         VALUES (?, ?, ?, ?, ?, ?)",
+           (company_id, calendar_id, title_variable, title_text, trigger_extra_ids,
+            trigger_options, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user.company_id)
     .bind(input.calendar_id)
     .bind(input.title_variable.as_str())
     .bind(checked.text)
     .bind(checked.triggers)
+    .bind(checked.options)
     .bind(user.id)
     .execute(&state.pool)
     .await?
@@ -346,13 +409,15 @@ pub async fn update_sale_event(
     let checked = check(&state.pool, user.company_id, &input).await?;
     sqlx::query(
         "UPDATE quote_sale_event_templates
-            SET calendar_id = ?, title_variable = ?, title_text = ?, trigger_extra_ids = ?
+            SET calendar_id = ?, title_variable = ?, title_text = ?, trigger_extra_ids = ?,
+                trigger_options = ?
           WHERE id = ? AND company_id = ?",
     )
     .bind(input.calendar_id)
     .bind(input.title_variable.as_str())
     .bind(checked.text)
     .bind(checked.triggers)
+    .bind(checked.options)
     .bind(id)
     .bind(user.company_id)
     .execute(&state.pool)
@@ -395,6 +460,34 @@ pub async fn delete_sale_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trigger_options_keep_only_catalog_options_once() {
+        let catalog = vec![
+            (
+                3,
+                r#"{"name":"Sink","arrOptions":[{"id":"opt-a","name":"Undermount"},{"id":"opt-b","name":"Farm"}]}"#
+                    .to_string(),
+            ),
+            (4, r#"{"name":"Sealer"}"#.to_string()),
+        ];
+        let want = |extra_id, option_id: &str| TriggerOption {
+            extra_id,
+            option_id: option_id.into(),
+        };
+        let kept = kept_options(
+            &[
+                want(3, "opt-b"),
+                want(3, "opt-a"),
+                want(3, "opt-b"),
+                want(3, "opt-z"),
+                want(4, "opt-a"),
+                want(9, "opt-a"),
+            ],
+            &catalog,
+        );
+        assert_eq!(kept, vec![want(3, "opt-a"), want(3, "opt-b")]);
+    }
 
     #[test]
     fn the_title_is_the_variable_then_the_text() {

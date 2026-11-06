@@ -585,6 +585,14 @@ pub async fn set_outcome(
             .execute(&state.pool)
             .await?;
             service::won_leaves_first_stage(&mut *state.pool.acquire().await?, id).await?;
+            // Sold: the job goes to Projects.
+            crate::routes::projects::service::start_for_won_deal(
+                &state.pool,
+                user.company_id,
+                id,
+                Some(user.id),
+            )
+            .await;
         }
         DealStatus::Lost => {
             let reason = body

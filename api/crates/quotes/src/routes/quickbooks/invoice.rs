@@ -243,6 +243,10 @@ pub struct EditableInvoice {
     /// BCC of the invoice email (set on a new invoice only).
     #[serde(default)]
     pub bill_email_bcc: Option<String>,
+    /// Whether `QuickBooks` emailed it: `EmailSent`, `NeedToSend` or
+    /// `NotSet` (read only).
+    #[serde(default)]
+    pub email_status: Option<String>,
 }
 
 pub(super) fn rows(value: &Value) -> Vec<Value> {
@@ -295,6 +299,7 @@ pub fn editable(value: &Value) -> Option<EditableInvoice> {
         class_name: text(&value["ClassRef"]["name"]),
         bill_email_cc: text(&value["BillEmailCc"]["Address"]),
         bill_email_bcc: text(&value["BillEmailBcc"]["Address"]),
+        email_status: text(&value["EmailStatus"]),
     })
 }
 
@@ -425,6 +430,12 @@ fn is_new(id: Option<&str>) -> bool {
 }
 
 /// The sparse update `QuickBooks` takes for `edited`, on top of `current`.
+///
+/// Lines come in the editor's order (a line the quote sync adds sits where
+/// the quote has it, not at the bottom). A line the editor does not show
+/// stays after the line it followed; sales and description lines it left
+/// out are removed. Every line is numbered in that order, since `QuickBooks`
+/// puts lines that keep an old `LineNum` before those without one.
 pub fn update_payload(current: &Value, edited: &EditableInvoice) -> Result<Value, String> {
     let current_id = text(&current["Id"]).ok_or("Invoice is missing Id or SyncToken")?;
     let sync_token = match &current["SyncToken"] {
@@ -435,72 +446,79 @@ pub fn update_payload(current: &Value, edited: &EditableInvoice) -> Result<Value
     if current_id != edited.id {
         return Err("Invoice id mismatch".into());
     }
-    let edited_by_id: HashMap<&str, &Line> = edited
-        .lines
+    let originals = rows(&current["Line"]);
+    let by_id: HashMap<String, usize> = originals
         .iter()
-        .filter(|line| !is_new(line.id.as_deref()))
-        .filter_map(|line| line.id.as_deref().map(|id| (id, line)))
+        .enumerate()
+        .filter_map(|(index, line)| text(&line["Id"]).map(|id| (id, index)))
         .collect();
-    let mut next = Vec::new();
-    let mut trailer = Vec::new();
-    let mut matched = HashSet::new();
-    for original in rows(&current["Line"]) {
-        if !original.is_object() {
-            next.push(original);
+    let kind = |line: &Value| text(&line["DetailType"]);
+    let is_trailer = |line: &Value| {
+        matches!(
+            kind(line).as_deref(),
+            Some("DiscountLineDetail" | "TaxLineDetail")
+        )
+    };
+    let is_subtotal = |line: &Value| kind(line).as_deref() == Some("SubTotalLineDetail");
+    // Each line with the index of the original it came from.
+    let mut next: Vec<(Value, Option<usize>)> = Vec::new();
+    let mut used = HashSet::new();
+    for line in &edited.lines {
+        let id = line.id.as_deref();
+        if is_new(id) {
+            next.push((new_line(line), None));
             continue;
         }
-        let detail_type = text(&original["DetailType"]);
-        match detail_type.as_deref() {
-            Some("SubTotalLineDetail") => continue,
-            Some("DiscountLineDetail" | "TaxLineDetail") => {
-                trailer.push(original);
-                continue;
+        match id.and_then(|id| by_id.get(id).copied()) {
+            Some(index) if used.insert(index) => {
+                let original = &originals[index];
+                if !is_subtotal(original) && !is_trailer(original) {
+                    next.push((updated_line(original, line)?, Some(index)));
+                }
             }
-            _ => {}
+            Some(_) => {}
+            None if line.editable
+                && matches!(
+                    line.detail_type.as_str(),
+                    "SalesItemLineDetail" | "DescriptionOnly"
+                ) =>
+            {
+                next.push((new_line(line), None));
+            }
+            None => {}
         }
-        let line_id = text(&original["Id"]);
-        let edited_line = line_id
-            .as_deref()
-            .and_then(|id| edited_by_id.get(id).copied());
+    }
+    // Lines the editor did not show: the editable kinds were removed, the
+    // rest stay after the line they followed.
+    for (index, original) in originals.iter().enumerate() {
         let editable_kind = matches!(
-            detail_type.as_deref(),
+            kind(original).as_deref(),
             Some("SalesItemLineDetail" | "DescriptionOnly")
         );
-        match (line_id, edited_line) {
-            // The editor removed it.
-            (Some(_), None) if editable_kind => {}
-            (Some(id), Some(line)) => {
-                matched.insert(id);
-                next.push(updated_line(&original, line)?);
-            }
-            _ => next.push(original),
-        }
-    }
-    for line in edited
-        .lines
-        .iter()
-        .filter(|line| is_new(line.id.as_deref()))
-    {
-        next.push(new_line(line));
-    }
-    for line in &edited.lines {
-        let Some(id) = line.id.as_deref() else {
+        let has_id = text(&original["Id"]).is_some();
+        if used.contains(&index)
+            || !original.is_object()
+            || is_subtotal(original)
+            || is_trailer(original)
+            || (editable_kind && has_id)
+        {
             continue;
-        };
-        let unmatched_edit = !is_new(Some(id))
-            && !matched.contains(id)
-            && line.editable
-            && matches!(
-                line.detail_type.as_str(),
-                "SalesItemLineDetail" | "DescriptionOnly"
-            );
-        if unmatched_edit {
-            next.push(new_line(line));
+        }
+        let at = next
+            .iter()
+            .rposition(|(_, from)| from.is_some_and(|from| from < index))
+            .map_or(0, |at| at + 1);
+        next.insert(at, (original.clone(), Some(index)));
+    }
+    let mut lines: Vec<Value> = next.into_iter().map(|(line, _)| line).collect();
+    lines.extend(originals.iter().filter(|line| is_trailer(line)).cloned());
+    for (index, line) in lines.iter_mut().enumerate() {
+        if let Some(line) = line.as_object_mut() {
+            line.insert("LineNum".into(), json!(index + 1));
         }
     }
-    next.extend(trailer);
     let mut payload =
-        json!({ "Id": current_id, "SyncToken": sync_token, "sparse": true, "Line": next });
+        json!({ "Id": current_id, "SyncToken": sync_token, "sparse": true, "Line": lines });
     set_fields(&mut payload, edited);
     Ok(payload)
 }
@@ -591,6 +609,32 @@ pub fn create_payload(
         payload["ClassRef"] = json!({ "value": class });
     }
     Ok(payload)
+}
+
+/// The numbers `count` new invoices get after `recent`, the numbers of the
+/// company's newest invoices: one more than the highest, then the next ones,
+/// keeping its prefix and zero padding (`INV-0099` → `INV-0100`), as
+/// `QuickBooks` itself numbers a new invoice. `None` when none of them ends
+/// in a number.
+pub fn next_doc_numbers(recent: &[String], count: usize) -> Option<Vec<String>> {
+    let (prefix, width, highest) = recent
+        .iter()
+        .filter_map(|number| {
+            let number = number.trim();
+            let digits = number.bytes().rev().take_while(u8::is_ascii_digit).count();
+            let (prefix, tail) = number.split_at(number.len() - digits);
+            // Up to 18 digits fit a u64 with room to count on.
+            if tail.is_empty() || tail.len() > 18 {
+                return None;
+            }
+            Some((prefix, tail.len(), tail.parse::<u64>().ok()?))
+        })
+        .max_by_key(|(_, _, value)| *value)?;
+    Some(
+        (1..=count as u64)
+            .map(|step| format!("{prefix}{:0width$}", highest + step))
+            .collect(),
+    )
 }
 
 /// The editor's dates, notes and addresses.
@@ -748,5 +792,88 @@ mod tests {
             .lines
             .retain(|line| line.detail_type != "SalesItemLineDetail");
         assert!(create_payload("42", &invoice, None, &none).is_err());
+    }
+
+    fn note(id: &str, text: &str) -> Line {
+        Line {
+            id: Some(id.into()),
+            detail_type: "DescriptionOnly".into(),
+            description: Some(text.into()),
+            editable: true,
+            ..Line::default()
+        }
+    }
+
+    #[test]
+    fn lines_keep_the_editors_order_and_are_numbered() {
+        // Synced from a quote: the countertop line, its notes, then the
+        // cabinet line. Before, kept lines went first and every new line
+        // to the bottom.
+        let current = json!({
+            "Id": "77", "SyncToken": "3",
+            "Line": [
+                { "Id": "1", "LineNum": 1, "DetailType": "SalesItemLineDetail", "Amount": 100,
+                  "SalesItemLineDetail": { "ItemRef": { "value": "9" } } },
+                { "Id": "2", "LineNum": 2, "DetailType": "DescriptionOnly", "Description": "Old note" },
+                { "Id": "3", "LineNum": 3, "DetailType": "GroupLineDetail" },
+                { "Id": "9", "LineNum": 9, "DetailType": "SalesItemLineDetail", "Amount": 50,
+                  "SalesItemLineDetail": { "ItemRef": { "value": "9" } } },
+                { "DetailType": "SubTotalLineDetail", "Amount": 150 },
+                { "DetailType": "DiscountLineDetail", "Amount": 5 },
+            ],
+        });
+        let mut invoice = editable(&current).unwrap();
+        let mut cabinets = invoice.lines[3].clone();
+        cabinets.amount = Some(60.0);
+        let countertops = invoice.lines[0].clone();
+        // The editor shows neither the old note nor the group line.
+        invoice.lines = vec![
+            countertops,
+            note("new:a", "3 sq ft Granite"),
+            note("new:b", "Sealer"),
+            cabinets,
+            note("new:c", "Delivery"),
+        ];
+        let payload = update_payload(&current, &invoice).unwrap();
+        let lines = payload["Line"].as_array().unwrap();
+        let shape: Vec<(String, String)> = lines
+            .iter()
+            .map(|line| {
+                (
+                    text(&line["Id"]).unwrap_or_default(),
+                    text(&line["Description"]).unwrap_or_default(),
+                )
+            })
+            .collect();
+        let want = [
+            ("1", ""),
+            ("3", ""),
+            ("", "3 sq ft Granite"),
+            ("", "Sealer"),
+            ("9", ""),
+            ("", "Delivery"),
+            ("", ""),
+        ];
+        assert_eq!(
+            shape,
+            want.map(|(id, text)| (id.to_string(), text.to_string()))
+        );
+        assert_eq!(lines[4]["Amount"], 60.0);
+        assert_eq!(lines[6]["DetailType"], "DiscountLineDetail");
+        let numbers: Vec<Value> = lines.iter().map(|line| line["LineNum"].clone()).collect();
+        assert_eq!(numbers, (1..=7).map(|n| json!(n)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn new_invoices_take_the_numbers_after_the_highest() {
+        let recent = ["3357", "3356", "abc", "", "3355"].map(String::from);
+        assert_eq!(
+            next_doc_numbers(&recent, 3).unwrap(),
+            ["3358", "3359", "3360"]
+        );
+        let padded = ["INV-0099", "INV-0098"].map(String::from);
+        assert_eq!(next_doc_numbers(&padded, 1).unwrap(), ["INV-0100"]);
+        assert!(next_doc_numbers(&["draft".to_string()], 1).is_none());
+        assert!(next_doc_numbers(&[], 1).is_none());
     }
 }

@@ -17,6 +17,8 @@ struct FeatureRow {
     auto_sale: bool,
     auto_unscheduled_jobs: bool,
     auto_invoice: bool,
+    quote_invoice_sync: bool,
+    auto_project: bool,
     sale_event_templates: bool,
 }
 
@@ -77,6 +79,8 @@ pub async fn company_features(
                 c.auto_sale <> 0 AS auto_sale,
                 c.auto_unscheduled_jobs <> 0 AS auto_unscheduled_jobs,
                 c.auto_invoice <> 0 AS auto_invoice,
+                c.quote_invoice_sync <> 0 AS quote_invoice_sync,
+                c.auto_project <> 0 AS auto_project,
                 EXISTS (SELECT 1 FROM quote_sale_event_templates st
                           JOIN calendars sc ON sc.id = st.calendar_id
                                            AND sc.company_id = st.company_id
@@ -112,6 +116,8 @@ pub async fn company_features(
             auto_sale: false,
             auto_unscheduled_jobs: false,
             auto_invoice: false,
+            quote_invoice_sync: false,
+            auto_project: false,
             sale_event_templates: false,
         },
         |row| CompanyFeatures {
@@ -128,6 +134,8 @@ pub async fn company_features(
             auto_sale: row.auto_sale,
             auto_unscheduled_jobs: row.auto_unscheduled_jobs,
             auto_invoice: row.auto_invoice,
+            quote_invoice_sync: row.quote_invoice_sync,
+            auto_project: row.auto_project,
             sale_event_templates: row.sale_event_templates,
         },
     ))

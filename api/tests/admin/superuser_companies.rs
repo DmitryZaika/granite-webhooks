@@ -469,6 +469,13 @@ async fn superusers_switch_features_and_billing(pool: MySqlPool) {
         .json(&json!({ "enabled": true }))
         .await
         .assert_status(StatusCode::BAD_REQUEST);
+    // Projects has no switch: it is on for everyone.
+    server
+        .put("/v1/superuser/companies/100/features/projects")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "enabled": true }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
     server
         .put("/v1/superuser/companies/99999/features/quickbooks")
         .with_session(sessions::ADMIN)

@@ -1,4 +1,5 @@
 pub mod email_template;
+pub mod lead_automation;
 pub mod notifications;
 pub mod outbound_email;
 pub mod phone_app;

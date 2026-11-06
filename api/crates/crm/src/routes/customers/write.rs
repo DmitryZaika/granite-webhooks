@@ -486,26 +486,34 @@ pub async fn set_temperature(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `positions.id` of a sales manager (may delete customers).
+/// `positions.id` of a sales manager (may delete customers and mark leads
+/// invalid).
 const SALES_MANAGER_POSITION: i32 = 2;
+/// `positions.id` of a manager (may delete customers).
+const MANAGER_POSITION: i32 = 5;
 
-/// Admins and the company's sales managers manage customers' fate.
-async fn require_manager(
+/// Admins, and the company's people holding one of `positions`, manage
+/// customers' fate.
+async fn require_position(
     pool: &sqlx::MySqlPool,
     user: &crate::auth::session::SessionUser,
+    positions: &[i32],
 ) -> ApiResult<()> {
     if user.is_admin || user.is_superuser {
         return Ok(());
     }
-    let manager: Option<i32> = sqlx::query_scalar(
-        "SELECT 1 FROM users_positions WHERE user_id = ? AND company_id = ? AND position_id = ? LIMIT 1",
+    let held: Vec<i32> = sqlx::query_scalar(
+        "SELECT position_id FROM users_positions WHERE user_id = ? AND company_id = ?",
     )
     .bind(user.id)
     .bind(user.company_id)
-    .bind(SALES_MANAGER_POSITION)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await?;
-    manager.map(|_| ()).ok_or(ApiError::Forbidden)
+    if held.iter().any(|position| positions.contains(position)) {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
 }
 
 /// Body of `PUT /v1/customers/{id}/invalid`.
@@ -544,7 +552,7 @@ pub async fn mark_invalid(
     JsonBody(body): JsonBody<InvalidInput>,
 ) -> ApiResult<StatusCode> {
     let pool = &state.pool;
-    require_manager(pool, &user).await?;
+    require_position(pool, &user, &[SALES_MANAGER_POSITION]).await?;
     let reason = body.reason.trim();
     if reason.is_empty() || reason.chars().count() > 255 {
         return Err(ApiError::BadRequest("Select a reason".into()));
@@ -598,7 +606,7 @@ pub async fn mark_invalid(
 ///
 /// Hides the customer (soft delete) and removes it from the telephony
 /// address books. A customer with live deals needs `cascade_deals=true`,
-/// which hides the deals too. Admins and sales managers only.
+/// which hides the deals too. Admins, sales managers and managers only.
 #[crate::openapi::path(
     delete,
     path = "/v1/customers/{id}",
@@ -608,7 +616,7 @@ pub async fn mark_invalid(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is neither an admin nor a sales manager", body = ErrorBody),
+        (status = 403, description = "Caller is neither an admin, a sales manager nor a manager", body = ErrorBody),
         (status = 404, description = "No such live customer in the company", body = ErrorBody),
         (status = 409, description = "The customer has live deals and `cascade_deals` is not set", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -622,7 +630,7 @@ pub async fn delete(
     Query(query): Query<DeleteQuery>,
 ) -> ApiResult<StatusCode> {
     let pool = &state.pool;
-    require_manager(pool, &user).await?;
+    require_position(pool, &user, &[SALES_MANAGER_POSITION, MANAGER_POSITION]).await?;
     let found: Option<i32> = sqlx::query_scalar(
         "SELECT 1 FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )

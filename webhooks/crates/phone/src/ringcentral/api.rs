@@ -262,17 +262,37 @@ pub async fn sync_customer_to_ring_central(
     let (first_name, last_name) = split_name(mapping.name.as_deref());
     let payload = build_rc_contact_payload(&mapping, first_name, last_name);
     upsert_contact(pool, client, &mapping, &payload, clean_company_id).await;
+    // The company's connection fills only its own login's book: every rep who
+    // connected their own RingCentral gets the customer in theirs too.
+    if let Err(error) =
+        common::telephony::ringcentral_contacts::sync_customer(pool, client, customer_id).await
+    {
+        tracing::error!(
+            ?error,
+            customer_id,
+            "Failed to sync reps' RingCentral contacts"
+        );
+    }
     OK_RESPONSE
 }
 
-/// Removes a deleted customer from the company's `RingCentral` contacts and
-/// forgets the mapping. A contact already gone there (404) only drops the
-/// mapping.
+/// Removes a deleted customer from the company's `RingCentral` contacts, and
+/// from every rep's own, and forgets the mappings. A contact already gone
+/// there (404) only drops the mapping.
 pub async fn delete_customer_from_ring_central(
     pool: &MySqlPool,
     client: &Client,
     customer_id: i32,
 ) -> BasicResponse {
+    if let Err(error) =
+        common::telephony::ringcentral_contacts::remove_customer(pool, client, customer_id).await
+    {
+        tracing::error!(
+            ?error,
+            customer_id,
+            "Failed to remove reps' RingCentral contacts"
+        );
+    }
     let mapping: Result<Option<(i32, i64, Option<i32>)>, sqlx::Error> = sqlx::query_as(
         "SELECT rc.id, rc.ringcentral_id, c.company_id FROM ringcentral_contacts rc
          JOIN customers c ON c.id = rc.customer_id WHERE rc.customer_id = ? LIMIT 1",

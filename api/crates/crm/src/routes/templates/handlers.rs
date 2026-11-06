@@ -135,8 +135,9 @@ async fn editable(
     }
 }
 
-/// The checked automation of a company template: list, its group, the delay
-/// and the sales reps whose deals get it (empty: every rep's).
+/// The checked automation of a template: list, its group, the delay and the
+/// sales reps whose deals get it (empty: every rep's; always for a personal
+/// template, which goes to its owner's deals).
 struct Automation {
     list: i32,
     group: i32,
@@ -144,14 +145,16 @@ struct Automation {
     reps: Vec<i32>,
 }
 
-/// `lead_list_id` and `hour_delay` of a company template: both or neither, a
-/// live deal list the company sees, a (list, delay) pair no other template
-/// uses for the same reps. Left-out reps are `kept_reps`.
+/// `lead_list_id` and `hour_delay` of a template: both or neither, a live
+/// deal list the company sees, a (list, delay) pair no other template of the
+/// same owner (`owner`: a personal template's user; `None`: the company)
+/// uses for the same reps. Left-out reps are `kept_reps`; a personal
+/// template names none.
 async fn automation(
     pool: &MySqlPool,
     company_id: i32,
     input: &EmailTemplateInput,
-    company: bool,
+    owner: Option<i32>,
     exclude: Option<i32>,
     kept_reps: &[i32],
 ) -> ApiResult<Option<Automation>> {
@@ -164,9 +167,6 @@ async fn automation(
             _ => Ok(None),
         };
     };
-    if !company {
-        return bad("Only company templates send automatically.");
-    }
     let Some(hours) = input.hour_delay else {
         return bad("Set how many hours to wait before sending.");
     };
@@ -185,16 +185,18 @@ async fn automation(
     let Some(group) = group else {
         return bad("Select a valid deal list.");
     };
-    let reps = match &input.sales_rep_ids {
-        Some(ids) => super::reps::checked(pool, company_id, ids).await?,
-        None => kept_reps.to_vec(),
+    let reps = match (&input.sales_rep_ids, owner) {
+        (_, Some(_)) => Vec::new(),
+        (Some(ids), None) => super::reps::checked(pool, company_id, ids).await?,
+        (None, None) => kept_reps.to_vec(),
     };
     let others: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT CAST(sales_rep_ids AS CHAR) FROM email_templates
-          WHERE company_id = ? AND user_id IS NULL AND lead_list_id = ? AND hour_delay = ?
+          WHERE company_id = ? AND user_id <=> ? AND lead_list_id = ? AND hour_delay = ?
             AND deleted_at IS NULL AND id <> ?",
     )
     .bind(company_id)
+    .bind(owner)
     .bind(list)
     .bind(hours)
     .bind(exclude.unwrap_or(0))
@@ -204,10 +206,12 @@ async fn automation(
         .iter()
         .any(|other| super::reps::overlap(&reps, &super::reps::ids_of(other.as_deref())))
     {
-        return Err(ApiError::Conflict(
+        return Err(ApiError::Conflict(if owner.is_some() {
+            "Another of your email templates already uses this list and delay.".into()
+        } else {
             "Another email template already uses this list and delay for the same sales reps."
-                .into(),
-        ));
+                .into()
+        }));
     }
     Ok(Some(Automation {
         list,
@@ -356,8 +360,11 @@ pub async fn list(
 /// Create an email template
 ///
 /// `scope: company` (admins only) makes it the whole company's; otherwise
-/// it is the caller's own. A company template may send automatically:
-/// `lead_list_id` + `hour_delay` schedule it for deals entering that list.
+/// it is the caller's own. Either may send automatically: `lead_list_id` +
+/// `hour_delay` schedule it for deals entering that list — a company
+/// template for the reps who use the company's automations, a personal one
+/// for the caller's own deals once they use their own
+/// (`PUT /v1/me/lead-automation`).
 #[crate::openapi::path(
     post,
     path = "/v1/email-templates",
@@ -369,7 +376,7 @@ pub async fn list(
         (status = 400, description = "Missing name, subject or body, unpaired braces, or a bad automation", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee, or not an admin for a company template", body = ErrorBody),
-        (status = 409, description = "Another company template sends on this list after this delay", body = ErrorBody),
+        (status = 409, description = "Another template of the same owner sends on this list after this delay", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -384,7 +391,8 @@ pub async fn create(
     if company && !(user.is_admin || user.is_superuser) {
         return Err(ApiError::Forbidden);
     }
-    let automation = automation(&state.pool, user.company_id, &input, company, None, &[]).await?;
+    let owner = (!company).then_some(user.id);
+    let automation = automation(&state.pool, user.company_id, &input, owner, None, &[]).await?;
     let id = sqlx::query(
         "INSERT INTO email_templates
            (template_name, template_subject, template_body, company_id, user_id, created_by,
@@ -395,7 +403,7 @@ pub async fn create(
     .bind(&clean.subject)
     .bind(&clean.body)
     .bind(user.company_id)
-    .bind((!company).then_some(user.id))
+    .bind(owner)
     .bind(user.id)
     .bind(automation.as_ref().map(|a| a.group))
     .bind(automation.as_ref().map(|a| a.list))
@@ -422,9 +430,10 @@ pub async fn create(
 
 /// Edit an email template
 ///
-/// The caller's own templates, and (admins) the company's, whose automation
-/// (`lead_list_id`, `hour_delay`) it sets too; removing the automation calls
-/// off the template's pending sends.
+/// The caller's own templates, and (admins) the company's, with their
+/// automation (`lead_list_id`, `hour_delay`; `sales_rep_ids` only for a
+/// company template); removing the automation calls off the template's
+/// pending sends.
 #[crate::openapi::path(
     put,
     path = "/v1/email-templates/{id}",
@@ -438,7 +447,7 @@ pub async fn create(
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee", body = ErrorBody),
         (status = 404, description = "No such template the caller may edit", body = ErrorBody),
-        (status = 409, description = "Another company template sends on this list after this delay", body = ErrorBody),
+        (status = 409, description = "Another template of the same owner sends on this list after this delay", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -451,13 +460,12 @@ pub async fn update(
 ) -> ApiResult<Json<EmailTemplate>> {
     let clean = clean(&input)?;
     let existing = editable(&state.pool, &user, id).await?;
-    let company = existing.user_id.is_none();
     let kept_reps = super::reps::ids_of(existing.sales_rep_ids.as_deref());
     let automation = automation(
         &state.pool,
         user.company_id,
         &input,
-        company,
+        existing.user_id,
         Some(id),
         &kept_reps,
     )

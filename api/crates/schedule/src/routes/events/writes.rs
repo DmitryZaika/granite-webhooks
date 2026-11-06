@@ -106,6 +106,9 @@ pub struct EventInput {
     /// leave out to keep the saved choice.
     #[serde(default)]
     pub picked_notification_flow_ids: Option<Vec<i32>>,
+    /// Create only: the project this template or installation is for.
+    #[serde(default)]
+    pub project_id: Option<i32>,
 }
 
 /// `POST /v1/events`.
@@ -403,8 +406,8 @@ async fn copy_records(
         .await;
     }
     sqlx::query(
-        "INSERT INTO event_images (event_id, company_id, url, created_by)
-         SELECT ?, company_id, url, created_by FROM event_images
+        "INSERT INTO event_images (event_id, company_id, url, created_by, for_customer)
+         SELECT ?, company_id, url, created_by, for_customer FROM event_images
           WHERE event_id = ? AND company_id = ? AND deleted_at IS NULL ORDER BY created_at, id",
     )
     .bind(event_id)
@@ -486,6 +489,18 @@ pub async fn create(
     let event = check(&input)?;
     check_calendar(pool, user.company_id, event.calendar_id).await?;
     let customer = check_customer(pool, user.company_id, &input).await?;
+    let project = match input.project_id.filter(|id| *id > 0) {
+        Some(project) => {
+            let found: Option<i32> =
+                sqlx::query_scalar("SELECT id FROM projects WHERE id = ? AND company_id = ?")
+                    .bind(project)
+                    .bind(user.company_id)
+                    .fetch_optional(pool)
+                    .await?;
+            Some(found.ok_or_else(|| ApiError::BadRequest("No such project".into()))?)
+        }
+        None => None,
+    };
     let assignee = match input.assigned_user_id.filter(|id| *id > 0) {
         Some(id) => Some(id),
         None => board::sole_template_maker(pool, event.calendar_id).await?,
@@ -493,8 +508,9 @@ pub async fn create(
     let id = sqlx::query(
         "INSERT INTO events (title, description, location, start_date, end_date, all_day,
             unscheduled, color, status, notes, created_user_id, assigned_user_id, sale_id,
-            customer_id, calendar_id, rrule, recurrence_until, contact_phone, contact_email)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            customer_id, calendar_id, rrule, recurrence_until, contact_phone, contact_email,
+            project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(event.title)
     .bind(event.description)
@@ -515,6 +531,7 @@ pub async fn create(
     .bind(event.recurrence_until)
     .bind(event.contact_phone.flatten())
     .bind(event.contact_email.flatten())
+    .bind(project)
     .execute(pool)
     .await?
     .last_insert_id();

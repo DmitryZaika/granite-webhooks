@@ -542,6 +542,27 @@ async fn due_rules_email_the_customer_once(pool: MySqlPool) {
             "skipped:no_customer"
         ]
     );
+    // The event the email went out for notes it; the skipped ones do not.
+    let lines: Vec<(i32, String, String)> = sqlx::query_as(
+        "SELECT event_id, message, created_by FROM event_history WHERE action = 'customer_message'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let sent_for: i32 = sqlx::query_scalar(
+        "SELECT event_id FROM schedule_notification_sends WHERE status = 'sent'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        lines,
+        vec![(
+            sent_for,
+            "Email sent to the customer: Reminder (1 day before)".to_string(),
+            "Automated".to_string()
+        )]
+    );
     let again: Value = run().await.json();
     assert_eq!(again["rule_processed"], 0);
     assert_eq!(sent.emails.lock().unwrap().len(), 1);
@@ -624,6 +645,11 @@ async fn text_rules_go_from_the_office_manager(pool: MySqlPool) {
     );
     assert!(texts[0].text.starts_with("Hi Alice, see you "));
     assert!(!texts[0].text.contains("{{"));
+    let text_line = history(&pool, last_event(&pool).await).await;
+    assert_eq!(
+        text_line,
+        vec!["Text sent to the customer: Reminder (1 day before)"]
+    );
 
     // RingCentral too, but the office manager only has a CloudTalk line.
     sqlx::query(
@@ -677,6 +703,103 @@ async fn a_rule_replaces_the_built_in_reminders(pool: MySqlPool) {
     .await
     .unwrap();
     assert_eq!(cancelled, 2);
+}
+
+#[test_db::test(seed)]
+async fn the_built_in_reminder_is_noted_on_the_event(pool: MySqlPool) {
+    sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
+    let (server, sent) = server(&pool).await;
+    let booked: Value = server
+        .post("/v1/events/estimates")
+        .with_session(sessions::REP)
+        .json(&json!({
+            "customer_id": 1000, "calendar_id": 8831, "title": "1000",
+            "start_date": "2099-01-15 15:00:00", "end_date": "2099-01-15 16:00:00",
+        }))
+        .await
+        .json();
+    let event = i32::try_from(booked["id"].as_i64().unwrap()).unwrap();
+    sqlx::query(
+        "UPDATE appointment_reminders SET send_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE
+          WHERE event_id = ? AND reminder_kind = '24h'",
+    )
+    .bind(event)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let body: Value = server
+        .post("/v1/jobs/appointment-reminders")
+        .add_header("Authorization", "job-secret")
+        .await
+        .json();
+    assert_eq!(body["sent"], 1);
+    assert_eq!(sent.emails.lock().unwrap().len(), 2);
+    assert_eq!(
+        history(&pool, event).await,
+        vec![
+            "Event created",
+            "Email sent to the customer: Booking confirmation",
+            "Email sent to the customer: Reminder (1 day before)",
+        ]
+    );
+}
+
+/// The migration that notes the messages sent before the api did.
+const BACKFILL: &str =
+    include_str!("../../../migrations/20261114100000_event-history-customer-messages.sql");
+
+#[test_db::test(seed)]
+async fn past_messages_are_added_to_the_history_once(pool: MySqlPool) {
+    sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
+    let flow = rule(&pool, 8830, "sms", "Hi", true).await;
+    event(&pool, 8830, "1000", 30, false).await;
+    let event = last_event(&pool).await;
+    sqlx::query(
+        "INSERT INTO schedule_notification_sends (rule_id, event_id, start_date, status, sent_at)
+         SELECT r.id, e.id, e.start_date, 'sent', '2026-11-01 15:00:00'
+           FROM schedule_notification_rules r, events e WHERE r.flow_id = ? AND e.id = ?",
+    )
+    .bind(flow)
+    .bind(event)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO appointment_reminders
+           (event_id, company_id, customer_id, calendar_slug, reminder_kind, send_at, status, sent_at)
+         VALUES (?, 100, 1000, 'installations', '1h', '2026-11-02 14:00:00', 'sent', '2026-11-02 14:00:00'),
+                (?, 100, 1000, 'installations', '24h', '2026-11-01 14:00:00', 'failed', NULL)",
+    )
+    .bind(event)
+    .bind(event)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(BACKFILL).execute(&pool).await.unwrap();
+    sqlx::raw_sql(BACKFILL).execute(&pool).await.unwrap();
+    let lines: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT message, created_by, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') FROM event_history
+          WHERE event_id = ? AND action = 'customer_message' ORDER BY created_at",
+    )
+    .bind(event)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let line =
+        |message: &str, at: &str| (message.to_string(), "Automated".to_string(), at.to_string());
+    assert_eq!(
+        lines,
+        vec![
+            line(
+                "Text sent to the customer: Reminder (1 day before)",
+                "2026-11-01 15:00"
+            ),
+            line(
+                "Sent to the customer: Reminder (1 hour before)",
+                "2026-11-02 14:00"
+            ),
+        ]
+    );
 }
 
 async fn last_event(pool: &MySqlPool) -> i32 {

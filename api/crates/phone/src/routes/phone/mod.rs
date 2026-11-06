@@ -37,6 +37,7 @@
 //! - `GET  /v1/phone/texts/threads`            → the Texts tab: my threads (line + other number)
 //! - `GET  /v1/phone/texts/threads/{key}/messages`, `POST .../read` → a thread's texts, mark it read
 //! - `GET  /v1/phone/texts/messages/{id}/thread` → the thread of a text (the `text` push's `textId`)
+//! - `DELETE /v1/phone/texts/messages/{id}`    → delete one of my texts that failed
 //! - `GET  /v1/phone/texts/media/{id}`         → a 5-minute link to a text's picture or file
 //! - `POST /v1/phone/texts`                    → text from one of my lines
 //! - `POST /v1/phone/pushes/test`              → send me a test push (temporary)
@@ -88,6 +89,7 @@ mod port_loa;
 mod porting;
 mod pushes;
 mod recording;
+mod ringcentral_calls;
 mod settings;
 mod superuser;
 mod support;
@@ -128,6 +130,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(contacts::contact_card))
         .routes(routes!(contacts::add_contact_phone))
         .routes(routes!(calls::list_calls))
+        .routes(routes!(ringcentral_calls::list_ringcentral_calls))
         .routes(routes!(calls::get_call, calls::hide_call))
         .routes(routes!(calls::mark_calls_seen))
         .routes(routes!(calls::call_stats))
@@ -141,6 +144,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(texts::list_text_threads))
         .routes(routes!(texts::list_text_messages))
         .routes(routes!(texts::text_thread))
+        .routes(routes!(texts::delete_failed_text))
         .routes(routes!(texts::text_media))
         .routes(routes!(texts::send_text))
         .routes(routes!(texts::mark_text_thread_read))

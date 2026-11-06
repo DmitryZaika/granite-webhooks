@@ -24,6 +24,9 @@ pub fn notification_type_title(notification_type: &str) -> &'static str {
         "installation_appointment_reminder" => "Installation Reminder",
         "template_appointment_reminder" => "Template Appointment Reminder",
         "installation_completed" => "Installation Completed",
+        "project_task_assigned" => "Gave You a Task",
+        "project_task_reminder" => "Task Due",
+        "project_task_done" => "Finished Your Task",
         "note_added" => "Added a Note",
         "note_edited" => "Edited a Note",
         "note_deleted" => "Deleted a Note",
@@ -31,6 +34,8 @@ pub fn notification_type_title(notification_type: &str) -> &'static str {
         "comment_deleted" => "Deleted a Comment",
         "ai_promise_due" => "Promise Reminder",
         "ai_promise_digest" => "Morning List",
+        "delayed_message_sent" => "Scheduled Message Sent",
+        "delayed_message_failed" => "Scheduled Message Failed",
         _ => "CRM Notification",
     }
 }

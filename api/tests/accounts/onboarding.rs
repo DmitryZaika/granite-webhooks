@@ -852,3 +852,37 @@ async fn the_team_lists_usage_sections_and_access(pool: MySqlPool) {
         assert!(member["sections"].is_null() || member["sections"].is_array());
     }
 }
+
+#[test_db::test(seed)]
+async fn opening_position_access_ticks_adjust_permissions(pool: MySqlPool) {
+    // Ada (admin) is Acme's Manager, who may open Position access.
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (102, 5, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool);
+    let reviewed = |server: &axum_test::TestServer| {
+        let request = server
+            .get("/v1/me/onboarding/setup")
+            .with_session(sessions::ADMIN);
+        async move { request.await.json::<Value>()["setup"]["has_permissions"].clone() }
+    };
+    // A company made after the migration starts with it to do.
+    assert_eq!(reviewed(&server).await, false);
+    // Only Managers mark it.
+    server
+        .post("/v1/company/position-sections/reviewed")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    for _ in 0..2 {
+        server
+            .post("/v1/company/position-sections/reviewed")
+            .with_session(sessions::ADMIN)
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    assert_eq!(reviewed(&server).await, true);
+}

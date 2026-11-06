@@ -8,7 +8,7 @@
 use super::store::{self, OnboardingState};
 use super::{manifest, usage};
 use crate::auth::AdminUser;
-use crate::auth::sections::{access_for, company_sections, sectioned_positions_held};
+use crate::auth::sections::{company_tabs, configured_positions_held, tabs_for};
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::routes::company::queries::company_features;
@@ -69,9 +69,9 @@ pub struct TeamMember {
     /// Features the member already uses: usage check id -> when they first
     /// used it (UTC, ISO 8601). Only the checks the tours name.
     pub usage: BTreeMap<String, String>,
-    /// The parts of the app the member's position opens in this company
-    /// (section keys, in the Company page's order); null when they have the
-    /// whole app.
+    /// The tabs the member's positions open in this company, as the app
+    /// shell's `sections` gives them to the member; null when they limit
+    /// nothing.
     pub sections: Option<Vec<String>>,
     /// When the member's account was created (UTC, ISO 8601).
     pub account_created_at: Option<String>,
@@ -184,7 +184,7 @@ pub async fn team(
     let mut uses = usage::evaluate_team(pool, company, &ids, &manifest::usage_checks()).await?;
     // The company's sections are read once; each member's follow from the
     // sectioned positions they hold here.
-    let company_sections = company_sections(pool, company).await?;
+    let company_tabs = company_tabs(pool, company).await?;
     // Members with a Telnyx number of the company they may call from (the
     // same rule as `lines::caller_ids`), in one query.
     let telnyx_users: Vec<i32> = sqlx::query_scalar(
@@ -209,7 +209,7 @@ pub async fn team(
                 .filter(|(user, _)| *user == row.id)
                 .map(|(_, position)| *position)
                 .collect();
-            let held = sectioned_positions_held(row.is_superuser, &here);
+            let held = configured_positions_held(row.is_superuser, &here);
             let telnyx_line = telnyx_users.contains(&row.id);
             TeamMember {
                 user_id: row.id,
@@ -222,7 +222,8 @@ pub async fn team(
                 has_sms_line: row.has_sms_line,
                 progress: record.state,
                 usage: uses.remove(&row.id).unwrap_or_default(),
-                sections: access_for(&held, &company_sections).keys(),
+                sections: tabs_for(&held, row.is_admin, &company_tabs)
+                    .map(|tabs| tabs.into_iter().map(str::to_string).collect()),
                 account_created_at: row.account_created_at,
                 phone_line: row.has_sms_line || telnyx_line,
                 message_composer: features.inbound_email

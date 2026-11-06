@@ -48,6 +48,14 @@ pub struct CompanyFeatures {
     /// option; confirming it creates the invoice in QuickBooks (Admin › Quotes ›
     /// Automation, `PUT /v1/company/auto-invoice`).
     pub auto_invoice: bool,
+    /// A new invoice from a quote starts with "Keep in sync with the quote"
+    /// ticked (Admin › Quotes › Automation,
+    /// `PUT /v1/company/quote-invoice-sync`).
+    pub quote_invoice_sync: bool,
+    /// Marking a deal won or a quote sold starts its project in Projects
+    /// (Admin › Quotes › Automation "Project on a sale",
+    /// `PUT /v1/company/auto-project`).
+    pub auto_project: bool,
     /// The company has event templates: Mark as Sold offers them as Extra
     /// events, and each one ticked adds an event to the schedule's Unscheduled
     /// list, whatever `auto_unscheduled_jobs` says (`GET /v1/quote-sale-events`).

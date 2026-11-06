@@ -28,7 +28,11 @@
 //! what it learns, filling a template) and on
 //! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes and
 //! files; not deleting a deal or the board setup), and a customer's sales
-//! rep (`customer_write`: the contact card's and the lead inbox's Assign) the
+//! rep or invalid lead (`customer_write`: the contact card's and the lead
+//! inbox's Assign, the lead notification's Mark invalid), and the To do tab's
+//! AI to-do list (`promise_route`: read it, close or reopen one), and the
+//! native quote screen (`DEVICE_QUOTE_READS` with `GET`, and `quote_write`:
+//! a new quote, its info, a saved revision, the sale and its email) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -39,11 +43,13 @@
 //! (`Authorization: Bearer agt_...`): the agent then acts as the person who
 //! asked it, read-only, in one company (see [`agent`]).
 //!
-//! Every extractor above also applies the position sections ([`sections`]):
-//! someone holding only Inventory Manager or Scheduling Manager is refused
-//! outside the sections their company gives those positions. Inside them
-//! they pass `EmployeeUser` and `ShopOrEmployeeUser`, and `AdminUser` on an
-//! admin section's routes.
+//! Every extractor above also applies position access ([`sections`]): when a
+//! company limits the tabs of someone's positions, they are refused the data
+//! only their closed tabs use, and a change that needs a skill their
+//! positions lack ([`skills`]: selling slabs, changing a transaction or a
+//! quote, planning the schedule). With limited tabs they pass `EmployeeUser` and
+//! `ShopOrEmployeeUser`, and on an admin tab's routes they act as a company
+//! admin (`is_admin`, so `AdminUser` and the handlers' own checks agree).
 
 pub mod agent;
 pub mod cookie;
@@ -51,6 +57,8 @@ pub mod device;
 pub mod job;
 pub mod sections;
 pub mod session;
+pub mod skills;
+pub mod web_link;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -77,16 +85,22 @@ async fn authenticate_with_positions(
         .map(|(user, positions, _)| (user, positions))
 }
 
-/// Who is asking and what their positions open. A request outside the
-/// sections of a sectioned position is refused here, before any handler.
+/// Who is asking and what their positions open. A request outside the tabs
+/// of their positions is refused here, before any handler; on an admin tab
+/// of theirs they act as a company admin.
 async fn authenticate_with_access(
     parts: &Parts,
     state: &AppState,
 ) -> Result<(SessionUser, Vec<session::UserPositionRow>, Access), ApiError> {
-    let (user, positions) = identify(parts, state).await?;
+    let (mut user, positions) = identify(parts, state).await?;
     let access = sections::user_access(&state.pool, &user, &positions).await?;
-    if !access.allows(parts.uri.path()) {
+    let path = parts.uri.path();
+    if !access.allows(path) {
         return Err(sections::outside_sections());
+    }
+    skills::check(&state.pool, &user, &positions, &parts.method, path).await?;
+    if access.allows_admin(path) {
+        user.is_admin = true;
     }
     Ok((user, positions, access))
 }
@@ -99,14 +113,14 @@ async fn check_sections(
     user: &SessionUser,
 ) -> Result<(), ApiError> {
     let positions = user_positions(&state.pool, user.id).await?;
-    if sections::user_access(&state.pool, user, &positions)
+    let path = parts.uri.path();
+    if !sections::user_access(&state.pool, user, &positions)
         .await?
-        .allows(parts.uri.path())
+        .allows(path)
     {
-        Ok(())
-    } else {
-        Err(sections::outside_sections())
+        return Err(sections::outside_sections());
     }
+    skills::check(&state.pool, user, &positions, &parts.method, path).await
 }
 
 /// The CRM routes the Granite Phone app also calls with its device token.
@@ -243,14 +257,29 @@ fn deal_write(method: &Method, path: &str) -> bool {
 
 /// The customer changes the app makes with its device token, exactly these:
 /// a customer's sales rep (`PUT /v1/customers/{id}/sales-rep`), from the
-/// contact card's Assign and the lead inbox. Editing or deleting a customer
-/// stays with the CRM session.
+/// contact card's Assign and the lead inbox, and marking a lead invalid
+/// (`PUT /v1/customers/{id}/invalid`, admins and sales managers only, as on
+/// the web), from the lead notification's Mark invalid. Editing or deleting a
+/// customer stays with the CRM session.
 fn customer_write(method: &Method, path: &str) -> bool {
     method == Method::PUT
-        && path
-            .strip_prefix("/v1/customers/")
-            .and_then(|rest| rest.strip_suffix("/sales-rep"))
-            .is_some_and(is_id)
+        && path.strip_prefix("/v1/customers/").is_some_and(|rest| {
+            rest.strip_suffix("/sales-rep")
+                .or_else(|| rest.strip_suffix("/invalid"))
+                .is_some_and(is_id)
+        })
+}
+
+/// The app's To do tab, exactly these: the caller's AI to-do list (`GET
+/// /v1/ai/promises`, with its filters) and marking one done, not wanted or
+/// back on the list (`PATCH /v1/ai/promises/{id}`). The handlers keep them to
+/// the caller's own and to reps AI promises is on for.
+fn promise_route(method: &Method, path: &str) -> bool {
+    match path.strip_prefix("/v1/ai/promises") {
+        Some("") => method == Method::GET,
+        Some(rest) => method == Method::PATCH && rest.strip_prefix('/').is_some_and(is_id),
+        None => false,
+    }
 }
 
 /// The text and email templates the app's Use Template list adds, edits and
@@ -271,11 +300,54 @@ fn template_write(method: &Method, path: &str) -> bool {
     }
 }
 
+/// The quote lookups the app's native quote screen reads with its device
+/// token, exactly these paths and `GET` only: the price lists a quote can move
+/// to and a new quote starts from, the tax rates and payment terms of Pricing
+/// Settings and Edit Payment Terms, the forms the Email dialog offers, and the
+/// caller's quote email templates. A price list's editor (`/{id}`) and every
+/// write there stay with the CRM session.
+pub const DEVICE_QUOTE_READS: [&str; 5] = [
+    "/v1/quote-price-lists",
+    "/v1/quote-tax-rates",
+    "/v1/quote-payment-terms",
+    "/v1/quote-forms",
+    "/v1/me/quote-email-templates",
+];
+
+/// The quote changes the app's native quote screen makes with its device
+/// token, exactly these: a new quote (`POST /v1/quotes`), its info (`PATCH
+/// /v1/quotes/{id}`), saving its drawing as a new revision (`PUT
+/// .../drawing`), Mark as Sold and Undo sale (`POST|DELETE .../sale`) and
+/// emailing it (`POST .../emails`). Reading a quote is under
+/// [`DEVICE_READ_ROUTES`]; deleting, copying, autosaving, updating its prices,
+/// printing and its links stay with the CRM session. The `edit_quotes` skill
+/// still applies ([`skills`]).
+fn quote_write(method: &Method, path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/v1/quotes") else {
+        return false;
+    };
+    if rest.is_empty() {
+        return method == Method::POST;
+    }
+    let Some(rest) = rest.strip_prefix('/') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    match parts.as_slice() {
+        [id] => is_id(id) && method == Method::PATCH,
+        [id, "drawing"] => is_id(id) && method == Method::PUT,
+        [id, "sale"] => is_id(id) && (method == Method::POST || method == Method::DELETE),
+        [id, "emails"] => is_id(id) && method == Method::POST,
+        _ => false,
+    }
+}
+
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
-/// ([`deal_write`]), a customer's sales rep ([`customer_write`]) and the
-/// templates' ([`template_write`]).
+/// ([`deal_write`]), a customer's sales rep ([`customer_write`]), the
+/// templates' ([`template_write`]), the To do tab's ([`promise_route`]) and
+/// the quote screen's (`GET` on [`DEVICE_QUOTE_READS`], [`quote_write`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
@@ -283,6 +355,9 @@ fn device_route(method: &Method, path: &str) -> bool {
         || deal_write(method, path)
         || customer_write(method, path)
         || template_write(method, path)
+        || promise_route(method, path)
+        || (method == Method::GET && DEVICE_QUOTE_READS.contains(&path))
+        || quote_write(method, path)
 }
 
 async fn identify(
@@ -550,7 +625,7 @@ mod tests {
             "/v1/suppliers/directory",
             "/v1/transactions",
             "/v1/transactions/7",
-            "/v1/quotes",
+            "/v1/quotes/7/revisions/3",
             "/v1/notifications/7",
             "/v1/shop/maintenance",
             "/v1/shop/maintenance/checks",
@@ -628,6 +703,7 @@ mod tests {
     fn the_phone_assigns_a_sales_rep() {
         assert!(device_route(&Method::GET, "/v1/users/sales-reps"));
         assert!(device_route(&Method::PUT, "/v1/customers/7/sales-rep"));
+        assert!(device_route(&Method::PUT, "/v1/customers/7/invalid"));
         for (method, path) in [
             (Method::POST, "/v1/users/sales-reps"),
             (Method::GET, "/v1/users/employees"),
@@ -637,9 +713,87 @@ mod tests {
             (Method::PUT, "/v1/customers//sales-rep"),
             (Method::PUT, "/v1/customers/7/8/sales-rep"),
             (Method::PUT, "/v1/customers/7/temperature"),
-            (Method::PUT, "/v1/customers/7/invalid"),
+            (Method::POST, "/v1/customers/7/invalid"),
+            (Method::PUT, "/v1/customers/x/invalid"),
+            (Method::PUT, "/v1/customers/7/invalidx"),
             (Method::PUT, "/v1/customers/7"),
             (Method::DELETE, "/v1/customers/7"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn the_quote_screen_reads_its_lookups_and_makes_exactly_its_changes() {
+        for (method, path) in [
+            (Method::GET, "/v1/quotes"),
+            (Method::GET, "/v1/quotes/7"),
+            (Method::GET, "/v1/quotes/7/revisions/3"),
+            (Method::GET, "/v1/quotes/suggestions"),
+            (Method::GET, "/v1/quote-price-lists"),
+            (Method::GET, "/v1/quote-tax-rates"),
+            (Method::GET, "/v1/quote-payment-terms"),
+            (Method::GET, "/v1/quote-forms"),
+            (Method::GET, "/v1/me/quote-email-templates"),
+            (Method::POST, "/v1/quotes"),
+            (Method::PATCH, "/v1/quotes/7"),
+            (Method::PUT, "/v1/quotes/7/drawing"),
+            (Method::POST, "/v1/quotes/7/sale"),
+            (Method::DELETE, "/v1/quotes/7/sale"),
+            (Method::POST, "/v1/quotes/7/emails"),
+        ] {
+            assert!(device_route(&method, path), "{method} {path}");
+        }
+        for (method, path) in [
+            (Method::DELETE, "/v1/quotes/7"),
+            (Method::PUT, "/v1/quotes/7"),
+            (Method::POST, "/v1/quotes/7"),
+            (Method::PATCH, "/v1/quotes"),
+            (Method::PATCH, "/v1/quotes/x"),
+            (Method::PATCH, "/v1/quotes/"),
+            (Method::POST, "/v1/quotes/7/drawing"),
+            (Method::PUT, "/v1/quotes/7/autosave"),
+            (Method::DELETE, "/v1/quotes/7/autosave"),
+            (Method::POST, "/v1/quotes/7/copies"),
+            (Method::POST, "/v1/quotes/7/prices"),
+            (Method::POST, "/v1/quotes/7/prints"),
+            (Method::POST, "/v1/quotes/7/portal-token"),
+            (Method::PATCH, "/v1/quotes/7/emails/3"),
+            (Method::PUT, "/v1/quotes/7/sale"),
+            (Method::POST, "/v1/quotes/x/sale"),
+            (Method::POST, "/v1/quotes/7/emails/3"),
+            (Method::POST, "/v1/quotes/7/invoice-sync"),
+            (Method::POST, "/v1/quotes/print-previews"),
+            (Method::POST, "/v1/quotesx"),
+            (Method::POST, "/v1/quote-price-lists"),
+            (Method::GET, "/v1/quote-price-lists/7"),
+            (Method::PUT, "/v1/quote-price-lists/7"),
+            (Method::GET, "/v1/quote-price-listsx"),
+            (Method::POST, "/v1/quote-tax-rates"),
+            (Method::DELETE, "/v1/quote-payment-terms/3"),
+            (Method::GET, "/v1/quote-forms/3"),
+            (Method::POST, "/v1/me/quote-email-templates"),
+            (Method::PUT, "/v1/me/quote-email-templates/3"),
+            (Method::GET, "/v1/quote-email-templates"),
+            (Method::GET, "/v1/quote-settings"),
+            (Method::GET, "/v1/quote-extras"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn the_to_do_tab_reads_and_closes_ai_promises() {
+        assert!(device_route(&Method::GET, "/v1/ai/promises"));
+        assert!(device_route(&Method::PATCH, "/v1/ai/promises/12"));
+        for (method, path) in [
+            (Method::POST, "/v1/ai/promises"),
+            (Method::GET, "/v1/ai/promises/12"),
+            (Method::DELETE, "/v1/ai/promises/12"),
+            (Method::PATCH, "/v1/ai/promises/x"),
+            (Method::PATCH, "/v1/ai/promises/12/draft"),
+            (Method::GET, "/v1/ai/promisesx"),
+            (Method::GET, "/v1/ai/chat"),
         ] {
             assert!(!device_route(&method, path), "{method} {path}");
         }

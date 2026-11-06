@@ -1,16 +1,25 @@
-//! Position sections: the parts of the app a sectioned position opens.
+//! Position access: the tabs of the app each position opens.
 //!
-//! Inventory Manager and Scheduling Manager are sectioned: someone who holds
-//! only those (in the company the request acts in) reaches only the sections
-//! they open, plus [`COMMON_API`]. Each company may change a position's
-//! sections (`company_position_sections`); a company without a row uses
-//! [`default_sections`]. Holding a [`FULL_ACCESS_POSITIONS`] position beside
-//! them, being a superuser, or holding no sectioned position keeps the whole
-//! app, as before.
+//! Each company picks, for every position of [`CONFIGURABLE_POSITIONS`], the
+//! tabs it opens (`company_position_sections`; a company without a row uses
+//! [`default_tabs`]). Someone holding several of them (in the company the
+//! request acts in) gets all their tabs together. Most positions open every
+//! main-app tab by default, so nothing changes until a company takes some
+//! away; Inventory Manager and Scheduling Manager open only a few. The
+//! portal positions (Shop Worker, Installer, Marketing, Walk-in, Template
+//! Guy) keep their own apps, and Super Admin, superusers and users without a
+//! listed position keep the whole app.
 //!
-//! The check runs in the extractors (`authenticate_with_access`), so a page's
-//! tab and its API are closed together. The app hides the tabs from the same
-//! keys (`sections` of `GET /v1/app/shell`).
+//! The Admin switch still opens the whole admin side: for an admin, position
+//! access hides only main-app tabs, and the API keeps all of its data. For
+//! someone without it, an admin tab opens that admin page, and the API treats
+//! them as an admin on that page's data ([`Access::allows_admin`]).
+//!
+//! The API refuses only data that just closed tabs use ([`OWNED_API`]); data
+//! several pages share (customers, stones, the schedule) stays readable for
+//! the pages that are open. The check runs in the extractors
+//! (`authenticate_with_access`). The app hides the tabs and their pages from
+//! the same keys (`sections` of `GET /v1/app/shell`).
 
 use crate::auth::session::{SUPER_ADMIN_POSITION, SessionUser, UserPositionRow};
 use crate::error::ApiError;
@@ -20,82 +29,21 @@ use sqlx::MySqlPool;
 pub const INVENTORY_MANAGER_POSITION: i32 = 12;
 /// `positions.id` of Scheduling Manager.
 pub const SCHEDULING_MANAGER_POSITION: i32 = 13;
-/// The positions whose access is a list of sections.
-pub const SECTIONED_POSITIONS: [i32; 2] = [INVENTORY_MANAGER_POSITION, SCHEDULING_MANAGER_POSITION];
 
-/// Positions that keep the whole app even beside a sectioned one: Sales
-/// Rep, Sales Manager, Manager and Super Admin.
-const FULL_ACCESS_POSITIONS: [i32; 4] = [1, 2, 5, SUPER_ADMIN_POSITION];
-
-/// What every signed-in user reaches, whatever their sections: signing in,
-/// the app frame, My Account and their own lists, notifications, uploads,
-/// the tours, Report a Bug, the AI chat and the shared pick lists.
-const COMMON_API: [&str; 19] = [
-    "/v1/auth",
-    "/v1/app",
-    "/v1/me",
-    "/v1/public",
-    "/v1/notifications",
-    "/v1/uploads",
-    "/v1/onboarding",
-    "/v1/bug-reports",
-    "/v1/points-leaderboard",
-    "/v1/colors",
-    "/v1/stone-types",
-    "/v1/sink-types",
-    "/v1/places",
-    "/v1/ai",
-    "/v1/billing/gate",
-    "/v1/company/features",
-    "/v1/company/tax-rate",
-    "/v1/company/drive-miles",
-    "/v1/users/sales-reps",
+/// The positions whose tabs a company may change, in the Company page's
+/// order: Sales Rep, Sales Manager, Manager, Office Manager, Shop Manager,
+/// Inventory Manager, Scheduling Manager.
+pub const CONFIGURABLE_POSITIONS: [i32; 7] = [
+    1,
+    2,
+    5,
+    10,
+    3,
+    INVENTORY_MANAGER_POSITION,
+    SCHEDULING_MANAGER_POSITION,
 ];
 
-/// The CRM: a customer with everything inside it (deals, quotes, emails,
-/// texts, calls, files, signatures, invoices), and the pick lists its forms
-/// use. Customers, Deals, Quotes, Emails and SMS all open it.
-const CRM_API: [&str; 37] = [
-    "/v1/customers",
-    "/v1/customer-sources",
-    "/v1/users/employees",
-    "/v1/deals",
-    "/v1/deal-groups",
-    "/v1/deal-lists",
-    "/v1/deal-activities",
-    "/v1/deal-pipelines",
-    "/v1/deal-stages",
-    "/v1/questionnaires",
-    "/v1/projects",
-    "/v1/quotes",
-    "/v1/quote-price-lists",
-    "/v1/quote-forms",
-    "/v1/quote-extras",
-    "/v1/quote-tax-rates",
-    "/v1/quote-payment-terms",
-    "/v1/quote-settings",
-    "/v1/quote-email-templates",
-    "/v1/online-quote-options",
-    "/v1/emails",
-    "/v1/email-attachments",
-    "/v1/email-templates",
-    "/v1/templates",
-    "/v1/sms",
-    "/v1/sms-templates",
-    "/v1/sms-flows",
-    "/v1/calls",
-    "/v1/call-transcripts",
-    "/v1/phone",
-    "/v1/followups",
-    "/v1/delayed",
-    "/v1/documents",
-    "/v1/images",
-    "/v1/image-library",
-    "/v1/signature-requests",
-    "/v1/signatures",
-];
-
-/// Stones, sinks and faucets, their slabs, and selling a slab.
+/// What an admin tab opens as admin: the inventory.
 const INVENTORY_API: [&str; 7] = [
     "/v1/stones",
     "/v1/sinks",
@@ -106,157 +54,246 @@ const INVENTORY_API: [&str; 7] = [
     "/v1/supplier-files",
 ];
 
-/// The schedule board, its events and calendars.
+/// What an admin tab opens as admin: a customer with their deals, quotes,
+/// emails, texts and signatures (not the phone line's own settings).
+const CRM_API: [&str; 18] = [
+    "/v1/customers",
+    "/v1/customer-sources",
+    "/v1/deals",
+    "/v1/deal-groups",
+    "/v1/deal-lists",
+    "/v1/deal-activities",
+    "/v1/deal-pipelines",
+    "/v1/deal-stages",
+    "/v1/questionnaires",
+    "/v1/projects",
+    "/v1/quotes",
+    "/v1/emails",
+    "/v1/email-attachments",
+    "/v1/sms",
+    "/v1/calls",
+    "/v1/call-transcripts",
+    "/v1/signature-requests",
+    "/v1/signatures",
+];
+
+/// What an admin tab opens as admin: the schedule board, its events and
+/// calendars.
 const SCHEDULE_API: [&str; 3] = ["/v1/schedule", "/v1/events", "/v1/calendars"];
 
-/// One part of the app a sectioned position may open.
+/// One tab a position may open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Section {
+pub struct Tab {
     /// Stable key, stored in `company_position_sections` and sent to the app.
     pub key: &'static str,
-    /// What the Company page calls it.
+    /// Its name on the Company page (admin tabs are listed apart).
     pub label: &'static str,
-    /// Opens admin pages: [`crate::auth::AdminUser`] passes on its API for
-    /// someone who is not a company admin.
+    /// An admin page: it opens for someone without the Admin switch only
+    /// when one of their positions has it.
     pub admin: bool,
-    /// The API prefixes its pages call (each path and everything under it).
+    /// For an admin tab, the API its page calls, where someone without the
+    /// Admin switch is treated as an admin (each path and everything under
+    /// it). Empty for main-app tabs.
     pub api: &'static [&'static str],
 }
 
-/// Every section, in the Company page's order.
-pub const SECTIONS: [Section; 15] = [
-    Section {
-        key: "dashboard",
-        label: "Dashboard",
-        admin: false,
-        api: &["/v1/stats"],
-    },
-    Section {
-        key: "inventory",
-        label: "Inventory",
-        admin: false,
-        api: &INVENTORY_API,
-    },
-    Section {
-        key: "inventory_admin",
-        label: "Inventory (admin)",
-        admin: true,
-        api: &INVENTORY_API,
-    },
-    Section {
-        key: "customers",
-        label: "Customers",
-        admin: false,
-        api: &CRM_API,
-    },
-    Section {
-        key: "deals",
-        label: "Deals",
-        admin: false,
-        api: &CRM_API,
-    },
-    Section {
-        key: "quotes",
-        label: "Quotes",
-        admin: false,
-        api: &CRM_API,
-    },
-    Section {
-        key: "emails",
-        label: "Emails",
-        admin: false,
-        api: &CRM_API,
-    },
-    Section {
-        key: "sms",
-        label: "SMS",
-        admin: false,
-        api: &CRM_API,
-    },
-    Section {
-        key: "schedule",
-        label: "Schedule",
-        admin: false,
-        api: &SCHEDULE_API,
-    },
-    Section {
-        key: "schedule_admin",
-        label: "Schedule (admin)",
-        admin: true,
-        api: &SCHEDULE_API,
-    },
-    Section {
-        key: "transactions",
-        label: "Transactions",
-        admin: false,
-        api: &["/v1/transactions"],
-    },
-    Section {
-        key: "samples",
-        label: "Samples",
-        admin: false,
-        api: &["/v1/stones"],
-    },
-    Section {
-        key: "special_order",
-        label: "Special Order",
+const fn main_tab(key: &'static str, label: &'static str) -> Tab {
+    Tab {
+        key,
+        label,
         admin: false,
         api: &[],
-    },
-    Section {
-        key: "checklists",
-        label: "Checklists",
-        admin: false,
-        api: &["/v1/checklists"],
-    },
-    Section {
-        key: "resources",
-        label: "Suppliers, Supports, Documents, Images, Instructions",
-        admin: false,
-        api: &[
-            "/v1/suppliers",
-            "/v1/supplier-files",
-            "/v1/supports",
-            "/v1/documents",
-            "/v1/images",
-            "/v1/image-folders",
-            "/v1/image-library",
-            "/v1/instructions",
-            "/v1/signature-requests",
-            "/v1/signatures",
-        ],
-    },
-];
-
-/// The section with this key.
-pub fn section(key: &str) -> Option<&'static Section> {
-    SECTIONS.iter().find(|section| section.key == key)
+    }
 }
 
-/// The sections a position opens in a company that has not changed them.
-pub const fn default_sections(position_id: i32) -> &'static [&'static str] {
-    match position_id {
-        INVENTORY_MANAGER_POSITION => &[
-            "inventory",
-            "inventory_admin",
-            "customers",
+const fn admin_tab(key: &'static str, label: &'static str, api: &'static [&'static str]) -> Tab {
+    Tab {
+        key,
+        label,
+        admin: true,
+        api,
+    }
+}
+
+/// Every tab, in the Company page's order: the main app, then the admin
+/// pages (as their sidebars list them).
+pub const TABS: [Tab; 40] = [
+    main_tab("dashboard", "Dashboard"),
+    main_tab("stones", "Stones"),
+    main_tab("sinks", "Sinks"),
+    main_tab("faucets", "Faucets"),
+    main_tab("customers", "Customers"),
+    main_tab("deals", "Deals"),
+    main_tab("quotes", "Quotes"),
+    main_tab("emails", "Emails"),
+    main_tab("sms", "SMS"),
+    main_tab("schedule", "Schedule"),
+    main_tab("transactions", "Transactions"),
+    main_tab("samples", "Samples"),
+    main_tab("special_order", "Special Order"),
+    main_tab("checklists", "Checklists"),
+    main_tab("suppliers", "Suppliers"),
+    main_tab("supports", "Supports"),
+    main_tab("documents", "Documents"),
+    main_tab("images", "Images"),
+    main_tab("instructions", "Instructions"),
+    main_tab("esignatures", "eSignatures"),
+    admin_tab("admin_stones", "Stones", &INVENTORY_API),
+    admin_tab("admin_sinks", "Sinks", &INVENTORY_API),
+    admin_tab("admin_faucets", "Faucets", &INVENTORY_API),
+    admin_tab(
+        "admin_suppliers",
+        "Suppliers",
+        &["/v1/suppliers", "/v1/supplier-files"],
+    ),
+    admin_tab("admin_supports", "Supports", &["/v1/supports"]),
+    admin_tab("admin_documents", "Documents", &["/v1/documents"]),
+    admin_tab(
+        "admin_images",
+        "Images",
+        &["/v1/images", "/v1/image-folders", "/v1/image-library"],
+    ),
+    admin_tab("admin_instructions", "Instructions", &["/v1/instructions"]),
+    admin_tab(
+        "admin_esignatures",
+        "eSignatures",
+        &["/v1/signature-requests", "/v1/signatures"],
+    ),
+    admin_tab("admin_customers", "Customers", &CRM_API),
+    admin_tab(
+        "admin_statistics",
+        "Statistic",
+        &["/v1/stats", "/v1/customers", "/v1/qbo/class-sales"],
+    ),
+    admin_tab("admin_deals", "Deals", &CRM_API),
+    admin_tab(
+        "admin_automations",
+        "Automations",
+        &[
+            "/v1/email-templates",
+            "/v1/sms-templates",
+            "/v1/sms-flows",
+            "/v1/followups",
+            "/v1/templates",
+        ],
+    ),
+    admin_tab(
+        "admin_quotes",
+        "Quotes",
+        &[
+            "/v1/quotes",
+            "/v1/quote-price-lists",
+            "/v1/quote-forms",
+            "/v1/quote-extras",
+            "/v1/quote-presets",
+            "/v1/quote-tax-rates",
+            "/v1/quote-payment-terms",
+            "/v1/quote-settings",
+            "/v1/quote-email-templates",
+            "/v1/quote-sale-events",
+            "/v1/online-quote-options",
+            "/v1/commissions",
+        ],
+    ),
+    admin_tab("admin_emails", "Emails", &["/v1/emails", "/v1/email-attachments"]),
+    admin_tab(
+        "admin_transactions",
+        "Transactions",
+        &["/v1/transactions", "/v1/stones", "/v1/slabs", "/v1/sales"],
+    ),
+    admin_tab("admin_surveys", "Survey", &["/v1/survey-results"]),
+    admin_tab(
+        "admin_users_activity",
+        "Users Activity",
+        &[
+            "/v1/users/activity",
+            "/v1/users/call-activity",
+            "/v1/onboarding/team",
+        ],
+    ),
+    admin_tab("admin_schedule", "Schedule", &SCHEDULE_API),
+    admin_tab("admin_sms", "SMS", &["/v1/sms"]),
+];
+
+/// API only some tabs use, and those tabs: someone limited to tabs is
+/// refused it when none of them is open. Everything else stays open, since
+/// several pages share it.
+const OWNED_API: [(&str, &[&str]); 3] = [
+    ("/v1/stats", &["dashboard", "admin_statistics"]),
+    (
+        "/v1/transactions",
+        &[
             "transactions",
-            "samples",
-            "special_order",
+            "admin_transactions",
+            "schedule",
+            "admin_schedule",
+        ],
+    ),
+    ("/v1/checklists", &["checklists"]),
+];
+
+/// The tab with this key.
+pub fn tab(key: &str) -> Option<&'static Tab> {
+    TABS.iter().find(|tab| tab.key == key)
+}
+
+/// The tabs a position opens in a company that has not changed them, in
+/// [`TABS`] order: every main-app tab, except for Inventory Manager and
+/// Scheduling Manager.
+pub fn default_tabs(position_id: i32) -> Vec<&'static str> {
+    let keys: &[&str] = match position_id {
+        INVENTORY_MANAGER_POSITION => &[
+            "stones",
+            "sinks",
+            "faucets",
+            "customers",
+            "admin_stones",
+            "admin_sinks",
+            "admin_faucets",
         ],
         SCHEDULING_MANAGER_POSITION => &["customers", "schedule"],
+        _ => {
+            return TABS
+                .iter()
+                .filter(|tab| !tab.admin)
+                .map(|tab| tab.key)
+                .collect();
+        }
+    };
+    TABS.iter()
+        .map(|tab| tab.key)
+        .filter(|key| keys.contains(key))
+        .collect()
+}
+
+/// The tabs an older key stood for (before every tab had its own).
+fn legacy(key: &str) -> &'static [&'static str] {
+    match key {
+        "inventory" => &["stones", "sinks", "faucets"],
+        "inventory_admin" => &["admin_stones", "admin_sinks", "admin_faucets"],
+        "schedule_admin" => &["admin_schedule"],
+        "resources" => &[
+            "suppliers",
+            "supports",
+            "documents",
+            "images",
+            "instructions",
+            "esignatures",
+        ],
         _ => &[],
     }
 }
 
-/// Section keys from their stored form (comma-separated), unknown keys
-/// dropped, in [`SECTIONS`] order.
-pub fn parse_sections(stored: &str) -> Vec<&'static str> {
+/// Tab keys from their stored form (comma-separated), older keys expanded,
+/// unknown keys dropped, in [`TABS`] order.
+pub fn parse_tabs(stored: &str) -> Vec<&'static str> {
     let keys: Vec<&str> = stored.split(',').map(str::trim).collect();
-    SECTIONS
-        .iter()
-        .filter(|section| keys.contains(&section.key))
-        .map(|section| section.key)
+    TABS.iter()
+        .map(|tab| tab.key)
+        .filter(|key| {
+            keys.iter()
+                .any(|stored| stored == key || legacy(stored).contains(key))
+        })
         .collect()
 }
 
@@ -265,8 +302,8 @@ pub fn parse_sections(stored: &str) -> Vec<&'static str> {
 pub enum Access {
     /// The whole app (whatever their flags and other positions allow).
     Full,
-    /// Only these sections, plus [`COMMON_API`].
-    Sections(Vec<&'static str>),
+    /// Only these tabs.
+    Tabs(Vec<&'static str>),
 }
 
 /// `path` is `prefix` or under it (`/v1/stonesx` is not under `/v1/stones`).
@@ -276,73 +313,65 @@ fn under(path: &str, prefix: &str) -> bool {
 }
 
 impl Access {
-    /// A request to `path` stays inside what they reach.
+    /// A request to `path` stays inside what they reach: no closed tab
+    /// alone uses it, or an admin tab of theirs opens it.
     pub fn allows(&self, path: &str) -> bool {
         match self {
             Self::Full => true,
-            Self::Sections(keys) => {
-                COMMON_API.iter().any(|prefix| under(path, prefix))
-                    || keys
-                        .iter()
-                        .filter_map(|key| section(key))
-                        .any(|section| section.api.iter().any(|prefix| under(path, prefix)))
+            Self::Tabs(open) => {
+                OWNED_API
+                    .iter()
+                    .filter(|(prefix, _)| under(path, prefix))
+                    .all(|(_, owners)| owners.iter().any(|owner| open.contains(owner)))
+                    || self.allows_admin(path)
             }
         }
     }
 
-    /// One of their admin sections covers `path`: admin routes there pass
-    /// without the company admin flag.
+    /// One of their admin tabs opens `path`: they act there as a company
+    /// admin, without the Admin switch.
     pub fn allows_admin(&self, path: &str) -> bool {
         match self {
             Self::Full => false,
-            Self::Sections(keys) => keys.iter().filter_map(|key| section(key)).any(|section| {
-                section.admin && section.api.iter().any(|prefix| under(path, prefix))
+            Self::Tabs(open) => open.iter().filter_map(|key| tab(key)).any(|tab| {
+                tab.admin && tab.api.iter().any(|prefix| under(path, prefix))
             }),
-        }
-    }
-
-    /// Their sections, `None` for the whole app (`sections` of the shell).
-    pub fn keys(&self) -> Option<Vec<String>> {
-        match self {
-            Self::Full => None,
-            Self::Sections(keys) => Some(keys.iter().map(ToString::to_string).collect()),
         }
     }
 }
 
-/// The sectioned positions `user` holds in the company the request acts in,
-/// or none when they keep the whole app.
-pub fn sectioned_positions(user: &SessionUser, positions: &[UserPositionRow]) -> Vec<i32> {
+/// The positions of [`CONFIGURABLE_POSITIONS`] `user` holds in the company
+/// the request acts in, or none when they keep the whole app (a superuser,
+/// or a Super Admin there).
+pub fn configured_positions(user: &SessionUser, positions: &[UserPositionRow]) -> Vec<i32> {
     let here: Vec<i32> = positions
         .iter()
         .filter(|row| row.company_id == user.company_id)
         .map(|row| row.position_id)
         .collect();
-    sectioned_positions_held(user.is_superuser, &here)
+    configured_positions_held(user.is_superuser, &here)
 }
 
-/// [`sectioned_positions`] from the position ids someone holds in the company
-/// (`here`) and their super user flag.
-pub fn sectioned_positions_held(is_superuser: bool, here: &[i32]) -> Vec<i32> {
+/// [`configured_positions`] from the position ids someone holds in the
+/// company (`here`) and their super user flag (the onboarding team view
+/// reads other users' this way).
+pub fn configured_positions_held(is_superuser: bool, here: &[i32]) -> Vec<i32> {
     if is_superuser {
         return Vec::new();
     }
-    if here
-        .iter()
-        .any(|position| FULL_ACCESS_POSITIONS.contains(position))
-    {
+    if here.contains(&SUPER_ADMIN_POSITION) {
         return Vec::new();
     }
-    SECTIONED_POSITIONS
+    CONFIGURABLE_POSITIONS
         .into_iter()
         .filter(|position| here.contains(position))
         .collect()
 }
 
-/// The sections a company gives each sectioned position: its own list where
-/// it changed one, the defaults otherwise. One entry per position of
-/// [`SECTIONED_POSITIONS`].
-pub async fn company_sections(
+/// The tabs a company gives each position of [`CONFIGURABLE_POSITIONS`]:
+/// its own list where it changed one (third field true), the defaults
+/// otherwise.
+pub async fn company_tabs(
     pool: &MySqlPool,
     company_id: i32,
 ) -> Result<Vec<(i32, Vec<&'static str>, bool)>, ApiError> {
@@ -352,53 +381,82 @@ pub async fn company_sections(
     .bind(company_id)
     .fetch_all(pool)
     .await?;
-    Ok(SECTIONED_POSITIONS
+    Ok(CONFIGURABLE_POSITIONS
         .into_iter()
         .map(
             |position| match rows.iter().find(|(id, _)| *id == position) {
-                Some((_, stored)) => (position, parse_sections(stored), true),
-                None => (position, default_sections(position).to_vec(), false),
+                Some((_, stored)) => (position, parse_tabs(stored), true),
+                None => (position, default_tabs(position), false),
             },
         )
         .collect())
 }
 
-/// What someone holding the sectioned positions `held` reaches.
-///
-/// `company` is the company's sections (see [`company_sections`]): the union
-/// of the held positions' sections, or the whole app when `held` is empty.
-pub fn access_for(held: &[i32], company: &[(i32, Vec<&'static str>, bool)]) -> Access {
+/// The tabs of `user`'s positions together, in [`TABS`] order; `None` when
+/// they limit nothing: no listed position, or every main-app tab open and
+/// no admin tab that adds to their flags (`sections` of the app shell).
+pub async fn user_tabs(
+    pool: &MySqlPool,
+    user: &SessionUser,
+    positions: &[UserPositionRow],
+) -> Result<Option<Vec<&'static str>>, ApiError> {
+    let held = configured_positions(user, positions);
     if held.is_empty() {
-        return Access::Full;
+        return Ok(None);
     }
-    let keys = SECTIONS
+    let company = company_tabs(pool, user.company_id).await?;
+    Ok(tabs_for(&held, user.is_admin, &company))
+}
+
+/// [`user_tabs`] for someone holding the configured positions `held`, with
+/// the admin flag `is_admin` and the company's tabs `company` (see
+/// [`company_tabs`]).
+pub fn tabs_for(
+    held: &[i32],
+    is_admin: bool,
+    company: &[(i32, Vec<&'static str>, bool)],
+) -> Option<Vec<&'static str>> {
+    if held.is_empty() {
+        return None;
+    }
+    let open: Vec<&'static str> = TABS
         .iter()
-        .map(|section| section.key)
+        .map(|tab| tab.key)
         .filter(|key| {
             company
                 .iter()
-                .any(|(position, sections, _)| held.contains(position) && sections.contains(key))
+                .any(|(position, tabs, _)| held.contains(position) && tabs.contains(key))
         })
         .collect();
-    Access::Sections(keys)
+    let every_main = TABS
+        .iter()
+        .filter(|tab| !tab.admin)
+        .all(|tab| open.contains(&tab.key));
+    let adds_admin = !is_admin && open.iter().any(|key| tab(key).is_some_and(|t| t.admin));
+    if every_main && !adds_admin {
+        None
+    } else {
+        Some(open)
+    }
 }
 
-/// What `user` reaches in the company the request acts in: the union of
-/// their sectioned positions' sections there.
+/// What `user` reaches in the company the request acts in. Admins keep the
+/// whole API: their positions hide only main-app tabs.
 pub async fn user_access(
     pool: &MySqlPool,
     user: &SessionUser,
     positions: &[UserPositionRow],
 ) -> Result<Access, ApiError> {
-    let held = sectioned_positions(user, positions);
-    if held.is_empty() {
+    if user.is_admin || user.is_superuser {
         return Ok(Access::Full);
     }
-    let company = company_sections(pool, user.company_id).await?;
-    Ok(access_for(&held, &company))
+    Ok(match user_tabs(pool, user, positions).await? {
+        Some(open) => Access::Tabs(open),
+        None => Access::Full,
+    })
 }
 
-/// The refusal for a request outside someone's sections.
+/// The refusal for a request outside someone's tabs.
 pub fn outside_sections() -> ApiError {
     ApiError::Denied(
         "Your position doesn't include this part of the app. A company Manager can add it on the Company page, under Position access.".into(),
@@ -439,89 +497,113 @@ mod tests {
     }
 
     #[test]
-    fn only_a_sectioned_position_in_the_acting_company_restricts() {
+    fn only_listed_positions_in_the_acting_company_count() {
         let u = user(3);
-        assert_eq!(sectioned_positions(&u, &rows(&[])), Vec::<i32>::new());
+        assert_eq!(configured_positions(&u, &rows(&[])), Vec::<i32>::new());
+        // Installer and Shop Worker keep their own apps.
         assert_eq!(
-            sectioned_positions(&u, &rows(&[(10, 3)])),
+            configured_positions(&u, &rows(&[(6, 3), (4, 3)])),
             Vec::<i32>::new()
         );
         assert_eq!(
-            sectioned_positions(&u, &rows(&[(12, 4)])),
+            configured_positions(&u, &rows(&[(12, 4)])),
             Vec::<i32>::new()
         );
         assert_eq!(
-            sectioned_positions(&u, &rows(&[(12, 3), (10, 3)])),
+            configured_positions(&u, &rows(&[(12, 3), (6, 3)])),
             vec![12]
         );
         assert_eq!(
-            sectioned_positions(&u, &rows(&[(13, 3), (12, 3)])),
-            vec![12, 13]
+            configured_positions(&u, &rows(&[(13, 3), (1, 3), (12, 3)])),
+            vec![1, 12, 13]
         );
-        for full in [1, 2, 5, 9] {
-            assert!(
-                sectioned_positions(&u, &rows(&[(12, 3), (full, 3)])).is_empty(),
-                "{full}"
-            );
-        }
+        assert!(configured_positions(&u, &rows(&[(12, 3), (9, 3)])).is_empty());
         let mut superuser = user(3);
         superuser.is_superuser = true;
-        assert_eq!(
-            sectioned_positions(&superuser, &rows(&[(12, 3)])),
-            Vec::<i32>::new()
-        );
+        assert!(configured_positions(&superuser, &rows(&[(12, 3)])).is_empty());
     }
 
     #[test]
-    fn sections_open_their_api_and_the_common_one() {
-        let access = Access::Sections(vec!["schedule"]);
+    fn only_data_of_closed_tabs_alone_is_refused() {
+        let access = Access::Tabs(vec!["customers", "schedule"]);
         for path in [
-            "/v1/schedule",
-            "/v1/events/7",
+            "/v1/customers/7",
+            "/v1/stones",
             "/v1/calendars",
+            "/v1/transactions/3",
             "/v1/me",
-            "/v1/app/shell",
+            "/v1/statsx",
         ] {
             assert!(access.allows(path), "{path}");
         }
-        for path in [
-            "/v1/stones",
-            "/v1/customers/7",
-            "/v1/admin/users",
-            "/v1/schedulex",
-            "/v1/users/activity",
-        ] {
+        for path in ["/v1/checklists", "/v1/stats/overview"] {
             assert!(!access.allows(path), "{path}");
         }
-        assert!(Access::Full.allows("/v1/admin/users"));
+        let inventory = Access::Tabs(vec!["stones"]);
+        assert!(!inventory.allows("/v1/transactions"));
+        assert!(Access::Tabs(vec!["admin_transactions"]).allows("/v1/transactions"));
+        assert!(Access::Full.allows("/v1/checklists"));
     }
 
     #[test]
-    fn only_admin_sections_pass_admin_routes() {
-        let employee = Access::Sections(vec!["inventory"]);
+    fn admin_tabs_open_their_api_as_admin() {
+        let employee = Access::Tabs(vec!["stones"]);
         assert!(employee.allows("/v1/stones/7"));
         assert!(!employee.allows_admin("/v1/stones/7"));
-        let admin = Access::Sections(vec!["inventory_admin"]);
+        let admin = Access::Tabs(vec!["admin_stones"]);
         assert!(admin.allows_admin("/v1/stones/7"));
         assert!(!admin.allows_admin("/v1/customers/7"));
+        assert!(!admin.allows_admin("/v1/phone/admin/numbers"));
+        let statistics = Access::Tabs(vec!["admin_statistics"]);
+        assert!(statistics.allows("/v1/stats/overview"));
         assert!(!Access::Full.allows_admin("/v1/stones"));
     }
 
     #[test]
-    fn stored_sections_drop_unknown_keys_and_keep_order() {
+    fn stored_tabs_expand_old_keys_drop_unknown_ones_and_keep_order() {
         assert_eq!(
-            parse_sections("schedule, customers,nope"),
+            parse_tabs("schedule, customers,nope"),
             vec!["customers", "schedule"]
         );
-        assert_eq!(parse_sections(""), Vec::<&str>::new());
+        assert_eq!(
+            parse_tabs("inventory_admin,inventory,schedule_admin"),
+            vec![
+                "stones",
+                "sinks",
+                "faucets",
+                "admin_stones",
+                "admin_sinks",
+                "admin_faucets",
+                "admin_schedule"
+            ]
+        );
+        assert_eq!(parse_tabs(""), Vec::<&str>::new());
     }
 
     #[test]
-    fn defaults_are_known_sections() {
-        for position in SECTIONED_POSITIONS {
-            for key in default_sections(position) {
-                assert!(section(key).is_some(), "{key}");
+    fn defaults_are_known_tabs_and_most_positions_open_the_whole_main_app() {
+        for position in CONFIGURABLE_POSITIONS {
+            for key in default_tabs(position) {
+                assert!(tab(key).is_some(), "{key}");
             }
+        }
+        let main: Vec<&str> = TABS
+            .iter()
+            .filter(|tab| !tab.admin)
+            .map(|tab| tab.key)
+            .collect();
+        for position in [1, 2, 3, 5, 10] {
+            assert_eq!(default_tabs(position), main, "{position}");
+        }
+        assert_eq!(default_tabs(13), vec!["customers", "schedule"]);
+        assert!(default_tabs(12).contains(&"admin_stones"));
+        assert!(!default_tabs(12).contains(&"transactions"));
+    }
+
+    #[test]
+    fn keys_are_unique() {
+        for (i, a) in TABS.iter().enumerate() {
+            assert!(TABS[i + 1..].iter().all(|b| b.key != a.key), "{}", a.key);
         }
     }
 }

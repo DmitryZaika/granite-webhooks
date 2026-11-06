@@ -70,7 +70,8 @@ async fn admins_list_and_change_the_company_numbers(pool: MySqlPool) {
     listed.assert_status_ok();
     let number = |id: i32, e164: &str, label: &str, kind: &str, assignments: Value| {
         json!({ "id": id, "e164": e164, "label": label, "kind": kind, "noAnswerAction": "ai",
-                "forwardTo": null, "greeting": null, "active": true, "assignments": assignments })
+                "forwardTo": null, "greeting": null, "active": true, "forwardOnly": false,
+                "forwardTextsTo": null, "assignments": assignments })
     };
     assert_eq!(
         listed.json::<Value>(),
@@ -143,6 +144,7 @@ async fn admins_list_and_change_the_company_numbers(pool: MySqlPool) {
     let expected = json!({
         "id": 9902, "e164": "+13175550161", "label": "Sales team", "kind": "shared",
         "noAnswerAction": "forward", "forwardTo": "+13175550188", "greeting": null, "active": true,
+        "forwardOnly": false, "forwardTextsTo": null,
         "assignments": [
             { "userId": 100, "rings": true, "canCallFrom": true },
             { "userId": 101, "rings": true, "canCallFrom": false }] });
@@ -210,6 +212,23 @@ async fn admins_list_and_change_the_company_numbers(pool: MySqlPool) {
             StatusCode::BAD_REQUEST,
         ),
         (with(json!({ "kind": "personal" })), StatusCode::BAD_REQUEST),
+        // Forward only needs a number; never to the number itself.
+        (
+            with(json!({ "forwardOnly": true, "noAnswerAction": "ai", "forwardTo": null })),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            with(json!({ "forwardOnly": true, "forwardTo": "+13175550161" })),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            with(json!({ "forwardTextsTo": "317-555-0161" })),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            with(json!({ "forwardTextsTo": "+442079460958" })),
+            StatusCode::BAD_REQUEST,
+        ),
     ] {
         server
             .put("/v1/phone/admin/numbers/9902")
@@ -254,6 +273,27 @@ async fn admins_list_and_change_the_company_numbers(pool: MySqlPool) {
             &json!([]),
             &json!(null)
         )
+    );
+    // Forward only: calls and texts go to other numbers.
+    let forward = server
+        .put("/v1/phone/admin/numbers/9902")
+        .with_session(sessions::ADMIN)
+        .json(
+            &json!({ "label": "Old Spectrum line", "kind": "shared", "noAnswerAction": "ai",
+                       "forwardTo": "(317) 555-0188", "greeting": null, "active": true,
+                       "forwardOnly": true, "forwardTextsTo": "317-555-0189",
+                       "assignments": [] }),
+        )
+        .await;
+    forward.assert_status_ok();
+    let forward = forward.json::<Value>();
+    assert_eq!(
+        (
+            &forward["forwardOnly"],
+            &forward["forwardTo"],
+            &forward["forwardTextsTo"]
+        ),
+        (&json!(true), &json!("+13175550188"), &json!("+13175550189"))
     );
 }
 

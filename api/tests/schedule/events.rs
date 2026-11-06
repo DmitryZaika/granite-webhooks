@@ -548,6 +548,24 @@ async fn files_are_attached_from_the_events_folder(pool: MySqlPool) {
         history(&pool, 8950).await,
         ["Attachment added", "Attachment removed"]
     );
+
+    // A job photo for the customer is marked so; the others stay inside.
+    server
+        .post("/v1/events/8950/photos")
+        .with_session(sessions::REP)
+        .json(&json!({ "urls": [urls[1].0], "for_customer": true }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let flags: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT url, for_customer <> 0 FROM event_images WHERE event_id = 8950 ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        flags,
+        [(urls[0].0.clone(), false), (urls[1].0.clone(), true)]
+    );
 }
 
 #[test_db::test(seed)]
@@ -594,12 +612,18 @@ async fn search_finds_titles_customers_and_places(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn search_puts_mine_then_title_hits_then_the_nearest_first(pool: MySqlPool) {
     sqlx::raw_sql(
-        "INSERT INTO events (id, title, location, start_date, end_date, created_user_id, assigned_user_id, unscheduled) VALUES
+        "-- Rita sees every event, as a manager does
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 3, 100);
+         INSERT INTO events (id, title, location, start_date, end_date, created_user_id, assigned_user_id, unscheduled) VALUES
            (8970, 'Zork other', NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, NULL, 0),
            (8971, 'Zork mine far', NULL, UTC_TIMESTAMP() + INTERVAL 300 DAY, UTC_TIMESTAMP() + INTERVAL 300 DAY, 101, 100, 0),
            (8972, 'Zork mine near', NULL, UTC_TIMESTAMP() - INTERVAL 2 DAY, UTC_TIMESTAMP() - INTERVAL 2 DAY, 100, NULL, 0),
            (8973, 'Mine by place', 'Zork Lane', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 100, 0),
-           (8974, 'Zork mine unscheduled', NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 100, NULL, 1);",
+           (8974, 'Zork mine unscheduled', NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 100, NULL, 1);
+         -- My customer's job made by someone else; a job I made for another rep's customer
+         INSERT INTO events (id, title, start_date, end_date, created_user_id, customer_id, unscheduled) VALUES
+           (8975, 'Zork my customer', UTC_TIMESTAMP() + INTERVAL 100 DAY, UTC_TIMESTAMP() + INTERVAL 100 DAY, 101, 1000, 0),
+           (8976, 'Zork their customer', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 100, 1010, 0);",
     )
     .execute(&pool)
     .await
@@ -616,5 +640,39 @@ async fn search_puts_mine_then_title_hits_then_the_nearest_first(pool: MySqlPool
         .iter()
         .map(|event| event["id"].as_i64().unwrap())
         .collect();
-    assert_eq!(ids, [8972, 8971, 8974, 8973, 8970]);
+    // My customers and jobs, then ones I only made, then the rest
+    assert_eq!(ids, [8975, 8971, 8973, 8976, 8972, 8974, 8970]);
+}
+
+#[test_db::test(seed)]
+async fn search_puts_word_starts_open_and_upcoming_first_and_allows_a_typo(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 3, 100);
+         INSERT INTO events (id, title, start_date, end_date, created_user_id, unscheduled, completed_at) VALUES
+           (8980, 'Plover install', UTC_TIMESTAMP() + INTERVAL 10 DAY, UTC_TIMESTAMP() + INTERVAL 10 DAY, 101, 0, NULL),
+           (8981, 'Replover job', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 0, NULL),
+           (8982, 'Plover done', UTC_TIMESTAMP() + INTERVAL 1 DAY, UTC_TIMESTAMP() + INTERVAL 1 DAY, 101, 0, UTC_TIMESTAMP()),
+           (8983, 'Plover last week', UTC_TIMESTAMP() - INTERVAL 7 DAY, UTC_TIMESTAMP() - INTERVAL 7 DAY, 101, 0, NULL),
+           (8984, 'I-Plover two days ago', UTC_TIMESTAMP() - INTERVAL 2 DAY, UTC_TIMESTAMP() - INTERVAL 2 DAY, 101, 0, NULL),
+           (8985, 'Ploevr typo', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 0, NULL),
+           (8986, 'Plonk deck', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 101, 0, NULL);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let found: Value = server(pool)
+        .get("/v1/events/search")
+        .add_query_param("q", "plover")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    let ids: Vec<i64> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["id"].as_i64().unwrap())
+        .collect();
+    // Word starts (past counts double: 2 days ago, 10 days ahead, 7 days
+    // ago), the finished job, then "contains", then the typo; "Plonk" no
+    assert_eq!(ids, [8984, 8980, 8983, 8982, 8981, 8985]);
 }

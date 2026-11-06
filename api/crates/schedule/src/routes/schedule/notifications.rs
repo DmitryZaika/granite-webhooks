@@ -30,7 +30,7 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::company::queries::company_features;
-use crate::routes::events::history::{History, record};
+use crate::routes::events::history::{History, record, record_customer_message};
 use crate::routes::events::notify::{
     OfficeManager, customer_email, customer_phone, escape_html, office_manager, sender_for,
 };
@@ -1923,6 +1923,37 @@ struct DueRule {
     subject: Option<String>,
     body: String,
     created_at: DateTime<Utc>,
+    /// The template's name, for the event's history.
+    template_name: String,
+}
+
+impl DueRule {
+    /// `Template reminder (1 day before)`: what the event's history says went out.
+    fn history_label(&self) -> String {
+        let when = step_label(
+            self.offset_value,
+            OffsetUnit::parse(&self.offset_unit),
+            Direction::parse(&self.direction),
+        );
+        format!("{} ({when})", self.template_name.trim())
+    }
+}
+
+/// `1 day before`, `2 hours after`, `when completed`.
+pub fn step_label(value: i32, unit: OffsetUnit, direction: Direction) -> String {
+    let unit = match (unit, value == 1) {
+        (OffsetUnit::Minutes, true) => "minute",
+        (OffsetUnit::Minutes, false) => "minutes",
+        (OffsetUnit::Hours, true) => "hour",
+        (OffsetUnit::Hours, false) => "hours",
+        (OffsetUnit::Days, true) => "day",
+        (OffsetUnit::Days, false) => "days",
+    };
+    match direction {
+        Direction::Completed => "when completed".to_string(),
+        Direction::Before => format!("{value} {unit} before"),
+        Direction::After => format!("{value} {unit} after"),
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -2235,7 +2266,8 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
     let rules: Vec<DueRule> = sqlx::query_as(
         "SELECT r.id, r.company_id, CAST(m.channel AS CHAR) AS channel, r.offset_value,
                 CAST(r.offset_unit AS CHAR) AS offset_unit, CAST(r.direction AS CHAR) AS direction,
-                TIME_FORMAT(r.send_time, '%H:%i') AS send_time, m.subject, m.body, r.created_at
+                TIME_FORMAT(r.send_time, '%H:%i') AS send_time, m.subject, m.body, r.created_at,
+                m.name AS template_name
            FROM schedule_notification_rules r
            JOIN schedule_notification_flows f ON f.id = r.flow_id
             AND f.is_active = 1 AND f.deleted_at IS NULL
@@ -2355,6 +2387,14 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
             match outcome {
                 None => {
                     finish(pool, rule.id, &event, "sent", None).await?;
+                    record_customer_message(
+                        pool,
+                        event.id,
+                        rule.company_id,
+                        message.channel == Channel::Sms,
+                        &rule.history_label(),
+                    )
+                    .await;
                     run.sent += 1;
                 }
                 Some(code) => {
@@ -2375,7 +2415,8 @@ pub async fn send_on_complete(state: &AppState, event_id: i32) -> Result<usize, 
     let rules: Vec<DueRule> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT r.id, r.company_id, CAST(m.channel AS CHAR) AS channel, r.offset_value,
                 CAST(r.offset_unit AS CHAR) AS offset_unit, CAST(r.direction AS CHAR) AS direction,
-                TIME_FORMAT(r.send_time, '%H:%i') AS send_time, m.subject, m.body, r.created_at
+                TIME_FORMAT(r.send_time, '%H:%i') AS send_time, m.subject, m.body, r.created_at,
+                m.name AS template_name
            FROM schedule_notification_rules r
            JOIN schedule_notification_flows f ON f.id = r.flow_id
            JOIN events e ON e.id = ? AND {FLOW_APPLIES}
@@ -2423,6 +2464,14 @@ pub async fn send_on_complete(state: &AppState, event_id: i32) -> Result<usize, 
         match outcome {
             None => {
                 finish(pool, rule.id, &event, "sent", None).await?;
+                record_customer_message(
+                    pool,
+                    event.id,
+                    rule.company_id,
+                    message.channel == Channel::Sms,
+                    &rule.history_label(),
+                )
+                .await;
                 sent += 1;
             }
             Some(code) => finish(pool, rule.id, &event, "failed", Some(code)).await?,
@@ -3303,6 +3352,26 @@ mod tests {
 
     fn at(text: &str) -> NaiveDateTime {
         NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M").unwrap()
+    }
+
+    #[test]
+    fn steps_read_as_words_in_the_history() {
+        assert_eq!(
+            step_label(1, OffsetUnit::Days, Direction::Before),
+            "1 day before"
+        );
+        assert_eq!(
+            step_label(2, OffsetUnit::Hours, Direction::After),
+            "2 hours after"
+        );
+        assert_eq!(
+            step_label(30, OffsetUnit::Minutes, Direction::Before),
+            "30 minutes before"
+        );
+        assert_eq!(
+            step_label(0, OffsetUnit::Days, Direction::Completed),
+            "when completed"
+        );
     }
 
     #[test]

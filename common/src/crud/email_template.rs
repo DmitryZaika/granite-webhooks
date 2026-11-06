@@ -1,4 +1,6 @@
 use sqlx::MySqlPool;
+
+use crate::crud::lead_automation::DRIP_TEMPLATE_FOR_REP;
 use sqlx::mysql::MySqlQueryResult;
 
 pub struct EmailTemplate {
@@ -6,30 +8,28 @@ pub struct EmailTemplate {
     pub hour_delay: Option<i32>,
 }
 
-/// The company email drips of `list_id` that go out for deals of `user_id`:
-/// those naming no sales reps, or naming them.
+/// The email drips of `list_id` that go out for deals of `user_id`: the
+/// company's (those naming no sales reps, or naming them), or the user's own
+/// when they chose their own automations ([`DRIP_TEMPLATE_FOR_REP`]).
 pub async fn get_templates_for_list_id(
     pool: &MySqlPool,
     list_id: i32,
     company_id: i32,
     user_id: i32,
 ) -> Result<Vec<EmailTemplate>, sqlx::Error> {
-    let rows: Vec<(i32, Option<i32>)> = sqlx::query_as(
-        r#"
-        SELECT email_templates.id, email_templates.hour_delay
-        FROM email_templates
-        WHERE email_templates.lead_list_id = ?
-          AND email_templates.company_id = ?
-          AND email_templates.user_id IS NULL
-          AND email_templates.deleted_at IS NULL
-          AND (email_templates.sales_rep_ids IS NULL
-               OR JSON_LENGTH(email_templates.sales_rep_ids) = 0
-               OR JSON_CONTAINS(email_templates.sales_rep_ids, CAST(? AS JSON)))
-        ORDER BY email_templates.hour_delay ASC, email_templates.id ASC
-        "#,
-    )
+    let rows: Vec<(i32, Option<i32>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT t.id, t.hour_delay
+           FROM email_templates t
+          WHERE t.lead_list_id = ?
+            AND t.company_id = ?
+            AND t.deleted_at IS NULL
+            AND {DRIP_TEMPLATE_FOR_REP}
+          ORDER BY t.hour_delay ASC, t.id ASC"
+    )))
     .bind(list_id)
     .bind(company_id)
+    .bind(user_id)
+    .bind(user_id)
     .bind(user_id)
     .fetch_all(pool)
     .await?;

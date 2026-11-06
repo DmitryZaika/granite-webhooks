@@ -25,14 +25,10 @@
 //!    (`ai_promises`) for the CRM's promise list and composers;
 //! 5. reminds the rep of each promise once it is due ([`remind_due`]): a bell
 //!    notification pushed to their phones, else sent to their Telegram;
-//! 6. from 8 AM their time, once a day, sends the rep's morning list
-//!    ([`send_digests`]): due today, overdue, without a time, quotes to make
-//!    or update, what waits for the customer's approval, and the customers
-//!    whose text waits for their reply;
-//! 7. a day after the rep sent something for the customer's approval (kind
+//! 6. a day after the rep sent something for the customer's approval (kind
 //!    `approval`), closes it when the customer has replied since, else
 //!    reminds the rep once to check with them ([`check_approvals`]);
-//! 8. closes the tasks the rep finished in the CRM ([`close_finished`]): a
+//! 7. closes the tasks the rep finished in the CRM ([`close_finished`]): a
 //!    quote of the customer's saved or emailed, a document sent to sign, an
 //!    event on the schedule, a call with them.
 
@@ -45,7 +41,7 @@ use crate::routes::calls::recording::{CallTranscriptError, transcribe_call};
 use crate::sms_provider::not_a_copy;
 use crate::state::AppState;
 use crate::transcribe::TranscribeError;
-use chrono::{NaiveDateTime, TimeZone, Timelike, Utc};
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use lambda_http::tracing;
 use regex::Regex;
@@ -604,8 +600,6 @@ pub struct JobRun {
     pub promises: usize,
     /// Due promises, and approvals with no reply, the rep was reminded of.
     pub reminded: usize,
-    /// Morning lists sent.
-    pub digests: usize,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -655,7 +649,7 @@ enum Text {
 
 pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
     let pool = &state.pool;
-    // Reminders and the morning list first: reading calls takes longer.
+    // Reminders first: reading calls takes longer.
     let reminded = remind_due(state).await.unwrap_or_else(|err| {
         tracing::error!(error = %err, "promise reminders failed; continuing");
         0
@@ -668,14 +662,9 @@ pub async fn run_job(state: &AppState) -> sqlx::Result<JobRun> {
     if let Err(err) = close_finished(pool).await {
         tracing::error!(error = %err, "finished tasks not closed; continuing");
     }
-    let digests = send_digests(state).await.unwrap_or_else(|err| {
-        tracing::error!(error = %err, "morning lists failed; continuing");
-        0
-    });
     let mut run = JobRun {
         queued: queue(pool).await?,
         reminded,
-        digests,
         ..JobRun::default()
     };
     sqlx::query(
@@ -762,7 +751,7 @@ fn of_task_customer(column: &str) -> String {
 const TASK_DIGITS: &str =
     "COALESCE(p.customer_digits, RIGHT(REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', ''), 10))";
 
-/// Step 8: the open tasks the rep finished in the CRM after they were said
+/// Step 7: the open tasks the rep finished in the CRM after they were said
 /// (for the reps AI promises is on for), closed:
 /// - a quote task once one of the customer's quotes is saved (a new
 ///   version) or emailed after its last ask;
@@ -916,7 +905,7 @@ struct SentForApproval {
     telegram: bool,
 }
 
-/// Step 7: what was sent for the customer's approval [`APPROVAL_WAIT_HOURS`]
+/// Step 6: what was sent for the customer's approval [`APPROVAL_WAIT_HOURS`]
 /// ago, each once: closed when the customer has replied since (a text, an
 /// email, a call of [`MIN_CALL_SECONDS`] or more), else a bell notification
 /// (`ai_promise_approval`) reminds the rep to check with them, as
@@ -1093,20 +1082,6 @@ async fn notify(
     Ok(())
 }
 
-/// The morning list goes out from this hour, the rep's time (until 4 hours
-/// later, so a late run still sends it, but never in the evening).
-pub const DIGEST_HOUR: u32 = 8;
-
-/// An open promise, quote task or approval for the morning list.
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct ListedPromise {
-    pub kind: String,
-    pub title: String,
-    pub customer_name: Option<String>,
-    pub customer_digits: Option<String>,
-    pub due_at: Option<NaiveDateTime>,
-}
-
 /// A customer whose text waits for the rep's reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Waiting {
@@ -1117,70 +1092,6 @@ pub struct Waiting {
     pub text: String,
     /// When they sent it (UTC).
     pub at: NaiveDateTime,
-}
-
-/// Step 6: each rep's morning list, once a day from [`DIGEST_HOUR`] their
-/// time, as a bell notification (`ai_promise_digest`) pushed to their phones,
-/// else the whole list to their Telegram. Nothing on it: nothing is sent.
-pub async fn send_digests(state: &AppState) -> sqlx::Result<usize> {
-    let pool = &state.pool;
-    let reps: Vec<(i32, i32, bool)> = sqlx::query_as(
-        "SELECT id, company_id, COALESCE(telegram_activity_notifications, 0) <> 0
-           FROM users WHERE ai_promises = 1 AND is_deleted = 0",
-    )
-    .fetch_all(pool)
-    .await?;
-    let mut sent = 0;
-    for (user_id, company_id, telegram) in reps {
-        let config = company::load(pool, company_id).await.unwrap_or_else(|err| {
-            tracing::warn!(company_id, error = %err, "morning list: company time zone unreadable");
-            None
-        });
-        let tz = company::time_zone_of(config.as_ref());
-        let now = Utc::now().with_timezone(&tz);
-        if !(DIGEST_HOUR..DIGEST_HOUR + 4).contains(&now.hour()) {
-            continue;
-        }
-        let claimed = sqlx::query(
-            "INSERT IGNORE INTO ai_promise_digests (user_id, digest_date) VALUES (?, ?)",
-        )
-        .bind(user_id)
-        .bind(now.date_naive())
-        .execute(pool)
-        .await?
-        .rows_affected();
-        if claimed == 0 {
-            continue;
-        }
-        let promises: Vec<ListedPromise> = sqlx::query_as(
-            "SELECT CAST(p.kind AS CHAR) AS kind, p.title, c.name AS customer_name,
-                    p.customer_digits, p.due_at
-               FROM ai_promises p
-               LEFT JOIN customers c ON c.id = p.customer_id
-              WHERE p.user_id = ? AND p.company_id = ? AND p.status = 'open'
-              ORDER BY p.due_at IS NULL, p.due_at, p.promised_at DESC
-              LIMIT 100",
-        )
-        .bind(user_id)
-        .bind(company_id)
-        .fetch_all(pool)
-        .await?;
-        let waiting = waiting_customers(pool, company_id, user_id).await?;
-        let Some((summary, text)) = morning_list(&promises, &waiting, now.naive_utc(), tz) else {
-            continue;
-        };
-        notify(
-            state,
-            user_id,
-            "ai_promise_digest",
-            &summary,
-            &text,
-            telegram,
-        )
-        .await?;
-        sent += 1;
-    }
-    Ok(sent)
 }
 
 /// The customer's name, else their phone, else "a customer".
@@ -1197,117 +1108,39 @@ fn who(name: Option<&str>, digits: Option<&str>) -> String {
     }
 }
 
-/// The morning list: its one-line summary (the bell) and the whole list (for
-/// Telegram); `None` when there is nothing on it. `now` is UTC.
-pub fn morning_list(
-    promises: &[ListedPromise],
-    waiting: &[Waiting],
-    now: NaiveDateTime,
-    tz: Tz,
-) -> Option<(String, String)> {
-    let local = |at: NaiveDateTime| tz.from_utc_datetime(&at);
-    let today = local(now).date_naive();
-    let mut overdue = Vec::new();
-    let mut due_today = Vec::new();
-    let mut undated = Vec::new();
-    let mut quotes = Vec::new();
-    let mut approvals = Vec::new();
-    for promise in promises {
-        let line = format!(
-            "{} — {}",
-            promise.title,
-            who(
-                promise.customer_name.as_deref(),
-                promise.customer_digits.as_deref()
-            )
-        );
-        if promise.kind == "quote" {
-            quotes.push(line);
-            continue;
-        }
-        if promise.kind == "approval" {
-            approvals.push(line);
-            continue;
-        }
-        match promise.due_at {
-            Some(due) if due < now => {
-                overdue.push(format!(
-                    "{line} (due {})",
-                    local(due).format("%b %-d, %-I:%M %p")
-                ));
-            }
-            Some(due) if local(due).date_naive() == today => {
-                due_today.push(format!("{} {line}", local(due).format("%-I:%M %p")));
-            }
-            Some(_) => {}
-            None => undated.push(line),
-        }
-    }
-    let waiting_lines: Vec<String> = waiting
-        .iter()
-        .map(|customer| {
-            let hours = (now - customer.at).num_hours();
-            let ago = if hours < 24 {
-                format!("{} h", hours.max(1))
-            } else {
-                format!("{} days", hours / 24)
-            };
-            format!(
-                "{} — \"{}\" ({ago})",
-                who(
-                    customer.customer_name.as_deref(),
-                    Some(&customer.phone_digits)
-                ),
-                clip(&customer.text, 80)
-            )
-        })
-        .collect();
-    let sections = [
-        ("Overdue", &overdue),
-        ("Due today", &due_today),
-        ("No time set", &undated),
-        ("Quotes to make or update", &quotes),
-        ("Waiting for the customer's approval", &approvals),
-        ("Waiting for your reply", &waiting_lines),
+/// A phone's reaction to a message, sent as a text: `Loved “See you then”`,
+/// `Laughed at “…”`, `Reacted 👍 to “…”`, `Removed a heart from “…”`.
+fn is_reaction(text: &str) -> bool {
+    const VERBS: [&str; 7] = [
+        "liked ",
+        "loved ",
+        "disliked ",
+        "laughed at ",
+        "emphasized ",
+        "emphasised ",
+        "questioned ",
     ];
-    if sections.iter().all(|(_, lines)| lines.is_empty()) {
-        return None;
+    const QUOTES: [char; 5] = ['“', '"', '”', '‘', '\''];
+    let lower = text.trim_start().to_lowercase();
+    let quoted = |rest: &str| rest.trim_start().starts_with(QUOTES);
+    if let Some(rest) = VERBS.iter().find_map(|verb| lower.strip_prefix(verb)) {
+        return quoted(rest);
     }
-    let counts: Vec<String> = [
-        (overdue.len(), "overdue"),
-        (due_today.len(), "due today"),
-        (undated.len(), "without a time"),
-        (quotes.len(), "quotes to update"),
-        (approvals.len(), "waiting for approval"),
-        (waiting_lines.len(), "waiting for your reply"),
-    ]
-    .iter()
-    .filter(|(count, _)| *count > 0)
-    .map(|(count, what)| format!("{count} {what}"))
-    .collect();
-    let summary = clip(&format!("Morning list: {}", counts.join(", ")), 255);
-    let mut text = format!(
-        "☀️ Good morning! Your list for {}:",
-        local(now).format("%a, %b %-d")
-    );
-    for (heading, lines) in sections {
-        if lines.is_empty() {
-            continue;
-        }
-        text.push_str(&format!("\n\n{heading} ({}):", lines.len()));
-        for line in lines.iter().take(8) {
-            text.push_str(&format!("\n• {line}"));
-        }
-        if lines.len() > 8 {
-            text.push_str(&format!("\n• and {} more", lines.len() - 8));
-        }
-    }
-    Some((summary, text))
+    ["reacted ", "removed "].iter().any(|verb| {
+        lower.strip_prefix(verb).is_some_and(|rest| {
+            rest.split_once(" to ")
+                .or_else(|| rest.split_once(" from "))
+                .is_some_and(|(what, rest)| what.chars().count() <= 12 && quoted(rest))
+        })
+    })
 }
 
 /// A short text that ends a conversation ("Thank you!", "Ok", "Sounds good",
-/// a lone emoji): no reply is owed.
+/// a lone emoji) or a reaction to a message ([`is_reaction`]): no reply is owed.
 pub fn is_closing(text: &str) -> bool {
+    if is_reaction(text) {
+        return true;
+    }
     const CLOSERS: [&str; 22] = [
         "thanks",
         "thank you",
@@ -2400,59 +2233,6 @@ mod tests {
     }
 
     #[test]
-    fn the_morning_list_sorts_what_is_due() {
-        let tz = chrono_tz::America::Indiana::Indianapolis;
-        let promise = |kind: &str, title: &str, due: Option<&str>| ListedPromise {
-            kind: kind.into(),
-            title: title.into(),
-            customer_name: Some("Ann Lee".into()),
-            customer_digits: None,
-            due_at: due.map(at),
-        };
-        // 8:30 AM in Indianapolis.
-        let now = at("2026-10-28 12:30");
-        let (summary, text) = morning_list(
-            &[
-                promise("promise", "Send the price", Some("2026-10-27 21:00")),
-                promise("promise", "Call back", Some("2026-10-28 18:00")),
-                promise("promise", "Send photos", None),
-                promise("promise", "Visit next week", Some("2026-11-03 15:00")),
-                promise("quote", "Update the quote", None),
-                promise("approval", "Sign the contract", Some("2026-10-28 20:00")),
-            ],
-            &[Waiting {
-                phone_digits: "3175550100".into(),
-                customer_id: None,
-                customer_name: None,
-                text: "Can you send the price?".into(),
-                at: at("2026-10-28 09:30"),
-            }],
-            now,
-            tz,
-        )
-        .unwrap();
-        assert_eq!(
-            summary,
-            "Morning list: 1 overdue, 1 due today, 1 without a time, 1 quotes to update, 1 waiting for approval, 1 waiting for your reply"
-        );
-        assert!(
-            text.contains(
-                "Waiting for the customer's approval (1):\n• Sign the contract — Ann Lee"
-            )
-        );
-        assert!(text.starts_with("☀️ Good morning! Your list for Wed, Oct 28:"));
-        assert!(text.contains("Overdue (1):\n• Send the price — Ann Lee (due Oct 27, 5:00 PM)"));
-        assert!(text.contains("Due today (1):\n• 2:00 PM Call back — Ann Lee"));
-        assert!(text.contains("No time set (1):\n• Send photos — Ann Lee"));
-        assert!(text.contains("Quotes to make or update (1):\n• Update the quote — Ann Lee"));
-        assert!(text.contains(
-            "Waiting for your reply (1):\n• (317) 555-0100 — \"Can you send the price?\" (3 h)"
-        ));
-        assert!(!text.contains("Visit next week"));
-        assert_eq!(morning_list(&[], &[], now, tz), None);
-    }
-
-    #[test]
     fn due_times_are_company_local() {
         let tz = chrono_tz::America::Indiana::Indianapolis;
         assert_eq!(
@@ -2536,6 +2316,13 @@ mod tests {
             "Sounds good.",
             "👍",
             "Thanks so much!!",
+            "Loved “Thank you, I appreciate you too. It’s been very easy working with you”",
+            "Liked \"See you Friday\"",
+            "Laughed at “haha”",
+            "Emphasized “The install is Monday”",
+            "Reacted 👍 to “Your quote is ready”",
+            "Reacted ❤️ to \"Thanks\"",
+            "Removed a heart from “See you then”",
         ] {
             assert!(is_closing(text), "{text}");
         }
@@ -2543,6 +2330,9 @@ mod tests {
             "Yes please that would be great",
             "Can you send the price?",
             "Ok, can we do Friday instead?",
+            "Loved the samples, can you send the price?",
+            "Liked the white one better",
+            "Reacted to the quote, it's too high to be honest",
         ] {
             assert!(!is_closing(text), "{text}");
         }

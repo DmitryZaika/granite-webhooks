@@ -140,6 +140,15 @@ async fn the_office_manager_texts_the_confirmation(pool: MySqlPool) {
         ("cloudtalk", 101, "5101", "3175550100", true)
     );
     assert!(texts[0].text.ends_with("Address: 1 Main St."));
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    let noted: Vec<String> = sqlx::query_scalar(
+        "SELECT message FROM event_history WHERE event_id = ? AND action = 'customer_message'",
+    )
+    .bind(id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(noted, ["Text sent to the customer: Booking confirmation"]);
 }
 
 #[test_db::test(seed)]
