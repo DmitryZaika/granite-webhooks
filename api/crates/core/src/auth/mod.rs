@@ -55,6 +55,7 @@ pub mod job;
 pub mod sections;
 pub mod session;
 pub mod skills;
+pub mod web_link;
 
 use crate::error::ApiError;
 use crate::state::AppState;

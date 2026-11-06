@@ -48979,6 +48979,83 @@
         ]
       }
     },
+    "/v1/company/sales-goal": {
+      "put": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Set the company's monthly sales goal",
+        "description": "A Manager or Sales Manager sets the goal every employee sees on the\n`QuickBooks` sales widget's Company view. Null clears it.",
+        "operationId": "set_company_sales_goal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompanyGoal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The goal as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyGoal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Goal out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager or Sales Manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/qbo/class-sales": {
       "get": {
         "tags": [
@@ -56234,6 +56311,109 @@
             "session_cookie": []
           }
         ]
+      }
+    },
+    "/v1/auth/web-link": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Get a link that opens a CRM page signed in",
+        "description": "For the Granite Phone app: returns a link to `path` on the caller's CRM\nhost that signs the phone's browser in as the caller on the way. Open it\nat once (the API's base URL + `link_path`): it works for `expires_in`\nseconds, and only while this phone stays signed in. Device token only.",
+        "operationId": "create_web_link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebLinkInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The path is not a page of the CRM's host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/web-link/{token}": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Open a CRM page signed in",
+        "description": "Follows a link from `POST /v1/auth/web-link`: redirects (303) to its page\non the company's CRM host, with a session cookie for the link's user. A\nbrowser already signed in as that user keeps its session; otherwise a new\none starts, as signing in with the password does. An expired or changed\nlink, or one whose phone was signed out since, redirects to the CRM's\nsign-in page instead. Takes no other credentials.",
+        "operationId": "open_web_link",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token of the link",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "To the page signed in, or to the sign-in page when the link no longer works"
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/phone/bootstrap": {
@@ -72867,6 +73047,20 @@
               "$ref": "#/components/schemas/FrameSupplier"
             },
             "description": "Suppliers of its faucets."
+          }
+        }
+      },
+      "CompanyGoal": {
+        "type": "object",
+        "description": "The company's monthly sales goal.",
+        "properties": {
+          "monthly_sales_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Null when not set."
           }
         }
       },
@@ -95233,7 +95427,8 @@
         "type": "object",
         "description": "`GET /v1/me/qbo-sales`.",
         "required": [
-          "status"
+          "status",
+          "can_set_company_goal"
         ],
         "properties": {
           "status": {
@@ -95254,6 +95449,18 @@
             ],
             "format": "double",
             "description": "The whole company's sales this month (the report's grand total)."
+          },
+          "company_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The company's monthly sales goal, when a manager set one."
+          },
+          "can_set_company_goal": {
+            "type": "boolean",
+            "description": "The caller may set the company goal (a Manager or Sales Manager)."
           },
           "currency": {
             "type": [
@@ -105260,6 +105467,20 @@
         },
         "additionalProperties": false
       },
+      "UpdateCompanyGoal": {
+        "type": "object",
+        "description": "`PUT /v1/company/sales-goal` body.",
+        "properties": {
+          "monthly_sales_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The goal each month; null clears it."
+          }
+        }
+      },
       "UpdateSalesGoal": {
         "type": "object",
         "description": "A new monthly sales goal.",
@@ -106330,6 +106551,39 @@
             "description": "Shown in \"Signed-in devices\", e.g. \"Chrome on Windows\" (cut to 100\ncharacters; empty = \"Browser\")."
           }
         }
+      },
+      "WebLink": {
+        "type": "object",
+        "description": "A link that opens a CRM page signed in.",
+        "required": [
+          "link_path",
+          "expires_in"
+        ],
+        "properties": {
+          "link_path": {
+            "type": "string",
+            "description": "The link's path on this API (`/v1/auth/web-link/{token}`): open the\nAPI's base URL followed by it in the phone's browser."
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds the link works for (120)."
+          }
+        }
+      },
+      "WebLinkInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/auth/web-link`.",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The CRM page to open: a path on the company's CRM host, starting with\none `/`, e.g. `/employee/quote/12` (a quote's editor) or\n`/employee/quotes/add` (a new quote). At most 512 characters."
+          }
+        },
+        "additionalProperties": false
       },
       "WebPhone": {
         "type": "object",

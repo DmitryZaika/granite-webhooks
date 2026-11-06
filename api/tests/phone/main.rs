@@ -26,3 +26,4 @@ mod phone_settings;
 mod phone_texts;
 mod phone_web;
 mod phone_web_recording;
+mod web_link;
