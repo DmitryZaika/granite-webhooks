@@ -597,12 +597,14 @@ async fn activity(
             -- registration's, number ports' and AI promises' (they name no
             -- deal), and a finished installation of a customer without a deal.
             -- The morning list (ai_promise_digest) is no longer sent or shown.
+            -- A scheduled message's outcome shows with or without a deal.
             AND (((d.id IS NOT NULL OR pr.id IS NOT NULL) AND c.id IS NOT NULL)
                  OR (n.notification_type = 'installation_completed' AND c.id IS NOT NULL
                      AND c.deleted_at IS NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
                                             'phone_port', 'ai_promise_due',
-                                            'ai_promise_approval'))
+                                            'ai_promise_approval', 'delayed_message_sent',
+                                            'delayed_message_failed'))
             -- A project task's reminder shows while the task is open.
             AND (COALESCE(n.notification_type, '') <> 'project_task_reminder' OR EXISTS (
                   SELECT 1 FROM project_activities pa

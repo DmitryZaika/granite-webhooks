@@ -415,3 +415,50 @@ async fn a_manager_marks_a_lead_invalid_from_the_phone(pool: MySqlPool) {
     .unwrap();
     assert_eq!(live, 0);
 }
+
+#[test_db::test(seed)]
+async fn a_scheduled_text_that_went_out_is_pushed_to_the_senders_app(pool: MySqlPool) {
+    let (server, stubs) = setup(&pool).await;
+    // Rita (100, phone 1) scheduled a text to a number with no customer (no deal): due now.
+    sql(
+        &pool,
+        "INSERT INTO delayed_sms (company_id, user_id, customer_id, phone_digits, provider, send_at,
+            cancel_if_customer_messages, baseline_at, status, payload_json)
+         VALUES (100, 100, NULL, '3175559999', 'telnyx', UTC_TIMESTAMP() - INTERVAL 1 MINUTE, 0,
+            UTC_TIMESTAMP() - INTERVAL 1 HOUR, 'pending', '{\"text\":\"See you Monday\"}')",
+    )
+    .await;
+    job(&server, "/v1/jobs/sms-followups", json!({})).await;
+    let status: String = sqlx::query_scalar("SELECT status FROM delayed_sms LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let kind = if status == "sent" {
+        "delayed_message_sent"
+    } else {
+        "delayed_message_failed"
+    };
+    // Sent or not, her phone hears it, and the bell's notification opens for the app.
+    let id: i64 = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM notifications WHERE user_id = 100 AND notification_type = ?",
+    )
+    .bind(kind)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let pushed = pushes(&stubs, "notification");
+    assert_eq!(pushed.len(), 1, "{pushed:?}");
+    assert_eq!(pushed[0].0, "push-1");
+    assert_eq!(pushed[0].1["notificationId"], id.to_string());
+    let heading = if status == "sent" {
+        "Scheduled Message Sent"
+    } else {
+        "Scheduled Message Failed"
+    };
+    assert_eq!(pushed[0].1["heading"], heading);
+    server
+        .get(&format!("/v1/notifications/{id}"))
+        .add_header(phone_common::HEADER, phone_common::token(1))
+        .await
+        .assert_status_ok();
+}
