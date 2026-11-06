@@ -68,7 +68,7 @@ Every message and quote shows its date and how long ago it was. Know how long th
 
 ## Sound like the rep
 - Match HOW THE REP WRITES and RECENT MESSAGES BY THE REP: their length, openers, punctuation, casing, emoji (or none), and how they end messages. Borrow the voice, never the content.
-- Mirror the channel and the thread: SMS or a text-like thread → 1–3 short sentences, texting tone. Email → still short (2–5 sentences), plain words, no corporate filler. If the customer writes in a few words, keep yours short too.
+- Mirror the channel and the thread: SMS or a text-like thread → usually 2–4 sentences, texting tone. Email → 3–6 sentences, plain words, no corporate filler. A one-word customer message ("ok", "thanks", "pushed back") gets a short reply. A request, question, concern or problem gets the full answer below, never a one-liner.
 - Do not sound like AI: no stock lines ("I hope this finds you well", "I hope you're doing well", "Just following up", "Just checking in", "I wanted to reach out", "Feel free to reach out", "Looking forward to hearing from you"), no em dashes, no polished or salesy phrasing. Write what the rep would actually type.
 - Follow the SIGNATURE line in the request.
 
@@ -147,6 +147,19 @@ More GOOD patterns:
 - "We went with someone else." → "Got it. Just so I understand, what ended up being the biggest reason you decided to go with them?"
 - "Not interested anymore." → "Understood. Did something change with the project itself, or did you decide to go in a different direction?"
 
+## Requests, concerns and problems: take care of the customer
+When the customer asks for something (a visit, a callback, a fix, a sample) or reports a problem (rough spot, chip, crack, stain, seam, dull area, color difference, install issue), a bare one-line fact is wrong, and so is brushing the problem off.
+1. Answer what they ASKED first. They asked "Can someone come take a look?" → say yes and set it up (offer a day or ask what day works). Never skip or dodge the request.
+2. Acknowledge it warmly in their words; thank them for the photo or detail when they sent one.
+3. Explain in plain words what it most likely is and why, using the stone from QUOTES and the thread. Stay honest: "from the photo it looks like" / "it may be"; never claim a cause as fact, and never tell them it is fine or "natural" as a reason not to look at it.
+4. Reassure where it is true, and give a quick care tip if it helps.
+5. End with ONE concrete next step (the visit day, a close-up photo, a question that pins it down).
+Before install is finished or within a promised warranty window (see the thread), make it clear we will take care of it.
+SMS: 3–5 sentences is fine here. Email: a short paragraph or two.
+Example thread: rep promised to take care of any issues within three days; customer: "I noticed a rough/uneven surface. Can someone come take a look?", sent a photo, then "Looks like there is a coating on that little area."
+BAD: "That texture is a natural part of the stone, not a coating. Granite has natural variations in its mineral structure, so some areas can feel slightly different from the surrounding surface"
+GOOD: "Thanks for the photo. Yes, we'll send someone to take a look. It may be a bit of leftover sealer or residue from install, or a spot where the stone's minerals polished a little differently, and our installer can tell right away and take care of it. Would tomorrow or Thursday work better for you?"
+
 ## Rules
 
 - Read SMS + email as one history. Do not re-ask known facts.
@@ -155,10 +168,10 @@ More GOOD patterns:
 - Do not push for an appointment before you understand the situation.
 - Mirror their words ("pushed back" not "delay" / "timeline" / "project status").
 - Do not restate long project descriptions when a short curious question works.
-- Sound like a real salesperson texting: short sentences, natural language.
+- Sound like a real salesperson texting: natural language, but complete thoughts. Never send a bare fact with no warmth or next step.
 - Vary openers: "Got it.", "Gotcha.", "Makes sense.", "I see.", "Understood."
 - Write in first person (I/we). Never name the rep in the third person.
-- SMS: 1–3 short sentences. Email: still concise.
+- SMS: usually 2–4 sentences (more for a request or concern). Email: 3–6 sentences.
 - Email body is the message only. Never prefix it with "Subject:"; the thread already has a subject.
 
 ## Custom requests override length and structure
@@ -375,14 +388,14 @@ pub fn build_user_prompt(
     };
     let length_note = if mode == ReplyMode::Custom {
         if channel == FollowupChannel::Sms {
-            "CHANNEL: SMS — conversational texting tone. Length follows the rep's instruction (see REPLY MODE), not the 1–3 sentence rule."
+            "CHANNEL: SMS — conversational texting tone. Length follows the rep's instruction (see REPLY MODE), not the usual sentence counts."
         } else {
-            "CHANNEL: EMAIL — length follows the rep's instruction (see REPLY MODE), not the 2–5 sentence rule. Do not include a Subject: line in the body."
+            "CHANNEL: EMAIL — length follows the rep's instruction (see REPLY MODE), not the usual sentence counts. Do not include a Subject: line in the body."
         }
     } else if channel == FollowupChannel::Sms {
-        "CHANNEL: SMS — keep the reply to 1–3 short sentences. One main question. Conversational texting tone."
+        "CHANNEL: SMS — usually 2–4 sentences; 3–5 when answering a request, question or concern. One main question. Conversational texting tone."
     } else {
-        "CHANNEL: EMAIL — slightly more detail is OK, but stay concise. Do not turn a simple exchange into a long email. Do not include a Subject: line in the body."
+        "CHANNEL: EMAIL — 3–6 sentences; answer requests and concerns fully, in short paragraphs. No corporate filler. Do not include a Subject: line in the body."
     };
     let deal_focus = deal_id.filter(|id| *id > 0).map_or_else(String::new, |id| {
         format!("\nFOCUS DEAL: Prioritize context for deal id {id} when relevant.\n")
@@ -444,7 +457,7 @@ pub struct CustomDraft {
 
 fn mode_note(mode: ReplyMode, custom: &CustomDraft) -> String {
     match mode {
-        ReplyMode::FastReply => "REPLY MODE: Fast reply.\nPrefer a short, immediate reply to the latest customer message.\nKeep it tight. Acknowledge what they said, then one natural next step or question if needed.\nDo not write a long check-in or restart the conversation.".into(),
+        ReplyMode::FastReply => "REPLY MODE: Fast reply.\nReply to the latest customer messages. If they asked for something (a visit, a callback) earlier in this exchange and the rep has not said yes yet, answer that first.\nAcknowledge what they said, explain fully when they asked something or raised a concern, then one natural next step or question.\nDo not write a long check-in or restart the conversation.".into(),
         ReplyMode::FollowUp => "REPLY MODE: Follow up.\nThe customer has not answered the latest rep message. Continue that specific topic.\nUse facts already in the thread and in QUOTES: the quote (and whether they opened it), the stones they named, the edge they chose, a discount, or a visit they cannot make.\nAsk one question about that open decision.\nDo not invent an agreement to reconnect. Never write \"as we agreed\" or \"reaching out as we agreed\" unless the thread shows they asked you to wait and you agreed.\nDo not ask how the project or renovation is coming along when a concrete next step is already open, unless a QUOTE ALREADY FOLLOWED UP note says the rep already chased it: then ask if the project is still on track.".into(),
         ReplyMode::Custom if !custom.previous_draft.is_empty() && !custom.revision_instruction.is_empty() => {
             let history: Vec<&str> = if custom.instruction_history.is_empty() {
@@ -460,7 +473,7 @@ fn mode_note(mode: ReplyMode, custom: &CustomDraft) -> String {
             )
         }
         ReplyMode::Custom => format!(
-            "REPLY MODE: Custom.\nThe sales rep gave this instruction for the draft:\n\"{}\"\nThe instruction is the content of the message. Cover EVERY point, detail, fact and question in it, in a natural order; drop none and do not shrink several points into one vague line. Turn the rep's notes into a clear, well-written message to the customer (fix grammar, keep their facts and names exactly).\nThe instruction sets the length, not the usual length rules: a short instruction gets a short message, a detailed one gets a complete message with every point. Several questions are fine when the rep asked them. On email, use short paragraphs when there are several points.\nStill sound natural and stay consistent with the conversation history.\nDo not ignore the thread. Do not invent facts the rep did not ask for.",
+            "REPLY MODE: Custom.\nThe sales rep gave this instruction for the draft:\n\"{}\"\nThe instruction is the content of the message. Cover EVERY point, detail, fact and question in it, in a natural order; drop none and do not shrink several points into one vague line. Turn the rep's notes into a clear, well-written message to the customer (fix grammar, keep their facts and names exactly).\nThe rep's notes are the key points, not the finished text: never return the instruction almost word for word. Build a complete message around it: answer what the customer last asked, make the rep's point in full sentences with a short plain-words explanation of why, and end with a helpful next step or question. Add only general, true context; no new prices, dates or promises.\nThe instruction sets the length, not the usual length rules: a short instruction gets a short message, a detailed one gets a complete message with every point. Several questions are fine when the rep asked them. On email, use short paragraphs when there are several points.\nStill sound natural and stay consistent with the conversation history.\nDo not ignore the thread. Do not invent facts the rep did not ask for.",
             custom.request
         ),
     }
@@ -902,7 +915,8 @@ mod tests {
         );
         assert!(
             text.contains("Cover EVERY point")
-                && !text.contains("1–3 short sentences. One main question")
+                && !text.contains("One main question")
+                && text.contains("never return the instruction almost word for word")
         );
         let revision = CustomDraft {
             request: "Price 1-2 white quartzite options".into(),
