@@ -32,7 +32,8 @@
 //! inbox's Assign, the lead notification's Mark invalid), and the To do tab's
 //! AI to-do list (`promise_route`: read it, close or reopen one), and the
 //! native quote screen (`DEVICE_QUOTE_READS` with `GET`, and `quote_write`:
-//! a new quote, its info, a saved revision, the sale and its email) the
+//! a new quote, its info, deleting and copying it, a saved revision and the
+//! autosave, today's prices, the sale, its email and links, a print) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -303,25 +304,35 @@ fn template_write(method: &Method, path: &str) -> bool {
 /// The quote lookups the app's native quote screen reads with its device
 /// token, exactly these paths and `GET` only: the price lists a quote can move
 /// to and a new quote starts from, the tax rates and payment terms of Pricing
-/// Settings and Edit Payment Terms, the forms the Email dialog offers, and the
-/// caller's quote email templates. A price list's editor (`/{id}`) and every
-/// write there stay with the CRM session.
-pub const DEVICE_QUOTE_READS: [&str; 5] = [
+/// Settings and Edit Payment Terms, the forms the Email and Print dialogs
+/// offer, the caller's quote email templates, the company's features (Mark as
+/// Sold's template readiness and job notes, Undo sale's warning), the event
+/// templates Mark as Sold offers as Extra events, and whether Google Maps
+/// finds the quote's address before it is printed. A price list's editor
+/// (`/{id}`) and every write there stay with the CRM session.
+pub const DEVICE_QUOTE_READS: [&str; 8] = [
     "/v1/quote-price-lists",
     "/v1/quote-tax-rates",
     "/v1/quote-payment-terms",
     "/v1/quote-forms",
     "/v1/me/quote-email-templates",
+    "/v1/company/features",
+    "/v1/quote-sale-events",
+    "/v1/places/check",
 ];
 
 /// The quote changes the app's native quote screen makes with its device
 /// token, exactly these: a new quote (`POST /v1/quotes`), its info (`PATCH
-/// /v1/quotes/{id}`), saving its drawing as a new revision (`PUT
-/// .../drawing`), Mark as Sold and Undo sale (`POST|DELETE .../sale`) and
-/// emailing it (`POST .../emails`). Reading a quote is under
-/// [`DEVICE_READ_ROUTES`]; deleting, copying, autosaving, updating its prices,
-/// printing and its links stay with the CRM session. The `edit_quotes` skill
-/// still applies ([`skills`]).
+/// /v1/quotes/{id}`), deleting it (`DELETE /v1/quotes/{id}`), saving its
+/// drawing as a new revision (`PUT .../drawing`), the unsaved drawing kept
+/// every 15 seconds and discarded (`PUT|DELETE .../autosave`), Copy quote
+/// (`POST .../copies`), Update prices (`POST .../prices`), Mark as Sold and
+/// Undo sale (`POST|DELETE .../sale`), emailing it (`POST .../emails`),
+/// switching a sent email's link off or on (`PATCH .../emails/{email_id}`)
+/// and recording a print (`POST .../prints`). Reading a quote is under
+/// [`DEVICE_READ_ROUTES`]; the customer link, contracts, QuickBooks invoices
+/// and the browser's print previews stay with the CRM session. The
+/// `edit_quotes` skill still applies ([`skills`]).
 fn quote_write(method: &Method, path: &str) -> bool {
     let Some(rest) = path.strip_prefix("/v1/quotes") else {
         return false;
@@ -333,11 +344,19 @@ fn quote_write(method: &Method, path: &str) -> bool {
         return false;
     };
     let parts: Vec<&str> = rest.split('/').collect();
+    let (is_post, is_put, is_patch, is_delete) = (
+        method == Method::POST,
+        method == Method::PUT,
+        method == Method::PATCH,
+        method == Method::DELETE,
+    );
     match parts.as_slice() {
-        [id] => is_id(id) && method == Method::PATCH,
-        [id, "drawing"] => is_id(id) && method == Method::PUT,
-        [id, "sale"] => is_id(id) && (method == Method::POST || method == Method::DELETE),
-        [id, "emails"] => is_id(id) && method == Method::POST,
+        [id] => is_id(id) && (is_patch || is_delete),
+        [id, "drawing"] => is_id(id) && is_put,
+        [id, "autosave"] => is_id(id) && (is_put || is_delete),
+        [id, "copies" | "prices" | "emails" | "prints"] => is_id(id) && is_post,
+        [id, "sale"] => is_id(id) && (is_post || is_delete),
+        [id, "emails", email] => is_id(id) && is_id(email) && is_patch,
         _ => false,
     }
 }
@@ -744,24 +763,50 @@ mod tests {
             (Method::POST, "/v1/quotes/7/sale"),
             (Method::DELETE, "/v1/quotes/7/sale"),
             (Method::POST, "/v1/quotes/7/emails"),
-        ] {
-            assert!(device_route(&method, path), "{method} {path}");
-        }
-        for (method, path) in [
+            (Method::GET, "/v1/company/features"),
+            (Method::GET, "/v1/quote-sale-events"),
+            (Method::GET, "/v1/places/check"),
             (Method::DELETE, "/v1/quotes/7"),
-            (Method::PUT, "/v1/quotes/7"),
-            (Method::POST, "/v1/quotes/7"),
-            (Method::PATCH, "/v1/quotes"),
-            (Method::PATCH, "/v1/quotes/x"),
-            (Method::PATCH, "/v1/quotes/"),
-            (Method::POST, "/v1/quotes/7/drawing"),
             (Method::PUT, "/v1/quotes/7/autosave"),
             (Method::DELETE, "/v1/quotes/7/autosave"),
             (Method::POST, "/v1/quotes/7/copies"),
             (Method::POST, "/v1/quotes/7/prices"),
             (Method::POST, "/v1/quotes/7/prints"),
-            (Method::POST, "/v1/quotes/7/portal-token"),
             (Method::PATCH, "/v1/quotes/7/emails/3"),
+        ] {
+            assert!(device_route(&method, path), "{method} {path}");
+        }
+        for (method, path) in [
+            (Method::PUT, "/v1/quotes/7"),
+            (Method::POST, "/v1/quotes/7"),
+            (Method::DELETE, "/v1/quotes"),
+            (Method::DELETE, "/v1/quotes/x"),
+            (Method::PATCH, "/v1/quotes"),
+            (Method::PATCH, "/v1/quotes/x"),
+            (Method::PATCH, "/v1/quotes/"),
+            (Method::POST, "/v1/quotes/7/drawing"),
+            (Method::POST, "/v1/quotes/7/autosave"),
+            (Method::PUT, "/v1/quotes/7/autosavex"),
+            (Method::PUT, "/v1/quotes/x/autosave"),
+            (Method::PUT, "/v1/quotes/7/copies"),
+            (Method::DELETE, "/v1/quotes/7/prices"),
+            (Method::PATCH, "/v1/quotes/7/prints"),
+            (Method::POST, "/v1/quotes/7/portal-token"),
+            (Method::PATCH, "/v1/quotes/7/emails"),
+            (Method::PATCH, "/v1/quotes/7/emails/x"),
+            (Method::DELETE, "/v1/quotes/7/emails/3"),
+            (Method::PATCH, "/v1/quotes/7/emails/3/views"),
+            (Method::POST, "/v1/quotes/7/view-link"),
+            (Method::POST, "/v1/company/features"),
+            (Method::GET, "/v1/company/featuresx"),
+            (Method::GET, "/v1/company/auto-sale"),
+            (Method::PUT, "/v1/company/auto-unscheduled-jobs"),
+            (Method::POST, "/v1/quote-sale-events"),
+            (Method::PUT, "/v1/quote-sale-events/3"),
+            (Method::DELETE, "/v1/quote-sale-events/3"),
+            (Method::GET, "/v1/quote-sale-events/3"),
+            (Method::GET, "/v1/places/autocomplete"),
+            (Method::POST, "/v1/places/check"),
             (Method::PUT, "/v1/quotes/7/sale"),
             (Method::POST, "/v1/quotes/x/sale"),
             (Method::POST, "/v1/quotes/7/emails/3"),
