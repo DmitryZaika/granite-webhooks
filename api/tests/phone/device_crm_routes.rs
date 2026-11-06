@@ -249,7 +249,7 @@ async fn the_app_reads_emails_and_the_schedule_with_its_device_token(pool: MySql
 
     // Elsewhere the cookie routes still need the cookie, even right next to
     // the prefixes (`/v1/email-attachments` is not under `/v1/emails`).
-    for path in ["/v1/company/drive-miles", "/v1/email-attachments/1/preview"] {
+    for path in ["/v1/company/tax-rate", "/v1/email-attachments/1/preview"] {
         server
             .get(path)
             .add_header(HEADER, token(301))
@@ -596,6 +596,8 @@ async fn the_quote_screen_sells_copies_reprices_prints_and_deletes_with_its_devi
         "/v1/company/features",
         "/v1/quote-sale-events",
         "/v1/places/check?address=1%20Main%20St%2C%20Carmel",
+        // The lead card's miles to the customer.
+        "/v1/company/drive-miles?address=Indianapolis%2046224",
     ] {
         let by_phone = server.get(read).add_header(HEADER, token(313)).await;
         by_phone.assert_status_ok();
