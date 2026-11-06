@@ -14,6 +14,7 @@ use crate::openapi::ToSchema;
 use crate::routes::calls::ringcentral::map_record;
 use crate::routes::calls::saved;
 use crate::routes::company::queries::company_features;
+use crate::routes::users::call_activity::ringcentral_saved_extra;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -134,7 +135,11 @@ async fn ringcentral_calls(
                 .as_array()
                 .into_iter()
                 .flatten()
-                .map(|record| map_record(record, None)),
+                .map(|record| {
+                    let mut item = map_record(record, None);
+                    item["Ringcentral"] = ringcentral_saved_extra(record);
+                    item
+                }),
         );
         // The next page is a full URI; keep what follows the API root.
         let Some(next) = body["navigation"]["nextPage"]["uri"]
