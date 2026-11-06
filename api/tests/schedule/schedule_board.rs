@@ -235,7 +235,7 @@ async fn admins_pick_the_day_weeks_start_on(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn people_see_their_own_events_and_the_office_sees_all(pool: MySqlPool) {
+async fn everyone_sees_every_event(pool: MySqlPool) {
     sqlx::raw_sql(
         "INSERT INTO events (id, title, start_date, end_date, created_user_id, assigned_user_id) VALUES
            (9790, 'Rita made', '2026-06-10 15:00:00', '2026-06-10 16:00:00', 100, NULL),
@@ -258,20 +258,11 @@ async fn people_see_their_own_events_and_the_office_sees_all(pool: MySqlPool) {
         let request = server.get("/v1/schedule/unscheduled").with_session(session);
         async move { common::ids(&request.await.json::<Value>()) }
     };
-    // Rita: what she made or is assigned to. Mark (Sales Manager): his own.
-    assert_eq!(june(sessions::REP).await, [9790, 9791]);
-    assert!(june(sessions::MANAGER).await.is_empty());
-    assert!(waiting(sessions::REP).await.is_empty());
-    // Admins and the Office Manager (scheduling) see everyone's.
-    assert_eq!(june(sessions::ADMIN).await, [9790, 9791, 9792]);
-    assert_eq!(waiting(sessions::ADMIN).await, [9793]);
-    sqlx::query(
-        "UPDATE users_positions SET position_id = 10 WHERE user_id = 101 AND company_id = 100",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    assert_eq!(june(sessions::MANAGER).await, [9790, 9791, 9792]);
+    // Owner's rule: everyone sees every event, whatever their position.
+    for session in [sessions::REP, sessions::MANAGER, sessions::ADMIN] {
+        assert_eq!(june(session).await, [9790, 9791, 9792]);
+        assert_eq!(waiting(session).await, [9793]);
+    }
 }
 
 #[test_db::test(seed)]
