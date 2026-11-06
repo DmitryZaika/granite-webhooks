@@ -42,7 +42,9 @@
 //!
 //! Every extractor above also applies position access ([`sections`]): when a
 //! company limits the tabs of someone's positions, they are refused the data
-//! only their closed tabs use. With limited tabs they pass `EmployeeUser` and
+//! only their closed tabs use, and a change that needs a skill their
+//! positions lack ([`skills`]: selling slabs, changing a transaction or a
+//! quote, planning the schedule). With limited tabs they pass `EmployeeUser` and
 //! `ShopOrEmployeeUser`, and on an admin tab's routes they act as a company
 //! admin (`is_admin`, so `AdminUser` and the handlers' own checks agree).
 
@@ -52,6 +54,7 @@ pub mod device;
 pub mod job;
 pub mod sections;
 pub mod session;
+pub mod skills;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -91,6 +94,7 @@ async fn authenticate_with_access(
     if !access.allows(path) {
         return Err(sections::outside_sections());
     }
+    skills::check(&state.pool, &user, &positions, &parts.method, path).await?;
     if access.allows_admin(path) {
         user.is_admin = true;
     }
@@ -105,14 +109,14 @@ async fn check_sections(
     user: &SessionUser,
 ) -> Result<(), ApiError> {
     let positions = user_positions(&state.pool, user.id).await?;
-    if sections::user_access(&state.pool, user, &positions)
+    let path = parts.uri.path();
+    if !sections::user_access(&state.pool, user, &positions)
         .await?
-        .allows(parts.uri.path())
+        .allows(path)
     {
-        Ok(())
-    } else {
-        Err(sections::outside_sections())
+        return Err(sections::outside_sections());
     }
+    skills::check(&state.pool, user, &positions, &parts.method, path).await
 }
 
 /// The CRM routes the Granite Phone app also calls with its device token.
