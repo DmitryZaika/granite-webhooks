@@ -80440,6 +80440,20 @@
             ],
             "description": "Email for this event only, up to 255 characters; like `contact_phone`."
           },
+          "contact_phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second phone for this event; every automated text goes to both.\nEmpty or null clears it, leave out to keep it."
+          },
+          "contact_email_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second email for this event; every automated email goes to both."
+          },
           "qbo_invoice": {
             "oneOf": [
               {
@@ -82124,6 +82138,20 @@
               "null"
             ],
             "description": "Email for this event only; null uses the customer's."
+          },
+          "contact_phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second phone for this event."
+          },
+          "contact_email_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second email for this event."
           }
         }
       },
@@ -98482,6 +98510,20 @@
             ],
             "description": "Email for this event only; null uses the customer's."
           },
+          "contact_phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second phone for this event; automated texts go to both."
+          },
+          "contact_email_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second email for this event; automated emails go to both."
+          },
           "crew_status": {
             "type": [
               "string",
@@ -107017,7 +107059,8 @@
           "companies",
           "logged_in_is_superuser",
           "has_cloudtalk_api",
-          "has_ringcentral_api"
+          "has_ringcentral_api",
+          "other_office_managers"
         ],
         "properties": {
           "user": {
@@ -107066,6 +107109,11 @@
           "has_ringcentral_api": {
             "type": "boolean",
             "description": "Their company has `RingCentral`."
+          },
+          "other_office_managers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Other live Office Managers of their company: at 0 the form warns\nbefore it takes the position off them (survey texts stop)."
           }
         }
       },
