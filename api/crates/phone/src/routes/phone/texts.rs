@@ -306,6 +306,59 @@ pub async fn text_thread(
     Ok(Json(thread))
 }
 
+/// Delete a text that failed
+///
+/// Removes one of my lines' outbound texts that was not delivered (status
+/// `failed`), with its files: it never reached the other person, so the
+/// conversation no longer shows it. The app deletes the failed text it sends
+/// again, so it is never sent twice. 409 for a text that went out (or is
+/// still going), 404 for one not on my lines. Device token only.
+#[crate::openapi::path(
+    delete,
+    path = "/v1/phone/texts/messages/{id}",
+    operation_id = "delete_failed_phone_text",
+    tag = "phone",
+    params(("id" = String, Path, description = "The text's id (a text's `id`)")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "No valid device token", body = ErrorBody),
+        (status = 403, description = "`texting_disabled`", body = ErrorBody),
+        (status = 404, description = "Not a text of my lines", body = ErrorBody),
+        (status = 409, description = "The text did not fail: only a failed text can be deleted", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("device_token" = []))
+)]
+pub async fn delete_failed_text(
+    State(state): State<AppState>,
+    device: DeviceUser,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let company_id = device.user.company_id;
+    texting_on(&state, company_id).await?;
+    let id: i64 = id.trim().parse().map_err(|_| ApiError::NotFound)?;
+    let key = texts::thread_of(&state.pool, company_id, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    my_thread(&state, &device, key).await?;
+    // Its files go with it (ON DELETE CASCADE).
+    let deleted = sqlx::query(
+        "DELETE FROM telnyx_sms
+          WHERE id = ? AND company_id = ? AND direction = 'outbound' AND status = 'failed'",
+    )
+    .bind(id)
+    .bind(company_id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if deleted == 0 {
+        return Err(ApiError::Conflict(
+            "Only a text that failed can be deleted".into(),
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Link to a text's picture or file
 ///
 /// A 5-minute link to a picture or file of a text on one of my lines. 404
