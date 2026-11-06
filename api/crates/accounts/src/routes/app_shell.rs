@@ -85,6 +85,10 @@ pub struct AppShell {
     /// The Admin switch still opens every admin page. Null when nothing is
     /// limited.
     pub sections: Option<Vec<String>>,
+    /// The skills the user's positions give them (Position access):
+    /// `sell_slabs`, `edit_transactions`, `edit_quotes`, `plan_schedule`.
+    /// Null when they have every skill (admins always do).
+    pub skills: Option<Vec<String>>,
     /// The company has CloudTalk.
     pub has_cloudtalk_api: bool,
     /// The company has RingCentral.
@@ -249,6 +253,9 @@ pub async fn shell(
     let sections = crate::auth::sections::user_tabs(pool, &user, &rows)
         .await?
         .map(|keys| keys.into_iter().map(ToString::to_string).collect());
+    let skills = crate::auth::skills::user_skills(pool, &user, &rows)
+        .await
+        .map(|keys| keys.into_iter().map(ToString::to_string).collect());
     let sms_images_enabled = !std::env::var("SMS_IMAGES_ENABLED").is_ok_and(|value| {
         matches!(
             value.trim().to_lowercase().as_str(),
@@ -281,6 +288,7 @@ pub async fn shell(
         portal_home: portal.as_ref().map(|(_, home)| home.clone()),
         portal: portal.map(|(name, _)| name),
         sections,
+        skills,
         has_cloudtalk_api: features.cloudtalk,
         has_ringcentral_api: features.ringcentral,
         has_telnyx_api: features.telnyx,

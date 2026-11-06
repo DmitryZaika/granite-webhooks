@@ -2640,7 +2640,7 @@
           "customers"
         ],
         "summary": "Delete a customer",
-        "description": "Hides the customer (soft delete) and removes it from the telephony\naddress books. A customer with live deals needs `cascade_deals=true`,\nwhich hides the deals too. Admins and sales managers only.",
+        "description": "Hides the customer (soft delete) and removes it from the telephony\naddress books. A customer with live deals needs `cascade_deals=true`,\nwhich hides the deals too. Admins, sales managers and managers only.",
         "operationId": "delete_customer",
         "parameters": [
           {
@@ -2678,7 +2678,7 @@
             }
           },
           "403": {
-            "description": "Caller is neither an admin nor a sales manager",
+            "description": "Caller is neither an admin, a sales manager nor a manager",
             "content": {
               "application/json": {
                 "schema": {
@@ -53644,7 +53644,7 @@
           "company"
         ],
         "summary": "List position access",
-        "description": "Every tab of the app, and for each position the company may change (all\nbut Super Admin and the portal ones: Shop Worker, Installer, Marketing,\nWalk-in, Template Guy) the tabs it opens, its defaults and whether the\ncompany changed them. Someone with several positions gets all their tabs\ntogether. By default every position opens the whole main app, except\nInventory Manager and Scheduling Manager. The Admin switch still opens\nevery admin page; an admin tab opens that page to someone without it.\nSuperusers and company managers (admins with the Manager position);\nsuperusers may pass `company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
+        "description": "Every tab of the app, and for each position the company may change (all\nbut Super Admin and the portal ones: Shop Worker, Installer, Marketing,\nWalk-in, Template Guy) the tabs it opens, its defaults and whether the\ncompany changed them. Someone with several positions gets all their tabs\ntogether. By default every position opens the whole main app, except\nInventory Manager and Scheduling Manager. The Admin switch still opens\nevery admin page; an admin tab opens that page to someone without it.\nEvery skill too, and each position's: by default every position sells\nslabs and works with transactions and quotes, and only Scheduling Manager\nplans the schedule; the Admin switch keeps every skill. Superusers and\ncompany managers (admins with the Manager position);\nsuperusers may pass `company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
         "operationId": "list_position_sections",
         "parameters": [
           {
@@ -53713,7 +53713,7 @@
           "company"
         ],
         "summary": "Save a position's tabs",
-        "description": "Replaces the tabs the position opens in the company, from then on\nfor every user holding it (their next request). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
+        "description": "Replaces the tabs the position opens in the company, and its skills\n(null: the defaults), from then on for every user holding it (their next\nrequest). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
         "operationId": "save_position_sections",
         "parameters": [
           {
@@ -53752,7 +53752,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "A position whose tabs can't be changed, or an unknown tab",
+            "description": "A position whose tabs can't be changed, or an unknown tab or skill",
             "content": {
               "application/json": {
                 "schema": {
@@ -53803,7 +53803,7 @@
           "company"
         ],
         "summary": "Reset a position's tabs",
-        "description": "The position opens its default tabs again in the company.",
+        "description": "The position opens its default tabs, with its default skills, again in\nthe company.",
         "operationId": "reset_position_sections",
         "parameters": [
           {
@@ -68932,6 +68932,16 @@
               "type": "string"
             },
             "description": "The tabs the user's positions open, when the company limits them\n(Position access): keys such as `stones`, `customers`, `schedule`,\n`admin_stones` (`GET /v1/company/position-sections` lists them all).\nThe Admin switch still opens every admin page. Null when nothing is\nlimited."
+          },
+          "skills": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The skills the user's positions give them (Position access):\n`sell_slabs`, `edit_transactions`, `edit_quotes`, `plan_schedule`.\nNull when they have every skill (admins always do)."
           },
           "has_cloudtalk_api": {
             "type": "boolean",
@@ -90693,6 +90703,7 @@
         "description": "`GET /v1/company/position-sections`.",
         "required": [
           "sections",
+          "skills",
           "positions"
         ],
         "properties": {
@@ -90702,6 +90713,13 @@
               "$ref": "#/components/schemas/SectionInfo"
             },
             "description": "Every tab, in the order to show them: the main app, then admin pages."
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillInfo"
+            },
+            "description": "Every skill, in the order to show them."
           },
           "positions": {
             "type": "array",
@@ -90733,6 +90751,8 @@
           "position_id",
           "sections",
           "default_sections",
+          "skills",
+          "default_skills",
           "customized"
         ],
         "properties": {
@@ -90755,6 +90775,20 @@
             },
             "description": "The tabs it opens in a company that has not changed it."
           },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its skills in this company, in [`SkillInfo`] order."
+          },
+          "default_skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its skills in a company that has not changed them."
+          },
           "customized": {
             "type": "boolean",
             "description": "The company changed it (false: it uses the defaults)."
@@ -90774,6 +90808,16 @@
               "type": "string"
             },
             "description": "Tab keys the position opens (may be empty: then only My Account)."
+          },
+          "skills": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Skill keys it has (may be empty); null or left out: the default\nskills, which follow later changes to the defaults."
           }
         },
         "additionalProperties": false
@@ -98973,6 +99017,29 @@
               "$ref": "#/components/schemas/StoneUsingType"
             },
             "description": "Live sink models of that type, by name; delete or retype them first."
+          }
+        }
+      },
+      "SkillInfo": {
+        "type": "object",
+        "description": "A skill a position may have: something its people may do on the tabs\nthey open.",
+        "required": [
+          "key",
+          "label",
+          "description"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable key (`sell_slabs`, `edit_transactions`, `edit_quotes`,\n`plan_schedule`)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its name on the Company page."
+          },
+          "description": {
+            "type": "string",
+            "description": "What it lets people do."
           }
         }
       },
