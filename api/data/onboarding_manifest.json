@@ -130,6 +130,16 @@
       ]
     },
     {
+      "id": "quote-contract-add-to-email",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "quote-contract-add-to-email"
+      ]
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,
