@@ -2,6 +2,11 @@
 //! browser can show. iPhone photos (HEIC) become JPEGs, kept in the bucket
 //! after the first view; `icon=true` answers a small JPEG for chat tiles.
 //! Replaces the Remix `api.email-attachments.$attachmentId.{preview,raw}`.
+//!
+//! `GET /v1/email-attachments/{id}/open`: any attachment (a PDF invoice, a
+//! video, a picture), through a link signed when it is opened. A link from
+//! the conversation is only good for an hour, and a page left open longer
+//! (the installed phone app stays open for days) would hand out a dead one.
 
 use super::attachments::{is_image, readable_attachment};
 use crate::auth::EmployeeUser;
@@ -199,6 +204,41 @@ pub async fn preview(
     }
     let location = storage.presign_get(&key, "image/jpeg").await?;
     Ok(answer(&location, query.link))
+}
+
+/// Open an attachment
+///
+/// Redirects to the stored file through a link signed now (valid an hour),
+/// whatever kind of file it is. Use this for links people tap: the
+/// `signed_url` in a conversation dies an hour after the conversation was
+/// loaded. Pictures for an `<img>` go through `/preview` instead (HEIC
+/// becomes a JPEG there).
+#[crate::openapi::path(
+    get,
+    path = "/v1/email-attachments/{id}/open",
+    operation_id = "open_email_attachment",
+    tag = "emails",
+    params(("id" = i32, Path, description = "Attachment id")),
+    responses(
+        (status = 302, description = "Redirect to the file"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such attachment the caller may read", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn open(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<Response> {
+    let (url, kind, sub, _) = readable_attachment(&state.pool, user.company_id, id).await?;
+    let readable = state
+        .storage
+        .readable_url(&url, mime(&kind, &sub).as_deref())
+        .await;
+    // Never reused: the next tap signs a new link.
+    Ok(redirect(&readable, "private, no-store"))
 }
 
 #[cfg(test)]
