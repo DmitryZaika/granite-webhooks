@@ -190,7 +190,7 @@
       "version": 1,
       "points": 5,
       "checklist": false,
-      "required_steps": 0,
+      "required_steps": 2,
       "base_keys": [
         "schedule-unscheduled",
         "schedule-unscheduled-header"
@@ -293,7 +293,7 @@
       "version": 1,
       "points": 10,
       "checklist": false,
-      "required_steps": 0,
+      "required_steps": 2,
       "base_keys": [
         "deal-call-item",
         "call-add-note"
@@ -379,6 +379,18 @@
         "schedule-ai-texts"
       ],
       "usage_check": "schedule_texts_saved"
+    },
+    {
+      "id": "stone-image-crop",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "stone-image-preview",
+        "stone-image-crop"
+      ],
+      "usage_check": "stone_image_edited"
     },
     {
       "id": "setup-email-name",
