@@ -89289,6 +89289,16 @@
               "null"
             ],
             "description": "The portal a position locks the user into on the web, if any.\n\nThe same rule as `GET /v1/app/shell` `portal` (`installer`,\n`check-in`, `marketing`, `shop_worker`, `template`); null for everyone\nelse. For `installer` and `template` the app shows only the user's own\nschedule (`GET /v1/me/schedule`) and does not set the phone up for\ncalls."
+          },
+          "skills": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The skills the user's positions give them (Position access), as\n`GET /v1/app/shell` `skills` has them: e.g. without `edit_quotes` the\napp shows quotes read-only. Null: every skill (admins, superusers and\npeople without a configurable position)."
           }
         }
       },

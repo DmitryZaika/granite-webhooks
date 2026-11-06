@@ -244,7 +244,7 @@ async fn the_app_reads_emails_and_the_schedule_with_its_device_token(pool: MySql
 
     // Elsewhere the cookie routes still need the cookie, even right next to
     // the prefixes (`/v1/email-attachments` is not under `/v1/emails`).
-    for path in ["/v1/company/features", "/v1/email-attachments/1/preview"] {
+    for path in ["/v1/company/drive-miles", "/v1/email-attachments/1/preview"] {
         server
             .get(path)
             .add_header(HEADER, token(301))
@@ -512,16 +512,16 @@ async fn the_quote_screen_reads_and_saves_a_quote_with_its_device_token(pool: My
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // The rest of the quote's writes still need the CRM session.
+    // The customer link, the price list's editor and the company's quote
+    // setup still need the CRM session.
     for (method, route) in [
-        ("DELETE", path.clone()),
-        ("POST", format!("{path}/copies")),
-        ("PUT", format!("{path}/autosave")),
-        ("POST", format!("{path}/prices")),
+        ("POST", format!("{path}/portal-token")),
+        ("GET", "/v1/quote-extras".to_string()),
         ("GET", format!("/v1/quote-price-lists/{list_id}")),
+        ("POST", "/v1/quote-sale-events".to_string()),
+        ("PUT", "/v1/company/auto-unscheduled-jobs".to_string()),
     ] {
         let request = match method {
-            "DELETE" => server.delete(&route),
             "POST" => server.post(&route).json(&json!({})),
             "PUT" => server.put(&route).json(&json!({})),
             _ => server.get(&route),
@@ -531,4 +531,277 @@ async fn the_quote_screen_reads_and_saves_a_quote_with_its_device_token(pool: My
             .await
             .assert_status(StatusCode::FORBIDDEN);
     }
+}
+
+/// A Retail price list with Granite (Ubatuba, $40) in company 100.
+async fn granite_price_list(server: &axum_test::TestServer, pool: &MySqlPool) -> i64 {
+    let list = server
+        .post("/v1/quote-price-lists")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Retail" }))
+        .await;
+    list.assert_status(StatusCode::CREATED);
+    let list_id = list.json::<Value>()["id"].as_i64().unwrap();
+    let info = json!({
+        "units": "in", "currency": "$", "lineItemPriceRounding": 2,
+        "arrProducts": [{ "name": "Granite", "allowDiscount": 1,
+                          "arrVariants": [{ "name": "Ubatuba", "price": 40 }] }],
+        "arrOtherItems": [], "arrSinkModels": [],
+    });
+    sqlx::query(
+        "UPDATE price_list_revisions r JOIN price_lists pl ON pl.current_revision_id = r.id
+            SET r.info_json = ? WHERE pl.id = ?",
+    )
+    .bind(info.to_string())
+    .bind(list_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    list_id
+}
+
+#[test_db::test(seed)]
+async fn the_quote_screen_sells_copies_reprices_prints_and_deletes_with_its_device_token(
+    pool: MySqlPool,
+) {
+    // Rita (user 100, company 100) on her phone; the company has a Plumbers
+    // calendar with a "Plumbing" event template for Mark as Sold.
+    add_session(&pool, 313, 100, 100).await;
+    let (server, stubs) = phone_server(pool.clone()).await;
+    let list_id = granite_price_list(&server, &pool).await;
+    sql(
+        &pool,
+        "INSERT INTO calendars (company_id, name, color, slug) VALUES (100, 'Plumbers', 'green', NULL)",
+    )
+    .await;
+    let plumbers: i32 = sqlx::query_scalar("SELECT id FROM calendars WHERE name = 'Plumbers'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let template = server
+        .post("/v1/quote-sale-events")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "calendar_id": plumbers, "title_text": "Plumbing" }))
+        .await;
+    template.assert_status(StatusCode::CREATED);
+    let template_id = template.json::<Value>()["id"].as_i64().unwrap();
+
+    // Mark as Sold's and Print's lookups read as with her cookie.
+    for read in [
+        "/v1/company/features",
+        "/v1/quote-sale-events",
+        "/v1/places/check?address=1%20Main%20St%2C%20Carmel",
+    ] {
+        let by_phone = server.get(read).add_header(HEADER, token(313)).await;
+        by_phone.assert_status_ok();
+        let by_cookie = server.get(read).with_session(sessions::REP).await;
+        assert_eq!(
+            by_phone.json::<Value>(),
+            by_cookie.json::<Value>(),
+            "{read}"
+        );
+    }
+    let events = server
+        .get("/v1/quote-sale-events")
+        .add_header(HEADER, token(313))
+        .await
+        .json::<Value>();
+    assert_eq!(events[0]["title_text"], "Plumbing");
+
+    let created = server
+        .post("/v1/quotes")
+        .add_header(HEADER, token(313))
+        .json(&json!({ "customer_id": 1000, "quote_name": "Kitchen", "price_list_id": list_id }))
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let id = created.json::<Value>()["id"].as_i64().unwrap();
+    let path = format!("/v1/quotes/{id}");
+    let doc = json!({
+        "version": 2,
+        "areas": [{ "id": "area-1", "name": "Kitchen", "quantity": 1 }],
+        "colorOptions": [{ "id": "option-1",
+                           "byArea": { "area-1": { "product": "Granite", "color": "Ubatuba" } } }],
+        "items": [{ "id": "i1", "kind": "misc", "areaId": null, "name": "Sealer",
+                    "quantity": 1, "price": 100 }],
+    });
+    server
+        .put(&format!("{path}/drawing"))
+        .add_header(HEADER, token(313))
+        .json(&json!({ "doc": doc, "notes": "First" }))
+        .await
+        .assert_status_ok();
+
+    // Unsaved changes kept every 15 seconds, then discarded.
+    server
+        .put(&format!("{path}/autosave"))
+        .add_header(HEADER, token(313))
+        .json(&json!({ "doc": doc }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let quote = server
+        .get(&path)
+        .add_header(HEADER, token(313))
+        .await
+        .json::<Value>();
+    assert_eq!(quote["autosave"]["doc"]["items"][0]["name"], "Sealer");
+    server
+        .delete(&format!("{path}/autosave"))
+        .add_header(HEADER, token(313))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let quote = server
+        .get(&path)
+        .add_header(HEADER, token(313))
+        .await
+        .json::<Value>();
+    assert_eq!(quote["autosave"], Value::Null);
+
+    // Update prices, and a print recorded.
+    server
+        .post(&format!("{path}/prices"))
+        .add_header(HEADER, token(313))
+        .json(&json!({}))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .post(&format!("{path}/prints"))
+        .add_header(HEADER, token(313))
+        .json(&json!({ "form_label": "Quote (line items)" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // Emailed, then its link switched off and on again.
+    server
+        .post(&format!("{path}/emails"))
+        .add_header(HEADER, token(313))
+        .json(
+            &json!({ "to": ["alice@example.com"], "subject": "Your quote",
+                       "body": "Here it is: [QuoteLink]" }),
+        )
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(stubs.emails().len(), 1);
+    let quote = server
+        .get(&path)
+        .add_header(HEADER, token(313))
+        .await
+        .json::<Value>();
+    let email_id = quote["emails"][0]["id"].as_i64().unwrap();
+    for active in [false, true] {
+        server
+            .patch(&format!("{path}/emails/{email_id}"))
+            .add_header(HEADER, token(313))
+            .json(&json!({ "active": active }))
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+        let quote = server
+            .get(&path)
+            .add_header(HEADER, token(313))
+            .await
+            .json::<Value>();
+        assert_eq!(quote["emails"][0]["deactivated_at"].is_null(), active);
+    }
+
+    // Sold with the template not ready, job notes and the Plumbing event.
+    server
+        .post(&format!("{path}/sale"))
+        .add_header(HEADER, token(313))
+        .json(&json!({
+            "option": 0,
+            "job_status": "not_ready",
+            "template_notes": "Measure twice",
+            "install_notes": "Back door",
+            "full_height_backsplash": true,
+            "extra_events": [{ "template_id": template_id, "notes": "Two sinks" }],
+        }))
+        .await
+        .assert_status_ok();
+    let extra: (String, Option<String>) = sqlx::query_as(
+        "SELECT title, notes FROM events WHERE quote_id = ? AND calendar_id = ? AND deleted_date IS NULL",
+    )
+    .bind(id)
+    .bind(plumbers)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        extra,
+        (
+            "Kitchen - Plumbing".to_string(),
+            Some("Two sinks".to_string())
+        )
+    );
+
+    // Copied, with its drawing, then the copy deleted.
+    let copy = server
+        .post(&format!("{path}/copies"))
+        .add_header(HEADER, token(313))
+        .json(&json!({ "quote_name": "Kitchen copy", "copy_address": true, "copy_drawing": true }))
+        .await;
+    copy.assert_status(StatusCode::CREATED);
+    let copy_id = copy.json::<Value>()["id"].as_i64().unwrap();
+    let copied = server
+        .get(&format!("/v1/quotes/{copy_id}"))
+        .add_header(HEADER, token(313))
+        .await
+        .json::<Value>();
+    assert_eq!(copied["quote"]["name"], "Kitchen copy");
+    assert_eq!(copied["doc"]["items"][0]["name"], "Sealer");
+    server
+        .delete(&format!("/v1/quotes/{copy_id}"))
+        .add_header(HEADER, token(313))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let deleted: bool =
+        sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM quotes WHERE id = ?")
+            .bind(copy_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(deleted);
+}
+
+#[test_db::test(seed)]
+async fn without_edit_quotes_the_phone_is_told_and_refused(pool: MySqlPool) {
+    // Rita is a sales rep whose company took Edit quotes from sales reps.
+    add_session(&pool, 314, 100, 100).await;
+    sql(
+        &pool,
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 1, 100)",
+    )
+    .await;
+    let (server, _) = phone_server(pool.clone()).await;
+    let bootstrap = server
+        .get("/v1/phone/bootstrap")
+        .add_header(HEADER, token(314))
+        .await
+        .json::<Value>();
+    assert_eq!(
+        bootstrap["user"]["skills"],
+        json!(["sell_slabs", "edit_transactions", "edit_quotes"])
+    );
+    sql(
+        &pool,
+        "INSERT INTO company_position_sections (company_id, position_id, sections, skills)
+           VALUES (100, 1, 'customers,deals', 'sell_slabs')",
+    )
+    .await;
+    let bootstrap = server
+        .get("/v1/phone/bootstrap")
+        .add_header(HEADER, token(314))
+        .await
+        .json::<Value>();
+    assert_eq!(bootstrap["user"]["skills"], json!(["sell_slabs"]));
+    // Her phone may still read quotes but not change them.
+    server
+        .get("/v1/quotes")
+        .add_header(HEADER, token(314))
+        .await
+        .assert_status_ok();
+    server
+        .post("/v1/quotes")
+        .add_header(HEADER, token(314))
+        .json(&json!({ "customer_id": 1000, "quote_name": "Kitchen" }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
 }
