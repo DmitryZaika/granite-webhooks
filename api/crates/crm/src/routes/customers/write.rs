@@ -405,14 +405,14 @@ pub async fn set_sales_rep(
     JsonBody(body): JsonBody<SalesRepInput>,
 ) -> ApiResult<StatusCode> {
     let pool = &state.pool;
-    let previous: Option<Option<i32>> = sqlx::query_scalar(
-        "SELECT sales_rep FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    let found: Option<(Option<i32>, Option<String>)> = sqlx::query_as(
+        "SELECT sales_rep, name FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(id)
     .bind(user.company_id)
     .fetch_optional(pool)
     .await?;
-    let previous = previous.ok_or(ApiError::NotFound)?;
+    let (previous, name) = found.ok_or(ApiError::NotFound)?;
     refuse_import_placeholder(pool, id).await?;
     check_rep(&state, user.company_id, body.sales_rep).await?;
     if previous != body.sales_rep {
@@ -437,7 +437,15 @@ pub async fn set_sales_rep(
         let deal = ensure_open_deal(pool, id, user.company_id, rep).await?;
         remind_new_rep(pool, rep, id).await?;
         if previous != body.sales_rep {
-            notify_assigned_rep(&state, user.company_id, id, rep, user.id, deal, None).await;
+            // Moved from another rep: "You were reassigned the customer <name>".
+            let reassigned = previous.map(|_| {
+                name.as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("Unknown")
+            });
+            notify_assigned_rep(&state, user.company_id, id, rep, user.id, deal, reassigned)
+                .await;
         }
         state.webhooks.sync_contacts(user.company_id, id).await;
     }

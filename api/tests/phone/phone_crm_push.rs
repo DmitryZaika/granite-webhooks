@@ -524,4 +524,23 @@ async fn a_customer_moved_to_another_rep_on_its_edit_page_says_reassigned(pool: 
             .starts_with("You were assigned a lead. Click here: \n"),
         "{texts:?}"
     );
+
+    // The Sales rep picker says the same: Bob goes to Rita, then back to Dina.
+    for rep in [100, 107] {
+        server
+            .put("/v1/customers/1001/sales-rep")
+            .with_session(sessions::MANAGER)
+            .json(&json!({ "sales_rep": rep }))
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    let texts = to_dina(&chats);
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    assert!(
+        texts[2]
+            .as_str()
+            .unwrap()
+            .starts_with("You were reassigned the customer Bob Unassigned. Click here: \n"),
+        "{texts:?}"
+    );
 }
