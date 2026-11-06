@@ -165,7 +165,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(texts::send_text))
         .routes(routes!(texts::mark_text_thread_read))
         .routes(routes!(admin::list_admin_numbers))
-        .routes(routes!(admin::update_admin_number))
+        .routes(routes!(
+            admin::update_admin_number,
+            admin::delete_admin_number
+        ))
         .routes(routes!(admin::import_admin_numbers))
         .routes(routes!(admin::list_admin_devices))
         .routes(routes!(admin::revoke_admin_device))

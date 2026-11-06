@@ -743,8 +743,9 @@ async fn add_numbers(pool: &MySqlPool, row: &PortRow) -> sqlx::Result<usize> {
             Some(_) => elsewhere += 1,
             None => {
                 let inserted = sqlx::query(
-                    "INSERT IGNORE INTO telnyx_numbers (company_id, e164, last10, label, kind, active)
-                     VALUES (?, ?, ?, ?, 'direct', 1)",
+                    "INSERT IGNORE INTO telnyx_numbers
+                       (company_id, e164, last10, label, kind, active, no_answer_action)
+                     VALUES (?, ?, ?, ?, 'direct', 1, 'voicemail')",
                 )
                 .bind(row.company_id)
                 .bind(&e164)
