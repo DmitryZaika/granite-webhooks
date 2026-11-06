@@ -29,7 +29,9 @@
 //! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes and
 //! files; not deleting a deal or the board setup), and a customer's sales
 //! rep or invalid lead (`customer_write`: the contact card's and the lead
-//! inbox's Assign, the lead notification's Mark invalid), and the To do tab's
+//! inbox's Assign, the lead notification's Mark invalid, and the deal Edit's
+//! customer, as the website's deal edit saves it, with the lead sources it
+//! offers), and the To do tab's
 //! AI to-do list (`promise_route`: read it, close or reopen one), and the
 //! native quote screen (`DEVICE_QUOTE_READS` with `GET`, and `quote_write`:
 //! a new quote, its info, deleting and copying it, a saved revision and the
@@ -265,18 +267,29 @@ fn deal_write(method: &Method, path: &str) -> bool {
 
 /// The customer changes the app makes with its device token, exactly these:
 /// a customer's sales rep (`PUT /v1/customers/{id}/sales-rep`), from the
-/// contact card's Assign and the lead inbox, and marking a lead invalid
-/// (`PUT /v1/customers/{id}/invalid`, admins and sales managers only, as on
-/// the web), from the lead notification's Mark invalid. Editing or deleting a
-/// customer stays with the CRM session.
+/// contact card's Assign and the lead inbox, marking a lead invalid (`PUT
+/// /v1/customers/{id}/invalid`, admins and sales managers only, as on the
+/// web), from the lead notification's Mark invalid, and the deal's Edit
+/// saving its customer as the website's deal edit does (`PUT
+/// /v1/customers/{id}`: name, emails, phones, address, source, sales rep,
+/// company and notes; a new sales rep gets the customer's deals and is told).
+/// Creating, merging or deleting a customer stays with the CRM session.
 fn customer_write(method: &Method, path: &str) -> bool {
     method == Method::PUT
         && path.strip_prefix("/v1/customers/").is_some_and(|rest| {
-            rest.strip_suffix("/sales-rep")
-                .or_else(|| rest.strip_suffix("/invalid"))
-                .is_some_and(is_id)
+            is_id(rest)
+                || rest
+                    .strip_suffix("/sales-rep")
+                    .or_else(|| rest.strip_suffix("/invalid"))
+                    .is_some_and(is_id)
         })
 }
+
+/// What the deal's Edit reads with the device token to save its customer,
+/// exactly this path and `GET` only: the company's lead sources (`GET
+/// /v1/customer-sources`), the Source list of the website's customer form.
+/// Adding, renaming and deleting a source stay with the CRM session.
+const DEVICE_CUSTOMER_SOURCES: &str = "/v1/customer-sources";
 
 /// The app's To do tab, exactly these: the caller's AI to-do list (`GET
 /// /v1/ai/promises`, with its filters) and marking one done, not wanted or
@@ -463,7 +476,8 @@ fn own_invoice(method: &Method, path: &str) -> bool {
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
-/// ([`deal_write`]), a customer's sales rep ([`customer_write`]), the
+/// ([`deal_write`]), a customer's sales rep and the deal's Edit of its
+/// customer ([`customer_write`], `GET` on [`DEVICE_CUSTOMER_SOURCES`]), the
 /// templates' ([`template_write`]), the To do tab's ([`promise_route`]) and
 /// the quote screen's (`GET` on [`DEVICE_QUOTE_READS`], [`quote_write`],
 /// [`quote_print_and_templates`]), and the sale form's and invoice editor's
@@ -475,6 +489,7 @@ fn device_route(method: &Method, path: &str) -> bool {
         || (method == Method::POST && (DEVICE_ACTIONS.contains(&path) || sms_send(path)))
         || deal_write(method, path)
         || customer_write(method, path)
+        || (method == Method::GET && path == DEVICE_CUSTOMER_SOURCES)
         || template_write(method, path)
         || promise_route(method, path)
         || (method == Method::GET && DEVICE_QUOTE_READS.contains(&path))
@@ -746,7 +761,6 @@ mod tests {
             "/v1/documents",
             "/v1/customers/email-recipients",
             "/v1/customers/page",
-            "/v1/customers/7",
             "/v1/deal-groups",
             "/v1/deal-lists",
             "/v1/stones",
@@ -845,8 +859,36 @@ mod tests {
             (Method::POST, "/v1/customers/7/invalid"),
             (Method::PUT, "/v1/customers/x/invalid"),
             (Method::PUT, "/v1/customers/7/invalidx"),
-            (Method::PUT, "/v1/customers/7"),
             (Method::DELETE, "/v1/customers/7"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn the_deal_edit_saves_its_customer_as_the_website_does() {
+        // A customer is read as before; its Edit is saved whole.
+        assert!(device_route(&Method::GET, "/v1/customers/7"));
+        assert!(device_route(&Method::PUT, "/v1/customers/7"));
+        assert!(device_route(&Method::GET, "/v1/customer-sources"));
+        for (method, path) in [
+            (Method::POST, "/v1/customers"),
+            (Method::POST, "/v1/customers/7"),
+            (Method::PATCH, "/v1/customers/7"),
+            (Method::DELETE, "/v1/customers/7"),
+            (Method::PUT, "/v1/customers"),
+            (Method::PUT, "/v1/customers/"),
+            (Method::PUT, "/v1/customers/x"),
+            (Method::PUT, "/v1/customers/7/8"),
+            (Method::PUT, "/v1/customers/7/temperature"),
+            (Method::PUT, "/v1/customers/merge"),
+            (Method::PUT, "/v1/customersx/7"),
+            (Method::POST, "/v1/customer-sources"),
+            (Method::GET, "/v1/customer-sources/3"),
+            (Method::PUT, "/v1/customer-sources/3"),
+            (Method::DELETE, "/v1/customer-sources/3"),
+            (Method::POST, "/v1/customer-sources/3/walk-in"),
+            (Method::GET, "/v1/customer-sourcesx"),
         ] {
             assert!(!device_route(&method, path), "{method} {path}");
         }
