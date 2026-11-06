@@ -934,6 +934,16 @@ async fn a_confirmation_goes_out_right_away(pool: MySqlPool) {
     let emails = sent.emails.lock().unwrap().clone();
     assert_eq!(emails.len(), 2);
     assert_eq!(emails[1].to, ["wife@example.com"]);
+
+    // A second email gets it too.
+    sqlx::query("UPDATE events SET contact_email_2 = 'husband@example.com' WHERE id = ?")
+        .bind(booked)
+        .execute(&pool)
+        .await
+        .unwrap();
+    confirm(booked, template).await.assert_status_ok();
+    let emails = sent.emails.lock().unwrap().clone();
+    assert_eq!(emails[2].to, ["wife@example.com", "husband@example.com"]);
 }
 
 /// The event's history lines.

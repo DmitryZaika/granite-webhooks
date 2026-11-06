@@ -70,6 +70,9 @@ pub struct Booking<'a> {
     pub customer_email: Option<&'a str>,
     /// The event's own phone, else the customer's is looked up.
     pub customer_phone: Option<&'a str>,
+    /// The event's second phone and email: the text or email goes to both.
+    pub customer_phone_2: Option<&'a str>,
+    pub customer_email_2: Option<&'a str>,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub location: Option<&'a str>,
@@ -411,10 +414,16 @@ pub async fn notify_booking(
             Some(phone) => Some(phone.to_string()),
             None => customer_phone(pool, booking.company_id, booking.customer_id).await?,
         };
-        let digits = phone
+        let first = phone
             .map(|phone| phone10(&phone))
             .filter(|digits| digits.len() == 10);
-        if let Some(phone_digits) = digits {
+        let second = booking
+            .customer_phone_2
+            .map(str::trim)
+            .map(phone10)
+            .filter(|digits| digits.len() == 10 && Some(digits) != first.as_ref());
+        let mut texted = false;
+        for phone_digits in first.into_iter().chain(second) {
             let sms = OutgoingSms {
                 provider: provider.as_str().to_string(),
                 company_id: booking.company_id,
@@ -427,11 +436,14 @@ pub async fn notify_booking(
                 idempotency_key: None,
             };
             match crate::routes::sms::send::send_text(state, *provider, seat, &sms).await {
-                Ok(_) => return Ok(Some(Channel::Sms)),
+                Ok(_) => texted = true,
                 Err(failure) => {
                     tracing::warn!(error = %failure.error, "estimate booking text failed");
                 }
             }
+        }
+        if texted {
+            return Ok(Some(Channel::Sms));
         }
     }
 
@@ -443,14 +455,23 @@ pub async fn notify_booking(
         Some(email) => Some(email.to_string()),
         None => customer_email(pool, booking.customer_id).await?,
     };
-    let Some(email) = email else {
+    let mut to: Vec<String> = email.into_iter().collect();
+    if let Some(second) = booking
+        .customer_email_2
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+        && !to.iter().any(|email| email.eq_ignore_ascii_case(second))
+    {
+        to.push(second.to_string());
+    }
+    if to.is_empty() {
         return Ok(None);
-    };
+    }
     let (from_name, from_address) = email_sender(pool, booking).await?;
     let message = OutgoingEmail {
         from_name,
         from_address,
-        to: vec![email],
+        to,
         cc: Vec::new(),
         bcc: Vec::new(),
         subject: booking.kind.subject(&company_name),

@@ -1177,7 +1177,7 @@ pub async fn send_on_my_way(
         "SELECT e.id, e.start_date, e.end_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
                 e.location, e.created_date, e.created_user_id,
                 CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id,
-                e.contact_phone, e.contact_email
+                e.contact_phone, e.contact_email, e.contact_phone_2, e.contact_email_2
            FROM events e
            JOIN users r ON r.id = e.created_user_id
            {EVENT_CUSTOMER}
@@ -1971,6 +1971,11 @@ struct Appointment {
     contact_phone: Option<String>,
     #[sqlx(default)]
     contact_email: Option<String>,
+    /// A second phone and email: every text and email goes to both.
+    #[sqlx(default)]
+    contact_phone_2: Option<String>,
+    #[sqlx(default)]
+    contact_email_2: Option<String>,
 }
 
 /// Records how the send went; `false` when another run already has it.
@@ -2140,6 +2145,33 @@ async fn sms_phone(
         .filter(|digits| digits.len() == 10))
 }
 
+/// The event's second phone's 10 digits, when it has one other than `first`.
+fn second_phone(event: &Appointment, first: Option<&str>) -> Option<String> {
+    own(event.contact_phone_2.as_deref())
+        .map(phone10)
+        .filter(|digits| digits.len() == 10 && Some(digits.as_str()) != first)
+}
+
+/// Every address an email for the appointment goes to: the event's own
+/// email (else the customer's) and its second one.
+async fn email_addresses(
+    pool: &MySqlPool,
+    event: &Appointment,
+    customer_id: i32,
+) -> Result<Vec<String>, sqlx::Error> {
+    let first = match own(event.contact_email.as_deref()) {
+        Some(email) => Some(email.to_string()),
+        None => customer_email(pool, customer_id).await?,
+    };
+    let mut to: Vec<String> = first.into_iter().collect();
+    if let Some(second) = own(event.contact_email_2.as_deref())
+        && !to.iter().any(|email| email.eq_ignore_ascii_case(second))
+    {
+        to.push(second.to_string());
+    }
+    Ok(to)
+}
+
 /// The user whose details fill `{{user.*}}`: the customer's sales rep, else
 /// whoever made the event.
 async fn message_user(
@@ -2197,46 +2229,58 @@ async fn deliver_sent(
             Ok(sender) => sender,
             Err(code) => return Ok(Err(code)),
         };
-        let Some(phone_digits) = sms_phone(pool, company_id, event, customer_id).await? else {
+        let first = sms_phone(pool, company_id, event, customer_id).await?;
+        let second = second_phone(event, first.as_deref());
+        let phones: Vec<String> = first.into_iter().chain(second).collect();
+        if phones.is_empty() {
             return Ok(Err("no_phone"));
-        };
-        let sent = SentText {
-            phone: phone_digits.clone(),
-            body: body.clone(),
-        };
-        let sms = OutgoingSms {
-            provider: provider.as_str().to_string(),
-            company_id,
-            user_id: manager.id,
-            agent_id: manager.agent_id,
-            phone_digits,
-            text: body,
-            attachments: Vec::new(),
-            is_automated: true,
-            idempotency_key: message.idempotency_key.clone(),
-        };
-        return Ok(
+        }
+        // Every phone gets it; the first that went out is the one answers
+        // are awaited from.
+        let mut delivered: Option<SentText> = None;
+        for (index, phone_digits) in phones.into_iter().enumerate() {
+            let sms = OutgoingSms {
+                provider: provider.as_str().to_string(),
+                company_id,
+                user_id: manager.id,
+                agent_id: manager.agent_id.clone(),
+                phone_digits: phone_digits.clone(),
+                text: body.clone(),
+                attachments: Vec::new(),
+                is_automated: true,
+                idempotency_key: message.idempotency_key.as_ref().map(|key| {
+                    if index == 0 {
+                        key.clone()
+                    } else {
+                        format!("{key}-{index}")
+                    }
+                }),
+            };
             match crate::routes::sms::send::send_text(state, provider, &seat, &sms).await {
-                Ok(_) => Ok(Some(sent)),
+                Ok(_) => {
+                    if delivered.is_none() {
+                        delivered = Some(SentText {
+                            phone: phone_digits,
+                            body: body.clone(),
+                        });
+                    }
+                }
                 Err(failure) => {
                     tracing::warn!(error = %failure.error, event_id = event.id, "schedule notification text failed");
-                    Err("send_error")
                 }
-            },
-        );
+            }
+        }
+        return Ok(delivered.map(Some).ok_or("send_error"));
     }
-    let email = match own(event.contact_email.as_deref()) {
-        Some(email) => Some(email.to_string()),
-        None => customer_email(pool, customer_id).await?,
-    };
-    let Some(email) = email else {
+    let to = email_addresses(pool, event, customer_id).await?;
+    if to.is_empty() {
         return Ok(Err("no_email"));
-    };
+    }
     let (from_name, from_address) = sender_for(pool, company_id, customer_id, user_id).await?;
     let email = OutgoingEmail {
         from_name,
         from_address,
-        to: vec![email],
+        to,
         cc: Vec::new(),
         bcc: Vec::new(),
         subject: subject.unwrap_or_default(),
@@ -2307,7 +2351,7 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
             "SELECT e.id, e.start_date, e.end_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
                     e.location, e.created_date, e.created_user_id,
                     CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id,
-                e.contact_phone, e.contact_email
+                e.contact_phone, e.contact_email, e.contact_phone_2, e.contact_email_2
                FROM schedule_notification_rules r
                JOIN schedule_notification_flows f ON f.id = r.flow_id
                JOIN events e ON {FLOW_APPLIES}
@@ -2641,7 +2685,7 @@ async fn appointment(pool: &MySqlPool, id: i32) -> Result<Appointment, sqlx::Err
         "SELECT e.id, e.start_date, e.end_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
                 e.location, e.created_date, e.created_user_id,
                 CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id,
-                e.contact_phone, e.contact_email
+                e.contact_phone, e.contact_email, e.contact_phone_2, e.contact_email_2
            FROM events e
            JOIN users r ON r.id = e.created_user_id
            {EVENT_CUSTOMER}
