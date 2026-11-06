@@ -256,7 +256,7 @@ pub async fn name_customers(
 }
 
 /// The rep's extension on a `RingCentral` call-log row.
-fn ringcentral_extension(record: &Value) -> String {
+pub fn ringcentral_extension(record: &Value) -> String {
     [
         &record["extension"]["id"],
         &record["from"]["extensionId"],

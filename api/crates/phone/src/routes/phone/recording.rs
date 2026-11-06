@@ -191,8 +191,7 @@ pub async fn set_live_call_recording(
         (Some(leg), false) => {
             let done = if input.recording {
                 // The user turned the recording voice off (My Account): no notice.
-                let voice =
-                    settings::says_recording_notice(pool, user.id, user.company_id).await;
+                let voice = settings::says_recording_notice(pool, user.id, user.company_id).await;
                 let notice = match config.recording_notice_url.as_deref() {
                     _ if !voice => Ok(()),
                     Some(url) => {
