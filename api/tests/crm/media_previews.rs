@@ -215,6 +215,32 @@ async fn a_heic_attachment_becomes_a_jpeg_kept_for_later(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn any_attachment_opens_through_a_link_signed_now(pool: MySqlPool) {
+    let (server, storage) = server_with_storage(pool.clone());
+    attachments(&pool, &storage).await;
+    for (id, target) in [
+        (9912, "https://example.test/q.pdf".to_string()),
+        (9911, url("emails/plan.png")),
+    ] {
+        let opened = server
+            .get(&format!("/v1/email-attachments/{id}/open"))
+            .with_session(sessions::OTHER_COMPANY_REP)
+            .await;
+        opened.assert_status(StatusCode::FOUND);
+        assert_eq!(location(&opened), target);
+        assert_eq!(opened.headers()["cache-control"], "private, no-store");
+    }
+    // Another company's attachment, or none at all: not found.
+    for id in [9915, 1] {
+        server
+            .get(&format!("/v1/email-attachments/{id}/open"))
+            .with_session(sessions::OTHER_COMPANY_REP)
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
+}
+
+#[test_db::test(seed)]
 async fn a_picture_link_is_answered_as_json_for_scripts(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     attachments(&pool, &storage).await;

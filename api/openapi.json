@@ -21254,6 +21254,68 @@
         ]
       }
     },
+    "/v1/email-attachments/{id}/open": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Open an attachment",
+        "description": "Redirects to the stored file through a link signed now (valid an hour),\nwhatever kind of file it is. Use this for links people tap: the\n`signed_url` in a conversation dies an hour after the conversation was\nloaded. Pictures for an `<img>` go through `/preview` instead (HEIC\nbecomes a JPEG there).",
+        "operationId": "open_email_attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Attachment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the file"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attachment the caller may read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/emails/{id}/conversation": {
       "get": {
         "tags": [

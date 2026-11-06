@@ -13,6 +13,7 @@
 //! - `POST /v1/emails`                            → send (or schedule) an email
 //! - `POST /v1/email-attachments/{id}/deal`      → save an attachment to a deal
 //! - `GET  /v1/email-attachments/{id}/preview`   → a picture attachment for an `<img>` (HEIC → JPEG)
+//! - `GET  /v1/email-attachments/{id}/open`      → any attachment, through a freshly signed link
 //! - `GET  /v1/deals/file-urls`                   → file URLs of a deal or a customer's deals
 //! - `GET  /v1/emails/{id}/images`                 → an email's pictures, for the photo viewer
 //! - `GET  /v1/emails/{id}/reads`                  → every time the recipient opened a sent email
@@ -71,6 +72,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(attachments::email_images))
         .routes(routes!(reads::email_reads))
         .routes(routes!(attachment_preview::preview))
+        .routes(routes!(attachment_preview::open))
         .routes(routes!(conversation::conversation))
         .routes(routes!(inbound_push::inbound_push))
         .routes(routes!(
