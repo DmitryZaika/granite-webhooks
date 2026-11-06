@@ -2092,7 +2092,7 @@ fn own(value: Option<&str>) -> Option<&str> {
 }
 
 /// Who texts the company's appointment messages: Telnyx when the company
-/// texts through it and the office manager has a line there; then the
+/// texts through it and the Scheduling Manager has a line there; then the
 /// company's provider first; with both set up, the other one when the office
 /// manager only has a line there. Else why there is nobody.
 async fn sms_sender(
@@ -2542,7 +2542,7 @@ pub struct ConfirmationSent {
 fn failure_text(code: &str) -> Option<&'static str> {
     Some(match code {
         "sms_unavailable" => "Texting is not set up for this company",
-        "no_sms_sender" => "No office manager has a texting line",
+        "no_sms_sender" => "No Scheduling Manager has a texting line",
         "no_phone" => "The customer has no phone number",
         "no_email" => "The customer has no email",
         "unfilled_variables" => {
@@ -2798,7 +2798,7 @@ pub struct SchedulingTexts {
     /// The scheduling texts for the event's calendar, in the admin's order.
     pub templates: Vec<SchedulingTextPreview>,
     /// Why no text can go to this event's customer (no customer, no phone,
-    /// no office manager line); null when they can.
+    /// no Scheduling Manager line); null when they can.
     pub problem: Option<String>,
     /// AI marks the job Ready when the customer agrees.
     pub ai_ready: bool,
@@ -2808,7 +2808,7 @@ pub struct SchedulingTexts {
 ///
 /// The company's scheduling texts (`confirmation` templates sent by text)
 /// for the event's calendar, each filled in for this event, for the event
-/// details' Send SMS. They go out from the office manager's line with
+/// details' Send SMS. They go out from the Scheduling Manager's line with
 /// `POST /v1/events/{id}/confirmation`.
 #[crate::openapi::path(
     get,
@@ -2862,7 +2862,7 @@ pub async fn scheduling_texts(
         Some("Pick the customer in the event first")
     } else if let Err(code) = sms_sender(pool, company_id).await? {
         Some(match code {
-            "no_sms_sender" => "No office manager has a texting line",
+            "no_sms_sender" => "No Scheduling Manager has a texting line",
             _ => "Texting is not set up for this company",
         })
     } else if sms_phone(

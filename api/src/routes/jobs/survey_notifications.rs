@@ -2,7 +2,7 @@
 //!
 //! A day after an installer's checklist is signed the customer gets the
 //! survey link by email and text; reminders follow on days 3 and 7 (a text
-//! from the office manager's `CloudTalk` line, else email), plus an email on
+//! from the Scheduling Manager's `CloudTalk` line, else email), plus an email on
 //! day 5 for customers reminded by text. Only in the evening on weekdays or
 //! midday on weekends. Port of `checklistSurveyNotify.server.ts`.
 //!
@@ -10,9 +10,9 @@
 //! (`checklist-survey-<id>`, `checklist-survey-reminder-<n>-<id>`); a
 //! submitted survey leaves `checklist-survey-done-<id>`.
 //!
-//! When a survey text can't go out from the office manager's line (no line on
+//! When a survey text can't go out from the Scheduling Manager's line (no line on
 //! the company's provider, or the provider refused it, e.g. RingCentral
-//! signed out) the office managers (else the managers) get one email saying
+//! signed out) the Scheduling Managers (else the managers) get one email saying
 //! so; `checklist-survey-sms-down-<company>` remembers it until a survey text
 //! goes out again.
 
@@ -35,10 +35,10 @@ use std::fmt::Write;
 const SENT_PREFIX: &str = "checklist-survey-";
 const REMINDER_PREFIX: &str = "checklist-survey-reminder-";
 const DONE_PREFIX: &str = "checklist-survey-done-";
-/// The company's office managers were told survey texts are down.
+/// The company's Scheduling Managers were told survey texts are down.
 const LINE_DOWN_PREFIX: &str = "checklist-survey-sms-down-";
 /// `positions.id`s.
-const OFFICE_MANAGER_POSITION: i32 = 10;
+const SCHEDULING_MANAGER_POSITION: i32 = 13;
 const MANAGER_POSITION: i32 = 5;
 const NO_REPLY: &str = "noreply@granite-manager.com";
 
@@ -251,7 +251,7 @@ enum Target {
     NoPhone,
     /// The company doesn't text.
     NoTexting,
-    /// The company texts on `provider`, but no office manager has a line.
+    /// The company texts on `provider`, but no Scheduling Manager has a line.
     NoLine(SmsProvider),
 }
 
@@ -291,7 +291,7 @@ async fn sms_target(
 
 /// Texts the survey; false when it didn't go out. A text the office
 /// manager's line can't send (no line, or the line refused it) emails the
-/// company's office managers once, until a survey text goes out again.
+/// company's Scheduling Managers once, until a survey text goes out again.
 async fn send_sms(
     state: &AppState,
     company_id: i32,
@@ -306,7 +306,7 @@ async fn send_sms(
             tracing::warn!(
                 company_id,
                 provider = provider.as_str(),
-                "checklist survey SMS: no office manager line"
+                "checklist survey SMS: no Scheduling Manager line"
             );
             line_down(state, company_id, company, &LineProblem::NoLine(provider)).await?;
             return Ok(false);
@@ -362,17 +362,17 @@ const fn provider_name(provider: SmsProvider) -> &'static str {
 }
 
 impl LineProblem {
-    /// What happened, then what to do, for the office managers' email.
+    /// What happened, then what to do, for the Scheduling Managers' email.
     fn explain(&self) -> (String, String) {
         match self {
             Self::NoLine(provider) => {
                 let name = provider_name(*provider);
                 (
                     format!(
-                        "No Office Manager has a {name} line, so there is no number to text the surveys from."
+                        "No Scheduling Manager has a {name} line, so there is no number to text the surveys from."
                     ),
                     format!(
-                        "Give an Office Manager a {name} line: Admin > Company settings > Users > Edit."
+                        "Give a Scheduling Manager a {name} line: Admin > Company settings > Users > Edit."
                     ),
                 )
             }
@@ -383,7 +383,7 @@ impl LineProblem {
             } => {
                 let name = provider_name(*provider);
                 let owner = if manager.trim().is_empty() {
-                    "the Office Manager".to_string()
+                    "the Scheduling Manager".to_string()
                 } else {
                     manager.trim().to_string()
                 };
@@ -409,14 +409,14 @@ impl LineProblem {
     }
 }
 
-/// Marker of a company whose office managers were told survey texts are down.
+/// Marker of a company whose Scheduling Managers were told survey texts are down.
 fn line_down_marker(company_id: i32) -> String {
     format!("{LINE_DOWN_PREFIX}{company_id}")
 }
 
-/// Office managers' emails, else managers'.
+/// Scheduling Managers' emails, else managers'.
 async fn manager_emails(state: &AppState, company_id: i32) -> Result<Vec<String>, sqlx::Error> {
-    for position in [OFFICE_MANAGER_POSITION, MANAGER_POSITION] {
+    for position in [SCHEDULING_MANAGER_POSITION, MANAGER_POSITION] {
         let emails: Vec<String> = sqlx::query_scalar(
             "SELECT DISTINCT TRIM(u.email) FROM users u
                JOIN users_positions up ON up.user_id = u.id
@@ -435,7 +435,7 @@ async fn manager_emails(state: &AppState, company_id: i32) -> Result<Vec<String>
     Ok(Vec::new())
 }
 
-/// Emails the office managers that survey texts aren't going out, once.
+/// Emails the Scheduling Managers that survey texts aren't going out, once.
 async fn line_down(
     state: &AppState,
     company_id: i32,

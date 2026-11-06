@@ -193,7 +193,7 @@ fn configurable(position_id: i32) -> ApiResult<()> {
     operation_id = "save_position_sections",
     tag = "company",
     params(
-        ("position_id" = i32, Path, description = "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager"),
+        ("position_id" = i32, Path, description = "1 Sales Rep, 2 Sales Manager, 5 Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager"),
         TargetCompany,
     ),
     request_body = PositionSectionsInput,
@@ -257,7 +257,7 @@ pub async fn save(
     operation_id = "reset_position_sections",
     tag = "company",
     params(
-        ("position_id" = i32, Path, description = "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager"),
+        ("position_id" = i32, Path, description = "1 Sales Rep, 2 Sales Manager, 5 Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager"),
         TargetCompany,
     ),
     responses(
