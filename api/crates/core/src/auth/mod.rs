@@ -33,7 +33,9 @@
 //! AI to-do list (`promise_route`: read it, close or reopen one), and the
 //! native quote screen (`DEVICE_QUOTE_READS` with `GET`, and `quote_write`:
 //! a new quote, its info, deleting and copying it, a saved revision and the
-//! autosave, today's prices, the sale, its email and links, a print) the
+//! autosave, today's prices, the sale, its email and links, a print; and
+//! `quote_print_and_templates`: a form's layout and the letterhead to print it,
+//! the caller's quote email templates) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -301,6 +303,25 @@ fn template_write(method: &Method, path: &str) -> bool {
     }
 }
 
+/// The quote screen's print and Email sheet with the device token: a company
+/// form's layout and the company's letterhead (`GET /v1/quote-forms/{id}`,
+/// `GET /v1/quote-forms/letterhead`), so the app makes a form's PDF itself,
+/// and the caller's own quote email templates (`POST
+/// /v1/me/quote-email-templates`, `PUT|DELETE .../{id}`). Every other form
+/// change stays with the CRM session.
+fn quote_print_and_templates(method: &Method, path: &str) -> bool {
+    if let Some(rest) = path.strip_prefix("/v1/quote-forms/") {
+        return method == Method::GET && (rest == "letterhead" || is_id(rest));
+    }
+    match path.strip_prefix("/v1/me/quote-email-templates") {
+        Some("") => method == Method::POST,
+        Some(rest) => rest
+            .strip_prefix('/')
+            .is_some_and(|id| is_id(id) && (method == Method::PUT || method == Method::DELETE)),
+        None => false,
+    }
+}
+
 /// The quote lookups the app's native quote screen reads with its device
 /// token, exactly these paths and `GET` only: the price lists a quote can move
 /// to and a new quote starts from, the tax rates and payment terms of Pricing
@@ -366,7 +387,8 @@ fn quote_write(method: &Method, path: &str) -> bool {
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
 /// ([`deal_write`]), a customer's sales rep ([`customer_write`]), the
 /// templates' ([`template_write`]), the To do tab's ([`promise_route`]) and
-/// the quote screen's (`GET` on [`DEVICE_QUOTE_READS`], [`quote_write`]).
+/// the quote screen's (`GET` on [`DEVICE_QUOTE_READS`], [`quote_write`],
+/// [`quote_print_and_templates`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
@@ -377,6 +399,7 @@ fn device_route(method: &Method, path: &str) -> bool {
         || promise_route(method, path)
         || (method == Method::GET && DEVICE_QUOTE_READS.contains(&path))
         || quote_write(method, path)
+        || quote_print_and_templates(method, path)
 }
 
 async fn identify(
@@ -773,6 +796,11 @@ mod tests {
             (Method::POST, "/v1/quotes/7/prices"),
             (Method::POST, "/v1/quotes/7/prints"),
             (Method::PATCH, "/v1/quotes/7/emails/3"),
+            (Method::GET, "/v1/quote-forms/3"),
+            (Method::GET, "/v1/quote-forms/letterhead"),
+            (Method::POST, "/v1/me/quote-email-templates"),
+            (Method::PUT, "/v1/me/quote-email-templates/3"),
+            (Method::DELETE, "/v1/me/quote-email-templates/3"),
         ] {
             assert!(device_route(&method, path), "{method} {path}");
         }
@@ -819,9 +847,18 @@ mod tests {
             (Method::GET, "/v1/quote-price-listsx"),
             (Method::POST, "/v1/quote-tax-rates"),
             (Method::DELETE, "/v1/quote-payment-terms/3"),
-            (Method::GET, "/v1/quote-forms/3"),
-            (Method::POST, "/v1/me/quote-email-templates"),
-            (Method::PUT, "/v1/me/quote-email-templates/3"),
+            (Method::PUT, "/v1/quote-forms/3"),
+            (Method::DELETE, "/v1/quote-forms/3"),
+            (Method::POST, "/v1/quote-forms"),
+            (Method::POST, "/v1/quote-forms/3/copies"),
+            (Method::PUT, "/v1/quote-forms/order"),
+            (Method::GET, "/v1/quote-forms/3/x"),
+            (Method::GET, "/v1/quote-forms/x"),
+            (Method::GET, "/v1/me/quote-email-templates/3"),
+            (Method::PUT, "/v1/me/quote-email-templates"),
+            (Method::PATCH, "/v1/me/quote-email-templates/3"),
+            (Method::DELETE, "/v1/me/quote-email-templates/x"),
+            (Method::POST, "/v1/me/quote-email-templates/3"),
             (Method::GET, "/v1/quote-email-templates"),
             (Method::GET, "/v1/quote-settings"),
             (Method::GET, "/v1/quote-extras"),
