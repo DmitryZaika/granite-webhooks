@@ -31,6 +31,9 @@ pub const EDIT_TRANSACTIONS: &str = "edit_transactions";
 pub const EDIT_QUOTES: &str = "edit_quotes";
 /// The schedule's Auto plan, a day's route (reroute) and an event's Send SMS.
 pub const PLAN_SCHEDULE: &str = "plan_schedule";
+/// See each job's readiness dot (Not ready, Called, Ready) on the schedule.
+/// Only the app reads it; no route needs it.
+pub const SEE_READINESS: &str = "see_readiness";
 
 /// One skill a position may have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +48,7 @@ pub struct Skill {
 }
 
 /// Every skill, in the Company page's order.
-pub const SKILLS: [Skill; 4] = [
+pub const SKILLS: [Skill; 5] = [
     Skill {
         key: SELL_SLABS,
         label: "Sell slabs",
@@ -66,6 +69,11 @@ pub const SKILLS: [Skill; 4] = [
         label: "Plan the schedule",
         description: "Auto plan, build a day's route and send SMS from an event.",
     },
+    Skill {
+        key: SEE_READINESS,
+        label: "See readiness",
+        description: "See each job's readiness dot (Not ready, Called, Ready) on the schedule.",
+    },
 ];
 
 /// The skill with this key.
@@ -77,12 +85,15 @@ pub fn skill(key: &str) -> Option<&'static Skill> {
 ///
 /// In [`SKILLS`] order: every position sells slabs and works with
 /// transactions and quotes, as before skills; only Scheduling Manager plans
-/// the schedule.
+/// the schedule and sees readiness.
 pub fn default_skills(position_id: i32) -> Vec<&'static str> {
     SKILLS
         .iter()
         .map(|skill| skill.key)
-        .filter(|key| *key != PLAN_SCHEDULE || position_id == SCHEDULING_MANAGER_POSITION)
+        .filter(|key| {
+            ![PLAN_SCHEDULE, SEE_READINESS].contains(key)
+                || position_id == SCHEDULING_MANAGER_POSITION
+        })
         .collect()
 }
 

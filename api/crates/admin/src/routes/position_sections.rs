@@ -46,7 +46,7 @@ pub struct SectionInfo {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SkillInfo {
     /// Stable key (`sell_slabs`, `edit_transactions`, `edit_quotes`,
-    /// `plan_schedule`).
+    /// `plan_schedule`, `see_readiness`).
     pub key: &'static str,
     /// Its name on the Company page.
     pub label: &'static str,
