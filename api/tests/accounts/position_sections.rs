@@ -94,7 +94,7 @@ async fn the_company_changes_and_resets_a_positions_tabs(pool: MySqlPool) {
         .iter()
         .map(|p| p["position_id"].as_i64().unwrap())
         .collect();
-    assert_eq!(ids, vec![1, 2, 5, 10, 3, 12, 13]);
+    assert_eq!(ids, vec![1, 2, 5, 3, 12, 13]);
     let scheduling = &positions[6];
     assert_eq!(scheduling["customized"], false);
     assert_eq!(scheduling["sections"], json!(["customers", "schedule"]));
@@ -289,7 +289,8 @@ async fn each_position_has_its_default_skills_and_admins_have_all(pool: MySqlPoo
             "sell_slabs",
             "edit_transactions",
             "edit_quotes",
-            "plan_schedule"
+            "plan_schedule",
+            "see_readiness"
         ]
     );
     let rep = &access["positions"][0];
@@ -397,7 +398,7 @@ async fn tabs_saved_without_skills_keep_the_default_skills(pool: MySqlPool) {
         .with_session(sessions::ADMIN)
         .await
         .json();
-    let scheduling = &access["positions"][6];
+    let scheduling = &access["positions"][5];
     assert_eq!(scheduling["skills"], scheduling["default_skills"]);
     server
         .put("/v1/company/position-sections/13")

@@ -75,7 +75,7 @@ const CALENDARS: &str = "INSERT INTO calendars (id, company_id, name, color, slu
 
 const TEXTING: &str = "UPDATE company SET cloudtalk_access_key = 'k', cloudtalk_access_secret = 's' WHERE id = 100;
     UPDATE users SET cloudtalk_agent_id = '5101', cloudtalk_phone_number = '3175550999' WHERE id = 101;
-    INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 10, 100);";
+    INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 13, 100);";
 
 fn email_template() -> Value {
     json!({
