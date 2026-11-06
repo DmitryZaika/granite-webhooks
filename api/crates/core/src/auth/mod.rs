@@ -35,7 +35,10 @@
 //! a new quote, its info, deleting and copying it, a saved revision and the
 //! autosave, today's prices, the sale, its email and links, a print; and
 //! `quote_print_and_templates`: a form's layout and the letterhead to print it,
-//! the caller's quote email templates) the
+//! the caller's quote email templates), and the sale form and QuickBooks
+//! invoice editor that open after a quote is sold (`DEVICE_SALE_READS` with
+//! `GET`, `place_read`, and `sale_and_invoice_write`: the sale, a quick-added
+//! stone, the invoice or its split, its draft rules and sync link) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -351,8 +354,9 @@ pub const DEVICE_QUOTE_READS: [&str; 8] = [
 /// Undo sale (`POST|DELETE .../sale`), emailing it (`POST .../emails`),
 /// switching a sent email's link off or on (`PATCH .../emails/{email_id}`)
 /// and recording a print (`POST .../prints`). Reading a quote is under
-/// [`DEVICE_READ_ROUTES`]; the customer link, contracts, QuickBooks invoices
-/// and the browser's print previews stay with the CRM session. The
+/// [`DEVICE_READ_ROUTES`]; making its QuickBooks invoice is
+/// [`sale_and_invoice_write`]; the customer link, contracts and the browser's
+/// print previews stay with the CRM session. The
 /// `edit_quotes` skill still applies ([`skills`]).
 fn quote_write(method: &Method, path: &str) -> bool {
     let Some(rest) = path.strip_prefix("/v1/quotes") else {
@@ -382,13 +386,68 @@ fn quote_write(method: &Method, path: &str) -> bool {
     }
 }
 
+/// What the app's native sale form and QuickBooks invoice editor read with the
+/// device token, exactly these paths and `GET` only, after a quote is sold
+/// (Admin › Quotes › Automation "Sale on a win" and "Create invoice from
+/// quote"): the sink and faucet models with free units, the slabs picked (by
+/// id), the stone types Add New Color offers, the address suggestions of the
+/// project address (also the schedule's Location), and the company's
+/// QuickBooks products, services and classes and its usual split of a quote's
+/// invoice. A place's address (`GET /v1/places/{place_id}`) is
+/// [`place_read`]. Every change to the catalogs stays with the CRM session.
+pub const DEVICE_SALE_READS: [&str; 7] = [
+    "/v1/sinks",
+    "/v1/faucets",
+    "/v1/slabs",
+    "/v1/stone-types",
+    "/v1/places/autocomplete",
+    "/v1/qbo/items",
+    "/v1/qbo/invoice-split",
+];
+
+/// `GET /v1/places/{place_id}`: the address (with its ZIP) of a suggestion
+/// picked from [`DEVICE_SALE_READS`]' autocomplete.
+fn place_read(method: &Method, path: &str) -> bool {
+    method == Method::GET
+        && path
+            .strip_prefix("/v1/places/")
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
+/// The changes the app's native sale form and invoice editor make with the
+/// device token, exactly these: the sale (`POST /v1/sales`, which needs the
+/// Sell slabs skill, [`skills`]), Add New Color's stone with its slabs (`POST
+/// /v1/stones/quick`), the QuickBooks invoice made from the sold option, one
+/// or split in several (`POST /v1/customers/{id}/qbo-invoices` and
+/// `.../qbo-invoices/split`), the company's usual changes made to its draft
+/// (`POST /v1/quotes/{id}/invoice-draft`) and "Keep in sync with the quote"
+/// (`PUT /v1/quotes/{id}/invoice-sync`). Editing or cancelling a sale and
+/// editing an invoice stay with the CRM session.
+fn sale_and_invoice_write(method: &Method, path: &str) -> bool {
+    if path == "/v1/sales" || path == "/v1/stones/quick" {
+        return method == Method::POST;
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    match parts.as_slice() {
+        ["", "v1", "customers", id, "qbo-invoices"]
+        | ["", "v1", "customers", id, "qbo-invoices", "split"] => {
+            is_id(id) && method == Method::POST
+        }
+        ["", "v1", "quotes", id, "invoice-draft"] => is_id(id) && method == Method::POST,
+        ["", "v1", "quotes", id, "invoice-sync"] => is_id(id) && method == Method::PUT,
+        _ => false,
+    }
+}
+
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
 /// ([`deal_write`]), a customer's sales rep ([`customer_write`]), the
 /// templates' ([`template_write`]), the To do tab's ([`promise_route`]) and
 /// the quote screen's (`GET` on [`DEVICE_QUOTE_READS`], [`quote_write`],
-/// [`quote_print_and_templates`]).
+/// [`quote_print_and_templates`]), and the sale form's and invoice editor's
+/// (`GET` on [`DEVICE_SALE_READS`], [`place_read`],
+/// [`sale_and_invoice_write`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
@@ -400,6 +459,9 @@ fn device_route(method: &Method, path: &str) -> bool {
         || (method == Method::GET && DEVICE_QUOTE_READS.contains(&path))
         || quote_write(method, path)
         || quote_print_and_templates(method, path)
+        || (method == Method::GET && DEVICE_SALE_READS.contains(&path))
+        || place_read(method, path)
+        || sale_and_invoice_write(method, path)
 }
 
 async fn identify(
@@ -833,7 +895,6 @@ mod tests {
             (Method::PUT, "/v1/quote-sale-events/3"),
             (Method::DELETE, "/v1/quote-sale-events/3"),
             (Method::GET, "/v1/quote-sale-events/3"),
-            (Method::GET, "/v1/places/autocomplete"),
             (Method::POST, "/v1/places/check"),
             (Method::PUT, "/v1/quotes/7/sale"),
             (Method::POST, "/v1/quotes/x/sale"),
@@ -933,6 +994,71 @@ mod tests {
             "/v1/sms/ringcentral/threads/5551234567/read",
         ] {
             assert!(!device_route(&Method::POST, path), "{path}");
+        }
+    }
+
+    #[test]
+    fn the_sale_form_and_invoice_editor_after_a_sold_quote() {
+        for (method, path) in [
+            (Method::GET, "/v1/sinks"),
+            (Method::GET, "/v1/faucets"),
+            (Method::GET, "/v1/slabs"),
+            (Method::GET, "/v1/stone-types"),
+            (Method::GET, "/v1/places/autocomplete"),
+            (Method::GET, "/v1/places/ChIJabc123"),
+            (Method::GET, "/v1/qbo/items"),
+            (Method::GET, "/v1/qbo/invoice-split"),
+            (Method::POST, "/v1/sales"),
+            (Method::POST, "/v1/stones/quick"),
+            (Method::POST, "/v1/customers/7/qbo-invoices"),
+            (Method::POST, "/v1/customers/7/qbo-invoices/split"),
+            (Method::POST, "/v1/quotes/7/invoice-draft"),
+            (Method::PUT, "/v1/quotes/7/invoice-sync"),
+            // Read under DEVICE_READ_ROUTES already: the free slabs of a
+            // stone, the customer's sales and an invoice's PDF.
+            (Method::GET, "/v1/stones/7/slabs"),
+            (Method::GET, "/v1/customers/7/sales"),
+            (Method::GET, "/v1/customers/7/qbo-invoices/9/pdf"),
+            (Method::GET, "/v1/quotes/7/invoice-sync"),
+            (Method::GET, "/v1/quotes/inventory-slabs"),
+        ] {
+            assert!(device_route(&method, path), "{method} {path}");
+        }
+        for (method, path) in [
+            // Editing or cancelling a sale, and the catalogs, stay with the CRM.
+            (Method::PUT, "/v1/sales/7"),
+            (Method::POST, "/v1/sales/7/unsell"),
+            (Method::GET, "/v1/sales"),
+            (Method::POST, "/v1/salesx"),
+            (Method::POST, "/v1/sinks"),
+            (Method::PUT, "/v1/sinks/3"),
+            (Method::GET, "/v1/sinks/3"),
+            (Method::POST, "/v1/faucets"),
+            (Method::PATCH, "/v1/slabs/3"),
+            (Method::GET, "/v1/slabs/3"),
+            (Method::POST, "/v1/stone-types"),
+            (Method::DELETE, "/v1/stone-types/3"),
+            (Method::PUT, "/v1/stones/quick"),
+            (Method::POST, "/v1/stones"),
+            (Method::POST, "/v1/stones/7/slabs"),
+            (Method::POST, "/v1/places/autocomplete"),
+            (Method::GET, "/v1/places/a/b"),
+            (Method::GET, "/v1/places/"),
+            // Editing an invoice and the invoice settings stay with the CRM.
+            (Method::PUT, "/v1/customers/7/qbo-invoices/9"),
+            (Method::POST, "/v1/customers/x/qbo-invoices"),
+            (Method::POST, "/v1/customers/7/qbo-invoices/9"),
+            (Method::POST, "/v1/qbo/items"),
+            (Method::GET, "/v1/qbo/invoice-instructions"),
+            (Method::PUT, "/v1/qbo/invoice-instructions"),
+            (Method::GET, "/v1/qbo/invoices/9/pdf"),
+            (Method::POST, "/v1/ai/invoice-edit"),
+            (Method::PUT, "/v1/quotes/7/invoice-draft"),
+            (Method::POST, "/v1/quotes/7/invoice-sync"),
+            (Method::DELETE, "/v1/quotes/7/invoice-sync"),
+            (Method::PUT, "/v1/quotes/x/invoice-sync"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
         }
     }
 
