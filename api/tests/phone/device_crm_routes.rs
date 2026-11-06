@@ -330,3 +330,53 @@ async fn the_composer_reads_its_lists_and_changes_only_the_templates(pool: MySql
     assert_ne!(upload.status_code(), StatusCode::UNAUTHORIZED);
     assert_ne!(upload.status_code(), StatusCode::FORBIDDEN);
 }
+
+#[test_db::test(seed)]
+async fn the_to_do_tab_reads_and_closes_ai_promises_with_its_device_token(pool: MySqlPool) {
+    // Rita (user 100) has AI promises and one open promise; her phone is signed in.
+    sql(&pool, "UPDATE users SET ai_promises = 1 WHERE id = 100").await;
+    let id: u64 = sqlx::query(
+        "INSERT INTO ai_promises
+                (company_id, user_id, scan_id, source, kind, promised_at,
+                 customer_id, customer_digits, title, said, due_at)
+         VALUES (100, 100, 1, 'call', 'promise', '2026-10-29 10:00:00',
+                 1000, '3175550100', 'Send the price', '', '2026-10-30 15:00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_id();
+    add_session(&pool, 311, 100, 100).await;
+    let (server, _) = phone_server(pool.clone()).await;
+
+    // The list, as her CRM session reads it.
+    let by_phone = server
+        .get("/v1/ai/promises")
+        .add_header(HEADER, token(311))
+        .await;
+    by_phone.assert_status_ok();
+    let by_cookie = server
+        .get("/v1/ai/promises")
+        .with_session(sessions::REP)
+        .await;
+    assert_eq!(by_phone.json::<Value>(), by_cookie.json::<Value>());
+    assert_eq!(
+        by_phone.json::<Value>()["promises"][0]["title"],
+        "Send the price"
+    );
+
+    // Done from the phone.
+    server
+        .patch(&format!("/v1/ai/promises/{id}"))
+        .add_header(HEADER, token(311))
+        .json(&json!({ "status": "done" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let status: String =
+        sqlx::query_scalar("SELECT CAST(status AS CHAR) FROM ai_promises WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "done");
+}
