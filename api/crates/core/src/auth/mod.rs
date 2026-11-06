@@ -38,7 +38,9 @@
 //! the caller's quote email templates), and the sale form and QuickBooks
 //! invoice editor that open after a quote is sold (`DEVICE_SALE_READS` with
 //! `GET`, `place_read`, and `sale_and_invoice_write`: the sale, a quick-added
-//! stone, the invoice or its split, its draft rules and sync link) the
+//! stone, the invoice or its split, its draft rules and sync link), and the
+//! company's own (non-QuickBooks) invoice made from a quote (`own_invoice`:
+//! the next number, creating it, marking it sent once emailed) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -439,6 +441,23 @@ fn sale_and_invoice_write(method: &Method, path: &str) -> bool {
     }
 }
 
+/// The company's own invoice (the CRM keeps it, for a company not on
+/// QuickBooks) that the app's native invoice editor makes from a quote,
+/// exactly these: the number a new one gets (`GET /v1/invoices`, which also
+/// lists them), creating it (`POST /v1/invoices`) and marking it sent once
+/// it is emailed (`PUT /v1/invoices/{id}/status`). Opening or editing an
+/// invoice stays with the CRM session.
+fn own_invoice(method: &Method, path: &str) -> bool {
+    if path == "/v1/invoices" {
+        return method == Method::GET || method == Method::POST;
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    match parts.as_slice() {
+        ["", "v1", "invoices", id, "status"] => is_id(id) && method == Method::PUT,
+        _ => false,
+    }
+}
+
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
@@ -447,7 +466,7 @@ fn sale_and_invoice_write(method: &Method, path: &str) -> bool {
 /// the quote screen's (`GET` on [`DEVICE_QUOTE_READS`], [`quote_write`],
 /// [`quote_print_and_templates`]), and the sale form's and invoice editor's
 /// (`GET` on [`DEVICE_SALE_READS`], [`place_read`],
-/// [`sale_and_invoice_write`]).
+/// [`sale_and_invoice_write`]) and its own invoice ([`own_invoice`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
@@ -462,6 +481,7 @@ fn device_route(method: &Method, path: &str) -> bool {
         || (method == Method::GET && DEVICE_SALE_READS.contains(&path))
         || place_read(method, path)
         || sale_and_invoice_write(method, path)
+        || own_invoice(method, path)
 }
 
 async fn identify(
@@ -1057,6 +1077,34 @@ mod tests {
             (Method::POST, "/v1/quotes/7/invoice-sync"),
             (Method::DELETE, "/v1/quotes/7/invoice-sync"),
             (Method::PUT, "/v1/quotes/x/invoice-sync"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn the_own_invoice_editor_makes_a_quotes_invoice() {
+        for (method, path) in [
+            (Method::GET, "/v1/invoices"),
+            (Method::POST, "/v1/invoices"),
+            (Method::PUT, "/v1/invoices/7/status"),
+        ] {
+            assert!(device_route(&method, path), "{method} {path}");
+        }
+        for (method, path) in [
+            // Opening, editing or deleting an invoice stays with the CRM.
+            (Method::GET, "/v1/invoices/7"),
+            (Method::PUT, "/v1/invoices/7"),
+            (Method::DELETE, "/v1/invoices/7"),
+            (Method::PUT, "/v1/invoices"),
+            (Method::DELETE, "/v1/invoices"),
+            (Method::GET, "/v1/invoices/7/status"),
+            (Method::POST, "/v1/invoices/7/status"),
+            (Method::PUT, "/v1/invoices/x/status"),
+            (Method::PUT, "/v1/invoices//status"),
+            (Method::PUT, "/v1/invoices/7/status/x"),
+            (Method::POST, "/v1/invoicesx"),
+            (Method::GET, "/v1/invoices/"),
         ] {
             assert!(!device_route(&method, path), "{method} {path}");
         }

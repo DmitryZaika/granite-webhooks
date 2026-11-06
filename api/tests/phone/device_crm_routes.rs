@@ -1248,3 +1248,122 @@ async fn the_invoice_editor_makes_the_sold_quotes_quickbooks_invoice_with_its_de
     }
     assert_eq!(posted.lock().unwrap().len(), 3);
 }
+
+#[test_db::test(seed)]
+async fn the_sale_form_reads_the_deal_owner_with_its_device_token(pool: MySqlPool) {
+    // Deal 8008 is Mark's (user 101): a quote without a salesperson sells as
+    // his, so Rita's phone reads the deal's owner as the website does.
+    add_session(&pool, 322, 100, 100).await;
+    let (server, _stubs) = phone_server(pool.clone()).await;
+    let by_phone = server
+        .get("/v1/deals/8008")
+        .add_header(HEADER, token(322))
+        .await;
+    by_phone.assert_status_ok();
+    let by_phone: Value = by_phone.json();
+    assert_eq!(by_phone["user_id"], 101);
+    let by_cookie: Value = server
+        .get("/v1/deals/8008")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(by_phone, by_cookie);
+}
+
+#[test_db::test(seed)]
+async fn the_own_invoice_editor_makes_a_quotes_invoice_with_its_device_token(pool: MySqlPool) {
+    // Company 100 is not on QuickBooks: Rita's phone makes the quote's invoice
+    // the CRM keeps itself, emails it and marks it sent.
+    add_session(&pool, 323, 100, 100).await;
+    sql(
+        &pool,
+        "INSERT INTO quotes (id, customer_id, quote_name, quote_type, created_date, sales_rep,
+                             company_id, salesperson_id, created_by, status)
+         VALUES (9812, 1000, 'Kitchen', 'countertops', NOW(), 'Rep', 100, 100, 100, 'converted')",
+    )
+    .await;
+    let (server, _stubs) = phone_server(pool.clone()).await;
+
+    // The number the new invoice gets, as with her cookie.
+    let by_phone = server
+        .get("/v1/invoices")
+        .add_header(HEADER, token(323))
+        .await;
+    by_phone.assert_status_ok();
+    let by_phone: Value = by_phone.json();
+    let by_cookie: Value = server
+        .get("/v1/invoices")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(by_phone, by_cookie);
+    let next = by_phone["next_number"].as_i64().unwrap();
+
+    let created = server
+        .post("/v1/invoices")
+        .add_header(HEADER, token(323))
+        .json(&json!({
+            "invoice_number": null, "customer_id": 1000, "quote_id": 9812,
+            "invoice_date": "2026-11-06", "due_date": "2026-11-20",
+            "bill_to_name": "Alice Lead", "bill_to_email": "alice@example.com",
+            "project_address": "1 Main St, Carmel, IN 46032",
+            "lines": [
+                { "description": "Kitchen countertops", "qty": 1, "unit_price": 2814 },
+                { "description": "42 sq ft Quartz", "qty": null, "unit_price": null },
+            ],
+            "tax": 197.0, "customer_memo": "Payment Terms\nDue on install",
+            "private_note": null,
+        }))
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let invoice: Value = created.json();
+    assert_eq!(invoice["invoice_number"], next);
+    assert_eq!(invoice["status"], "draft");
+    assert_eq!(invoice["quote_id"], 9812);
+    assert_eq!(invoice["total"], 3011.0);
+    let id = invoice["id"].as_i64().unwrap();
+
+    // "Keep in sync with the quote" links it, as an own invoice.
+    server
+        .put("/v1/quotes/9812/invoice-sync")
+        .add_header(HEADER, token(323))
+        .json(
+            &json!({ "option_index": 0, "kind": "own", "invoice_ids": [id.to_string()],
+                       "detail": {}, "source_hash": "0123456789abcdef", "enabled": true }),
+        )
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // Once the email with its PDF goes, it is marked sent.
+    let sent = server
+        .put(&format!("/v1/invoices/{id}/status"))
+        .add_header(HEADER, token(323))
+        .json(&json!({ "status": "sent" }))
+        .await;
+    sent.assert_status_ok();
+    assert_eq!(sent.json::<Value>()["status"], "sent");
+    let status: String = sqlx::query_scalar("SELECT status FROM invoices WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "sent");
+
+    // Opening or editing an invoice stays with the CRM session.
+    server
+        .get(&format!("/v1/invoices/{id}"))
+        .add_header(HEADER, token(323))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .put(&format!("/v1/invoices/{id}"))
+        .add_header(HEADER, token(323))
+        .json(&json!({}))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .get(&format!("/v1/invoices/{id}"))
+        .with_session(sessions::REP)
+        .await
+        .assert_status_ok();
+}
