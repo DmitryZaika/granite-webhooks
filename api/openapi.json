@@ -48979,6 +48979,83 @@
         ]
       }
     },
+    "/v1/company/sales-goal": {
+      "put": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Set the company's monthly sales goal",
+        "description": "A Manager or Sales Manager sets the goal every employee sees on the\n`QuickBooks` sales widget's Company view. Null clears it.",
+        "operationId": "set_company_sales_goal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompanyGoal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The goal as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyGoal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Goal out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager or Sales Manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/qbo/class-sales": {
       "get": {
         "tags": [
@@ -53840,6 +53917,68 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/position-sections/reviewed": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Mark position access reviewed",
+        "description": "A Manager opened Position access: the setup checklist's \"Adjust\npermissions\" is done for the company (`company.permissions_reviewed_at`,\nkept from the first time).",
+        "operationId": "mark_position_access_reviewed",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked"
           },
           "401": {
             "description": "No valid session",
@@ -72867,6 +73006,20 @@
               "$ref": "#/components/schemas/FrameSupplier"
             },
             "description": "Suppliers of its faucets."
+          }
+        }
+      },
+      "CompanyGoal": {
+        "type": "object",
+        "description": "The company's monthly sales goal.",
+        "properties": {
+          "monthly_sales_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Null when not set."
           }
         }
       },
@@ -95233,7 +95386,8 @@
         "type": "object",
         "description": "`GET /v1/me/qbo-sales`.",
         "required": [
-          "status"
+          "status",
+          "can_set_company_goal"
         ],
         "properties": {
           "status": {
@@ -95254,6 +95408,18 @@
             ],
             "format": "double",
             "description": "The whole company's sales this month (the report's grand total)."
+          },
+          "company_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The company's monthly sales goal, when a manager set one."
+          },
+          "can_set_company_goal": {
+            "type": "boolean",
+            "description": "The caller may set the company goal (a Manager or Sales Manager)."
           },
           "currency": {
             "type": [
@@ -98173,7 +98339,8 @@
           "has_sales_tax",
           "has_quick_books",
           "quickbooks_feature_enabled",
-          "has_supplier_price_lists"
+          "has_supplier_price_lists",
+          "has_permissions"
         ],
         "properties": {
           "has_email_name": {
@@ -98231,6 +98398,10 @@
           "has_supplier_price_lists": {
             "type": "boolean",
             "description": "A supplier price list is processed."
+          },
+          "has_permissions": {
+            "type": "boolean",
+            "description": "A Manager opened Position access (Company page), or the company\nexisted before the checklist asked."
           }
         }
       },
@@ -105259,6 +105430,20 @@
           }
         },
         "additionalProperties": false
+      },
+      "UpdateCompanyGoal": {
+        "type": "object",
+        "description": "`PUT /v1/company/sales-goal` body.",
+        "properties": {
+          "monthly_sales_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The goal each month; null clears it."
+          }
+        }
       },
       "UpdateSalesGoal": {
         "type": "object",
