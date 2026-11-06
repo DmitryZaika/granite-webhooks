@@ -289,7 +289,8 @@ async fn each_position_has_its_default_skills_and_admins_have_all(pool: MySqlPoo
             "sell_slabs",
             "edit_transactions",
             "edit_quotes",
-            "plan_schedule"
+            "plan_schedule",
+            "see_readiness"
         ]
     );
     let rep = &access["positions"][0];
