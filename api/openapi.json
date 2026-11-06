@@ -57632,6 +57632,416 @@
         ]
       }
     },
+    "/v1/phone/contact-groups": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "List contact groups",
+        "description": "The company's contact groups (made by any of its users) with their\nmembers, by name, and which of them I hid from the top of my Contacts;\nalso whether I hid the built-in Coworkers. Members are ids to show from\nthe contact index (`GET /v1/phone/contacts/index`: customers by `id`,\ncoworkers by `userId`); deleted customers and users are left out. Change\na group with `PATCH /v1/phone/contact-groups/{id}` and\n`PUT /v1/phone/contact-groups/{id}/members`. Device token only.",
+        "operationId": "list_phone_contact_groups",
+        "responses": {
+          "200": {
+            "description": "The company's groups and what I hid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactGroups"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Create a contact group",
+        "description": "A new group of the company, with me as its maker, and optionally its\nfirst members; every user of the company sees it at the top of their\nContacts (until they hide it). At most 100 groups per company (400\n`too_many_groups`) and 500 members per group (400 `too_many_members`).\n400 `name_taken`, `unknown_contact`, `unknown_coworker`, or what is\nwrong with the name. Device token only.",
+        "operationId": "create_phone_contact_group",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`name_taken`, `too_many_groups`, `too_many_members`, `unknown_contact`, `unknown_coworker`, or what is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/contact-groups/{id}": {
+      "delete": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Delete a contact group",
+        "description": "Deletes the group for everyone at the company (its customers and\ncoworkers themselves stay). To only take it off the top of my Contacts,\nhide it instead (`PATCH /v1/phone/contact-groups/{id}` `hidden`). 404\nwhen the group is not my company's. Device token only.",
+        "operationId": "delete_phone_contact_group",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The group's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a group of my company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Rename, hide or show a contact group",
+        "description": "`name` renames the group for everyone at the company (400 as for\n`POST /v1/phone/contact-groups`); `hidden` hides it from the top of my\nown Contacts or shows it there again (other users' tops are left alone;\nthe group and its members stay). Send either or both. 404 when the group\nis not my company's. Device token only.",
+        "operationId": "update_phone_contact_group",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The group's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The group now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`name_taken`, or what is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a group of my company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/contact-groups/coworkers": {
+      "patch": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Hide or show Coworkers",
+        "description": "Hides the built-in Coworkers group (everyone at the company with a phone\nnumber) from the top of my Contacts, or shows it there again. Only for\nme; Coworkers itself is unchanged. `GET /v1/phone/contact-groups`\n`coworkersHidden` says which. Device token only.",
+        "operationId": "update_phone_coworkers_group",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoworkersChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No `hidden`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/contact-groups/{id}/members": {
+      "put": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Set a contact group's members",
+        "description": "Makes the group's members exactly the customers and coworkers sent\n(send the whole list: who is left out is taken out; empty lists empty\nthe group). For everyone at the company. At most 500 members (400\n`too_many_members`); 400 `unknown_contact` / `unknown_coworker` for ids\nthat are not my company's live customers / users. 404 when the group is\nnot my company's. Device token only.",
+        "operationId": "set_phone_contact_group_members",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The group's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupMembers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The group now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`too_many_members`, `unknown_contact` or `unknown_coworker`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a group of my company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
     "/v1/phone/calls": {
       "get": {
         "tags": [
@@ -74241,6 +74651,77 @@
           }
         }
       },
+      "ContactGroup": {
+        "type": "object",
+        "description": "One of the company's contact groups, as I see it.",
+        "required": [
+          "id",
+          "name",
+          "hidden",
+          "customerIds",
+          "userIds"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The group's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name, e.g. \"Installers\" (1 to 60 characters)."
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "I hid it from the top of my Contacts (it still exists, with its\nmembers, and other users still see it at their top)."
+          },
+          "customerIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The customers in it (ids of `GET /v1/phone/contacts/index`\n`contacts`), ascending. Deleted customers are left out."
+          },
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The coworkers in it (user ids, as `coworkers[].userId` of the\ncontact index), ascending. Deleted users are left out; I may be one of\nthem."
+          },
+          "createdBy": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user who made the group; null once that user is gone."
+          }
+        }
+      },
+      "ContactGroups": {
+        "type": "object",
+        "description": "`GET /v1/phone/contact-groups`.",
+        "required": [
+          "coworkersHidden",
+          "groups"
+        ],
+        "properties": {
+          "coworkersHidden": {
+            "type": "boolean",
+            "description": "I hid the built-in Coworkers group (everyone at the company with a\nphone number) from the top of my Contacts."
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactGroup"
+            },
+            "description": "The company's groups, by name."
+          }
+        }
+      },
       "ContactIndex": {
         "type": "object",
         "description": "`GET /v1/phone/contacts/index`.",
@@ -74794,6 +75275,19 @@
               "null"
             ],
             "description": "What it is: a direct line's own label (null when it has none),\n`Work` (their `RingCentral` number), `Office` (their `CloudTalk`\nnumber) or `Mobile` (their own phone). The app never names the provider."
+          }
+        }
+      },
+      "CoworkersChange": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/phone/contact-groups/coworkers`.",
+        "required": [
+          "hidden"
+        ],
+        "properties": {
+          "hidden": {
+            "type": "boolean",
+            "description": "True hides Coworkers from the top of my Contacts, false shows it\nagain. Only for me."
           }
         }
       },
@@ -81519,6 +82013,48 @@
           }
         }
       },
+      "GroupChange": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/phone/contact-groups/{id}`: what to change; a field\nleft out stays as it is.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new name, as for `POST /v1/phone/contact-groups`."
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "True hides the group from the top of my Contacts, false shows it\nagain. Only for me: other users' tops are left alone."
+          }
+        }
+      },
+      "GroupMembers": {
+        "type": "object",
+        "description": "Who is in a group: customers and coworkers of my company.",
+        "properties": {
+          "customerIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Customer ids of my company's live customers (400 `unknown_contact`\nfor any other id, or a deleted customer). Repeats count once."
+          },
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "User ids of my company's users (400 `unknown_coworker` for any other\nid, or a deleted user). Repeats count once."
+          }
+        }
+      },
       "HiddenUser": {
         "type": "object",
         "description": "A calendar an admin hid from one user.",
@@ -85926,6 +86462,35 @@
               "$ref": "#/components/schemas/StepInput"
             },
             "description": "1 to 20 steps."
+          }
+        }
+      },
+      "NewGroup": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/contact-groups`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Its name, 1 to 60 characters (trimmed); unique in the company,\nignoring case (400 `name_taken`)."
+          },
+          "customerIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Customer ids to put in it at once (as `PUT .../members`)."
+          },
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Coworkers' user ids to put in it at once (as `PUT .../members`)."
           }
         }
       },

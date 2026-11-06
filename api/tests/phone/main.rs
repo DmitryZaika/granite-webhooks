@@ -15,6 +15,7 @@ mod phone_bootstrap;
 mod phone_call_settings;
 mod phone_calls;
 mod phone_connect;
+mod phone_contact_groups;
 mod phone_contacts;
 mod phone_crm_push;
 mod phone_devices;

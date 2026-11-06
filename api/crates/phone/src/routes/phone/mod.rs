@@ -24,6 +24,9 @@
 //! - `GET  /v1/phone/contacts/{id}`            → a contact card
 //! - `POST /v1/phone/contacts`                 → a new customer (me as rep, an open deal)
 //! - `POST /v1/phone/contacts/{id}/phones`     → add a number to a customer
+//! - `GET|POST /v1/phone/contact-groups`, `PATCH|DELETE /v1/phone/contact-groups/{id}`,
+//!   `PUT /v1/phone/contact-groups/{id}/members`, `PATCH /v1/phone/contact-groups/coworkers`
+//!   → the company's contact groups; hiding one (or Coworkers) from my Contacts' top
 //! - `GET  /v1/phone/calls`, `/calls/{id}`     → Recents, one call
 //! - `POST /v1/phone/calls/seen`, `DELETE /v1/phone/calls/{id}` → mark seen, hide
 //! - `GET  /v1/phone/calls/stats`              → my talk time today, this week, this month
@@ -82,6 +85,7 @@ mod call_rules;
 mod calls;
 mod cell;
 mod connect;
+mod contact_groups;
 mod contacts;
 mod devices;
 mod directions;
@@ -130,6 +134,16 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(contacts::create_contact))
         .routes(routes!(contacts::contact_card))
         .routes(routes!(contacts::add_contact_phone))
+        .routes(routes!(
+            contact_groups::list_contact_groups,
+            contact_groups::create_contact_group
+        ))
+        .routes(routes!(
+            contact_groups::update_contact_group,
+            contact_groups::delete_contact_group
+        ))
+        .routes(routes!(contact_groups::update_coworkers_group))
+        .routes(routes!(contact_groups::set_contact_group_members))
         .routes(routes!(calls::list_calls))
         .routes(routes!(ringcentral_calls::list_ringcentral_calls))
         .routes(routes!(calls::get_call, calls::hide_call))
