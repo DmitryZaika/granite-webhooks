@@ -989,6 +989,7 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
                 "title_variable": "quote_name",
                 "title_text": "Plumbing",
                 "trigger_extra_ids": [],
+                "trigger_options": [],
             },
             {
                 "id": electric,
@@ -997,6 +998,7 @@ async fn admins_add_events_a_sold_quote_puts_on_the_schedule(pool: MySqlPool) {
                 "title_variable": "customer_name",
                 "title_text": "Electrical",
                 "trigger_extra_ids": [],
+                "trigger_options": [],
             },
         ])
     );
