@@ -454,9 +454,15 @@ async fn only_event_checks_can_be_reported(pool: MySqlPool) {
 }
 
 /// The seed gives the rep CloudTalk calls this month, which `customer_called`
-/// counts; tests that pin the whole usage map start without them.
-async fn without_seeded_calls(pool: &MySqlPool) {
+/// counts, and the company a drip template, which makes `automation_set_up`
+/// count for all of its users; tests that pin the whole usage map start
+/// without them (the template deleted).
+async fn without_seeded_uses(pool: &MySqlPool) {
     sqlx::query("DELETE FROM phone_call_points WHERE company_id = 100")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE email_templates SET deleted_at = NOW() WHERE id = 8670")
         .execute(pool)
         .await
         .unwrap();
@@ -464,7 +470,7 @@ async fn without_seeded_calls(pool: &MySqlPool) {
 
 #[test_db::test(seed)]
 async fn progress_reports_usage_and_the_account_date(pool: MySqlPool) {
-    without_seeded_calls(&pool).await;
+    without_seeded_uses(&pool).await;
     let server = server(pool.clone());
     seed_usage(&pool, 100, "2026-05-01 09:00:00", "2026-05-01 09:30:00").await;
     sqlx::query(
@@ -512,7 +518,7 @@ async fn progress_reports_usage_and_the_account_date(pool: MySqlPool) {
 
 #[test_db::test(seed)]
 async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
-    without_seeded_calls(&pool).await;
+    without_seeded_uses(&pool).await;
     use api::routes::onboarding::store::Actor;
     use api::routes::onboarding::usage::{evaluate, evaluate_team};
     let all = [
@@ -626,8 +632,9 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
     assert_eq!(team[&101]["quote_cutout_added"], "2026-05-01T06:30:00.000Z");
     assert!(!team[&100].contains_key("quote_drawn"));
     assert_eq!(team[&100]["templates_used"], "2026-05-01T09:00:00.000Z");
+    // The company now has an automation: it counts for every user of it.
     assert_eq!(team[&100]["automation_set_up"], "2026-05-01T07:00:00.000Z");
-    assert!(!team[&101].contains_key("automation_set_up"));
+    assert_eq!(team[&101]["automation_set_up"], "2026-05-01T07:00:00.000Z");
     assert_eq!(team[&101]["send_later_used"], "2026-05-01T08:00:00.000Z");
     assert!(!team[&100].contains_key("send_later_used"));
     // One user's check finds the same, from the cache the team run filled.
@@ -640,6 +647,89 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
         .await
         .unwrap();
     assert!(evaluate(&pool, rep, &all).await.unwrap().is_empty());
+}
+
+#[test_db::test(seed)]
+async fn a_company_setup_counts_for_every_user_until_their_reset(pool: MySqlPool) {
+    without_seeded_uses(&pool).await;
+    use api::routes::onboarding::store::Actor;
+    use api::routes::onboarding::usage::{evaluate, evaluate_team, record_event};
+    let checks = ["quote_automation_changed", "automation_set_up"];
+    let actor = |user_id, company_id| Actor {
+        user_id,
+        company_id,
+    };
+    assert!(
+        evaluate_team(&pool, 100, &[100, 101], &checks)
+            .await
+            .unwrap()
+            .values()
+            .all(|uses| uses.is_empty())
+    );
+    // A quote automation switch on, and drip templates from before templates
+    // kept their creator (a deleted one, older, does not count).
+    sqlx::query("UPDATE company SET auto_sale = 1 WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO email_templates (template_name, template_subject, template_body, company_id,
+                                      user_id, created_by, lead_list_id, hour_delay, created_at, deleted_at)
+         VALUES ('Old drip', 'Hi', 'Hi', 100, NULL, NULL, 101, 5, '2026-07-01 09:00:00', NULL),
+                ('Later drip', 'Hi', 'Hi', 100, NULL, NULL, 101, 6, '2026-08-01 09:00:00', NULL),
+                ('Gone drip', 'Hi', 'Hi', 100, NULL, NULL, 101, 7, '2026-06-01 09:00:00', '2026-06-02 09:00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Nobody in the company touched either: all of its live users count.
+    let team = evaluate_team(&pool, 100, &[100, 101, 105], &checks)
+        .await
+        .unwrap();
+    for user in [100, 101] {
+        assert_eq!(
+            team[&user]["quote_automation_changed"],
+            "2026-11-06T00:00:00.000Z"
+        );
+        assert_eq!(team[&user]["automation_set_up"], "2026-07-01T09:00:00.000Z");
+    }
+    assert!(team[&105].is_empty(), "a deleted user: {:?}", team[&105]);
+    // One user's check finds the same rows.
+    let own = evaluate(&pool, actor(107, 100), &checks).await.unwrap();
+    assert_eq!(own["quote_automation_changed"], "2026-11-06T00:00:00.000Z");
+    assert_eq!(own["automation_set_up"], "2026-07-01T09:00:00.000Z");
+    // Another company is not affected.
+    assert!(
+        evaluate(&pool, actor(106, 101), &checks)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // A tour reset after the release (a second will do) drops both; the
+    // user's own change after it counts again.
+    sqlx::query(
+        "INSERT INTO user_onboarding (user_id, company_id, feature_tasks_reset_at)
+         VALUES (100, 100, '2026-11-06 00:00:01')
+         ON DUPLICATE KEY UPDATE feature_tasks_reset_at = VALUES(feature_tasks_reset_at)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        evaluate(&pool, actor(100, 100), &checks)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    record_event(&pool, actor(100, 100), "quote_automation_changed")
+        .await
+        .unwrap();
+    let again = evaluate(&pool, actor(100, 100), &checks).await.unwrap();
+    assert_eq!(
+        again.keys().collect::<Vec<_>>(),
+        ["quote_automation_changed"]
+    );
+    assert!(again["quote_automation_changed"].as_str() > "2026-11-06T00:00:01");
 }
 
 fn sighted(at: &str) -> Value {

@@ -13,7 +13,12 @@
 //!   panel opened in the browser); the app reports them with
 //!   `POST /v1/me/onboarding/usage`;
 //! - **both**: read from the tables and also reported by the app, for a
-//!   setting whose tables keep who made a row but not who changed one.
+//!   setting whose tables keep who made a row but not who changed one, or
+//!   keep no one at all (a company switch).
+//!
+//! An admin setting the company already has counts for every user of the
+//! company: nobody can tell which admin set it up before its tour shipped.
+//! Each admin's own later changes still count for that admin.
 //!
 //! Positives are cached per user in `user_feature_usage` (a negative is
 //! asked again, so the first real use is noticed). A user's
@@ -213,6 +218,8 @@ static CHECKS: [UsageCheck; 20] = [
     },
     // A company automation the admin set up: an email template tied to a list
     // (it sends by itself after its delay), or a company follow-up flow.
+    // Templates from before 2026-08-10 keep no creator, so a company that has
+    // a live automation counts for each of its users, from its earliest one.
     UsageCheck {
         id: "automation_set_up",
         kind: Kind::Data,
@@ -225,7 +232,22 @@ static CHECKS: [UsageCheck; 20] = [
                SELECT sf.created_by AS user_id, sf.created_at AS ts
                  FROM sms_flows sf
                 WHERE sf.company_id = {c} AND sf.user_id IS NULL AND sf.created_by IS NOT NULL
-                  [[sf.created_by]]",
+                  [[sf.created_by]]
+               UNION ALL
+               SELECT u.id AS user_id, a.ts
+                 FROM users u
+                 JOIN (SELECT MIN(x.ts) AS ts
+                         FROM (SELECT et.created_at AS ts
+                                 FROM email_templates et
+                                WHERE et.company_id = {c} AND et.user_id IS NULL
+                                  AND et.deleted_at IS NULL
+                                  AND (et.lead_group_id IS NOT NULL OR et.lead_list_id IS NOT NULL)
+                               UNION ALL
+                               SELECT sf.created_at AS ts
+                                 FROM sms_flows sf
+                                WHERE sf.company_id = {c} AND sf.user_id IS NULL
+                                  AND sf.deleted_at IS NULL) x) a ON a.ts IS NOT NULL
+                WHERE u.company_id = {c} AND u.is_deleted = 0 [[u.id]]",
     },
     UsageCheck {
         id: "quote_views_opened",
@@ -251,11 +273,19 @@ static CHECKS: [UsageCheck; 20] = [
         rows: "",
     },
     // A quote automation switch changed and saved (Admin, Quotes, Automation).
-    // The switches are company columns: nothing keeps who set them.
+    // The switches are company columns: nothing keeps who set them or when.
+    // The app reports each change; a company with a switch on counts for
+    // each of its users as set up at the tours' release (2026-11-06, UTC). A
+    // tour reset after that drops it, as for any use from before the reset.
     UsageCheck {
         id: "quote_automation_changed",
-        kind: Kind::Event,
-        rows: "",
+        kind: Kind::Both,
+        rows: "SELECT u.id AS user_id, CAST('2026-11-06 00:00:00' AS DATETIME) AS ts
+                 FROM users u
+                 JOIN company co ON co.id = u.company_id
+                WHERE u.company_id = {c} AND u.is_deleted = 0
+                  AND (co.auto_sale = 1 OR co.auto_unscheduled_jobs = 1 OR co.auto_invoice = 1)
+                  [[u.id]]",
     },
     // Schedule's customer texts saved (Admin, Schedule): a template or a flow
     // the user made (deleted ones too), and what the app reports, as an edit
@@ -528,7 +558,6 @@ mod tests {
             "unscheduled_planned",
             "chat_page_shared",
             "ai_reply_revised",
-            "quote_automation_changed",
             "quote_size_typed",
             "stone_image_edited",
         ] {
@@ -537,10 +566,12 @@ mod tests {
             assert!(!check(id).unwrap().reads_data(), "{id}");
         }
         // Read from the tables, and the app may report it too.
-        let both = check("schedule_texts_saved").unwrap();
-        assert_eq!(both.kind, Kind::Both);
-        assert!(is_event_check(both.id) && both.reads_data());
-        assert!(both.rows.contains("{c}"));
+        for id in ["schedule_texts_saved", "quote_automation_changed"] {
+            let both = check(id).unwrap();
+            assert_eq!(both.kind, Kind::Both, "{id}");
+            assert!(is_event_check(both.id) && both.reads_data(), "{id}");
+            assert!(both.rows.contains("{c}"), "{id}");
+        }
         assert!(check("nope").is_none());
         assert!(!is_event_check("nope"));
     }
@@ -579,5 +610,30 @@ mod tests {
         for column in ["cl.user_id", "ch.user_id", "al.user_id"] {
             assert!(chat.contains(&format!("AND {column} = 3")), "{column}");
         }
+    }
+
+    #[test]
+    fn a_company_setup_counts_for_each_user_of_the_company() {
+        // Each user's own rows, and the company's for every user: one user is
+        // asked for by id, the whole company by its users.
+        let automation = check("automation_set_up").unwrap().rows;
+        let one = expand(automation, 7, Some(3));
+        for column in ["et.created_by", "sf.created_by", "u.id"] {
+            assert!(one.contains(&format!("AND {column} = 3")), "{column}");
+        }
+        assert!(automation.contains("MIN(x.ts)") && automation.contains("u.is_deleted = 0"));
+        let all = expand(automation, 7, None);
+        assert!(all.contains("u.company_id = 7") && !all.contains("= 3"));
+        // The switches keep no time: set up at the tours' release.
+        let quote = check("quote_automation_changed").unwrap().rows;
+        for column in [
+            "co.auto_sale",
+            "co.auto_unscheduled_jobs",
+            "co.auto_invoice",
+        ] {
+            assert!(quote.contains(column), "{column}");
+        }
+        assert!(quote.contains("'2026-11-06 00:00:00'"));
+        assert!(expand(quote, 7, Some(3)).contains("AND u.id = 3"));
     }
 }
