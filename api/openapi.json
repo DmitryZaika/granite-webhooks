@@ -13021,6 +13021,140 @@
         ]
       }
     },
+    "/v1/me/stats/outreach": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get my outreach today",
+        "description": "Returns how many outbound calls, texts and emails the signed-in user made\ntoday (midnight to midnight in the company's time zone), and the company's\ndaily minimums for each (null when not set).",
+        "operationId": "get_my_outreach_today",
+        "responses": {
+          "200": {
+            "description": "Today's calls, texts and emails",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Outreach"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/outreach-goals": {
+      "put": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Set the daily outreach minimums",
+        "description": "A Manager or Sales Manager sets the minimum calls, texts and emails each\nrep should make a day. Null (or 0) clears one.",
+        "operationId": "set_company_outreach_goals",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutreachGoals"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The minimums as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutreachGoals"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A minimum out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager or Sales Manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/stats/overview": {
       "get": {
         "tags": [
@@ -77219,7 +77353,8 @@
           "sms-per-month",
           "daily-sales",
           "available-inventory",
-          "feature-sales"
+          "feature-sales",
+          "outreach-activity"
         ]
       },
       "DayCut": {
@@ -88597,6 +88732,71 @@
               "null"
             ],
             "description": "Why it was lost; only with `lost`."
+          }
+        }
+      },
+      "Outreach": {
+        "type": "object",
+        "description": "Today's outreach of the signed-in user.",
+        "required": [
+          "calls",
+          "sms",
+          "emails",
+          "goals",
+          "can_set_goals"
+        ],
+        "properties": {
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Outbound calls started today, on every phone provider."
+          },
+          "sms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Texts sent today through the user's SMS provider."
+          },
+          "emails": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Emails the user sent today; automated emails left out."
+          },
+          "goals": {
+            "$ref": "#/components/schemas/OutreachGoals"
+          },
+          "can_set_goals": {
+            "type": "boolean",
+            "description": "The caller is a Manager or Sales Manager and may set the minimums."
+          }
+        }
+      },
+      "OutreachGoals": {
+        "type": "object",
+        "description": "The company's daily minimums; null when not set.",
+        "properties": {
+          "calls": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "sms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "emails": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
