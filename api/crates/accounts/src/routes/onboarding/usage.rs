@@ -284,7 +284,8 @@ static CHECKS: [UsageCheck; 20] = [
                  FROM users u
                  JOIN company co ON co.id = u.company_id
                 WHERE u.company_id = {c} AND u.is_deleted = 0
-                  AND (co.auto_sale = 1 OR co.auto_unscheduled_jobs = 1 OR co.auto_invoice = 1)
+                  AND (co.auto_sale = 1 OR co.auto_unscheduled_jobs = 1 OR co.auto_invoice = 1
+                       OR co.quote_invoice_sync = 1 OR co.auto_project = 1)
                   [[u.id]]",
     },
     // Schedule's customer texts saved (Admin, Schedule): a template or a flow
@@ -630,6 +631,8 @@ mod tests {
             "co.auto_sale",
             "co.auto_unscheduled_jobs",
             "co.auto_invoice",
+            "co.quote_invoice_sync",
+            "co.auto_project",
         ] {
             assert!(quote.contains(column), "{column}");
         }
