@@ -5,12 +5,14 @@
 //! - `GET /v1/me/stats/top-stones`      → stones they sold the most slabs of this month
 //! - `GET /v1/me/stats/sent-emails`     → emails sent per month, last 3 months
 //! - `GET /v1/me/stats/sent-sms`        → texts sent per month, last 3 months
-//! - `GET /v1/stats/overview`           → the admin Statistics page ([`overview`])
+//! - `GET /v1/me/stats/outreach`        → calls, texts and emails today ([`outreach`])
+//! - `GET /v1/stats/overview`          → the admin Statistics page ([`overview`])
 //! - `GET|PUT /v1/stats/widget-layout`  → its widget layout ([`widget_layout`])
 //!
 //! Replaces `salesRepStats.server.ts` and `employeeDashboardMetrics.server.ts`.
 
 mod handlers;
+pub mod outreach;
 pub mod overview;
 pub mod queries;
 pub mod schemas;
@@ -29,6 +31,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::top_stones))
         .routes(routes!(handlers::sent_emails))
         .routes(routes!(handlers::sent_sms))
+        .routes(routes!(outreach::get_outreach))
+        .routes(routes!(outreach::set_goals))
         .routes(routes!(overview::overview))
         .routes(routes!(
             widget_layout::get_layout,
