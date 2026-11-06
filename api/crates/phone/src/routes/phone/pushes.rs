@@ -10,7 +10,8 @@ use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
 use crate::phone::crm_push::{
-    LeadKind, push_lead, push_manager_lead, push_notification, sales_managers,
+    LeadKind, push_lead, push_leads_changed_logged, push_manager_lead, push_notification,
+    sales_managers,
 };
 use crate::state::AppState;
 use axum::Json;
@@ -97,6 +98,12 @@ pub async fn push_notification_route(
 /// `taken` push tells the managers (but `except_user_ids`) that the lead
 /// was assigned, as its Telegram message is edited. Nothing is pushed (`pushed: 0`) for another
 /// company's or a deleted customer. Calling it again pushes again.
+///
+/// A managers' push (no `user_id`) but `quote` also sends every other phone
+/// of the company, the rep and the manager who assigned it included, a quiet
+/// `{granite: "1", type: "leads"}` push (not counted in `pushed`): it shows
+/// nothing and makes the app refetch its lead inbox, so a lead assigned in
+/// Telegram leaves "Waiting for a sales rep" on every phone at once.
 #[crate::openapi::path(
     post,
     path = "/v1/phone/pushes/lead",
@@ -131,7 +138,7 @@ pub async fn push_lead_route(
         None => {
             let mut managers = sales_managers(&state.pool, body.company_id).await?;
             managers.retain(|id| !body.except_user_ids.contains(id));
-            push_manager_lead(
+            let pushed = push_manager_lead(
                 &state,
                 body.company_id,
                 &managers,
@@ -139,8 +146,24 @@ pub async fn push_lead_route(
                 body.customer_id,
                 body.deal_id,
             )
-            .await?
+            .await?;
+            if body.kind != LeadKind::Quote && lead_of(&state, &body).await? {
+                push_leads_changed_logged(&state, body.company_id, &managers).await;
+            }
+            pushed
         }
     };
     Ok(Json(PushSent { pushed }))
+}
+
+/// The push names a live customer of its company (else nobody is told).
+async fn lead_of(state: &AppState, body: &LeadPush) -> sqlx::Result<bool> {
+    let found: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(body.customer_id)
+    .bind(body.company_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(found.is_some())
 }

@@ -3,7 +3,9 @@
 
 use crate::error::ApiError;
 use crate::phone::calls::SALES_MANAGER_POSITION;
-use crate::phone::crm_push::{LeadKind, push_lead_logged, push_manager_lead, sales_managers};
+use crate::phone::crm_push::{
+    LeadKind, push_lead_logged, push_leads_changed_logged, push_manager_lead, sales_managers,
+};
 use crate::phone::numbers::last10;
 use crate::routes::deals::service::{enter_stage, sync_drip};
 use crate::state::AppState;
@@ -409,8 +411,10 @@ pub fn rep_reassigned_text(customer_name: &str, lead_link: &str) -> String {
 /// from another rep) it says "You were reassigned the customer
 /// {name}. Click here:" instead. The sales managers' Telegram messages about the lead are
 /// edited to "Lead assigned to {rep}", and the other managers' phones get a
-/// `taken` push. Best effort: the assignment is saved already, so failures
-/// are logged.
+/// `taken` push. Every other phone of the company (the actor's own included)
+/// gets the quiet `leads` push, so the lead leaves "Waiting for a sales rep"
+/// everywhere at once. Best effort: the assignment is saved already, so
+/// failures are logged.
 pub async fn notify_assigned_rep(
     state: &AppState,
     company_id: i32,
@@ -463,6 +467,11 @@ pub async fn notify_assigned_rep(
     {
         tracing::warn!(?error, customer_id, "assigned lead: managers' push failed");
     }
+    let mut told = managers;
+    if rep != actor {
+        told.push(rep);
+    }
+    push_leads_changed_logged(state, company_id, &told).await;
 
     if rep == actor {
         return;

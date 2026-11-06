@@ -12,6 +12,7 @@ use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::ToSchema;
+use crate::phone::crm_push::push_leads_changed_logged;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -368,6 +369,9 @@ pub async fn update(
             let reassigned = previous_rep.map(|_| input.name.trim());
             notify_assigned_rep(&state, user.company_id, id, rep, user.id, deal, reassigned)
                 .await;
+        } else {
+            // Back to "Waiting for a sales rep" on every phone.
+            push_leads_changed_logged(&state, user.company_id, &[]).await;
         }
     }
     state.webhooks.sync_contacts(user.company_id, id).await;
@@ -448,6 +452,9 @@ pub async fn set_sales_rep(
                 .await;
         }
         state.webhooks.sync_contacts(user.company_id, id).await;
+    } else if previous.is_some() {
+        // Taken back: "Waiting for a sales rep" again on every phone.
+        push_leads_changed_logged(&state, user.company_id, &[]).await;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -609,6 +616,8 @@ pub async fn mark_invalid(
         }
     }
     tx.commit().await?;
+    // It leaves the lead inbox of every phone.
+    push_leads_changed_logged(&state, user.company_id, &[]).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
