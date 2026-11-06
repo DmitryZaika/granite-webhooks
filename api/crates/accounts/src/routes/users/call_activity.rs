@@ -228,6 +228,33 @@ pub async fn agent_calls(
     items
 }
 
+/// Names each call after the CRM customer with the other party's number
+/// (`customer_id` too), leaving the rest as they are.
+pub async fn name_customers(
+    pool: &sqlx::MySqlPool,
+    company_id: i32,
+    calls: &mut [CallActivity],
+) -> sqlx::Result<()> {
+    if calls.is_empty() {
+        return Ok(());
+    }
+    let customers = customers_by_phone(pool, company_id).await?;
+    for call in calls {
+        let customer = call
+            .contact
+            .as_deref()
+            .and_then(last10)
+            .and_then(|key| customers.get(&key));
+        if let Some(customer) = customer {
+            call.customer_id = Some(customer.id);
+            if customer.name.is_some() {
+                call.customer_name.clone_from(&customer.name);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The rep's extension on a `RingCentral` call-log row.
 fn ringcentral_extension(record: &Value) -> String {
     [
@@ -508,22 +535,7 @@ pub async fn call_activity(
                 Some(ringcentral_activity(record, *id, name))
             })
             .collect();
-        if !ringcentral_calls.is_empty() {
-            let customers = customers_by_phone(&state.pool, user.company_id).await?;
-            for call in &mut ringcentral_calls {
-                let customer = call
-                    .contact
-                    .as_deref()
-                    .and_then(last10)
-                    .and_then(|key| customers.get(&key));
-                if let Some(customer) = customer {
-                    call.customer_id = Some(customer.id);
-                    if customer.name.is_some() {
-                        call.customer_name.clone_from(&customer.name);
-                    }
-                }
-            }
-        }
+        name_customers(&state.pool, user.company_id, &mut ringcentral_calls).await?;
         calls.extend(ringcentral_calls);
     }
     for task in tasks {
