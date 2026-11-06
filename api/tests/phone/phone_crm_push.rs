@@ -544,3 +544,176 @@ async fn a_customer_moved_to_another_rep_on_its_edit_page_says_reassigned(pool: 
         "{texts:?}"
     );
 }
+
+/// The quiet `leads` pushes FCM got: (push token, Android priority), in order.
+fn leads_refreshes(stubs: &Stubs) -> Vec<(String, String)> {
+    stubs
+        .pushes()
+        .into_iter()
+        .filter(|push| push["data"]["type"] == "leads")
+        .map(|push| {
+            // Ids only, nothing to show: an iPhone gets a background push.
+            assert_eq!(push["data"], json!({ "granite": "1", "type": "leads" }));
+            assert_eq!(
+                push["apns"]["payload"]["aps"],
+                json!({ "content-available": 1 })
+            );
+            (
+                push["token"].as_str().unwrap().to_string(),
+                push["android"]["priority"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn tokens(refreshes: &[(String, String)]) -> Vec<&str> {
+    refreshes.iter().map(|(token, _)| token.as_str()).collect()
+}
+
+/// Bob Unassigned (1001) is a lead of today with no rep, in the managers'
+/// "Waiting for a sales rep". Phones: Rita (1), Mark (2 and 4), Ada the
+/// admin (3) of Acme; Olga of another company (5).
+async fn waiting_lead(pool: &MySqlPool) -> (TestServer, Stubs) {
+    let (server, stubs) = setup(pool).await;
+    add_phone(pool, 3, 102, 100).await;
+    add_phone(pool, 4, 101, 100).await;
+    add_phone(pool, 5, 106, 101).await;
+    sql(
+        pool,
+        "UPDATE customers SET source = 'leads', created_date = NOW() - INTERVAL 1 HOUR
+          WHERE id = 1001",
+    )
+    .await;
+    (server, stubs)
+}
+
+/// The leads waiting for a rep in the lead inbox of phone `n`.
+async fn waiting(server: &TestServer, n: u32) -> Vec<i64> {
+    let res = server
+        .get("/v1/customers/lead-inbox")
+        .add_header(HEADER, token(n))
+        .await;
+    res.assert_status_ok();
+    let inbox: Value = res.json();
+    assert_eq!(inbox["is_manager"], true);
+    inbox["unassigned"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|lead| lead["customer_id"].as_i64().unwrap())
+        .collect()
+}
+
+#[test_db::test(seed)]
+async fn a_lead_assigned_in_telegram_refreshes_every_phone_of_the_company(pool: MySqlPool) {
+    let (server, stubs) = waiting_lead(&pool).await;
+    assert_eq!(waiting(&server, 3).await, [1001]);
+
+    // Mark presses Rita's button in Telegram: the webhooks Lambda saves it,
+    // then tells Rita and the other managers (not Mark, who pressed it).
+    sql(
+        &pool,
+        "UPDATE customers SET sales_rep = 100, assigned_date = NOW() WHERE id = 1001",
+    )
+    .await;
+    let assigned = json!({
+        "company_id": 100, "customer_id": 1001, "deal_id": 8001, "kind": "assigned", "user_id": 100,
+    });
+    assert_eq!(
+        job(&server, "/v1/phone/pushes/lead", assigned).await,
+        json!({ "pushed": 1 })
+    );
+    let taken = json!({
+        "company_id": 100, "customer_id": 1001, "deal_id": 8001, "kind": "taken",
+        "except_user_ids": [100, 101],
+    });
+    assert_eq!(
+        job(&server, "/v1/phone/pushes/lead", taken).await,
+        json!({ "pushed": 0 })
+    );
+
+    // Every Acme phone hears the leads changed, quietly: Mark's two, Ada's
+    // (an admin, no sales manager: no `taken`), Rita's. Not Olga's.
+    let refreshes = leads_refreshes(&stubs);
+    assert_eq!(tokens(&refreshes), ["push-1", "push-2", "push-3", "push-4"]);
+    assert!(refreshes.iter().all(|(_, priority)| priority == "NORMAL"));
+    // The refetched inbox no longer has it waiting.
+    assert_eq!(waiting(&server, 2).await, Vec::<i64>::new());
+    assert_eq!(waiting(&server, 3).await, Vec::<i64>::new());
+
+    // A new lead is news for every phone too; a finished quote and another
+    // company's customer are not.
+    for kind in ["new", "quote"] {
+        job(
+            &server,
+            "/v1/phone/pushes/lead",
+            json!({ "company_id": 100, "customer_id": 1000, "kind": kind }),
+        )
+        .await;
+    }
+    job(
+        &server,
+        "/v1/phone/pushes/lead",
+        json!({ "company_id": 101, "customer_id": 1000, "kind": "taken" }),
+    )
+    .await;
+    // The `new` push went to Mark: the others refetch quietly.
+    assert_eq!(tokens(&leads_refreshes(&stubs)[4..]), ["push-1", "push-3"]);
+}
+
+#[test_db::test(seed)]
+async fn a_lead_given_or_taken_back_on_the_website_or_a_phone_refreshes_every_phone(
+    pool: MySqlPool,
+) {
+    use crate::common::{WithSession, sessions};
+    let (server, stubs) = waiting_lead(&pool).await;
+
+    // Ada gives Bob to Rita on the website: Rita gets `assigned`, Mark
+    // `taken`; Ada's own phone refetches quietly.
+    server
+        .put("/v1/customers/1001/sales-rep")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "sales_rep": 100 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let kinds: Vec<_> = pushes(&stubs, "lead")
+        .into_iter()
+        .map(|(token, data)| (token, data["kind"].as_str().unwrap().to_string()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("push-2".to_string(), "taken".to_string()),
+            ("push-4".to_string(), "taken".to_string()),
+            ("push-1".to_string(), "assigned".to_string()),
+        ]
+    );
+    assert_eq!(tokens(&leads_refreshes(&stubs)), ["push-3"]);
+    assert_eq!(waiting(&server, 3).await, Vec::<i64>::new());
+
+    // Mark takes it back on his phone: waiting again, on every phone.
+    server
+        .put("/v1/customers/1001/sales-rep")
+        .add_header(HEADER, token(2))
+        .json(&json!({ "sales_rep": null }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        tokens(&leads_refreshes(&stubs)[1..]),
+        ["push-1", "push-2", "push-3", "push-4"]
+    );
+    assert_eq!(waiting(&server, 3).await, [1001]);
+
+    // Ada marks it invalid from her phone: it leaves every phone's inbox.
+    server
+        .put("/v1/customers/1001/invalid")
+        .add_header(HEADER, token(3))
+        .json(&json!({ "reason": "Out of area" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        tokens(&leads_refreshes(&stubs)[5..]),
+        ["push-1", "push-2", "push-3", "push-4"]
+    );
+    assert_eq!(waiting(&server, 2).await, Vec::<i64>::new());
+}

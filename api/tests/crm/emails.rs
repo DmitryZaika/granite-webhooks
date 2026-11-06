@@ -56,7 +56,8 @@ async fn inbox_lists_threads_addressed_to_the_caller(pool: MySqlPool) {
             "thread_has_attachments": true,
             "sender_name": "Other Co Customer",
             "receiver_name": "Olga Other",
-            "inbox_sort_at": "2026-04-11T09:00:00.000Z"
+            "inbox_sort_at": "2026-04-11T09:00:00.000Z",
+            "thread_unread": true
         })
     );
     // Olga's reply: the open counts, the name comes from the users table.
@@ -162,6 +163,95 @@ async fn inbox_lists_only_unread_threads_when_asked(pool: MySqlPool) {
     let page = get(&pool, "/v1/emails/threads?unread=true", OLGA).await;
     assert_eq!(email_ids(&page), Vec::<i64>::new());
     assert_eq!(page["total_count"], 0);
+}
+
+/// `thread_unread` of each listed thread, in list order.
+fn thread_unread(page: &Value) -> Vec<(String, bool)> {
+    let mut seen = Vec::<(String, bool)>::new();
+    for row in page["emails"].as_array().unwrap() {
+        let id = row["thread_id"].as_str().unwrap().to_string();
+        let unread = row["thread_unread"].as_bool().unwrap();
+        match seen.iter().find(|(seen_id, _)| *seen_id == id) {
+            Some((_, flag)) => assert_eq!(*flag, unread, "one flag per thread"),
+            None => seen.push((id, unread)),
+        }
+    }
+    seen
+}
+
+#[test_db::test(seed)]
+async fn rows_say_which_threads_the_counts_call_unread(pool: MySqlPool) {
+    let page = get(&pool, "/v1/emails/threads", OLGA).await;
+    assert_eq!(
+        thread_unread(&page),
+        vec![(T1.to_string(), true), (T2.to_string(), false)]
+    );
+    // Other folders never flag a thread.
+    for folder in ["sent", "trash", "drafts"] {
+        let page = get(&pool, &format!("/v1/emails/threads?folder={folder}"), OLGA).await;
+        assert!(thread_unread(&page).iter().all(|(_, unread)| !unread));
+    }
+
+    // The customer's mail of T1 is read; then Sam, a coworker, writes Olga in it.
+    server(pool.clone())
+        .post("/v1/emails/threads/mark-read")
+        .with_session(OLGA)
+        .json(&json!({ "thread_ids": [T1] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        get(&pool, "/v1/emails/folder-counts", OLGA).await["inbox_unread"],
+        0
+    );
+    sqlx::query(
+        "INSERT INTO emails (id, subject, body, sent_at, message_id, thread_id, sender_user_id,
+                             receiver_user_id, sender_email, receiver_email, deal_id,
+                             employee_read_at, company_id, is_draft)
+         VALUES (8897, 'Re: Kitchen quote', 'Can you call her?', '2026-04-12 09:00:00',
+                 '<m8897@other.test>', ?, 103, 106, 'Sam Super <super@other.test>',
+                 'rep@other.test', NULL, NULL, 101, 0)",
+    )
+    .bind(T1)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // The badge, the folder count, the Unread list and the row all say the same.
+    assert_eq!(get(&pool, "/v1/emails/unread", OLGA).await["count"], 1);
+    assert_eq!(
+        get(&pool, "/v1/emails/folder-counts", OLGA).await["inbox_unread"],
+        1
+    );
+    let unread = get(&pool, "/v1/emails/threads?unread=true", OLGA).await;
+    assert_eq!(unread["total_count"], 1);
+    assert_eq!(thread_unread(&unread), vec![(T1.to_string(), true)]);
+    let all = get(&pool, "/v1/emails/threads", OLGA).await;
+    assert_eq!(
+        thread_unread(&all),
+        vec![(T1.to_string(), true), (T2.to_string(), false)]
+    );
+
+    // Opening it reads it everywhere.
+    server(pool.clone())
+        .post(&format!("/v1/emails/threads/{T1}/read"))
+        .with_session(OLGA)
+        .json(&json!({}))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(get(&pool, "/v1/emails/unread", OLGA).await["count"], 0);
+    assert_eq!(
+        get(&pool, "/v1/emails/folder-counts", OLGA).await["inbox_unread"],
+        0
+    );
+    assert_eq!(
+        get(&pool, "/v1/emails/threads?unread=true", OLGA).await["total_count"],
+        0
+    );
+    assert!(
+        thread_unread(&get(&pool, "/v1/emails/threads", OLGA).await)
+            .iter()
+            .all(|(_, unread)| !unread)
+    );
 }
 
 #[test_db::test(seed)]
