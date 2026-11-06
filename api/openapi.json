@@ -53956,6 +53956,68 @@
         ]
       }
     },
+    "/v1/company/position-sections/reviewed": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Mark position access reviewed",
+        "description": "A Manager opened Position access: the setup checklist's \"Adjust\npermissions\" is done for the company (`company.permissions_reviewed_at`,\nkept from the first time).",
+        "operationId": "mark_position_access_reviewed",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/superuser/companies": {
       "get": {
         "tags": [
@@ -98380,7 +98442,8 @@
           "has_sales_tax",
           "has_quick_books",
           "quickbooks_feature_enabled",
-          "has_supplier_price_lists"
+          "has_supplier_price_lists",
+          "has_permissions"
         ],
         "properties": {
           "has_email_name": {
@@ -98438,6 +98501,10 @@
           "has_supplier_price_lists": {
             "type": "boolean",
             "description": "A supplier price list is processed."
+          },
+          "has_permissions": {
+            "type": "boolean",
+            "description": "A Manager opened Position access (Company page), or the company\nexisted before the checklist asked."
           }
         }
       },

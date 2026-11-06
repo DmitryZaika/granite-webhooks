@@ -26,6 +26,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list))
         .routes(routes!(save, reset))
+        .routes(routes!(reviewed))
 }
 
 /// A tab a position may open.
@@ -280,5 +281,39 @@ pub async fn reset(
         .bind(position_id)
         .execute(&state.pool)
         .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Mark position access reviewed
+///
+/// A Manager opened Position access: the setup checklist's "Adjust
+/// permissions" is done for the company (`company.permissions_reviewed_at`,
+/// kept from the first time).
+#[crate::openapi::path(
+    post,
+    path = "/v1/company/position-sections/reviewed",
+    operation_id = "mark_position_access_reviewed",
+    tag = "company",
+    params(TargetCompany),
+    responses(
+        (status = 204, description = "Marked"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller does not manage the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn reviewed(
+    State(state): State<AppState>,
+    UserManager(user): UserManager,
+    Query(query): Query<TargetCompany>,
+) -> ApiResult<StatusCode> {
+    sqlx::query(
+        "UPDATE company SET permissions_reviewed_at = NOW()
+          WHERE id = ? AND permissions_reviewed_at IS NULL",
+    )
+    .bind(target(&user, &query))
+    .execute(&state.pool)
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }

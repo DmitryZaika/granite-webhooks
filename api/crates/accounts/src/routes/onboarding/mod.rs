@@ -240,6 +240,9 @@ pub struct SetupStatus {
     pub quickbooks_feature_enabled: bool,
     /// A supplier price list is processed.
     pub has_supplier_price_lists: bool,
+    /// A Manager opened Position access (Company page), or the company
+    /// existed before the checklist asked.
+    pub has_permissions: bool,
 }
 
 /// Setup tasks credited by this request.
@@ -342,6 +345,14 @@ async fn setup_status(
         status.has_sales_tax = taxes;
         status.has_quick_books = features.quickbooks_connected;
         status.has_supplier_price_lists = price_list.is_some();
+        // Best effort: before its migration every company counts as done.
+        status.has_permissions = sqlx::query_scalar::<_, i64>(
+            "SELECT CAST(permissions_reviewed_at IS NOT NULL AS SIGNED) FROM company WHERE id = ?",
+        )
+        .bind(company)
+        .fetch_optional(pool)
+        .await
+        .map_or(true, |found| found.is_some_and(|reviewed| reviewed == 1));
         status.quickbooks_feature_enabled = features.quickbooks_enabled;
     }
     Ok(status)
