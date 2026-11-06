@@ -57737,6 +57737,53 @@
         ]
       }
     },
+    "/v1/phone/calls/ringcentral": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "List my `RingCentral` calls",
+        "description": "The caller's `RingCentral` calls of the last 30 days, newest first: those\nof an extension of theirs, now or ever, and those to or from a number of\ntheirs, now or ever (the rule texts follow). Each is named after our\ncustomer with that number. Empty when the company has no `RingCentral`\nor it can't be read. Device token only.",
+        "operationId": "list_ringcentral_calls",
+        "responses": {
+          "200": {
+            "description": "The caller's RingCentral calls",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RingCentralCalls"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
     "/v1/phone/calls/{id}": {
       "get": {
         "tags": [
@@ -58823,6 +58870,87 @@
           },
           "404": {
             "description": "Not a text of my lines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/texts/messages/{id}": {
+      "delete": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Delete a text that failed",
+        "description": "Removes one of my lines' outbound texts that was not delivered (status\n`failed`), with its files: it never reached the other person, so the\nconversation no longer shows it. The app deletes the failed text it sends\nagain, so it is never sent twice. 409 for a text that went out (or is\nstill going), 404 for one not on my lines. Device token only.",
+        "operationId": "delete_failed_phone_text",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The text's id (a text's `id`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`texting_disabled`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a text of my lines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The text did not fail: only a failed text can be deleted",
             "content": {
               "application/json": {
                 "schema": {
@@ -88899,6 +89027,11 @@
             "type": "integer",
             "description": "10DLC number assignments read again from Telnyx; left out when none.",
             "minimum": 0
+          },
+          "tendlc_numbers_assigned": {
+            "type": "integer",
+            "description": "Numbers assigned to their company's approved 10DLC campaign by themselves; left out when none.",
+            "minimum": 0
           }
         }
       },
@@ -95670,6 +95803,71 @@
           "doc": {
             "type": "object",
             "description": "The drawing."
+          }
+        }
+      },
+      "RingCentralCall": {
+        "type": "object",
+        "description": "One `RingCentral` call.",
+        "required": [
+          "id",
+          "direction",
+          "status",
+          "startedAt",
+          "durationSecs",
+          "otherNumber"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`RingCentral`'s call-log id."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/CallDirection"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CallStatus",
+            "description": "`answered`, `missed`, `voicemail`, `busy` or `no_answer`."
+          },
+          "startedAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "durationSecs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Talk time in seconds; 0 when nobody talked."
+          },
+          "otherNumber": {
+            "type": "string",
+            "description": "The other party's number, as `RingCentral` gives it (E.164)."
+          },
+          "customer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallCustomer",
+                "description": "Our customer with that number; null when none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "RingCentralCalls": {
+        "type": "object",
+        "description": "The caller's `RingCentral` calls.",
+        "required": [
+          "calls"
+        ],
+        "properties": {
+          "calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RingCentralCall"
+            },
+            "description": "Newest first, the last 30 days."
           }
         }
       },
