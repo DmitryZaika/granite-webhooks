@@ -5,10 +5,12 @@
 //! Fixture phones use n = 41..=60; numbers 9720+; customers 930000+; calls
 //! 980100+.
 
+use crate::common;
 use crate::phone_common;
 
 use axum::http::{Method, StatusCode};
 use chrono::Utc;
+use common::{WithSession, sessions};
 use phone_common::{
     APP_URL, HEADER, add_call, add_number, add_phone, add_session, assert_device_only, assign,
     phone_server, revoke_session, sql, token,
@@ -421,6 +423,13 @@ async fn coworkers_have_all_their_numbers(pool: MySqlPool) {
               "phones": [{ "e164": "+13175550133", "label": "Mobile" }] },
         ])
     );
+    // The CRM's phone dock lists the same coworkers.
+    let web: Value = server
+        .get("/v1/phone/web/bootstrap")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(web["coworkers"], body["coworkers"]);
     // Any of a coworker's numbers names them.
     let matches: Value = server
         .post("/v1/phone/contacts/lookup")

@@ -58182,7 +58182,7 @@
           "phone"
         ],
         "summary": "List my Recents",
-        "description": "The caller's calls, newest first: calls they placed or answered, every\ncall of a direct line assigned to them, and unanswered incoming calls of\nshared and main lines that ring them; calls they hid are left out.\n`filter`: `missed` = incoming calls nobody answered (voicemails and AI\nmessages included), `incoming`, `outgoing`, `recorded`; `number` = one\nnumber's calls. Pages by id (`before`, `limit` 1 to 100, default 50).\nDevice token only.",
+        "description": "The caller's calls, newest first: calls they placed or answered, every\ncall of a direct line assigned to them, and unanswered incoming calls of\nshared and main lines that ring them; calls they hid are left out.\n`filter`: `missed` = incoming calls nobody answered (voicemails and AI\nmessages included), `incoming`, `outgoing`, `recorded`, `voicemail`\n(voicemails and AI messages); `number` = one number's calls. Pages by id\n(`before`, `limit` 1 to 100, default 50). Takes the device token or the\nsession cookie (the CRM's phone dock).",
         "operationId": "list_phone_calls",
         "parameters": [
           {
@@ -58208,17 +58208,18 @@
           {
             "name": "filter",
             "in": "query",
-            "description": "`all` (default), `missed`, `incoming`, `outgoing` or `recorded`.",
+            "description": "`all` (default), `missed`, `incoming`, `outgoing`, `recorded` or\n`voicemail`.",
             "required": false,
             "schema": {
               "type": "string",
-              "description": "Which calls Recents lists: `all`, `missed` (incoming calls nobody\nanswered, voicemails and AI messages included), `incoming`,\n`outgoing` or `recorded` (with a recording).",
+              "description": "Which calls Recents lists: `all`, `missed` (incoming calls nobody\nanswered, voicemails and AI messages included), `incoming`,\n`outgoing`, `recorded` (with a recording) or `voicemail` (voicemails\nand AI messages).",
               "enum": [
                 "All",
                 "Missed",
                 "Incoming",
                 "Outgoing",
-                "Recorded"
+                "Recorded",
+                "Voicemail"
               ]
             }
           },
@@ -58254,7 +58255,17 @@
             }
           },
           "401": {
-            "description": "No valid device token",
+            "description": "No valid device token or session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A cookie of a user who is not an employee or admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -58277,6 +58288,9 @@
         "security": [
           {
             "device_token": []
+          },
+          {
+            "session_cookie": []
           }
         ]
       }
@@ -58463,7 +58477,7 @@
           "phone"
         ],
         "summary": "Mark calls seen",
-        "description": "Marks calls seen for the caller (clears them from the unread counts and\nshows them as seen): the `ids` sent, or every call in their Recents that\nstarted at or before `upTo`. Send one of the two. Device token only.",
+        "description": "Marks calls seen for the caller (clears them from the unread counts and\nshows them as seen): the `ids` sent, or every call in their Recents that\nstarted at or before `upTo`. Send one of the two. Takes the device token\nor the session cookie (the CRM's phone dock).",
         "operationId": "mark_phone_calls_seen",
         "requestBody": {
           "content": {
@@ -58490,7 +58504,17 @@
             }
           },
           "401": {
-            "description": "No valid device token",
+            "description": "No valid device token or session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A cookie of a user who is not an employee or admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -58513,6 +58537,9 @@
         "security": [
           {
             "device_token": []
+          },
+          {
+            "session_cookie": []
           }
         ]
       }
@@ -107898,7 +107925,8 @@
           "recordingMode",
           "callerIds",
           "settings",
-          "availability"
+          "availability",
+          "coworkers"
         ],
         "properties": {
           "serverTime": {
@@ -107936,6 +107964,13 @@
           "availability": {
             "$ref": "#/components/schemas/Availability",
             "description": "Whether calls ring the user now (Do not disturb, working hours)."
+          },
+          "coworkers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Coworker"
+            },
+            "description": "The company's other users with a phone number, by name: the\nphone's Contacts tab lists them to call."
           }
         }
       },

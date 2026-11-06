@@ -234,6 +234,13 @@ async fn recents_are_my_calls_and_my_lines(pool: MySqlPool) {
     );
     // Olga: only company 101's, whatever the assignments say.
     assert_eq!(ids(&recents(&server, 83, "").await), [980_308]);
+    // The CRM's phone dock reads Rita's Recents with her cookie.
+    let by_cookie = server
+        .get("/v1/phone/calls")
+        .with_session(sessions::REP)
+        .await;
+    by_cookie.assert_status_ok();
+    assert_eq!(by_cookie.json::<Value>(), rita);
 
     // Filters and one number's calls.
     for (query, expected) in [
@@ -241,6 +248,7 @@ async fn recents_are_my_calls_and_my_lines(pool: MySqlPool) {
         ("?filter=incoming", vec![980_302]),
         ("?filter=outgoing", vec![980_310, 980_301]),
         ("?filter=recorded", vec![980_302, 980_301]),
+        ("?filter=voicemail", vec![980_309]),
         ("?filter=all&number=%2B13175550100", vec![980_301]),
         ("?number=(317)%20555-0199", vec![980_303, 980_302]),
         ("?filter=missed&number=3175550199", vec![980_303]),
@@ -333,6 +341,14 @@ async fn seen_and_hidden_are_each_users_own(pool: MySqlPool) {
     seen(json!({ "ids": [] }))
         .await
         .assert_status(StatusCode::NO_CONTENT);
+    // Mark marks it seen from the CRM's phone dock, with his cookie.
+    server
+        .post("/v1/phone/calls/seen")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "ids": [980_303] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(recents(&server, 85, "").await["calls"][2]["seen"], true);
 
     // Hiding is mine only, and can be done twice.
     for _ in 0..2 {
@@ -1245,10 +1261,8 @@ async fn call_routes_take_only_a_live_device_token(pool: MySqlPool) {
         &server,
         109,
         &[
-            (Method::GET, "/v1/phone/calls".to_string()),
             (Method::GET, "/v1/phone/calls/980301".to_string()),
             (Method::DELETE, "/v1/phone/calls/980301".to_string()),
-            (Method::POST, "/v1/phone/calls/seen".to_string()),
             (Method::GET, "/v1/phone/calls/stats".to_string()),
             (Method::GET, "/v1/phone/calls/980301/recording".to_string()),
             (Method::POST, "/v1/phone/calls/980301/note".to_string()),
