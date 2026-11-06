@@ -567,7 +567,7 @@ async fn offers_come_from_the_price_lists_through_the_ai(pool: MySqlPool) {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(feature, "chat");
+    assert_eq!(feature, "price_offers");
 }
 
 #[test_db::test(seed)]

@@ -446,6 +446,11 @@ async fn only_event_checks_can_be_reported(pool: MySqlPool) {
         .assert_status(StatusCode::BAD_REQUEST);
     report("nope").await.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(stored().await.len(), 1);
+    // A check read from the tables that the app also reports is accepted.
+    report("schedule_texts_saved")
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(stored().await.len(), 2);
 }
 
 /// The seed gives the rep CloudTalk calls this month, which `customer_called`
@@ -523,6 +528,7 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
         "quote_drawn",
         "quote_cutout_added",
         "automation_set_up",
+        "schedule_texts_saved",
     ];
     let rep = Actor {
         user_id: 100,
@@ -577,7 +583,45 @@ async fn data_checks_read_the_company_and_respect_the_fence(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
+    // Other AI calls are not their feature: the rep's Schedule estimate and
+    // price offers (under their own names now, and as `chat` from before
+    // they got them) are no Chat question, and a call's text alone is no
+    // follow-up. The second user's Chat question and call note count.
+    sqlx::query(
+        "INSERT INTO ai_usage_log (feature, api_kind, model, user_id, company_id, success, created_at)
+         VALUES ('schedule_estimate', 'chat', 'gpt-6-luna', 100, 100, 1, '2026-05-01 05:00:00'),
+                ('price_offers', 'chat', 'gpt-6-luna', 100, 100, 1, '2026-05-01 05:00:00'),
+                ('chat', 'chat', 'gpt-6-luna', 100, 100, 1, '2026-10-08 05:00:00'),
+                ('call_transcription', 'transcription', 'universal-3-5-pro', 100, 100, 1, '2026-05-01 05:00:00'),
+                ('chat', 'chat', 'gpt-6-luna', 101, 100, 1, '2026-05-01 05:00:00'),
+                ('call_transcription', 'transcription', 'universal-3-5-pro', 101, 100, 1, '2026-05-01 04:00:00'),
+                ('call_note_summary', 'chat', 'gpt-6-luna', 101, 100, 1, '2026-05-01 05:30:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // A Schedule text template the second user made (deleted since).
+    sqlx::query(
+        "INSERT INTO schedule_notification_templates (company_id, name, channel, body, created_by, created_at, deleted_at)
+         VALUES (100, 'Reminder', 'sms', 'See you soon', 101, '2026-05-01 03:00:00', '2026-05-01 03:30:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let team = evaluate_team(&pool, 100, &[100, 101], &all).await.unwrap();
+    assert!(!team[&100].contains_key("chat_asked"), "{:?}", team[&100]);
+    assert!(
+        !team[&100].contains_key("call_followed_up"),
+        "{:?}",
+        team[&100]
+    );
+    assert_eq!(team[&101]["chat_asked"], "2026-05-01T05:00:00.000Z");
+    assert_eq!(team[&101]["call_followed_up"], "2026-05-01T05:30:00.000Z");
+    assert_eq!(
+        team[&101]["schedule_texts_saved"],
+        "2026-05-01T03:00:00.000Z"
+    );
+    assert!(!team[&100].contains_key("schedule_texts_saved"));
     assert_eq!(team[&101]["quote_drawn"], "2026-05-01T06:00:00.000Z");
     assert_eq!(team[&101]["quote_cutout_added"], "2026-05-01T06:30:00.000Z");
     assert!(!team[&100].contains_key("quote_drawn"));

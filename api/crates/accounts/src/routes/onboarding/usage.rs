@@ -6,12 +6,14 @@
 //! Onboarding widget, and a tour row created after an old use pays no points
 //! (see `store`).
 //!
-//! Two kinds of check:
+//! Three kinds of check:
 //! - **data** checks read the app's own tables (one grouped query per check,
 //!   for one user or for the whole company);
 //! - **event** checks cover work the server cannot see in its tables (a
 //!   panel opened in the browser); the app reports them with
-//!   `POST /v1/me/onboarding/usage`.
+//!   `POST /v1/me/onboarding/usage`;
+//! - **both**: read from the tables and also reported by the app, for a
+//!   setting whose tables keep who made a row but not who changed one.
 //!
 //! Positives are cached per user in `user_feature_usage` (a negative is
 //! asked again, so the first real use is noticed). A user's
@@ -32,6 +34,10 @@ pub enum Kind {
     Data,
     /// Reported by the app (`POST /v1/me/onboarding/usage`).
     Event,
+    /// Read from the app's tables (what they record) and reported by the app
+    /// (what they do not). A report is a cached positive like any other, so
+    /// the tables are read only while there is none.
+    Both,
 }
 
 /// One usage check.
@@ -39,16 +45,23 @@ pub enum Kind {
 pub struct UsageCheck {
     pub id: &'static str,
     pub kind: Kind,
-    /// Data checks: a `SELECT user_id, ts` of every use in the company, one
-    /// row per use. `{c}` is the company id; `[[col]]` becomes
+    /// Data and both checks: a `SELECT user_id, ts` of every use in the
+    /// company, one row per use. `{c}` is the company id; `[[col]]` becomes
     /// `AND col = <user>` when asking for one user and nothing for the whole
     /// company, so the user's rows are found by index. The ids are numbers,
     /// so they go in as literals.
     rows: &'static str,
 }
 
+impl UsageCheck {
+    /// The check has rows to read (a data or both check).
+    fn reads_data(&self) -> bool {
+        self.kind != Kind::Event
+    }
+}
+
 /// Every check, by id.
-static CHECKS: [UsageCheck; 18] = [
+static CHECKS: [UsageCheck; 20] = [
     // A quote emailed to a customer. Quotes are scoped by their company.
     UsageCheck {
         id: "quote_emailed",
@@ -110,9 +123,14 @@ static CHECKS: [UsageCheck; 18] = [
                 WHERE sr.company_id = {c} AND sr.status <> 'draft'
                   [[sr.created_by_user_id]]",
     },
-    // A question asked in Chat. `chat_log` (kept from 2026-10-28) may have
-    // no company: the asker's home company scopes it. Older questions are
-    // only in the AI cost log.
+    // A question asked in Chat: every question from 2026-10-28 is in
+    // `chat_log`, and `chat_history` (the user's saved conversation, only
+    // Chat writes it) dates from their first answer. Neither is sure to have
+    // a company: the asker's home company scopes them. The AI cost log holds
+    // older questions as `chat`, but from 2026-10-07 the Schedule estimate
+    // (run as the dialog opens) and price offers logged as `chat` too, with
+    // the same model and nothing else to tell them apart: only its rows from
+    // before they shipped count (a day early, whatever the session's zone).
     UsageCheck {
         id: "chat_asked",
         kind: Kind::Data,
@@ -121,9 +139,15 @@ static CHECKS: [UsageCheck; 18] = [
                  JOIN users u ON u.id = cl.user_id AND u.company_id = {c}
                 WHERE 1 = 1 [[cl.user_id]]
                UNION ALL
+               SELECT ch.user_id AS user_id, ch.created_date AS ts
+                 FROM chat_history ch
+                 JOIN users u ON u.id = ch.user_id AND u.company_id = {c}
+                WHERE ch.created_date IS NOT NULL [[ch.user_id]]
+               UNION ALL
                SELECT al.user_id AS user_id, al.created_at AS ts
                  FROM ai_usage_log al
                 WHERE al.company_id = {c} AND al.feature = 'chat' AND al.success = 1
+                  AND al.created_at < '2026-10-06'
                   AND al.user_id IS NOT NULL [[al.user_id]]",
     },
     // A draft from the AI reply button. Until 2026-11-05 it was logged as
@@ -154,14 +178,17 @@ static CHECKS: [UsageCheck; 18] = [
                 WHERE pc.company_id = {c} AND pc.user_id IS NOT NULL
                   AND pc.direction = 'outbound' [[pc.user_id]]",
     },
-    // A call turned into a note, activities or text by AI.
+    // A call turned into a note or activities by AI: only the call's Create
+    // note and Create activities buttons log these. A transcript alone does
+    // not count: the call's show-text action and the Call coach log
+    // `call_transcription` too.
     UsageCheck {
         id: "call_followed_up",
         kind: Kind::Data,
         rows: "SELECT al.user_id AS user_id, al.created_at AS ts
                  FROM ai_usage_log al
                 WHERE al.company_id = {c} AND al.success = 1 AND al.user_id IS NOT NULL
-                  AND al.feature IN ('call_note_summary', 'call_activity_extract', 'call_transcription')
+                  AND al.feature IN ('call_note_summary', 'call_activity_extract')
                   [[al.user_id]]",
     },
     // A quote drawing the user saved: each save of the drawing is a revision.
@@ -224,15 +251,36 @@ static CHECKS: [UsageCheck; 18] = [
         rows: "",
     },
     // A quote automation switch changed and saved (Admin, Quotes, Automation).
+    // The switches are company columns: nothing keeps who set them.
     UsageCheck {
         id: "quote_automation_changed",
         kind: Kind::Event,
         rows: "",
     },
-    // Schedule's customer texts saved (Admin, Schedule). The notification
-    // rules keep no user column.
+    // Schedule's customer texts saved (Admin, Schedule): a template or a flow
+    // the user made (deleted ones too), and what the app reports, as an edit
+    // of someone else's template or the AI texts settings (company columns).
     UsageCheck {
         id: "schedule_texts_saved",
+        kind: Kind::Both,
+        rows: "SELECT t.created_by AS user_id, t.created_at AS ts
+                 FROM schedule_notification_templates t
+                WHERE t.company_id = {c} AND t.created_by IS NOT NULL [[t.created_by]]
+               UNION ALL
+               SELECT f.created_by AS user_id, f.created_at AS ts
+                 FROM schedule_notification_flows f
+                WHERE f.company_id = {c} AND f.created_by IS NOT NULL [[f.created_by]]",
+    },
+    // An exact length typed and committed in the quote drawing's dimension
+    // dialog.
+    UsageCheck {
+        id: "quote_size_typed",
+        kind: Kind::Event,
+        rows: "",
+    },
+    // An edit applied in the stone photo editor (Use edited image).
+    UsageCheck {
+        id: "stone_image_edited",
         kind: Kind::Event,
         rows: "",
     },
@@ -243,9 +291,9 @@ pub fn check(id: &str) -> Option<&'static UsageCheck> {
     CHECKS.iter().find(|check| check.id == id)
 }
 
-/// `id` is a check the app reports itself.
+/// `id` is a check the app may report itself (an event or a both check).
 pub fn is_event_check(id: &str) -> bool {
-    check(id).is_some_and(|check| check.kind == Kind::Event)
+    check(id).is_some_and(|check| check.kind != Kind::Data)
 }
 
 /// ISO 8601 UTC, as the rest of the onboarding payloads.
@@ -359,7 +407,7 @@ async fn store(
 
 /// What the actor has used: check id -> first use (ISO 8601 UTC).
 ///
-/// Holds every cached positive (data and event) and each data check in
+/// Holds every cached positive (any kind) and each data or both check in
 /// `wanted` that is not cached and is positive now (stored for next time).
 /// Negatives are never cached.
 pub async fn evaluate(
@@ -373,7 +421,7 @@ pub async fn evaluate(
         .unwrap_or_default();
     let now = Utc::now().naive_utc();
     for id in wanted {
-        let Some(check) = check(id).filter(|check| check.kind == Kind::Data) else {
+        let Some(check) = check(id).filter(|check| check.reads_data()) else {
             continue;
         };
         if known.contains_key(check.id) {
@@ -388,8 +436,8 @@ pub async fn evaluate(
     Ok(known.into_iter().map(|(id, at)| (id, iso(at))).collect())
 }
 
-/// [`evaluate`] for many users of one company: each wanted data check that
-/// some user lacks runs once for the whole company.
+/// [`evaluate`] for many users of one company: each wanted data or both
+/// check that some user lacks runs once for the whole company.
 pub async fn evaluate_team(
     pool: &MySqlPool,
     company: i32,
@@ -399,7 +447,7 @@ pub async fn evaluate_team(
     let mut known = cached(pool, company, users).await?;
     let now = Utc::now().naive_utc();
     for id in wanted {
-        let Some(check) = check(id).filter(|check| check.kind == Kind::Data) else {
+        let Some(check) = check(id).filter(|check| check.reads_data()) else {
             continue;
         };
         let missing = users.iter().any(|user| {
@@ -481,11 +529,18 @@ mod tests {
             "chat_page_shared",
             "ai_reply_revised",
             "quote_automation_changed",
-            "schedule_texts_saved",
+            "quote_size_typed",
+            "stone_image_edited",
         ] {
             assert_eq!(check(id).unwrap().kind, Kind::Event, "{id}");
             assert!(is_event_check(id), "{id}");
+            assert!(!check(id).unwrap().reads_data(), "{id}");
         }
+        // Read from the tables, and the app may report it too.
+        let both = check("schedule_texts_saved").unwrap();
+        assert_eq!(both.kind, Kind::Both);
+        assert!(is_event_check(both.id) && both.reads_data());
+        assert!(both.rows.contains("{c}"));
         assert!(check("nope").is_none());
         assert!(!is_event_check("nope"));
     }
@@ -500,6 +555,19 @@ mod tests {
     }
 
     #[test]
+    fn other_ai_calls_do_not_count_as_their_feature() {
+        // The Schedule estimate and price offers logged as `chat` until they
+        // got their own names: the cost log counts only before they shipped.
+        let chat = check("chat_asked").unwrap().rows;
+        assert!(chat.contains("al.feature = 'chat'"));
+        assert!(chat.contains("al.created_at < '2026-10-06'"));
+        assert!(!chat.contains("schedule_estimate") && !chat.contains("price_offers"));
+        let call = check("call_followed_up").unwrap().rows;
+        assert!(call.contains("'call_note_summary'") && call.contains("'call_activity_extract'"));
+        assert!(!call.contains("call_transcription"));
+    }
+
+    #[test]
     fn a_user_filter_lands_on_every_branch() {
         let all = expand(check("send_later_used").unwrap().rows, 7, None);
         assert!(all.contains("company_id = 7"));
@@ -507,5 +575,9 @@ mod tests {
         let one = expand(check("send_later_used").unwrap().rows, 7, Some(3));
         assert!(one.contains("AND de.user_id = 3") && one.contains("AND ds.user_id = 3"));
         assert!(!one.contains("[[") && !one.contains("{c}"));
+        let chat = expand(check("chat_asked").unwrap().rows, 7, Some(3));
+        for column in ["cl.user_id", "ch.user_id", "al.user_id"] {
+            assert!(chat.contains(&format!("AND {column} = 3")), "{column}");
+        }
     }
 }

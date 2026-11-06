@@ -312,7 +312,7 @@ pub async fn estimate_time(
     chat.reasoning_effort = Some("low");
     chat.timeout = Duration::from_secs(20);
     let caller = Caller {
-        feature: "chat",
+        feature: "schedule_estimate",
         user_id: Some(user.id),
         company_id: Some(user.company_id),
     };

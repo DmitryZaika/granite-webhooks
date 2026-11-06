@@ -309,16 +309,17 @@
       "base_keys": [
         "quote-canvas-dimension"
       ],
-      "usage_check": "quote_drawn"
+      "usage_check": "quote_size_typed"
     },
     {
       "id": "draw-cutouts",
       "version": 1,
       "points": 10,
       "checklist": false,
-      "required_steps": 1,
+      "required_steps": 2,
       "base_keys": [
-        "quote-canvas-cutouts"
+        "quote-canvas-cutouts",
+        "quote-canvas-cutout-menu"
       ],
       "usage_check": "quote_cutout_added"
     },

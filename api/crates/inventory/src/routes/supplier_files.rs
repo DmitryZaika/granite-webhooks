@@ -431,7 +431,7 @@ pub async fn price_offers(
     chat.json = true;
     chat.timeout = Duration::from_secs(45);
     let caller = Caller {
-        feature: "chat",
+        feature: "price_offers",
         user_id: Some(user.id),
         company_id: Some(user.company_id),
     };

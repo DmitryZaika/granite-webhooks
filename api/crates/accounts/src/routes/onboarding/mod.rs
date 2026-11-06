@@ -110,9 +110,10 @@ pub async fn progress(
 /// Body of `POST /v1/me/onboarding/usage`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UsageInput {
-    /// The usage check the user just passed. Only checks the app reports
-    /// itself are accepted (`quote_views_opened`, `unscheduled_planned`);
-    /// checks the server reads from its own data are refused.
+    /// The usage check the user just passed. Only checks the app may report
+    /// itself are accepted (the event and both checks in `usage.rs`, such as
+    /// `quote_views_opened`); checks the server reads only from its own data
+    /// are refused.
     pub check_id: String,
 }
 
