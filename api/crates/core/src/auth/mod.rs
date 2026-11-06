@@ -30,7 +30,9 @@
 //! files; not deleting a deal or the board setup), and a customer's sales
 //! rep or invalid lead (`customer_write`: the contact card's and the lead
 //! inbox's Assign, the lead notification's Mark invalid), and the To do tab's
-//! AI to-do list (`promise_route`: read it, close or reopen one) the
+//! AI to-do list (`promise_route`: read it, close or reopen one), and the
+//! native quote screen (`DEVICE_QUOTE_READS` with `GET`, and `quote_write`:
+//! a new quote, its info, a saved revision, the sale and its email) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -298,11 +300,54 @@ fn template_write(method: &Method, path: &str) -> bool {
     }
 }
 
+/// The quote lookups the app's native quote screen reads with its device
+/// token, exactly these paths and `GET` only: the price lists a quote can move
+/// to and a new quote starts from, the tax rates and payment terms of Pricing
+/// Settings and Edit Payment Terms, the forms the Email dialog offers, and the
+/// caller's quote email templates. A price list's editor (`/{id}`) and every
+/// write there stay with the CRM session.
+pub const DEVICE_QUOTE_READS: [&str; 5] = [
+    "/v1/quote-price-lists",
+    "/v1/quote-tax-rates",
+    "/v1/quote-payment-terms",
+    "/v1/quote-forms",
+    "/v1/me/quote-email-templates",
+];
+
+/// The quote changes the app's native quote screen makes with its device
+/// token, exactly these: a new quote (`POST /v1/quotes`), its info (`PATCH
+/// /v1/quotes/{id}`), saving its drawing as a new revision (`PUT
+/// .../drawing`), Mark as Sold and Undo sale (`POST|DELETE .../sale`) and
+/// emailing it (`POST .../emails`). Reading a quote is under
+/// [`DEVICE_READ_ROUTES`]; deleting, copying, autosaving, updating its prices,
+/// printing and its links stay with the CRM session. The `edit_quotes` skill
+/// still applies ([`skills`]).
+fn quote_write(method: &Method, path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/v1/quotes") else {
+        return false;
+    };
+    if rest.is_empty() {
+        return method == Method::POST;
+    }
+    let Some(rest) = rest.strip_prefix('/') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    match parts.as_slice() {
+        [id] => is_id(id) && method == Method::PATCH,
+        [id, "drawing"] => is_id(id) && method == Method::PUT,
+        [id, "sale"] => is_id(id) && (method == Method::POST || method == Method::DELETE),
+        [id, "emails"] => is_id(id) && method == Method::POST,
+        _ => false,
+    }
+}
+
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
 /// ([`deal_write`]), a customer's sales rep ([`customer_write`]), the
-/// templates' ([`template_write`]) and the To do tab's ([`promise_route`]).
+/// templates' ([`template_write`]), the To do tab's ([`promise_route`]) and
+/// the quote screen's (`GET` on [`DEVICE_QUOTE_READS`], [`quote_write`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
@@ -311,6 +356,8 @@ fn device_route(method: &Method, path: &str) -> bool {
         || customer_write(method, path)
         || template_write(method, path)
         || promise_route(method, path)
+        || (method == Method::GET && DEVICE_QUOTE_READS.contains(&path))
+        || quote_write(method, path)
 }
 
 async fn identify(
@@ -578,7 +625,7 @@ mod tests {
             "/v1/suppliers/directory",
             "/v1/transactions",
             "/v1/transactions/7",
-            "/v1/quotes",
+            "/v1/quotes/7/revisions/3",
             "/v1/notifications/7",
             "/v1/shop/maintenance",
             "/v1/shop/maintenance/checks",
@@ -671,6 +718,65 @@ mod tests {
             (Method::PUT, "/v1/customers/7/invalidx"),
             (Method::PUT, "/v1/customers/7"),
             (Method::DELETE, "/v1/customers/7"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn the_quote_screen_reads_its_lookups_and_makes_exactly_its_changes() {
+        for (method, path) in [
+            (Method::GET, "/v1/quotes"),
+            (Method::GET, "/v1/quotes/7"),
+            (Method::GET, "/v1/quotes/7/revisions/3"),
+            (Method::GET, "/v1/quotes/suggestions"),
+            (Method::GET, "/v1/quote-price-lists"),
+            (Method::GET, "/v1/quote-tax-rates"),
+            (Method::GET, "/v1/quote-payment-terms"),
+            (Method::GET, "/v1/quote-forms"),
+            (Method::GET, "/v1/me/quote-email-templates"),
+            (Method::POST, "/v1/quotes"),
+            (Method::PATCH, "/v1/quotes/7"),
+            (Method::PUT, "/v1/quotes/7/drawing"),
+            (Method::POST, "/v1/quotes/7/sale"),
+            (Method::DELETE, "/v1/quotes/7/sale"),
+            (Method::POST, "/v1/quotes/7/emails"),
+        ] {
+            assert!(device_route(&method, path), "{method} {path}");
+        }
+        for (method, path) in [
+            (Method::DELETE, "/v1/quotes/7"),
+            (Method::PUT, "/v1/quotes/7"),
+            (Method::POST, "/v1/quotes/7"),
+            (Method::PATCH, "/v1/quotes"),
+            (Method::PATCH, "/v1/quotes/x"),
+            (Method::PATCH, "/v1/quotes/"),
+            (Method::POST, "/v1/quotes/7/drawing"),
+            (Method::PUT, "/v1/quotes/7/autosave"),
+            (Method::DELETE, "/v1/quotes/7/autosave"),
+            (Method::POST, "/v1/quotes/7/copies"),
+            (Method::POST, "/v1/quotes/7/prices"),
+            (Method::POST, "/v1/quotes/7/prints"),
+            (Method::POST, "/v1/quotes/7/portal-token"),
+            (Method::PATCH, "/v1/quotes/7/emails/3"),
+            (Method::PUT, "/v1/quotes/7/sale"),
+            (Method::POST, "/v1/quotes/x/sale"),
+            (Method::POST, "/v1/quotes/7/emails/3"),
+            (Method::POST, "/v1/quotes/7/invoice-sync"),
+            (Method::POST, "/v1/quotes/print-previews"),
+            (Method::POST, "/v1/quotesx"),
+            (Method::POST, "/v1/quote-price-lists"),
+            (Method::GET, "/v1/quote-price-lists/7"),
+            (Method::PUT, "/v1/quote-price-lists/7"),
+            (Method::GET, "/v1/quote-price-listsx"),
+            (Method::POST, "/v1/quote-tax-rates"),
+            (Method::DELETE, "/v1/quote-payment-terms/3"),
+            (Method::GET, "/v1/quote-forms/3"),
+            (Method::POST, "/v1/me/quote-email-templates"),
+            (Method::PUT, "/v1/me/quote-email-templates/3"),
+            (Method::GET, "/v1/quote-email-templates"),
+            (Method::GET, "/v1/quote-settings"),
+            (Method::GET, "/v1/quote-extras"),
         ] {
             assert!(!device_route(&method, path), "{method} {path}");
         }

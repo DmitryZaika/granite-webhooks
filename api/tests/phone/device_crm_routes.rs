@@ -380,3 +380,155 @@ async fn the_to_do_tab_reads_and_closes_ai_promises_with_its_device_token(pool: 
             .unwrap();
     assert_eq!(status, "done");
 }
+
+#[test_db::test(seed)]
+async fn the_quote_screen_reads_and_saves_a_quote_with_its_device_token(pool: MySqlPool) {
+    // Company 100 has a price list with Granite and a tax rate; Rita (user
+    // 100) signed in on her phone.
+    sql(
+        &pool,
+        "INSERT INTO quote_tax_rates (company_id, name, sequence, tax_pct) VALUES (100, 'Marion', 1, 7.25)",
+    )
+    .await;
+    add_session(&pool, 312, 100, 100).await;
+    let (server, stubs) = phone_server(pool.clone()).await;
+    let list = server
+        .post("/v1/quote-price-lists")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Retail" }))
+        .await;
+    list.assert_status(StatusCode::CREATED);
+    let list_id = list.json::<Value>()["id"].as_i64().unwrap();
+    let info = json!({
+        "units": "in", "currency": "$", "lineItemPriceRounding": 2,
+        "arrProducts": [{ "name": "Granite", "allowDiscount": 1,
+                          "arrVariants": [{ "name": "Ubatuba", "price": 40 }] }],
+        "arrOtherItems": [], "arrSinkModels": [],
+    });
+    sqlx::query(
+        "UPDATE price_list_revisions r JOIN price_lists pl ON pl.current_revision_id = r.id
+            SET r.info_json = ? WHERE pl.id = ?",
+    )
+    .bind(info.to_string())
+    .bind(list_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // New quote, from the phone.
+    let created = server
+        .post("/v1/quotes")
+        .add_header(HEADER, token(312))
+        .json(&json!({ "customer_id": 1000, "quote_name": "Kitchen", "price_list_id": list_id }))
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let id = created.json::<Value>()["id"].as_i64().unwrap();
+    let path = format!("/v1/quotes/{id}");
+
+    // The quote and the editor's lookups read as with her cookie.
+    for read in [
+        path.clone(),
+        "/v1/quote-price-lists".to_string(),
+        "/v1/quote-tax-rates".to_string(),
+        "/v1/quote-payment-terms".to_string(),
+        "/v1/quote-forms?active=true".to_string(),
+        "/v1/me/quote-email-templates".to_string(),
+    ] {
+        let by_phone = server.get(&read).add_header(HEADER, token(312)).await;
+        by_phone.assert_status_ok();
+        let by_cookie = server.get(&read).with_session(sessions::REP).await;
+        assert_eq!(
+            by_phone.json::<Value>(),
+            by_cookie.json::<Value>(),
+            "{read}"
+        );
+    }
+    let quote = server
+        .get(&path)
+        .add_header(HEADER, token(312))
+        .await
+        .json::<Value>();
+    assert_eq!(quote["quote"]["name"], "Kitchen");
+    assert_eq!(quote["price_list"]["arrProducts"][0]["name"], "Granite");
+
+    // Its info, then a saved revision with its notes.
+    server
+        .patch(&path)
+        .add_header(HEADER, token(312))
+        .json(&json!({ "quote_name": "Kitchen and bath", "expiration_date": "2026-12-31" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let doc = json!({
+        "version": 2,
+        "areas": [{ "id": "area-1", "name": "Kitchen", "quantity": 1 }],
+        "colorOptions": [{ "id": "option-1",
+                           "byArea": { "area-1": { "product": "Granite", "color": "Ubatuba" } } }],
+        "items": [{ "id": "i1", "kind": "misc", "areaId": null, "name": "Sealer",
+                    "quantity": 1, "price": 100 }],
+    });
+    let saved = server
+        .put(&format!("{path}/drawing"))
+        .add_header(HEADER, token(312))
+        .json(&json!({ "doc": doc, "notes": "From the phone" }))
+        .await;
+    saved.assert_status_ok();
+    assert_eq!(saved.json::<Value>()["revision"], 1);
+    let quote = server
+        .get(&path)
+        .add_header(HEADER, token(312))
+        .await
+        .json::<Value>();
+    assert_eq!(quote["quote"]["name"], "Kitchen and bath");
+    assert_eq!(quote["quote"]["expiration_date"], "2026-12-31");
+    assert_eq!(quote["revisions"][0]["notes"], "From the phone");
+    assert_eq!(quote["doc"]["items"][0]["name"], "Sealer");
+
+    // Emailed, sold and the sale undone.
+    server
+        .post(&format!("{path}/emails"))
+        .add_header(HEADER, token(312))
+        .json(
+            &json!({ "to": ["alice@example.com"], "subject": "Your quote",
+                       "body": "Here it is: [QuoteLink]" }),
+        )
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(stubs.emails().len(), 1);
+    server
+        .post(&format!("{path}/sale"))
+        .add_header(HEADER, token(312))
+        .json(&json!({ "option": 0 }))
+        .await
+        .assert_status_ok();
+    let status: String = sqlx::query_scalar("SELECT status FROM quotes WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "converted");
+    server
+        .delete(&format!("{path}/sale"))
+        .add_header(HEADER, token(312))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The rest of the quote's writes still need the CRM session.
+    for (method, route) in [
+        ("DELETE", path.clone()),
+        ("POST", format!("{path}/copies")),
+        ("PUT", format!("{path}/autosave")),
+        ("POST", format!("{path}/prices")),
+        ("GET", format!("/v1/quote-price-lists/{list_id}")),
+    ] {
+        let request = match method {
+            "DELETE" => server.delete(&route),
+            "POST" => server.post(&route).json(&json!({})),
+            "PUT" => server.put(&route).json(&json!({})),
+            _ => server.get(&route),
+        };
+        request
+            .add_header(HEADER, token(312))
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+}
