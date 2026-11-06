@@ -800,7 +800,7 @@ async fn billing(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>
 /// `CloudTalk` line and `RingCentral` extension.
 async fn missed_calls(state: &AppState, user: &SessionUser) -> Vec<NotificationItem> {
     use crate::routes::users::call_activity::{
-        CallActivity, activity, agent_calls, ringcentral_activity,
+        CallActivity, activity, agent_calls, name_customers, ringcentral_activity,
     };
     let present = |value: &Option<String>| {
         value
@@ -833,13 +833,16 @@ async fn missed_calls(state: &AppState, user: &SessionUser) -> Vec<NotificationI
             .collect::<Vec<CallActivity>>()
     };
     let (cloudtalk, ringcentral) = tokio::join!(cloudtalk, ringcentral);
-    cloudtalk
+    let mut calls: Vec<CallActivity> = cloudtalk
         .into_iter()
         .chain(ringcentral)
         .filter(|call| call.action == "Missed a call")
         .take(30)
-        .map(|call| missed_call_item(&call))
-        .collect()
+        .collect();
+    // The customer's name from our records, not the carrier's caller-ID label
+    // (on a database error the calls still list, by number).
+    let _ = name_customers(&state.pool, user.company_id, &mut calls).await;
+    calls.iter().map(missed_call_item).collect()
 }
 
 fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) -> NotificationItem {
@@ -852,6 +855,13 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
     let external = call.contact.clone().unwrap_or_default();
     let digits: String = external.chars().filter(char::is_ascii_digit).collect();
     let digits = &digits[digits.len().saturating_sub(10)..];
+    // RingCentral's own name for a number not in our records is the carrier's
+    // caller-ID label (`WIRELESS CALLER`, `INDIANAPOLIS IN`): show the number.
+    let name = if ringcentral && call.customer_id.is_none() {
+        None
+    } else {
+        call.customer_name.clone()
+    };
     let started = call.created_at.as_str();
     // CloudTalk sends `2026-05-01 10:00:00` (UTC), RingCentral RFC 3339.
     let sent_at = chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S")
@@ -869,7 +879,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
         } else {
             format!("call-{}", call.call_id)
         },
-        title: call.customer_name.clone().unwrap_or_else(|| {
+        title: name.clone().unwrap_or_else(|| {
             if external.is_empty() {
                 "Unknown caller".into()
             } else {
@@ -891,7 +901,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
         kind: NotificationKind::Call,
         notification_type: None,
         actor_name: None,
-        customer_name: call.customer_name.clone(),
+        customer_name: name,
         type_title: Some(if call.is_voicemail {
             format!("{provider} voicemail")
         } else {
