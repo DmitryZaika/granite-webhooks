@@ -255,41 +255,56 @@ async fn load_events(
     .bind(start)
     .fetch_all(&state.pool)
     .await?;
-    let features =
-        crate::routes::company::queries::company_features(&state.pool, company_id).await?;
-    let quickbooks_connected = features.quickbooks_enabled && features.quickbooks_connected;
-    if quickbooks_connected && !events.is_empty() {
-        let mut sql = sqlx::QueryBuilder::<sqlx::MySql>::new(
-            "SELECT event_id, qbo_invoice_id, qbo_invoice_number FROM event_qbo_invoices
-              WHERE company_id = ",
-        );
-        sql.push_bind(company_id).push(" AND event_id IN (");
-        let mut ids = sql.separated(", ");
-        for event in &events {
-            ids.push_bind(event.id);
-        }
-        sql.push(")");
-        let rows: Vec<(i32, String, Option<String>)> =
-            sql.build_query_as().fetch_all(&state.pool).await?;
-        let invoices: HashMap<i32, EventInvoice> = rows
-            .into_iter()
-            .map(|(event, id, number)| (event, EventInvoice { id, number }))
-            .collect();
-        for event in &mut events {
-            event.qbo_invoice = invoices.get(&event.id).cloned();
-        }
-    }
+    let quickbooks_connected = attach_invoices(state, company_id, &mut events).await?;
     Ok(ScheduleEvents {
         events,
         quickbooks_connected,
     })
 }
 
+/// Puts their QuickBooks invoices on the events when the company's
+/// QuickBooks is on and connected; says whether it is.
+async fn attach_invoices(
+    state: &AppState,
+    company_id: i32,
+    events: &mut [ScheduleEvent],
+) -> ApiResult<bool> {
+    let features =
+        crate::routes::company::queries::company_features(&state.pool, company_id).await?;
+    let quickbooks_connected = features.quickbooks_enabled && features.quickbooks_connected;
+    if !quickbooks_connected || events.is_empty() {
+        return Ok(quickbooks_connected);
+    }
+    let mut sql = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT event_id, qbo_invoice_id, qbo_invoice_number FROM event_qbo_invoices
+          WHERE company_id = ",
+    );
+    sql.push_bind(company_id).push(" AND event_id IN (");
+    let mut ids = sql.separated(", ");
+    for event in events.iter() {
+        ids.push_bind(event.id);
+    }
+    sql.push(")");
+    let rows: Vec<(i32, String, Option<String>)> =
+        sql.build_query_as().fetch_all(&state.pool).await?;
+    let invoices: HashMap<i32, EventInvoice> = rows
+        .into_iter()
+        .map(|(event, id, number)| (event, EventInvoice { id, number }))
+        .collect();
+    for event in events.iter_mut() {
+        event.qbo_invoice = invoices.get(&event.id).cloned();
+    }
+    Ok(quickbooks_connected)
+}
+
 /// Events waiting for their day
 ///
 /// The company's unscheduled events (kept off the calendar until someone
-/// picks the date), oldest first, with their customers' names. Events of
-/// calendars hidden for the caller are left out.
+/// picks the date), oldest first, with their customers' names and, while
+/// QuickBooks is on and connected, their QuickBooks invoices (so an edit
+/// that sends `qbo_invoice` back keeps the link). Their dates are only when
+/// they were made. Events of calendars hidden for the caller are left out.
+/// Give one a day with `PUT /v1/events/{id}` and `unscheduled: false`.
 #[crate::openapi::path(
     get,
     path = "/v1/schedule/unscheduled",
@@ -308,7 +323,7 @@ pub async fn unscheduled(
     ShopOrEmployeeUser(user): ShopOrEmployeeUser,
 ) -> ApiResult<Json<Vec<ScheduleEvent>>> {
     let own = super::own_events_only(&state.pool, &user).await?;
-    let events = sqlx::query_as(
+    let mut events: Vec<ScheduleEvent> = sqlx::query_as(
         "SELECT e.id, e.title, e.description, e.location,
                 DATE_FORMAT(e.start_date, '%Y-%m-%dT%H:%i:%sZ') AS start_date,
                 DATE_FORMAT(e.end_date, '%Y-%m-%dT%H:%i:%sZ') AS end_date,
@@ -337,6 +352,7 @@ pub async fn unscheduled(
     .bind(own)
     .fetch_all(&state.pool)
     .await?;
+    attach_invoices(&state, user.company_id, &mut events).await?;
     Ok(Json(events))
 }
 

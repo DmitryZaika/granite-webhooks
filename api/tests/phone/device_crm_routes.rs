@@ -199,10 +199,17 @@ async fn the_to_do_tab_keeps_the_list_with_its_device_token(pool: MySqlPool) {
 async fn the_app_reads_emails_and_the_schedule_with_its_device_token(pool: MySqlPool) {
     // Rita (user 100, company 100) signed in on her phone.
     add_session(&pool, 301, 100, 100).await;
+    // A job waiting in the Unscheduled list.
+    sql(
+        &pool,
+        "INSERT INTO events (id, title, start_date, end_date, created_user_id, status, unscheduled)
+           VALUES (9790, 'Waiting', '2026-10-02 14:00:00', '2026-10-02 14:00:00', 100, 'called', 1)",
+    )
+    .await;
     let (server, _) = phone_server(pool.clone()).await;
 
-    // The same answers as her CRM session gets.
-    for path in [UNREAD, EVENTS] {
+    // The same answers as her CRM session gets, the Unscheduled list too.
+    for path in [UNREAD, EVENTS, "/v1/schedule/unscheduled"] {
         let by_phone = server.get(path).add_header(HEADER, token(301)).await;
         by_phone.assert_status_ok();
         let by_cookie = server.get(path).with_session(sessions::REP).await;
@@ -213,6 +220,13 @@ async fn the_app_reads_emails_and_the_schedule_with_its_device_token(pool: MySql
             "{path}"
         );
     }
+    let waiting: Value = server
+        .get("/v1/schedule/unscheduled")
+        .add_header(HEADER, token(301))
+        .await
+        .json();
+    assert_eq!(waiting[0]["id"], 9790);
+    assert_eq!(waiting[0]["status"], "called");
 
     // Nothing without a token or cookie; a bad or revoked token is out even
     // with a cookie (the header decides alone). One long unused is still in.

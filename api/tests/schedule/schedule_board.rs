@@ -266,6 +266,50 @@ async fn everyone_sees_every_event(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn waiting_events_bring_their_invoices(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO events (id, title, start_date, end_date, created_user_id, status) VALUES
+           (9795, 'Waiting install', '2026-06-12 15:00:00', '2026-06-12 15:00:00', 100, 'ready'),
+           (9796, 'Waiting template', '2026-06-13 15:00:00', '2026-06-13 15:00:00', 100, NULL);
+         UPDATE events SET unscheduled = 1 WHERE id IN (9795, 9796);
+         INSERT INTO event_qbo_invoices (event_id, company_id, qbo_invoice_id, qbo_invoice_number, created_by)
+           VALUES (9795, 100, '1042', 'INV-1042', 100);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    let waiting = || async {
+        server
+            .get("/v1/schedule/unscheduled")
+            .with_session(sessions::REP)
+            .await
+            .json::<Value>()
+    };
+    // QuickBooks off: no invoices.
+    let off = waiting().await;
+    assert_eq!(common::ids(&off), [9795, 9796]);
+    assert_eq!(off[0]["qbo_invoice"], Value::Null);
+    assert_eq!(off[0]["status"], "ready");
+    sqlx::query(
+        "UPDATE company SET quickbooks_enabled = 1, qbo_realm_id = '123',
+                qbo_access_token = 'a', qbo_refresh_token = 'r',
+                qbo_access_expires = 1, qbo_refresh_expires = 2
+          WHERE id = 100",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Connected: an edit that sends the invoice back keeps the link.
+    let on = waiting().await;
+    assert_eq!(
+        on[0]["qbo_invoice"],
+        json!({ "id": "1042", "number": "INV-1042" })
+    );
+    assert_eq!(on[1]["qbo_invoice"], Value::Null);
+}
+
+#[test_db::test(seed)]
 async fn the_shop_sees_the_schedule(pool: MySqlPool) {
     let server = server(pool.clone());
     let april = "/v1/schedule/events?start=2026-04-01T00:00:00Z&end=2026-04-30T23:59:59Z";

@@ -41166,7 +41166,7 @@
           "schedule"
         ],
         "summary": "Events waiting for their day",
-        "description": "The company's unscheduled events (kept off the calendar until someone\npicks the date), oldest first, with their customers' names. Events of\ncalendars hidden for the caller are left out.",
+        "description": "The company's unscheduled events (kept off the calendar until someone\npicks the date), oldest first, with their customers' names and, while\nQuickBooks is on and connected, their QuickBooks invoices (so an edit\nthat sends `qbo_invoice` back keeps the link). Their dates are only when\nthey were made. Events of calendars hidden for the caller are left out.\nGive one a day with `PUT /v1/events/{id}` and `unscheduled: false`.",
         "operationId": "list_unscheduled_events",
         "responses": {
           "200": {
@@ -59999,6 +59999,96 @@
             "session_cookie": []
           }
         ]
+      },
+      "delete": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Delete a phone number",
+        "description": "Releases the number at Telnyx, so the company stops paying for it (it\ncan't be taken back), and takes it off the company's numbers: it rings\nnobody and nobody can call from it. Its calls and texts stay. A number\nTelnyx no longer has is just taken off. 404 when the company has no such\nnumber, 503 when Telnyx is not set up on the server, 502 when Telnyx\nfails (nothing changes). Written to the phone audit log. Company admins\n(and super admins, superusers) only.",
+        "operationId": "delete_phone_admin_number",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The number (`AdminNumber.id`)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Released and taken off"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such number in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/phone/admin/numbers/import": {
@@ -60007,7 +60097,7 @@
           "phone"
         ],
         "summary": "Import the company's numbers from Telnyx",
-        "description": "Reads the numbers assigned to the company's TeXML app in Telnyx and adds\nthe ones that are missing here as unassigned direct lines (no label,\nthe AI Assistant when nobody answers); numbers already here are left as\nthey are. Returns how many were added and the company's numbers. 400\nwhen Telnyx is not set up for the company (no TeXML app saved), 503\nwhen Telnyx is not set up on the server, 502 when Telnyx fails. Company\nadmins (and super admins, superusers) only.",
+        "description": "Reads the numbers assigned to the company's TeXML app in Telnyx and adds\nthe ones that are missing here as unassigned direct lines (no label,\nvoicemail when nobody answers); numbers already here are left as\nthey are. Returns how many were added and the company's numbers. 400\nwhen Telnyx is not set up for the company (no TeXML app saved), 503\nwhen Telnyx is not set up on the server, 502 when Telnyx fails. Company\nadmins (and super admins, superusers) only.",
         "operationId": "import_phone_admin_numbers",
         "responses": {
           "200": {
