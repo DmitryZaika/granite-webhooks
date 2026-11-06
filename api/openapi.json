@@ -39366,7 +39366,7 @@
           "schedule"
         ],
         "summary": "List an event's scheduling texts",
-        "description": "The company's scheduling texts (`confirmation` templates sent by text)\nfor the event's calendar, each filled in for this event, for the event\ndetails' Send SMS. They go out from the office manager's line with\n`POST /v1/events/{id}/confirmation`.",
+        "description": "The company's scheduling texts (`confirmation` templates sent by text)\nfor the event's calendar, each filled in for this event, for the event\ndetails' Send SMS. They go out from the Scheduling Manager's line with\n`POST /v1/events/{id}/confirmation`.",
         "operationId": "list_event_scheduling_texts",
         "parameters": [
           {
@@ -53930,7 +53930,7 @@
           {
             "name": "position_id",
             "in": "path",
-            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
+            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
             "required": true,
             "schema": {
               "type": "integer",
@@ -54020,7 +54020,7 @@
           {
             "name": "position_id",
             "in": "path",
-            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
+            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
             "required": true,
             "schema": {
               "type": "integer",
@@ -69935,7 +69935,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The skills the user's positions give them (Position access):\n`sell_slabs`, `edit_transactions`, `edit_quotes`, `plan_schedule`.\nNull when they have every skill (admins always do)."
+            "description": "The skills the user's positions give them (Position access):\n`sell_slabs`, `edit_transactions`, `edit_quotes`, `plan_schedule`, `see_readiness`.\nNull when they have every skill (admins always do)."
           },
           "has_cloudtalk_api": {
             "type": "boolean",
@@ -69982,7 +69982,7 @@
           },
           "has_projects_board": {
             "type": "boolean",
-            "description": "Projects is on and the caller's position has a Projects board (admin,\nManager, Sales Manager, Office Manager, Shop Manager, sales rep)."
+            "description": "Projects is on and the caller's position has a Projects board (admin,\nManager, Sales Manager, Shop Manager, sales rep)."
           },
           "is_template_maker": {
             "type": "boolean",
@@ -80440,6 +80440,20 @@
             ],
             "description": "Email for this event only, up to 255 characters; like `contact_phone`."
           },
+          "contact_phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second phone for this event; every automated text goes to both.\nEmpty or null clears it, leave out to keep it."
+          },
+          "contact_email_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second email for this event; every automated email goes to both."
+          },
           "qbo_invoice": {
             "oneOf": [
               {
@@ -82124,6 +82138,20 @@
               "null"
             ],
             "description": "Email for this event only; null uses the customer's."
+          },
+          "contact_phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second phone for this event."
+          },
+          "contact_email_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second email for this event."
           }
         }
       },
@@ -98482,6 +98510,20 @@
             ],
             "description": "Email for this event only; null uses the customer's."
           },
+          "contact_phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second phone for this event; automated texts go to both."
+          },
+          "contact_email_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second email for this event; automated emails go to both."
+          },
           "crew_status": {
             "type": [
               "string",
@@ -98757,7 +98799,7 @@
               "string",
               "null"
             ],
-            "description": "Why no text can go to this event's customer (no customer, no phone,\nno office manager line); null when they can."
+            "description": "Why no text can go to this event's customer (no customer, no phone,\nno Scheduling Manager line); null when they can."
           },
           "ai_ready": {
             "type": "boolean",
@@ -100363,7 +100405,7 @@
         "properties": {
           "key": {
             "type": "string",
-            "description": "Stable key (`sell_slabs`, `edit_transactions`, `edit_quotes`,\n`plan_schedule`)."
+            "description": "Stable key (`sell_slabs`, `edit_transactions`, `edit_quotes`,\n`plan_schedule`, `see_readiness`)."
           },
           "label": {
             "type": "string",
@@ -107017,7 +107059,8 @@
           "companies",
           "logged_in_is_superuser",
           "has_cloudtalk_api",
-          "has_ringcentral_api"
+          "has_ringcentral_api",
+          "other_scheduling_managers"
         ],
         "properties": {
           "user": {
@@ -107066,6 +107109,11 @@
           "has_ringcentral_api": {
             "type": "boolean",
             "description": "Their company has `RingCentral`."
+          },
+          "other_scheduling_managers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Other live Scheduling Managers of their company: at 0 the form warns\nbefore it takes the position off them (survey texts stop)."
           }
         }
       },

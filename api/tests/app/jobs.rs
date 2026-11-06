@@ -310,6 +310,16 @@ async fn managers_hear_once_when_survey_texts_cannot_go_out(pool: MySqlPool) {
     }
     assert!(sent.texts.lock().unwrap().is_empty());
     assert_eq!(marker().await, 1);
+    let belled = || async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM notifications
+              WHERE user_id = 101 AND notification_type = 'survey_texts_down'",
+        )
+        .fetch_one(pool_ref)
+        .await
+        .unwrap()
+    };
+    assert_eq!(belled().await, 1);
 
     // The next survey without a line: no second email.
     sqlx::raw_sql("DELETE FROM emails WHERE message_id = 'checklist-survey-9000'")
@@ -318,6 +328,7 @@ async fn managers_hear_once_when_survey_texts_cannot_go_out(pool: MySqlPool) {
         .unwrap();
     survey(&state, chrono::Utc::now()).await.unwrap();
     assert_eq!(told(&sent).len(), 1);
+    assert_eq!(belled().await, 1);
 
     // Mark gets a line: the text goes out, and a later outage is told again.
     sqlx::raw_sql(
