@@ -365,7 +365,9 @@ pub async fn update(
         record_reassignment(pool, id, by.as_deref(), to.as_deref(), None).await?;
         if let Some(rep) = input.sales_rep {
             let deal = ensure_open_deal(pool, id, user.company_id, rep).await?;
-            notify_assigned_rep(&state, user.company_id, id, rep, user.id, deal).await;
+            let reassigned = previous_rep.map(|_| input.name.trim());
+            notify_assigned_rep(&state, user.company_id, id, rep, user.id, deal, reassigned)
+                .await;
         }
     }
     state.webhooks.sync_contacts(user.company_id, id).await;
@@ -435,7 +437,7 @@ pub async fn set_sales_rep(
         let deal = ensure_open_deal(pool, id, user.company_id, rep).await?;
         remind_new_rep(pool, rep, id).await?;
         if previous != body.sales_rep {
-            notify_assigned_rep(&state, user.company_id, id, rep, user.id, deal).await;
+            notify_assigned_rep(&state, user.company_id, id, rep, user.id, deal, None).await;
         }
         state.webhooks.sync_contacts(user.company_id, id).await;
     }
