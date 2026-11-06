@@ -38,11 +38,7 @@ impl LeadAutomationMode {
     }
 
     fn parse(raw: &str) -> Self {
-        if raw == "own" {
-            Self::Own
-        } else {
-            Self::Company
-        }
+        if raw == "own" { Self::Own } else { Self::Company }
     }
 }
 
@@ -60,9 +56,7 @@ async fn mode_of(pool: &MySqlPool, user_id: i32) -> Result<LeadAutomationMode, s
             .bind(user_id)
             .fetch_optional(pool)
             .await?;
-    Ok(raw
-        .as_deref()
-        .map_or_else(LeadAutomationMode::default, LeadAutomationMode::parse))
+    Ok(raw.as_deref().map_or_else(LeadAutomationMode::default, LeadAutomationMode::parse))
 }
 
 /// Pending automatic sends of the side the caller just left are called off:
@@ -83,9 +77,10 @@ async fn cancel_left_side(
                 "t.user_id IS NULL AND d.user_id = ?",
                 "Sales rep uses their own automations",
             ),
-            LeadAutomationMode::Company => {
-                ("t.user_id = ?", "Sales rep uses the company automations")
-            }
+            LeadAutomationMode::Company => (
+                "t.user_id = ?",
+                "Sales rep uses the company automations",
+            ),
         };
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE {queue} s

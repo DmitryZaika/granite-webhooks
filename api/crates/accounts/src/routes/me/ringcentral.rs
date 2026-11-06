@@ -143,11 +143,7 @@ pub async fn finish(
     EmployeeUser(user): EmployeeUser,
     JsonBody(input): JsonBody<RingcentralReturn>,
 ) -> ApiResult<Json<RingcentralConnected>> {
-    if input
-        .error
-        .as_deref()
-        .is_some_and(|error| !error.is_empty())
-    {
+    if input.error.as_deref().is_some_and(|error| !error.is_empty()) {
         return Err(ApiError::BadRequest(
             "RingCentral connection was cancelled.".into(),
         ));
@@ -165,12 +161,7 @@ pub async fn finish(
             "RingCentral connection expired. Please try again.".into(),
         ));
     }
-    let Some(code) = input
-        .code
-        .as_deref()
-        .map(str::trim)
-        .filter(|c| !c.is_empty())
-    else {
+    let Some(code) = input.code.as_deref().map(str::trim).filter(|c| !c.is_empty()) else {
         return Err(ApiError::BadRequest(
             "Invalid data returned from RingCentral.".into(),
         ));
@@ -202,10 +193,7 @@ pub async fn finish(
             ));
         }
     };
-    let phone = login
-        .phone
-        .clone()
-        .or_else(|| before.ringcentral_phone.clone());
+    let phone = login.phone.clone().or_else(|| before.ringcentral_phone.clone());
     sqlx::query(
         "UPDATE users SET ringcentral_extension_id = ?, ringcentral_phone_number = ?
           WHERE id = ? AND company_id = ?",
@@ -221,15 +209,7 @@ pub async fn finish(
         ringcentral_phone: phone.clone(),
         ..before.clone()
     };
-    texting_history::follow(
-        &state,
-        actor.company_id,
-        actor.user_id,
-        &before,
-        &after,
-        true,
-    )
-    .await;
+    texting_history::follow(&state, actor.company_id, actor.user_id, &before, &after, true).await;
     if let Err(error) = ringcentral::ensure_rep_sms_subscription(
         pool,
         &state.telephony_http,
@@ -238,11 +218,7 @@ pub async fn finish(
     )
     .await
     {
-        tracing::error!(
-            ?error,
-            user_id = actor.user_id,
-            "a rep's RingCentral SMS subscription failed"
-        );
+        tracing::error!(?error, user_id = actor.user_id, "a rep's RingCentral SMS subscription failed");
     }
     Ok(Json(RingcentralConnected {
         company_subdomain: company_subdomain(pool, actor.company_id).await?,
