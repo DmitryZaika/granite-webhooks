@@ -805,3 +805,82 @@ async fn without_edit_quotes_the_phone_is_told_and_refused(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 }
+
+#[test_db::test(seed)]
+async fn the_quote_screen_prints_company_forms_and_keeps_its_email_templates(pool: MySqlPool) {
+    // Rita (user 100, company 100) on her phone; the company has a form.
+    add_session(&pool, 313, 100, 100).await;
+    let (server, _stubs) = phone_server(pool.clone()).await;
+    let form = server
+        .post("/v1/quote-forms")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Contract", "config": { "kind": "contract", "header": {}, "rows": [] } }))
+        .await;
+    form.assert_status(StatusCode::CREATED);
+    let form_id = form.json::<Value>()["id"].as_i64().unwrap();
+
+    // The form's layout and the letterhead read as with her cookie, to print it.
+    for read in [
+        format!("/v1/quote-forms/{form_id}"),
+        "/v1/quote-forms/letterhead".to_string(),
+    ] {
+        let by_phone = server.get(&read).add_header(HEADER, token(313)).await;
+        by_phone.assert_status_ok();
+        let by_cookie = server.get(&read).with_session(sessions::REP).await;
+        assert_eq!(
+            by_phone.json::<Value>(),
+            by_cookie.json::<Value>(),
+            "{read}"
+        );
+    }
+
+    // Her own email template: made, changed and deleted from the Email sheet.
+    let made = server
+        .post("/v1/me/quote-email-templates")
+        .add_header(HEADER, token(313))
+        .json(&json!({ "name": "Follow up", "subject": "Your quote", "body": "Hi" }))
+        .await;
+    made.assert_status(StatusCode::CREATED);
+    let template = made.json::<Value>()["id"].as_i64().unwrap();
+    server
+        .put(&format!("/v1/me/quote-email-templates/{template}"))
+        .add_header(HEADER, token(313))
+        .json(&json!({ "name": "Follow up", "subject": "Your new quote", "body": "Hi again" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let mine = server
+        .get("/v1/me/quote-email-templates")
+        .add_header(HEADER, token(313))
+        .await;
+    mine.assert_status_ok();
+    let listed = mine.json::<Value>()["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"].as_i64() == Some(template))
+        .cloned()
+        .expect("her template is listed");
+    assert_eq!(listed["subject"], "Your new quote");
+    server
+        .delete(&format!("/v1/me/quote-email-templates/{template}"))
+        .add_header(HEADER, token(313))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // Changing the company's forms still needs the CRM session.
+    for (method, route) in [
+        ("PUT", format!("/v1/quote-forms/{form_id}")),
+        ("POST", "/v1/quote-forms".to_string()),
+        ("DELETE", format!("/v1/quote-forms/{form_id}")),
+    ] {
+        let request = match method {
+            "POST" => server.post(&route).json(&json!({})),
+            "PUT" => server.put(&route).json(&json!({})),
+            _ => server.delete(&route),
+        };
+        request
+            .add_header(HEADER, token(313))
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+}
