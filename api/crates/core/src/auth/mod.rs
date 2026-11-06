@@ -336,13 +336,15 @@ fn quote_print_and_templates(method: &Method, path: &str) -> bool {
 /// templates Mark as Sold offers as Extra events, and whether Google Maps
 /// finds the quote's address before it is printed. A price list's editor
 /// (`/{id}`) and every write there stay with the CRM session.
-pub const DEVICE_QUOTE_READS: [&str; 8] = [
+pub const DEVICE_QUOTE_READS: [&str; 9] = [
     "/v1/quote-price-lists",
     "/v1/quote-tax-rates",
     "/v1/quote-payment-terms",
     "/v1/quote-forms",
     "/v1/me/quote-email-templates",
     "/v1/company/features",
+    // Miles to a lead's address, on the lead card.
+    "/v1/company/drive-miles",
     "/v1/quote-sale-events",
     "/v1/places/check",
 ];
@@ -869,6 +871,7 @@ mod tests {
             (Method::DELETE, "/v1/quotes/7/sale"),
             (Method::POST, "/v1/quotes/7/emails"),
             (Method::GET, "/v1/company/features"),
+            (Method::GET, "/v1/company/drive-miles"),
             (Method::GET, "/v1/quote-sale-events"),
             (Method::GET, "/v1/places/check"),
             (Method::DELETE, "/v1/quotes/7"),
@@ -908,6 +911,8 @@ mod tests {
             (Method::PATCH, "/v1/quotes/7/emails/3/views"),
             (Method::POST, "/v1/quotes/7/view-link"),
             (Method::POST, "/v1/company/features"),
+            (Method::POST, "/v1/company/drive-miles"),
+            (Method::GET, "/v1/company/drive-milesx"),
             (Method::GET, "/v1/company/featuresx"),
             (Method::GET, "/v1/company/auto-sale"),
             (Method::PUT, "/v1/company/auto-unscheduled-jobs"),
