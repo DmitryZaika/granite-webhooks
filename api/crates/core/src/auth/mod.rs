@@ -28,7 +28,8 @@
 //! what it learns, filling a template) and on
 //! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes and
 //! files; not deleting a deal or the board setup), and a customer's sales
-//! rep (`customer_write`: the contact card's and the lead inbox's Assign) the
+//! rep or invalid lead (`customer_write`: the contact card's and the lead
+//! inbox's Assign, the lead notification's Mark invalid) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -248,14 +249,17 @@ fn deal_write(method: &Method, path: &str) -> bool {
 
 /// The customer changes the app makes with its device token, exactly these:
 /// a customer's sales rep (`PUT /v1/customers/{id}/sales-rep`), from the
-/// contact card's Assign and the lead inbox. Editing or deleting a customer
-/// stays with the CRM session.
+/// contact card's Assign and the lead inbox, and marking a lead invalid
+/// (`PUT /v1/customers/{id}/invalid`, admins and sales managers only, as on
+/// the web), from the lead notification's Mark invalid. Editing or deleting a
+/// customer stays with the CRM session.
 fn customer_write(method: &Method, path: &str) -> bool {
     method == Method::PUT
-        && path
-            .strip_prefix("/v1/customers/")
-            .and_then(|rest| rest.strip_suffix("/sales-rep"))
-            .is_some_and(is_id)
+        && path.strip_prefix("/v1/customers/").is_some_and(|rest| {
+            rest.strip_suffix("/sales-rep")
+                .or_else(|| rest.strip_suffix("/invalid"))
+                .is_some_and(is_id)
+        })
 }
 
 /// The text and email templates the app's Use Template list adds, edits and
@@ -633,6 +637,7 @@ mod tests {
     fn the_phone_assigns_a_sales_rep() {
         assert!(device_route(&Method::GET, "/v1/users/sales-reps"));
         assert!(device_route(&Method::PUT, "/v1/customers/7/sales-rep"));
+        assert!(device_route(&Method::PUT, "/v1/customers/7/invalid"));
         for (method, path) in [
             (Method::POST, "/v1/users/sales-reps"),
             (Method::GET, "/v1/users/employees"),
@@ -642,7 +647,9 @@ mod tests {
             (Method::PUT, "/v1/customers//sales-rep"),
             (Method::PUT, "/v1/customers/7/8/sales-rep"),
             (Method::PUT, "/v1/customers/7/temperature"),
-            (Method::PUT, "/v1/customers/7/invalid"),
+            (Method::POST, "/v1/customers/7/invalid"),
+            (Method::PUT, "/v1/customers/x/invalid"),
+            (Method::PUT, "/v1/customers/7/invalidx"),
             (Method::PUT, "/v1/customers/7"),
             (Method::DELETE, "/v1/customers/7"),
         ] {
