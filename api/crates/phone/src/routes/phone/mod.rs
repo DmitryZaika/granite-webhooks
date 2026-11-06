@@ -84,6 +84,7 @@ mod cell;
 mod connect;
 mod contacts;
 mod devices;
+mod directions;
 mod hold;
 mod port_loa;
 mod porting;
@@ -139,6 +140,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(calls::call_via_cell))
         .routes(routes!(calls::test_call))
         .routes(routes!(calls::decline_call))
+        .routes(routes!(directions::find_directions_point))
         .routes(routes!(support::report_e911))
         .routes(routes!(support::send_diagnostics))
         .routes(routes!(texts::list_text_threads))

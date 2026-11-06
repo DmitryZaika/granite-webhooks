@@ -58465,6 +58465,74 @@
         ]
       }
     },
+    "/v1/phone/directions": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Find where an address is, for driving directions",
+        "description": "Returns the address's latitude and longitude (Google geocoding), which\nthe app hands to the phone's maps app so turn-by-turn navigation starts\nat once: a map app given only the words may show the place, or a list\nof matches, first. 404 when Google can't find the address (the app then\npasses the words as before); 400 for an empty or too long address.\nDevice token only.",
+        "operationId": "find_phone_directions_point",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "The address to drive to, as the app shows it (an event's or a\ncustomer's), e.g. `6309 Looking Glass Lane, Indianapolis, IN 46235`.\nAt most 300 characters.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Where the address is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Point"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Google can't find the address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
     "/v1/phone/e911": {
       "post": {
         "tags": [
