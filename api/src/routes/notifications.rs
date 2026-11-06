@@ -431,9 +431,10 @@ fn type_title(kind: &str) -> Option<&'static str> {
     })
 }
 
-/// AI promises' notifications (`crate::promises`): a promise came due, the
-/// morning list, and an approval got no reply. They may name a customer but
-/// no deal, and open the rep's promise list.
+/// AI promises' notifications (`crate::promises`): a promise came due, and an
+/// approval got no reply; the morning list (`ai_promise_digest`) is no longer
+/// sent nor listed, its old rows keep their heading. They may name a customer
+/// but no deal, and open the rep's promise list.
 const PROMISE_DUE: &str = "ai_promise_due";
 const PROMISE_DIGEST: &str = "ai_promise_digest";
 /// Something sent for a customer's approval got no reply in a day.
@@ -595,11 +596,12 @@ async fn activity(
             -- On a live deal or a project, except 911 alerts, the texting
             -- registration's, number ports' and AI promises' (they name no
             -- deal), and a finished installation of a customer without a deal.
+            -- The morning list (ai_promise_digest) is no longer sent or shown.
             AND (((d.id IS NOT NULL OR pr.id IS NOT NULL) AND c.id IS NOT NULL)
                  OR (n.notification_type = 'installation_completed' AND c.id IS NOT NULL
                      AND c.deleted_at IS NULL)
                  OR n.notification_type IN ('e911_alert', 'tendlc_ready', 'tendlc_status',
-                                            'phone_port', 'ai_promise_due', 'ai_promise_digest',
+                                            'phone_port', 'ai_promise_due',
                                             'ai_promise_approval'))
             -- A project task's reminder shows while the task is open.
             AND (COALESCE(n.notification_type, '') <> 'project_task_reminder' OR EXISTS (

@@ -29,7 +29,8 @@
 //! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes and
 //! files; not deleting a deal or the board setup), and a customer's sales
 //! rep or invalid lead (`customer_write`: the contact card's and the lead
-//! inbox's Assign, the lead notification's Mark invalid) the
+//! inbox's Assign, the lead notification's Mark invalid), and the To do tab's
+//! AI to-do list (`promise_route`: read it, close or reopen one) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -267,6 +268,18 @@ fn customer_write(method: &Method, path: &str) -> bool {
         })
 }
 
+/// The app's To do tab, exactly these: the caller's AI to-do list (`GET
+/// /v1/ai/promises`, with its filters) and marking one done, not wanted or
+/// back on the list (`PATCH /v1/ai/promises/{id}`). The handlers keep them to
+/// the caller's own and to reps AI promises is on for.
+fn promise_route(method: &Method, path: &str) -> bool {
+    match path.strip_prefix("/v1/ai/promises") {
+        Some("") => method == Method::GET,
+        Some(rest) => method == Method::PATCH && rest.strip_prefix('/').is_some_and(is_id),
+        None => false,
+    }
+}
+
 /// The text and email templates the app's Use Template list adds, edits and
 /// deletes with its device token: `POST /v1/sms-templates` and
 /// `/v1/email-templates`, `PUT|DELETE` on `/{id}` of either (the caller's own,
@@ -288,8 +301,8 @@ fn template_write(method: &Method, path: &str) -> bool {
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
-/// ([`deal_write`]), a customer's sales rep ([`customer_write`]) and the
-/// templates' ([`template_write`]).
+/// ([`deal_write`]), a customer's sales rep ([`customer_write`]), the
+/// templates' ([`template_write`]) and the To do tab's ([`promise_route`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
@@ -297,6 +310,7 @@ fn device_route(method: &Method, path: &str) -> bool {
         || deal_write(method, path)
         || customer_write(method, path)
         || template_write(method, path)
+        || promise_route(method, path)
 }
 
 async fn identify(
@@ -657,6 +671,23 @@ mod tests {
             (Method::PUT, "/v1/customers/7/invalidx"),
             (Method::PUT, "/v1/customers/7"),
             (Method::DELETE, "/v1/customers/7"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn the_to_do_tab_reads_and_closes_ai_promises() {
+        assert!(device_route(&Method::GET, "/v1/ai/promises"));
+        assert!(device_route(&Method::PATCH, "/v1/ai/promises/12"));
+        for (method, path) in [
+            (Method::POST, "/v1/ai/promises"),
+            (Method::GET, "/v1/ai/promises/12"),
+            (Method::DELETE, "/v1/ai/promises/12"),
+            (Method::PATCH, "/v1/ai/promises/x"),
+            (Method::PATCH, "/v1/ai/promises/12/draft"),
+            (Method::GET, "/v1/ai/promisesx"),
+            (Method::GET, "/v1/ai/chat"),
         ] {
             assert!(!device_route(&method, path), "{method} {path}");
         }

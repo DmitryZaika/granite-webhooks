@@ -49693,7 +49693,7 @@
           "jobs"
         ],
         "summary": "Read reps' calls and messages for promises",
-        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, closes the tasks they finished in the CRM (a quote saved or emailed,\na document sent to sign, an event on the schedule, a call), sends their\nmorning list (once a day from 8 AM their time), queues their calls, texts\nand emails of the last 3 days not read yet, then reads up to 4 (a call is\ntranscribed first): saves what the rep promised the customer and by when,\ncloses the open promises it keeps, adds the quote work the customer gave\nthem to that customer's one quote task, and writes the text or email that\nkeeps each promise a message can keep, in the rep's own style.",
+        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, closes the tasks they finished in the CRM (a quote saved or emailed,\na document sent to sign, an event on the schedule, a call), queues their calls, texts\nand emails of the last 3 days not read yet, then reads up to 4 (a call is\ntranscribed first): saves what the rep promised the customer and by when,\ncloses the open promises it keeps, adds the quote work the customer gave\nthem to that customer's one quote task, and writes the text or email that\nkeeps each promise a message can keep, in the rep's own style.",
         "operationId": "run_promises",
         "responses": {
           "200": {
@@ -92565,8 +92565,7 @@
           "processed",
           "queued",
           "promises",
-          "reminded",
-          "digests"
+          "reminded"
         ],
         "properties": {
           "processed": {
@@ -92588,11 +92587,6 @@
           "reminded": {
             "type": "integer",
             "description": "Due promises the reps were reminded of.",
-            "minimum": 0
-          },
-          "digests": {
-            "type": "integer",
-            "description": "Morning lists sent.",
             "minimum": 0
           }
         }
