@@ -430,6 +430,34 @@ async fn without_an_assistant_the_caller_leaves_a_voicemail(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_forward_only_number_sends_every_call_on(pool: MySqlPool) {
+    enable_calling(&pool, 100, "ai_assistant_id = 'assistant-100'").await;
+    lines(&pool).await;
+    // Rita's phone could ring; the number is forward only.
+    add_phone(&pool, 1, 100, 100).await;
+    sql(
+        &pool,
+        "UPDATE telnyx_numbers SET forward_only = 1, forward_to = '+13175550188' WHERE id = 9801",
+    )
+    .await;
+    let (server, stubs) = phone_server(pool.clone()).await;
+    let res = inbound(&server, 100, "v3:fo-1", "+13175550199", "+13175550151").await;
+    // No recording notice, no phone rings, no missed-call push.
+    assert_eq!(res.text(), texml_doc("<Dial>+13175550188</Dial>"));
+    let id = call_id(&pool, "v3:fo-1").await;
+    assert_eq!(status(&pool, id).await, "missed");
+    assert!(stubs.pushes().is_empty());
+    // Without a forward number the caller leaves a voicemail.
+    sql(
+        &pool,
+        "UPDATE telnyx_numbers SET forward_to = NULL WHERE id = 9801",
+    )
+    .await;
+    let res = inbound(&server, 100, "v3:fo-2", "+13175550199", "+13175550151").await;
+    assert!(res.text().contains("<Record "), "{}", res.text());
+}
+
+#[test_db::test(seed)]
 async fn recording_off_neither_announces_nor_records(pool: MySqlPool) {
     enable_calling(&pool, 100, "recording_mode = 'off'").await;
     lines(&pool).await;

@@ -58926,7 +58926,7 @@
           "phone"
         ],
         "summary": "Change a phone number",
-        "description": "Saves the whole number: label, kind (`direct`, `shared`, `main`), what a\ncall nobody answers does (`ai`, `voicemail`, `forward` with `forwardTo`,\na US or Canada number), the voicemail greeting, whether it is active, and\nwho it rings and who may call from it (the list replaces the current\none; every user must be a live user of the company, else 400). Returns\nthe number as saved. The change is written to the phone audit log.\nCompany admins (and super admins, superusers) only.",
+        "description": "Saves the whole number: label, kind (`direct`, `shared`, `main`), what a\ncall nobody answers does (`ai`, `voicemail`, `forward` with `forwardTo`,\na US or Canada number), the voicemail greeting, whether it is active,\nforward only (`forwardOnly`: it rings nobody and every call goes to\n`forwardTo`), where its texts are sent on (`forwardTextsTo`), and\nwho it rings and who may call from it (the list replaces the current\none; every user must be a live user of the company, else 400). A number\nmay not forward to itself (400). Returns\nthe number as saved. The change is written to the phone audit log.\nCompany admins (and super admins, superusers) only.",
         "operationId": "update_phone_admin_number",
         "parameters": [
           {
@@ -64896,7 +64896,7 @@
           "telnyx-webhooks"
         ],
         "summary": "Answer an incoming call",
-        "description": "Telnyx's TeXML app voice URL, fetched when someone calls one of the\ncompany's numbers (`To`). First the company's spam and blocked numbers\n(`GET /v1/phone/admin/call-blocking`): a trusted number is never\nblocked; a hidden number (when the company blocks those), a blocked\nnumber or area code, or likely spam (STIR/SHAKEN validation failed, or\nTelnyx's call screening says `SPAM LIKELY`; when the company blocks spam\nor sends it to voicemail) is logged as blocked and hears the\nannouncement then a hang-up, is rejected, or goes to voicemail without\nringing anyone; blocked calls get no missed-call push. Otherwise the\ncall is logged (`ringing`; the customer is the company's newest live\ncustomer with the caller's number; `spamLikely` when the caller-ID check\nsays so) and answered with TeXML: \"This call may be recorded.\" when the\ncompany records incoming calls, then a `<Dial>` ringing every signed-in\nphone of the users whose part of the call is to ring (not Do not\ndisturb, no forward of all calls, their first matching incoming call\nrule, else their working hours; the main line only while the company is\nopen), with `dial-result` as its action, a `leg-status` callback per\nphone, the `whisper` announcement for users who turned it on, and the\nnumber called as the caller ID when every one of them chose to see it.\nOn a user's own direct line their forward, voicemail or message rule\ntakes the whole call (no missed-call push). When no phone can ring it\ngoes straight on: the cells of users with cell fallback on, else the\nnumber's no-answer action (AI Assistant, voicemail or forward) and a\n`missed_call` push. A repeated request answers the same call again. An\ninternal error answers the fallback TeXML (`<Redirect>`). 403 when the\nnumber, account or connection is not the token's company's.",
+        "description": "Telnyx's TeXML app voice URL, fetched when someone calls one of the\ncompany's numbers (`To`). First the company's spam and blocked numbers\n(`GET /v1/phone/admin/call-blocking`): a trusted number is never\nblocked; a hidden number (when the company blocks those), a blocked\nnumber or area code, or likely spam (STIR/SHAKEN validation failed, or\nTelnyx's call screening says `SPAM LIKELY`; when the company blocks spam\nor sends it to voicemail) is logged as blocked and hears the\nannouncement then a hang-up, is rejected, or goes to voicemail without\nringing anyone; blocked calls get no missed-call push. Otherwise the\ncall is logged (`ringing`; the customer is the company's newest live\ncustomer with the caller's number; `spamLikely` when the caller-ID check\nsays so) and answered with TeXML: \"This call may be recorded.\" when the\ncompany records incoming calls, then a `<Dial>` ringing every signed-in\nphone of the users whose part of the call is to ring (not Do not\ndisturb, no forward of all calls, their first matching incoming call\nrule, else their working hours; the main line only while the company is\nopen), with `dial-result` as its action, a `leg-status` callback per\nphone, the `whisper` announcement for users who turned it on, and the\nnumber called as the caller ID when every one of them chose to see it.\nOn a user's own direct line their forward, voicemail or message rule\ntakes the whole call (no missed-call push). A forward-only number rings\nnobody: the call goes straight to its forward number (no recording\nnotice, no missed-call push; voicemail when the number has none). When no phone can ring it\ngoes straight on: the cells of users with cell fallback on, else the\nnumber's no-answer action (AI Assistant, voicemail or forward) and a\n`missed_call` push. A repeated request answers the same call again. An\ninternal error answers the fallback TeXML (`<Redirect>`). 403 when the\nnumber, account or connection is not the token's company's.",
         "operationId": "answer_telnyx_inbound_call",
         "parameters": [
           {
@@ -68152,6 +68152,7 @@
           "kind",
           "noAnswerAction",
           "active",
+          "forwardOnly",
           "assignments"
         ],
         "properties": {
@@ -68193,6 +68194,17 @@
           "active": {
             "type": "boolean",
             "description": "In use: an inactive number rings nobody and is nobody's caller ID."
+          },
+          "forwardOnly": {
+            "type": "boolean",
+            "description": "Forward only: it rings nobody, every call goes to `forwardTo`."
+          },
+          "forwardTextsTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where texts to the number are sent on (from the number, with the\nsender's number in front), E.164; null = they stay in the CRM."
           },
           "assignments": {
             "type": "array",
@@ -86573,6 +86585,17 @@
           "active": {
             "type": "boolean",
             "description": "In use."
+          },
+          "forwardOnly": {
+            "type": "boolean",
+            "description": "Forward only: it rings nobody and every call goes to `forwardTo`\n(needed then). Left out = false."
+          },
+          "forwardTextsTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where texts to the number are sent on: a US or Canada number (E.164\nor 10 digits); null or empty = nowhere."
           },
           "assignments": {
             "type": "array",

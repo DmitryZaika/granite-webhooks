@@ -74,6 +74,11 @@ pub struct AdminNumber {
     pub greeting: Option<String>,
     /// In use: an inactive number rings nobody and is nobody's caller ID.
     pub active: bool,
+    /// Forward only: it rings nobody, every call goes to `forwardTo`.
+    pub forward_only: bool,
+    /// Where texts to the number are sent on (from the number, with the
+    /// sender's number in front), E.164; null = they stay in the CRM.
+    pub forward_texts_to: Option<String>,
     /// Who it rings and who may call from it, by user id (users of the
     /// company only).
     pub assignments: Vec<NumberAssignment>,
@@ -91,6 +96,8 @@ struct NumberRow {
     forward_to: Option<String>,
     greeting: Option<String>,
     active: bool,
+    forward_only: bool,
+    forward_texts_to: Option<String>,
 }
 
 #[derive(FromRow)]
@@ -155,6 +162,14 @@ pub struct NumberInput {
     pub greeting: Option<String>,
     /// In use.
     pub active: bool,
+    /// Forward only: it rings nobody and every call goes to `forwardTo`
+    /// (needed then). Left out = false.
+    #[serde(default)]
+    pub forward_only: bool,
+    /// Where texts to the number are sent on: a US or Canada number (E.164
+    /// or 10 digits); null or empty = nowhere.
+    #[serde(default)]
+    pub forward_texts_to: Option<String>,
     /// Who it rings and who may call from it: replaces the current list.
     /// Every user must be a live user of the company, once each; users with
     /// neither flag on are left out.
@@ -219,7 +234,7 @@ pub(super) async fn company_numbers(
     let rows: Vec<NumberRow> = sqlx::query_as(
         "SELECT id, e164, label, CAST(kind AS CHAR) AS kind,
                 CAST(no_answer_action AS CHAR) AS no_answer_action, forward_to, greeting,
-                active <> 0 AS active
+                active <> 0 AS active, forward_only <> 0 AS forward_only, forward_texts_to
            FROM telnyx_numbers WHERE company_id = ?
           ORDER BY FIELD(kind, 'main', 'shared', 'direct'), label, id",
     )
@@ -256,6 +271,8 @@ pub(super) async fn company_numbers(
             forward_to: row.forward_to,
             greeting: row.greeting,
             active: row.active,
+            forward_only: row.forward_only,
+            forward_texts_to: row.forward_texts_to,
         })
         .collect())
 }
@@ -331,8 +348,21 @@ pub async fn list_admin_numbers(
 struct CheckedNumber {
     label: String,
     forward_to: Option<String>,
+    forward_texts_to: Option<String>,
     greeting: Option<String>,
     assignments: Vec<NumberAssignment>,
+}
+
+/// A forward number as stored: None when empty, 400 with `message` when it
+/// is not a US or Canada number.
+fn checked_forward(number: Option<&str>, message: &str) -> ApiResult<Option<String>> {
+    match number.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(number) => to_e164(number)
+            .filter(|number| is_nanp(number))
+            .map(Some)
+            .ok_or_else(|| ApiError::BadRequest(message.into())),
+    }
 }
 
 /// The input's fields as stored: 400 with a message for what is wrong.
@@ -343,21 +373,27 @@ fn check_number(input: &NumberInput) -> ApiResult<CheckedNumber> {
             "Use at most {LABEL_CHARS} characters for the label."
         )));
     }
-    let forward_to = match input.forward_to.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some(number) => Some(
-            to_e164(number)
-                .filter(|number| is_nanp(number))
-                .ok_or_else(|| {
-                    ApiError::BadRequest("Forward to a US or Canada phone number.".into())
-                })?,
-        ),
-    };
-    if input.no_answer_action == NoAnswerAction::Forward && forward_to.is_none() {
+    let forward_to = checked_forward(
+        input.forward_to.as_deref(),
+        "Forward to a US or Canada phone number.",
+    )?;
+    if input.forward_only && forward_to.is_none() {
+        return Err(ApiError::BadRequest(
+            "Enter the number to forward calls to.".into(),
+        ));
+    }
+    if !input.forward_only
+        && input.no_answer_action == NoAnswerAction::Forward
+        && forward_to.is_none()
+    {
         return Err(ApiError::BadRequest(
             "Enter the number to forward unanswered calls to.".into(),
         ));
     }
+    let forward_texts_to = checked_forward(
+        input.forward_texts_to.as_deref(),
+        "Forward texts to a US or Canada phone number.",
+    )?;
     let greeting = input
         .greeting
         .as_deref()
@@ -394,9 +430,22 @@ fn check_number(input: &NumberInput) -> ApiResult<CheckedNumber> {
     Ok(CheckedNumber {
         label,
         forward_to,
+        forward_texts_to,
         greeting,
         assignments,
     })
+}
+
+/// 400 when the number would forward calls or texts to itself (a call
+/// would come straight back, again and again).
+fn not_to_itself(e164: &str, checked: &CheckedNumber) -> ApiResult<()> {
+    let own = Some(e164);
+    if checked.forward_to.as_deref() == own || checked.forward_texts_to.as_deref() == own {
+        return Err(ApiError::BadRequest(
+            "Forward to another number, not to this one.".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Whether every one of `user_ids` is a live user of the company.
@@ -417,9 +466,12 @@ async fn all_in_company(pool: &MySqlPool, company_id: i32, user_ids: &[i32]) -> 
 ///
 /// Saves the whole number: label, kind (`direct`, `shared`, `main`), what a
 /// call nobody answers does (`ai`, `voicemail`, `forward` with `forwardTo`,
-/// a US or Canada number), the voicemail greeting, whether it is active, and
+/// a US or Canada number), the voicemail greeting, whether it is active,
+/// forward only (`forwardOnly`: it rings nobody and every call goes to
+/// `forwardTo`), where its texts are sent on (`forwardTextsTo`), and
 /// who it rings and who may call from it (the list replaces the current
-/// one; every user must be a live user of the company, else 400). Returns
+/// one; every user must be a live user of the company, else 400). A number
+/// may not forward to itself (400). Returns
 /// the number as saved. The change is written to the phone audit log.
 /// Company admins (and super admins, superusers) only.
 #[crate::openapi::path(
@@ -450,6 +502,7 @@ pub async fn update_admin_number(
     let before = company_number(pool, user.company_id, id)
         .await?
         .ok_or(ApiError::NotFound)?;
+    not_to_itself(&before.e164, &checked)?;
     let user_ids: Vec<i32> = checked
         .assignments
         .iter()
@@ -463,7 +516,8 @@ pub async fn update_admin_number(
     let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE telnyx_numbers
-            SET label = ?, kind = ?, no_answer_action = ?, forward_to = ?, greeting = ?, active = ?
+            SET label = ?, kind = ?, no_answer_action = ?, forward_to = ?, greeting = ?, active = ?,
+                forward_only = ?, forward_texts_to = ?
           WHERE id = ? AND company_id = ?",
     )
     .bind(&checked.label)
@@ -472,6 +526,8 @@ pub async fn update_admin_number(
     .bind(&checked.forward_to)
     .bind(&checked.greeting)
     .bind(input.active)
+    .bind(input.forward_only)
+    .bind(&checked.forward_texts_to)
     .bind(id)
     .bind(user.company_id)
     .execute(&mut *tx)
@@ -495,6 +551,7 @@ pub async fn update_admin_number(
     let after = json!({
         "label": checked.label, "kind": input.kind, "noAnswerAction": input.no_answer_action,
         "forwardTo": checked.forward_to, "greeting": checked.greeting, "active": input.active,
+        "forwardOnly": input.forward_only, "forwardTextsTo": checked.forward_texts_to,
         "assignments": checked.assignments,
     });
     audit(
