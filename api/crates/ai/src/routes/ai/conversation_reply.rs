@@ -175,7 +175,7 @@ GOOD: "Thanks for the photo. Yes, we'll send someone to take a look. It may be a
 - Email body is the message only. Never prefix it with "Subject:"; the thread already has a subject.
 
 ## Custom requests override length and structure
-When REPLY MODE is Custom or Custom revision, the rep's instruction decides what the message says and how long it is. Include every point the rep wrote, even when that takes many sentences or several questions. The sentence limits, "ONE question" and "short" rules above apply only to Fast reply and Follow up. Voice, greeting, signature, no invented facts and no AI stock lines still apply.
+When REPLY MODE is Custom or Custom revision, the rep's instruction decides what the message says and how long it is. Include every point the rep wrote, even when that takes many sentences or several questions. The rep's instruction is the only content: say what it says, and do not add anything the rep did not ask for, even when the customer asked for something else (no offer of a visit, call, discount or next step the rep did not mention). The "Requests, concerns and problems" section, the sentence limits, "ONE question" and "short" rules above apply only to Fast reply and Follow up. Voice, greeting, signature, no invented facts and no AI stock lines still apply.
 
 Output ONLY valid JSON: {"body":"draft message"}"#;
 
@@ -473,7 +473,7 @@ fn mode_note(mode: ReplyMode, custom: &CustomDraft) -> String {
             )
         }
         ReplyMode::Custom => format!(
-            "REPLY MODE: Custom.\nThe sales rep gave this instruction for the draft:\n\"{}\"\nThe instruction is the content of the message. Cover EVERY point, detail, fact and question in it, in a natural order; drop none and do not shrink several points into one vague line. Turn the rep's notes into a clear, well-written message to the customer (fix grammar, keep their facts and names exactly).\nThe rep's notes are the key points, not the finished text: never return the instruction almost word for word. Build a complete message around it: answer what the customer last asked, make the rep's point in full sentences with a short plain-words explanation of why, and end with a helpful next step or question. Add only general, true context; no new prices, dates or promises.\nThe instruction sets the length, not the usual length rules: a short instruction gets a short message, a detailed one gets a complete message with every point. Several questions are fine when the rep asked them. On email, use short paragraphs when there are several points.\nStill sound natural and stay consistent with the conversation history.\nDo not ignore the thread. Do not invent facts the rep did not ask for.",
+            "REPLY MODE: Custom.\nThe sales rep gave this instruction for the draft:\n\"{}\"\nThe instruction is the content of the message. Cover EVERY point, detail, fact and question in it, in a natural order; drop none and do not shrink several points into one vague line. Turn the rep's notes into a clear, well-written message to the customer (fix grammar, keep their facts and names exactly).\nThe rep's notes are the key points, not the finished text: never return the instruction almost word for word. Write the rep's point as a complete, warm message in full sentences, with a short plain-words explanation of why it is true. Say only what the rep asked you to say: do not answer other customer requests, and add no offer, visit, call, question, price, date or promise the rep did not mention.\nThe instruction sets the length, not the usual length rules: a short instruction gets a short message, a detailed one gets a complete message with every point. Several questions are fine when the rep asked them. On email, use short paragraphs when there are several points.\nStill sound natural and stay consistent with the conversation history.\nDo not ignore the thread. Do not invent facts the rep did not ask for.",
             custom.request
         ),
     }
@@ -917,6 +917,7 @@ mod tests {
             text.contains("Cover EVERY point")
                 && !text.contains("One main question")
                 && text.contains("never return the instruction almost word for word")
+                && text.contains("Say only what the rep asked you to say")
         );
         let revision = CustomDraft {
             request: "Price 1-2 white quartzite options".into(),
