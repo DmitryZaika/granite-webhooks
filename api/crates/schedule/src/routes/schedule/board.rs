@@ -105,6 +105,12 @@ pub struct ScheduleEvent {
     /// Email for this event only; null uses the customer's.
     #[sqlx(default)]
     pub contact_email: Option<String>,
+    /// A second phone for this event; automated texts go to both.
+    #[sqlx(default)]
+    pub contact_phone_2: Option<String>,
+    /// A second email for this event; automated emails go to both.
+    #[sqlx(default)]
+    pub contact_email_2: Option<String>,
     /// The crew's progress: `on_my_way`, `arrived` or `completed`.
     #[sqlx(default)]
     pub crew_status: Option<String>,
@@ -210,7 +216,7 @@ async fn load_events(
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
                 c.name AS customer_name, u.name AS created_user_name,
                 e.quote_id IS NOT NULL AS automated,
-                e.contact_phone, e.contact_email, e.crew_status,
+                e.contact_phone, e.contact_email, e.contact_phone_2, e.contact_email_2, e.crew_status,
                 DATE_FORMAT(e.on_my_way_at, '%Y-%m-%dT%H:%i:%sZ') AS on_my_way_at,
                 DATE_FORMAT(e.arrived_at, '%Y-%m-%dT%H:%i:%sZ') AS arrived_at,
                 DATE_FORMAT(e.completed_at, '%Y-%m-%dT%H:%i:%sZ') AS completed_at,
@@ -311,7 +317,7 @@ pub async fn unscheduled(
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
                 c.name AS customer_name, u.name AS created_user_name,
                 e.quote_id IS NOT NULL AS automated,
-                e.contact_phone, e.contact_email
+                e.contact_phone, e.contact_email, e.contact_phone_2, e.contact_email_2
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c
