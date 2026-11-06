@@ -383,7 +383,7 @@ async fn a_lead_assigned_from_the_phone_reaches_the_rep_in_the_app_and_in_telegr
         .delete("/v1/customers/1001")
         .add_header(HEADER, token(2))
         .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .assert_status(StatusCode::FORBIDDEN);
 }
 
 #[test_db::test(seed)]

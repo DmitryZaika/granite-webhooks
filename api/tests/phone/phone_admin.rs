@@ -108,7 +108,7 @@ async fn admins_list_and_change_the_company_numbers(pool: MySqlPool) {
         .get("/v1/phone/admin/numbers")
         .add_header(HEADER, token(111))
         .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .assert_status(StatusCode::FORBIDDEN);
     // A super admin of company 101 sees that company's numbers; no setup there.
     let other = server
         .get("/v1/phone/admin/numbers")

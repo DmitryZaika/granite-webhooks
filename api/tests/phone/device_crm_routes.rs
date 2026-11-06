@@ -125,7 +125,7 @@ async fn installers_and_template_makers_get_the_schedule_only_app(pool: MySqlPoo
         .get("/v1/me")
         .add_header(HEADER, token(304))
         .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .assert_status(StatusCode::FORBIDDEN);
 
     // A template maker gets the template portal; a super admin never gets one,
     // and neither does a sales rep.
@@ -249,7 +249,7 @@ async fn the_app_reads_emails_and_the_schedule_with_its_device_token(pool: MySql
             .get(path)
             .add_header(HEADER, token(301))
             .await
-            .assert_status(StatusCode::UNAUTHORIZED);
+            .assert_status(StatusCode::FORBIDDEN);
     }
     // The app's own routes took the token everywhere before, and still do.
     server
@@ -312,12 +312,12 @@ async fn the_composer_reads_its_lists_and_changes_only_the_templates(pool: MySql
         .delete("/v1/calendars/1")
         .add_header(HEADER, token(305))
         .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .assert_status(StatusCode::FORBIDDEN);
     server
         .delete("/v1/customers/1000")
         .add_header(HEADER, token(305))
         .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .assert_status(StatusCode::FORBIDDEN);
 
     // An email attachment's upload URL comes with the token (the send route
     // asks for its `token`).
@@ -529,6 +529,6 @@ async fn the_quote_screen_reads_and_saves_a_quote_with_its_device_token(pool: My
         request
             .add_header(HEADER, token(312))
             .await
-            .assert_status(StatusCode::UNAUTHORIZED);
+            .assert_status(StatusCode::FORBIDDEN);
     }
 }

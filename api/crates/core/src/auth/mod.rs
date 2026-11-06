@@ -381,6 +381,9 @@ async fn identify(
     let session = match (session, agent::bearer_token(&parts.headers)) {
         (Some(session), _) => session,
         (None, Some(token)) => return agent::authenticate(parts, state, token).await,
+        // The phone's token on a route it may not use: refused, but not "signed out" (401), which
+        // would sign the phone out although its token is good (an app newer than the API, say).
+        (None, None) if device::device_token(parts).is_some() => return Err(ApiError::Forbidden),
         (None, None) => return Err(ApiError::Unauthorized),
     };
     let session_id = session.session_id.ok_or(ApiError::Unauthorized)?;
