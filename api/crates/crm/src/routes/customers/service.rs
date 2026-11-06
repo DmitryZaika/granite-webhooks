@@ -395,7 +395,7 @@ pub fn rep_assigned_text(lead_link: &str) -> String {
 }
 
 /// What the leads bot tells the rep a customer was moved to from another
-/// rep on the customer's Edit page.
+/// rep (the customer's Edit page or its Sales rep picker).
 pub fn rep_reassigned_text(customer_name: &str, lead_link: &str) -> String {
     format!("You were reassigned the customer {customer_name}. Click here: \n{lead_link}")
 }
@@ -405,8 +405,8 @@ pub fn rep_reassigned_text(customer_name: &str, lead_link: &str) -> String {
 /// the rep's button in Telegram. The rep gets a `lead` push (`assigned`) and
 /// the leads bot's "You were assigned a lead. Click here:" with the link (an
 /// email with it when they have no Telegram); nothing for a rep who assigned
-/// themselves. With `reassigned` (the customer's name, when their Edit page
-/// moved them from another rep) it says "You were reassigned the customer
+/// themselves. With `reassigned` (the customer's name, when they were moved
+/// from another rep) it says "You were reassigned the customer
 /// {name}. Click here:" instead. The sales managers' Telegram messages about the lead are
 /// edited to "Lead assigned to {rep}", and the other managers' phones get a
 /// `taken` push. Best effort: the assignment is saved already, so failures
