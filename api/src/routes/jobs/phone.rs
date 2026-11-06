@@ -181,6 +181,9 @@ pub struct PhoneJobRun {
     /// 10DLC number assignments read again from Telnyx; left out when none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tendlc_numbers_refreshed: usize,
+    /// Numbers assigned to their company's approved 10DLC campaign by themselves; left out when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tendlc_numbers_assigned: usize,
 }
 
 /// Run Granite Phone's upkeep
@@ -250,6 +253,7 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
         let tendlc = crate::phone::tendlc_registry::run_job(&state, deadline).await?;
         run.tendlc_refreshed = tendlc.refreshed;
         run.tendlc_numbers_refreshed = tendlc.numbers_refreshed;
+        run.tendlc_numbers_assigned = tendlc.numbers_assigned;
     }
     run.processed = run.phones_signed_out
         + run.sessions_expired
@@ -266,7 +270,8 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
         + run.port_orders_completed
         + run.text_statuses_checked
         + run.tendlc_refreshed
-        + run.tendlc_numbers_refreshed;
+        + run.tendlc_numbers_refreshed
+        + run.tendlc_numbers_assigned;
     Ok(Json(run))
 }
 

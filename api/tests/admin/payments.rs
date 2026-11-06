@@ -221,7 +221,10 @@ fn token(company_id: i32) -> String {
 /// The api with payments set up against a fake Stripe.
 async fn server_with(pool: &MySqlPool, origins: &str) -> (TestServer, Shared) {
     let shared = Shared::default();
-    let stripe = Stripe::new(Some("sk_test_fake"), &fake_stripe(Arc::clone(&shared)).await);
+    let stripe = Stripe::new(
+        Some("sk_test_fake"),
+        &fake_stripe(Arc::clone(&shared)).await,
+    );
     let state = AppState::new(pool.clone(), SECRET, origins)
         .with_stripe(stripe)
         .with_extension(payments());
@@ -285,17 +288,20 @@ fn paid_invoice(paid_at: i64, cents: i64) -> Value {
 #[test_db::test(seed)]
 async fn without_stripe_or_a_link_secret_payments_are_off(pool: MySqlPool) {
     let no_stripe = TestServer::new(app(
-        AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN).with_extension(payments()),
+        AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN).with_extension(payments())
     ));
-    let response = no_stripe.get(&format!("/v1/public/payments/{}", token(100))).await;
+    let response = no_stripe
+        .get(&format!("/v1/public/payments/{}", token(100)))
+        .await;
     response.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(response.json::<Value>(), json!({ "error": "Payments are not set up" }));
+    assert_eq!(
+        response.json::<Value>(),
+        json!({ "error": "Payments are not set up" })
+    );
 
-    let no_secret = TestServer::new(app(
-        AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
-            .with_stripe(Stripe::new(Some("sk_test_fake"), "http://127.0.0.1:9"))
-            .with_extension(Payments::new("", APP_URL)),
-    ));
+    let no_secret = TestServer::new(app(AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+        .with_stripe(Stripe::new(Some("sk_test_fake"), "http://127.0.0.1:9"))
+        .with_extension(Payments::new("", APP_URL))));
     no_secret
         .post(&format!("/v1/public/payments/{}/checkout", token(100)))
         .await
@@ -350,7 +356,9 @@ async fn a_forged_or_stale_link_is_not_found(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn a_new_company_sees_its_name_and_the_default_price(pool: MySqlPool) {
     let (server, stripe) = server(&pool).await;
-    let response = server.get(&format!("/v1/public/payments/{}", token(100))).await;
+    let response = server
+        .get(&format!("/v1/public/payments/{}", token(100)))
+        .await;
     response.assert_status_ok();
     assert_eq!(
         response.json::<Value>(),
@@ -436,7 +444,10 @@ async fn the_first_checkout_links_a_new_customer_and_charges_the_company_price(p
         json!({ "url": "https://checkout.stripe.com/c/pay/cs_1" })
     );
     // The customer is saved on the company before the payer pays.
-    assert_eq!(stored_customer(&pool, 100).await.as_deref(), Some("cus_new1"));
+    assert_eq!(
+        stored_customer(&pool, 100).await.as_deref(),
+        Some("cus_new1")
+    );
     let s = stripe.lock().unwrap();
     let customer = s.last_form("POST", "/v1/customers");
     assert_eq!(customer["name"], "Acme Stone");
@@ -445,7 +456,10 @@ async fn the_first_checkout_links_a_new_customer_and_charges_the_company_price(p
         s.last_form("POST", "/v1/products"),
         HashMap::from([
             ("id".to_string(), PRODUCT_ID.to_string()),
-            ("name".to_string(), "Granite Manager subscription".to_string()),
+            (
+                "name".to_string(),
+                "Granite Manager subscription".to_string()
+            ),
             ("tax_code".to_string(), "txcd_10103001".to_string()),
         ])
     );
@@ -526,7 +540,14 @@ async fn a_product_made_without_a_tax_code_gets_one(pool: MySqlPool) {
 async fn a_company_with_a_live_subscription_cannot_check_out_again(pool: MySqlPool) {
     let (server, stripe) = server(&pool).await;
     set_customer(&pool, 100, "cus_acme").await;
-    for status in ["active", "trialing", "past_due", "unpaid", "paused", "incomplete"] {
+    for status in [
+        "active",
+        "trialing",
+        "past_due",
+        "unpaid",
+        "paused",
+        "incomplete",
+    ] {
         stripe.lock().unwrap().subscriptions.insert(
             "cus_acme".into(),
             vec![subscription("sub_1", status, status == "active", 80000)],
@@ -541,7 +562,13 @@ async fn a_company_with_a_live_subscription_cannot_check_out_again(pool: MySqlPo
             "{status}"
         );
     }
-    assert_eq!(stripe.lock().unwrap().count("POST", "/v1/checkout/sessions"), 0);
+    assert_eq!(
+        stripe
+            .lock()
+            .unwrap()
+            .count("POST", "/v1/checkout/sessions"),
+        0
+    );
     // After it ended, a new one can start (same customer).
     stripe.lock().unwrap().subscriptions.insert(
         "cus_acme".into(),
@@ -553,7 +580,10 @@ async fn a_company_with_a_live_subscription_cannot_check_out_again(pool: MySqlPo
         .assert_status_ok();
     let s = stripe.lock().unwrap();
     assert_eq!(s.count("POST", "/v1/customers"), 0);
-    assert_eq!(s.last_form("POST", "/v1/checkout/sessions")["customer"], "cus_acme");
+    assert_eq!(
+        s.last_form("POST", "/v1/checkout/sessions")["customer"],
+        "cus_acme"
+    );
 }
 
 #[test_db::test(seed)]
@@ -577,8 +607,11 @@ async fn checking_out_never_changes_access_to_the_crm(pool: MySqlPool) {
 
 #[test_db::test(seed)]
 async fn the_payments_page_origin_may_post(pool: MySqlPool) {
-    let (server, _stripe) =
-        server_with(&pool, "https://granite-manager.com,https://*.granite-manager.com").await;
+    let (server, _stripe) = server_with(
+        &pool,
+        "https://granite-manager.com,https://*.granite-manager.com",
+    )
+    .await;
     for origin in [
         "https://payments.granite-manager.com",
         "https://dev-payments.granite-manager.com",
@@ -630,7 +663,10 @@ async fn the_portal_makes_its_configuration_once_and_returns_to_the_page(pool: M
     assert_eq!(s.count("POST", "/v1/billing_portal/configurations"), 1);
     let config = s.last_form("POST", "/v1/billing_portal/configurations");
     assert_eq!(config["features[subscription_cancel][enabled]"], "true");
-    assert_eq!(config["features[subscription_cancel][mode]"], "at_period_end");
+    assert_eq!(
+        config["features[subscription_cancel][mode]"],
+        "at_period_end"
+    );
     assert_eq!(config["features[payment_method_update][enabled]"], "true");
     assert_eq!(config["features[invoice_history][enabled]"], "true");
     let session = s.last_form("POST", "/v1/billing_portal/sessions");
@@ -662,9 +698,10 @@ async fn the_portal_uses_the_account_default_configuration_when_there_is_one(poo
         .assert_status_ok();
     let s = stripe.lock().unwrap();
     assert_eq!(s.count("POST", "/v1/billing_portal/configurations"), 0);
-    assert!(!s
-        .last_form("POST", "/v1/billing_portal/sessions")
-        .contains_key("configuration"));
+    assert!(
+        !s.last_form("POST", "/v1/billing_portal/sessions")
+            .contains_key("configuration")
+    );
 }
 
 // ---- superuser screen
@@ -714,7 +751,10 @@ async fn superusers_see_every_company_s_payments(pool: MySqlPool) {
         );
         s.invoices.insert(
             "cus_acme".into(),
-            vec![paid_invoice(1_797_000_000, 80000), paid_invoice(1_794_000_000, 80000)],
+            vec![
+                paid_invoice(1_797_000_000, 80000),
+                paid_invoice(1_794_000_000, 80000),
+            ],
         );
         s.subscriptions.insert(
             "cus_other".into(),
@@ -771,9 +811,15 @@ async fn superusers_see_every_company_s_payments(pool: MySqlPool) {
         ])
     );
     // A link from the list opens that company's page.
-    let link = response.json::<Value>()[3]["payment_link"].as_str().unwrap().to_string();
+    let link = response.json::<Value>()[3]["payment_link"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let token = link.split("?c=").nth(1).unwrap();
-    let page: Value = server.get(&format!("/v1/public/payments/{token}")).await.json();
+    let page: Value = server
+        .get(&format!("/v1/public/payments/{token}"))
+        .await
+        .json();
     assert_eq!(page["company_name"], "Other Granite Co");
     assert_eq!(page["price_cents"], 50000);
 }
