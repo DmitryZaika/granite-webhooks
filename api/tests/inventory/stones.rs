@@ -244,7 +244,7 @@ async fn shop_staff_count_samples(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn admins_proxy_bucket_images(pool: MySqlPool) {
+async fn employees_proxy_bucket_images(pool: MySqlPool) {
     let (server, storage) = common::server_with_storage(pool);
     storage
         .put("stones/a b.png", common::png(4, 4), "image/png")
@@ -267,7 +267,11 @@ async fn admins_proxy_bucket_images(pool: MySqlPool) {
     assert_eq!(res.header("content-type"), "image/png");
     assert_eq!(res.as_bytes().as_ref(), common::png(4, 4).as_slice());
 
+    // A rep crops slab pictures in a quote's layout too.
     get(format!("{base}/stones/a%20b.png"), sessions::REP)
+        .await
+        .assert_status_ok();
+    get(format!("{base}/stones/a%20b.png"), sessions::VIEWER)
         .await
         .assert_status(StatusCode::FORBIDDEN);
     get(format!("{base}/stones/notes.pdf"), sessions::ADMIN)

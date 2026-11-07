@@ -7277,7 +7277,7 @@
           "stones"
         ],
         "summary": "Fetch a stone image through the API",
-        "description": "Returns the bytes of an image in the storage bucket so the browser can\ndraw it on a canvas (the bucket sends no CORS headers). Other URLs and\nfiles that are not images (or are SVG) are refused.",
+        "description": "Returns the bytes of an image in the storage bucket so the browser can\ndraw it on a canvas and crop it (the bucket sends no CORS headers): a\nstone's picture, or a slab picture in a quote layout. A crop is saved as a\nnew file, never over the original. Any employee may load one. Other URLs\nand files that are not images (or are SVG) are refused.",
         "operationId": "proxy_stone_image",
         "parameters": [
           {
@@ -7327,7 +7327,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an employee or admin",
             "content": {
               "application/json": {
                 "schema": {
