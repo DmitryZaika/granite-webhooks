@@ -1,4 +1,4 @@
--- Quote editor (Moraware-style drawing, price lists, revisions, emails).
+-- Quote editor (drawing, price lists, revisions, emails).
 -- Requires the existing quotes table.
 
 ALTER TABLE quotes
