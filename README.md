@@ -39,8 +39,15 @@ When server dies instantly:
 
 Every webhooks route is moving to one kind of credential: an access token
 (`gmk_` + 43 characters) in `Authorization: Bearer <token>`. Telegram sends it
-as its `secret_token` (`X-Telegram-Bot-Api-Secret-Token`) and RingCentral as
-its subscription `verificationToken` (`Verification-Token`).
+as its `secret_token` (`X-Telegram-Bot-Api-Secret-Token`), RingCentral as
+its subscription `verificationToken` (`Verification-Token`), and Telnyx, which
+can set no header on its TeXML callbacks, in the callback URL
+(`/telnyx/event-progress?token=<token>`, that route only).
+
+No route lets a request in without a credential, except `GET /` (health) and
+`GET /api-docs/openapi.json` (the lead form's public spec). `/ses/*` and
+`/telnyx/event-progress` take only a token (they never had a secret), and the
+lead forms take a token or the old bearer UUID.
 
 Tokens live in `access_tokens` (only their SHA-256). Each has scopes
 (`leads`, `internal`, `telephony`, `telegram`, `ses`) and either one company,
@@ -66,8 +73,7 @@ The `api` Lambda uses one token for everything (`WEBHOOKS_KEY`, see
 
 While callers switch, routes use `Transitional<...>`
 (`webhooks/crates/core/src/axum_helpers/access_token.rs`): a working token gets in, and
-otherwise the route's old check decides exactly as before (lead forms, SES and
-Telnyx still let everyone in). PostHog shows who has not switched:
+otherwise the route's old secret is still accepted. PostHog shows who has not switched:
 
 - `webhook_legacy_auth`: a request let in (or refused) by the old check, with
   `route`, `company_id`, `legacy` and `result`.

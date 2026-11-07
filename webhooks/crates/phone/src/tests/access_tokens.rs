@@ -88,3 +88,50 @@ async fn ringcentral_notify_takes_the_token_as_its_verification_token(pool: MySq
     assert_eq!(handshake.status_code(), StatusCode::OK);
     assert_eq!(handshake.header("Validation-Token"), "abc-123");
 }
+
+#[test_db::test]
+async fn telnyx_callbacks_need_an_internal_token_in_the_url(pool: MySqlPool) {
+    let company = token(&pool, 45, &[Scope::Telephony]).await;
+    let (_, internal) = tokens::create(
+        &pool,
+        &NewAccessToken {
+            name: "telnyx",
+            company_id: None,
+            scopes: &[Scope::Telephony],
+            expires_at: None,
+            created_by: None,
+        },
+    )
+    .await
+    .unwrap();
+    let app = new_test_app(pool);
+    let post = |uri: String| {
+        app.post(&uri)
+            .content_type("application/x-www-form-urlencoded")
+            .text("CallSid=CA-token-test&CallStatus=ringing")
+    };
+
+    assert_eq!(
+        post("/telnyx/event-progress".into()).await.status_code(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        post("/telnyx/event-progress?token=gmk_nope".into())
+            .await
+            .status_code(),
+        StatusCode::UNAUTHORIZED
+    );
+    // A company's token: the route has no company, so it may not call it.
+    assert_eq!(
+        post(format!("/telnyx/event-progress?token={company}"))
+            .await
+            .status_code(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(format!("/telnyx/event-progress?token={internal}"))
+            .await
+            .status_code(),
+        StatusCode::OK
+    );
+}

@@ -13,8 +13,14 @@
 //! The token is read from `Authorization` (`Bearer gmk_...` or the bare
 //! token), else from the headers the providers that cannot set
 //! `Authorization` send: Telegram's `X-Telegram-Bot-Api-Secret-Token` and
-//! `RingCentral`'s `Verification-Token`. The company is the route's
+//! `RingCentral`'s `Verification-Token`, else, only on routes whose callers
+//! can set nothing but a URL ([`TokenScope::TOKEN_IN_URL`], Telnyx's
+//! callbacks), from the `token` query parameter. The company is the route's
 //! `{company_id}` path segment.
+//!
+//! Every route but `GET /` (health) and `GET /api-docs/openapi.json` (the
+//! lead form's public spec) takes one of the two: no route lets a request
+//! in without a credential.
 
 use axum::extract::{FromRef, FromRequestParts, RawPathParams};
 use axum::http::{HeaderMap, StatusCode, request::Parts};
@@ -38,6 +44,10 @@ const UNAUTHORIZED_RESPONSE: BasicResponse = (StatusCode::UNAUTHORIZED, "unautho
 /// The scope a route needs, as a type: `AccessToken<scope::Leads>`.
 pub trait TokenScope {
     const SCOPE: Scope;
+    /// Whether the token may come in the URL (`?token=gmk_...`), for callers
+    /// that can set no header. Off everywhere else: a URL ends up in more
+    /// logs than a header does.
+    const TOKEN_IN_URL: bool = false;
 }
 
 pub mod scope {
@@ -71,10 +81,7 @@ pub mod scope {
 pub enum LegacyCheck {
     /// The old secret matched.
     Valid,
-    /// Let through without a matching secret, as the route always did
-    /// (lead forms, SES, Telnyx).
-    Unverified,
-    /// Turned away, as the route always did.
+    /// Turned away.
     Rejected,
 }
 
@@ -82,7 +89,6 @@ impl LegacyCheck {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Valid => "valid",
-            Self::Unverified => "unverified",
             Self::Rejected => "rejected",
         }
     }
@@ -120,6 +126,28 @@ fn presented_token(headers: &HeaderMap) -> Option<&str> {
     .find(|value| value.starts_with(tokens::TOKEN_PREFIX))
 }
 
+/// The `token` query parameter, if it looks like an access token. Tokens
+/// are letters, digits and `_`, so it is never percent-encoded.
+fn url_token(uri: &axum::http::Uri) -> Option<&str> {
+    uri.query()?
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| *name == "token")
+        .map(|(_, value)| value)
+        .filter(|value| value.starts_with(tokens::TOKEN_PREFIX))
+}
+
+/// The token a request for a route of scope `S` presents.
+fn request_token<S: TokenScope>(parts: &Parts) -> Option<&str> {
+    presented_token(&parts.headers).or_else(|| {
+        if S::TOKEN_IN_URL {
+            url_token(&parts.uri)
+        } else {
+            None
+        }
+    })
+}
+
 /// The route's `{company_id}` path segment. `None` when the route has none
 /// (or it is not a number, which the handler's `Path` turns away anyway).
 async fn path_company_id<S: Send + Sync>(parts: &mut Parts, state: &S) -> Option<i32> {
@@ -147,7 +175,7 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &St) -> Result<Self, Self::Rejection> {
         let company_id = path_company_id(parts, state).await;
         let report = AuthReport::new(parts, S::SCOPE, company_id);
-        let Some(token) = presented_token(&parts.headers) else {
+        let Some(token) = request_token::<S>(parts) else {
             report.token_rejected(Denied::Missing).await;
             return Err(UNAUTHORIZED_RESPONSE);
         };
@@ -201,7 +229,7 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &St) -> Result<Self, Self::Rejection> {
         let company_id = path_company_id(parts, state).await;
         let report = AuthReport::new(parts, L::SCOPE, company_id);
-        if let Some(token) = presented_token(&parts.headers) {
+        if let Some(token) = request_token::<L>(parts) {
             let pool = MySqlPool::from_ref(state);
             match TOKENS.verify(&pool, token, L::SCOPE, company_id).await {
                 Ok(token) => return Ok(Self::new(Some(token))),
@@ -216,7 +244,7 @@ where
         let check = L::check(&parts.headers);
         report.legacy(L::NAME, check).await;
         match check {
-            LegacyCheck::Valid | LegacyCheck::Unverified => Ok(Self::new(None)),
+            LegacyCheck::Valid => Ok(Self::new(None)),
             LegacyCheck::Rejected => Err(FORBIDDEN_RESPONSE),
         }
     }
@@ -423,6 +451,16 @@ mod tests {
         assert_eq!(presented_token(&HeaderMap::new()), None);
     }
 
+    #[test]
+    fn url_token_is_the_token_query_parameter() {
+        let uri = |value: &str| value.parse::<axum::http::Uri>().unwrap();
+        let with = format!("/t?a=1&token={TOKEN}&b=2");
+        assert_eq!(url_token(&uri(&with)), Some(TOKEN));
+        assert_eq!(url_token(&uri("/t?token=remix-key")), None);
+        assert_eq!(url_token(&uri("/t?other=gmk_x")), None);
+        assert_eq!(url_token(&uri("/t")), None);
+    }
+
     #[tokio::test]
     async fn company_comes_from_the_company_id_path_segment() {
         use axum::{Router, routing::post};
@@ -465,12 +503,12 @@ mod tests {
         let (parts, ()) = request.into_parts();
         let report = AuthReport::new(&parts, Scope::Leads, Some(12));
 
-        let legacy = report.legacy_properties("marketing_uuid", LegacyCheck::Unverified);
+        let legacy = report.legacy_properties("marketing_uuid", LegacyCheck::Valid);
         assert_eq!(legacy["route"], "/v1/webhooks/new-lead-form/{id}");
         assert_eq!(legacy["company_id"], 12);
         assert_eq!(legacy["scope"], "leads");
         assert_eq!(legacy["legacy"], "marketing_uuid");
-        assert_eq!(legacy["result"], "unverified");
+        assert_eq!(legacy["result"], "valid");
         assert_eq!(legacy["user_agent"], "Zapier");
 
         let rejected = report.rejected_properties(Denied::Expired);
@@ -620,7 +658,7 @@ mod route_tests {
     }
 
     #[test_db::test]
-    async fn transitional_lead_forms_never_turn_anyone_away(pool: MySqlPool) {
+    async fn lead_forms_need_a_token_or_the_old_uuid(pool: MySqlPool) {
         let (_, own) = token(&pool, Some(904), &[Scope::Leads]).await;
         let (revoked_id, revoked) = token(&pool, Some(904), &[Scope::Leads]).await;
         tokens::revoke(&pool, revoked_id).await.unwrap();
@@ -634,7 +672,6 @@ mod route_tests {
             text(app.post("/leads/904").authorization_bearer(&own).await),
             "token"
         );
-        assert_eq!(text(app.post("/leads/904").await), "legacy");
         assert_eq!(
             text(
                 app.post("/leads/904")
@@ -643,14 +680,56 @@ mod route_tests {
             ),
             "legacy"
         );
-        // A token that does not work here still gets in, as everyone did.
+        let status = |response: axum_test::TestResponse| response.status_code();
+        assert_eq!(status(app.post("/leads/904").await), StatusCode::FORBIDDEN);
         assert_eq!(
-            text(app.post("/leads/905").authorization_bearer(&own).await),
-            "legacy"
+            status(app.post("/leads/904").authorization_bearer("nope").await),
+            StatusCode::FORBIDDEN
+        );
+        // Another company's token, or a revoked one, without the old UUID.
+        assert_eq!(
+            status(app.post("/leads/905").authorization_bearer(&own).await),
+            StatusCode::FORBIDDEN
         );
         assert_eq!(
-            text(app.post("/leads/904").authorization_bearer(&revoked).await),
-            "legacy"
+            status(app.post("/leads/904").authorization_bearer(&revoked).await),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test_db::test]
+    async fn a_url_token_counts_only_where_the_route_allows_it(pool: MySqlPool) {
+        struct UrlLeads;
+        impl TokenScope for UrlLeads {
+            const SCOPE: Scope = Scope::Leads;
+            const TOKEN_IN_URL: bool = true;
+        }
+        let (_, own) = token(&pool, Some(907), &[Scope::Leads]).await;
+        let router = Router::new()
+            .route(
+                "/url/{company_id}",
+                post(|_: AccessToken<UrlLeads>| async { "ok" }),
+            )
+            .route(
+                "/header/{company_id}",
+                post(|_: AccessToken<scope::Leads>| async { "ok" }),
+            )
+            .with_state(pool);
+        let app = TestServer::builder().build(router);
+
+        let status = |response: axum_test::TestResponse| response.status_code();
+        assert_eq!(
+            status(app.post(&format!("/url/907?a=1&token={own}")).await),
+            StatusCode::OK
+        );
+        assert_eq!(status(app.post("/url/907").await), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            status(app.post(&format!("/url/908?token={own}")).await),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(app.post(&format!("/header/907?token={own}")).await),
+            StatusCode::UNAUTHORIZED
         );
     }
 

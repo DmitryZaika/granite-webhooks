@@ -340,8 +340,8 @@ const fn valid_or_rejected(valid: bool) -> LegacyCheck {
     }
 }
 
-/// Lead forms (website, Facebook, Make, Zapier): the shared bearer UUID was
-/// asked for but never required, so every request still gets in.
+/// Lead forms (website, Facebook, Make, Zapier): bearer `CORRECT_ID`, now
+/// required (it used to be asked for but never checked).
 pub struct MarketingUser;
 
 impl TokenScope for MarketingUser {
@@ -352,11 +352,7 @@ impl LegacyAuth for MarketingUser {
     const NAME: &'static str = "marketing_uuid";
 
     fn check(headers: &HeaderMap) -> LegacyCheck {
-        if bearer_is_correct_id(headers) {
-            LegacyCheck::Valid
-        } else {
-            LegacyCheck::Unverified
-        }
+        valid_or_rejected(bearer_is_correct_id(headers))
     }
 }
 
@@ -453,36 +449,28 @@ impl LegacyAuth for TelegramWebhookUser {
     }
 }
 
-/// SES events from `EventBridge`. Its connection sends an `Authorization`
-/// header that was never checked, so every request still gets in.
+/// SES events from `EventBridge`.
+///
+/// An access token (scope `ses`) in the API destination connection's
+/// `Authorization`, required. There was no old check (the header it sent
+/// was never read), so the route takes `AccessToken<SesEventBridge>`.
 pub struct SesEventBridge;
 
 impl TokenScope for SesEventBridge {
     const SCOPE: Scope = Scope::Ses;
 }
 
-impl LegacyAuth for SesEventBridge {
-    const NAME: &'static str = "ses_unchecked";
-
-    fn check(_: &HeaderMap) -> LegacyCheck {
-        LegacyCheck::Unverified
-    }
-}
-
-/// Telnyx's call-progress callbacks were never checked, so every request
-/// still gets in.
+/// Telnyx's `TeXML` call-progress callbacks.
+///
+/// An access token (scope `telephony`, internal) in the callback URL
+/// (`?token=gmk_...`), required. Telnyx signs no `TeXML` callback and sets no
+/// `Authorization`, so the URL is all it can carry. No old check, so the
+/// route takes `AccessToken<TelnyxCallback>`.
 pub struct TelnyxCallback;
 
 impl TokenScope for TelnyxCallback {
     const SCOPE: Scope = Scope::Telephony;
-}
-
-impl LegacyAuth for TelnyxCallback {
-    const NAME: &'static str = "telnyx_unchecked";
-
-    fn check(_: &HeaderMap) -> LegacyCheck {
-        LegacyCheck::Unverified
-    }
+    const TOKEN_IN_URL: bool = true;
 }
 
 #[cfg(test)]
@@ -499,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn marketing_lets_everyone_in_but_tells_the_uuid_apart() {
+    fn marketing_requires_the_uuid() {
         let bearer = format!("Bearer {CORRECT_ID}");
         assert_eq!(
             MarketingUser::check(&headers(&[("authorization", &bearer)])),
@@ -507,11 +495,11 @@ mod tests {
         );
         assert_eq!(
             MarketingUser::check(&HeaderMap::new()),
-            LegacyCheck::Unverified
+            LegacyCheck::Rejected
         );
         assert_eq!(
             MarketingUser::check(&headers(&[("authorization", "Bearer nope")])),
-            LegacyCheck::Unverified
+            LegacyCheck::Rejected
         );
     }
 
@@ -549,18 +537,6 @@ mod tests {
         assert_eq!(
             RingCentralNotificationUser::check(&with_bearer),
             LegacyCheck::Rejected
-        );
-    }
-
-    #[test]
-    fn unchecked_providers_still_get_in() {
-        assert_eq!(
-            SesEventBridge::check(&HeaderMap::new()),
-            LegacyCheck::Unverified
-        );
-        assert_eq!(
-            TelnyxCallback::check(&HeaderMap::new()),
-            LegacyCheck::Unverified
         );
     }
 }

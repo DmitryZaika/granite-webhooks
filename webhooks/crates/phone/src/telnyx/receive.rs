@@ -1,4 +1,4 @@
-use crate::axum_helpers::access_token::Transitional;
+use crate::axum_helpers::access_token::AccessToken;
 use crate::axum_helpers::guards::TelnyxCallback;
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -16,7 +16,7 @@ use sqlx::MySqlPool;
 /// event-specific upsert so call, recording, and transcript data can arrive in
 /// any order without overwriting each other.
 pub async fn event_progress(
-    _: Transitional<TelnyxCallback>,
+    _: AccessToken<TelnyxCallback>,
     State(pool): State<MySqlPool>,
     body: Bytes,
 ) -> BasicResponse {
