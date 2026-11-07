@@ -162,9 +162,25 @@ pub async fn stones(
         " GROUP BY s.id
           HAVING SUM(si.id IS NOT NULL AND si.sale_id IS NULL AND si.cut_date IS NULL
                      AND si.deleted_at IS NULL) > 0 OR MAX(s.regular_stock) = 1
-          ORDER BY s.name, s.id LIMIT 200",
+          ORDER BY ",
     );
+    push_name_rank(&mut sql, "s.name", name);
+    sql.push("s.name, s.id LIMIT 200");
     Ok(Json(sql.build_query_as().fetch_all(&state.pool).await?))
+}
+
+/// With a search, an `ORDER BY` key and comma: a `column` starting with it,
+/// then one with a word starting with it, then the rest.
+fn push_name_rank(sql: &mut QueryBuilder<MySql>, column: &str, name: &str) {
+    if name.is_empty() {
+        return;
+    }
+    let escaped = escape_like(name);
+    sql.push(format!("CASE WHEN {column} LIKE "))
+        .push_bind(format!("{escaped}%"))
+        .push(format!(" THEN 0 WHEN {column} LIKE "))
+        .push_bind(format!("% {escaped}%"))
+        .push(" THEN 1 ELSE 2 END, ");
 }
 
 async fn library(
@@ -182,11 +198,13 @@ async fn library(
         sql.push(" AND name LIKE ")
             .push_bind(format!("%{}%", escape_like(name)));
     }
+    sql.push(" ORDER BY ");
+    push_name_rank(&mut sql, "name", name);
     // A search fills a picker; the whole library is a page of its own.
     sql.push(if name.is_empty() {
-        " ORDER BY name, id LIMIT 2000"
+        "name, id LIMIT 2000"
     } else {
-        " ORDER BY name, id LIMIT 200"
+        "name, id LIMIT 200"
     });
     sql.build_query_as().fetch_all(&state.pool).await
 }

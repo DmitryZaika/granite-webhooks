@@ -450,6 +450,18 @@ impl Telnyx {
         .map(drop)
     }
 
+    /// Releases one of the account's numbers: Telnyx stops billing it and
+    /// it can't be taken back (`DELETE /phone_numbers/{id}`).
+    pub async fn release_number(&self, id: &str) -> Result<(), TelnyxError> {
+        self.send(
+            Method::DELETE,
+            &format!("/phone_numbers/{}", segment(id)),
+            None,
+        )
+        .await
+        .map(drop)
+    }
+
     /// Gives one of the account's numbers a messaging profile
     /// (`PATCH /phone_numbers/{id}/messaging`).
     pub async fn set_number_messaging(

@@ -17,12 +17,37 @@ use crate::webhooks::receive::__path_new_lead_form;
 For `/v1/webhooks/new-lead-form/{company_id}`:\n\
 - `referral_source` is optional; when set, prefer `website` or `facebook` for statistics.\n\
 - `form_name` is optional; when set, use the specific form id (e.g. `cabinet_quote`, \
-`facebook_form`, `facebook_cabinet_quote_form`, `quick_quote`)."
+`facebook_form`, `facebook_cabinet_quote_form`, `quick_quote`).\n\n\
+Authenticate with the access token Granite Manager gave you: \
+`Authorization: Bearer gmk_...`. Each token works for one company."
     ),
     paths(new_lead_form),
-    components(schemas(NewLeadForm))
+    components(schemas(NewLeadForm)),
+    modifiers(&AccessTokenAuth),
+    security(("access_token" = []))
 )]
 struct ApiDoc;
+
+/// The `access_token` bearer scheme the docs refer to.
+#[cfg(feature = "openapi")]
+struct AccessTokenAuth;
+
+#[cfg(feature = "openapi")]
+impl utoipa::Modify for AccessTokenAuth {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "access_token",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .description(Some("An access token (`gmk_...`)."))
+                    .build(),
+            ),
+        );
+    }
+}
 
 /// The document generated from the route annotations.
 #[cfg(feature = "openapi")]

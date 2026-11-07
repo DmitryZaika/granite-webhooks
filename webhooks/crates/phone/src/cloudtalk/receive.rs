@@ -1,4 +1,6 @@
+use crate::axum_helpers::access_token::AccessToken;
 use crate::axum_helpers::guards::CloudTalkWebhookUser;
+use crate::axum_helpers::guards::RemixBackend;
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::{
     CloudtalkSMS, inbound_customer_phone_from_call_payload, outbound_call_followup_check,
@@ -82,7 +84,7 @@ async fn resolve_unscoped_cloudtalk_company(
 }
 
 pub async fn sms_received_unscoped(
-    _: CloudTalkWebhookUser,
+    _: AccessToken<CloudTalkWebhookUser>,
     State(pool): State<MySqlPool>,
     body: Bytes,
 ) -> BasicResponse {
@@ -119,7 +121,7 @@ pub async fn sms_received_unscoped(
 }
 
 pub async fn sms_received(
-    _: CloudTalkWebhookUser,
+    _: AccessToken<CloudTalkWebhookUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -187,7 +189,7 @@ async fn process_inbound_sms(
 }
 
 pub async fn call_received(
-    _: CloudTalkWebhookUser,
+    _: AccessToken<CloudTalkWebhookUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -275,7 +277,7 @@ pub async fn call_received(
 }
 
 pub async fn sms_sent(
-    _: CloudTalkWebhookUser,
+    _: AccessToken<CloudTalkWebhookUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -293,7 +295,7 @@ pub async fn sms_sent(
     }
 }
 pub async fn sync_cloudtalk(
-    _: crate::axum_helpers::guards::RemixBackend,
+    _: AccessToken<RemixBackend>,
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
@@ -304,7 +306,7 @@ pub async fn sync_cloudtalk(
 /// `DELETE /cloudtalk/sync/{company_id}/{customer_id}`: drop the contact of a
 /// deleted customer.
 pub async fn unsync_cloudtalk(
-    _: crate::axum_helpers::guards::RemixBackend,
+    _: AccessToken<RemixBackend>,
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
@@ -315,7 +317,7 @@ pub async fn unsync_cloudtalk(
 #[cfg(test)]
 mod tests {
     use super::parse_cloudtalk_sms;
-    use crate::axum_helpers::guards::CORRECT_ID;
+    use crate::tests::utils::internal_token;
     use crate::tests::cloudtalk::{INBOUND_NULL_TEXT, INBOUND_SMS};
     use crate::tests::utils::{insert_group_list, insert_user, new_test_app};
     use axum::body::Bytes;
@@ -352,7 +354,7 @@ mod tests {
 
         let response = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -385,7 +387,7 @@ mod tests {
         let app = new_test_app(pool.clone());
         let response = app
             .post("/cloudtalk/sms")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -400,7 +402,7 @@ mod tests {
         let app = new_test_app(pool.clone());
         let response = app
             .post("/cloudtalk/sms")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_json())
             .await;
         // Must not 200 — CloudTalk only retries on 5xx; a silent OK permanently drops the SMS.
@@ -429,7 +431,7 @@ mod tests {
         ]);
         let response = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&batch)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -451,14 +453,14 @@ mod tests {
 
         let first = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_with_id_json())
             .await;
         assert_eq!(first.status_code(), StatusCode::OK);
 
         let second = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_with_id_json())
             .await;
         assert_eq!(second.status_code(), StatusCode::OK);
@@ -473,7 +475,7 @@ mod tests {
 
         let response = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .text("{not json")
             .await;
         // 500 since 0b2162e: a payload we cannot parse is answered with a 5xx so
@@ -491,7 +493,7 @@ mod tests {
 
         let response = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -506,7 +508,14 @@ mod tests {
     async fn test_sms_rejected_without_bearer_token(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let response = app.post("/cloudtalk/sms/42").json(&sms_json()).await;
-        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+        // The old shared UUID is no longer accepted.
+        let response = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer("9ca4dfa8-0eec-46cc-967f-3385624be883")
+            .json(&sms_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
         let smss = get_sms_received(&pool).await;
         assert_eq!(
             smss.len(),
@@ -521,7 +530,7 @@ mod tests {
 
         let response = app
             .post("/cloudtalk/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_with_id_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -553,7 +562,7 @@ mod tests {
         let app = new_test_app(pool.clone());
         let response = app
             .post("/cloudtalk/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_with_id_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -606,7 +615,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(MESSAGE_FALLBACK_ECHO).expect("parse");
         let response = app
             .post("/cloudtalk/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -644,7 +653,7 @@ mod tests {
             serde_json::from_slice(MESSAGE_SENT_NULL_TEXT).expect("parse");
         let response = app
             .post("/cloudtalk/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -690,7 +699,7 @@ mod tests {
 
         let response = app
             .post("/cloudtalk/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
@@ -744,7 +753,7 @@ mod tests {
         let app = new_test_app(pool.clone());
         let response = app
             .post(&format!("/cloudtalk/sms/{company_id}"))
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -801,7 +810,7 @@ mod tests {
         let app = new_test_app(pool.clone());
         let response = app
             .post(&format!("/cloudtalk/call/{company_id}"))
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&serde_json::json!({
                 "external_number": "+15551234567",
                 "type": "incoming"

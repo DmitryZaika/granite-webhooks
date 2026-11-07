@@ -578,6 +578,7 @@ async fn a_rep_sees_their_class_sales_and_customers(pool: MySqlPool) {
         .json();
     assert_eq!(sales["status"], "ok");
     assert_eq!(sales["amount"], 1250.5);
+    assert_eq!(sales["company_amount"], 1349.5);
     assert_eq!(sales["currency"], "USD");
     assert!(sales["days_remaining_in_month"].as_u64().unwrap() >= 1);
     let customers: Value = server
@@ -599,6 +600,46 @@ async fn a_rep_sees_their_class_sales_and_customers(pool: MySqlPool) {
         .await
         .json();
     assert_eq!(other["status"], "unavailable");
+}
+
+#[test_db::test(seed)]
+async fn only_managers_set_the_company_goal_everyone_sees(pool: MySqlPool) {
+    let (server, _) = server(&pool, 3600).await;
+    sqlx::query("UPDATE company SET qbo_access_token = ? WHERE id = 100")
+        .bind(encrypt(&KEY, "new-access"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    // The seed makes Mark Manager (101) a Sales Manager of company 100.
+    let set = |session, goal: Value| {
+        server
+            .put("/v1/company/sales-goal")
+            .with_session(session)
+            .json(&json!({ "monthly_sales_goal": goal }))
+    };
+    set(sessions::REP, json!(5000))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    set(sessions::MANAGER, json!(0))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let saved: Value = set(sessions::MANAGER, json!(120_000.456)).await.json();
+    assert_eq!(saved["monthly_sales_goal"], 120_000.46);
+    let sales: Value = server
+        .get("/v1/me/qbo-sales")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(sales["company_goal"], 120_000.46);
+    assert_eq!(sales["can_set_company_goal"], false);
+    let manager: Value = server
+        .get("/v1/me/qbo-sales")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(manager["can_set_company_goal"], true);
+    let cleared: Value = set(sessions::MANAGER, Value::Null).await.json();
+    assert_eq!(cleared["monthly_sales_goal"], Value::Null);
 }
 
 #[test_db::test(seed)]

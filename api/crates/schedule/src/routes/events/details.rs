@@ -746,6 +746,85 @@ struct FoundRow {
     customer_name: Option<String>,
     contact_phone: Option<String>,
     contact_email: Option<String>,
+    contact_phone_2: Option<String>,
+    contact_email_2: Option<String>,
+    /// 0 for the caller's customer or assigned to them, 1 only made by them, 2 else.
+    owner_rank: i64,
+    /// The crew finished the job.
+    done: bool,
+}
+
+/// Candidates read before the typo check and the smart order.
+const SEARCH_CANDIDATES: i64 = 300;
+
+/// Lowercase words of `text`, split at anything not a letter or digit
+/// ("I-Deborah Perr" → "i", "deborah", "perr").
+fn search_tokens(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// How well an event matches every word: 0 a word of its title or customer
+/// name starts with it, 1 the title or name contains it, 2 only the place,
+/// description or notes do, 3 the title or name has it with one typo; `None`
+/// when a word is nowhere. The worst word decides.
+fn match_rank(
+    title: &str,
+    customer_name: Option<&str>,
+    others: [Option<&str>; 3],
+    words: &[String],
+) -> Option<u8> {
+    let name = format!("{title} {}", customer_name.unwrap_or_default());
+    let name_tokens = search_tokens(&name);
+    let name = name.to_lowercase();
+    let other = others
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    // Typos only against real name words: "I-"/"T-" prefixes and initials
+    // would otherwise match any word starting with that letter
+    let typo_names = name_tokens
+        .iter()
+        .filter(|token| token.chars().count() >= 3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    words.iter().try_fold(0u8, |worst, word| {
+        let rank = if name_tokens
+            .iter()
+            .any(|token| token.starts_with(word.as_str()))
+        {
+            0
+        } else if name.contains(word.as_str()) {
+            1
+        } else if other.contains(word.as_str()) {
+            2
+        } else if word.chars().count() >= 4
+            && crate::routes::customers::fuzzy::matches_name_fuzzy(&typo_names, word)
+        {
+            3
+        } else {
+            return None;
+        };
+        Some(worst.max(rank))
+    })
+}
+
+/// Seconds between now and `start`; past ones count double, so a job next
+/// week comes before one from last week.
+fn date_distance(start: NaiveDateTime, now: NaiveDateTime) -> i64 {
+    let seconds = (start - now).num_seconds();
+    if seconds >= 0 {
+        seconds
+    } else {
+        seconds.saturating_mul(-2)
+    }
 }
 
 /// An event found by the search.
@@ -793,6 +872,10 @@ pub struct FoundEvent {
     pub contact_phone: Option<String>,
     /// Email for this event only; null uses the customer's.
     pub contact_email: Option<String>,
+    /// A second phone for this event.
+    pub contact_phone_2: Option<String>,
+    /// A second email for this event.
+    pub contact_email_2: Option<String>,
 }
 
 /// Search events
@@ -801,9 +884,15 @@ pub struct FoundEvent {
 /// name, location, description or notes; with `calendar_ids`, only those
 /// calendars' events.
 ///
-/// Smart order: the caller's own first (assigned to or made by them, or for
-/// their customer), then title or customer-name hits before hits only in the
-/// place or notes, then the nearest to now; unscheduled ones last.
+/// A word of 4+ letters also finds a title or customer name that has it with
+/// one typo ("deborh" finds "Deborah").
+///
+/// Smart order: the caller's own first (for their customer or assigned to
+/// them), then ones they only made (a scheduler makes everyone's), then the
+/// rest. In each: a title or customer-name word starting with the search,
+/// then containing it, then hits only in the place or notes, then typo
+/// hits; open jobs before ones the crew finished; then the nearest to now,
+/// upcoming before past (past distance counts double); unscheduled last.
 #[crate::openapi::path(
     get,
     path = "/v1/events/search",
@@ -831,15 +920,37 @@ pub async fn search(
     let own = crate::routes::schedule::own_events_only(&state.pool, &user).await?;
     // Each word anywhere in any of the fields, so "acadia court 9" finds
     // "Acadia Court Apts / Brandon Ct - 9/1/26"
-    let likes: Vec<String> = q
+    let words: Vec<String> = q
         .split_whitespace()
         .take(MAX_SEARCH_WORDS)
+        .map(str::to_lowercase)
+        .collect();
+    let likes: Vec<String> = words
+        .iter()
         .map(|word| format!("%{}%", escape_like(word)))
+        .collect();
+    // Typo candidates: the title or name has the word's first or last 3
+    // letters; `match_rank` decides
+    let loose: Vec<(String, String)> = words
+        .iter()
+        .map(|word| {
+            let chars: Vec<char> = word.chars().collect();
+            let head: String = chars.iter().take(3).collect();
+            let tail: String = chars[chars.len().saturating_sub(3)..].iter().collect();
+            (
+                format!("%{}%", escape_like(&head)),
+                format!("%{}%", escape_like(&tail)),
+            )
+        })
         .collect();
     let word_match = "(e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)";
     let words_match = vec![word_match; likes.len()].join(" AND ");
-    // Every word in the title or customer's name ranks the event higher
-    let name_match = vec!["(e.title LIKE ? OR c.name LIKE ?)"; likes.len()].join(" AND ");
+    let loose_match = vec![
+        "(e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?
+          OR e.title LIKE ? OR c.name LIKE ? OR e.title LIKE ? OR c.name LIKE ?)";
+        likes.len()
+    ]
+    .join(" AND ");
     // The calendars as a clean id list for FIND_IN_SET
     let calendars: Option<String> = query.calendar_ids.as_deref().map(|ids| {
         ids.split(',')
@@ -853,32 +964,42 @@ pub async fn search(
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.unscheduled <> 0 AS unscheduled,
                 e.color, e.status, e.calendar_id, e.rrule,
                 e.recurrence_until, e.created_user_id, e.assigned_user_id, e.sale_id,
-                e.customer_id, c.name AS customer_name, e.contact_phone, e.contact_email
+                e.customer_id, c.name AS customer_name, e.contact_phone, e.contact_email,
+                e.contact_phone_2, e.contact_email_2,
+                CAST(CASE WHEN e.assigned_user_id = ? OR c.sales_rep = ?
+                               OR EXISTS (SELECT 1 FROM deals mine
+                                           WHERE mine.customer_id = e.customer_id AND mine.user_id = ?
+                                             AND mine.deleted_at IS NULL)
+                          THEN 0
+                          WHEN e.created_user_id = ? THEN 1 ELSE 2 END AS SIGNED) AS owner_rank,
+                e.completed_at IS NOT NULL AS done
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c ON c.id = e.customer_id
                 AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL
-            AND {words_match}
+            AND {loose_match}
             AND (? IS NULL OR IF(? = '', e.calendar_id IS NULL, FIND_IN_SET(e.calendar_id, ?) > 0))
             AND (? IS NULL OR e.created_user_id = ? OR e.assigned_user_id = ?)
-          ORDER BY CASE WHEN e.assigned_user_id = ? OR e.created_user_id = ? OR c.sales_rep = ?
-                          OR EXISTS (SELECT 1 FROM deals mine
-                                      WHERE mine.customer_id = e.customer_id AND mine.user_id = ?
-                                        AND mine.deleted_at IS NULL)
-                        THEN 0 ELSE 1 END,
-                   CASE WHEN {name_match} THEN 0 ELSE 1 END,
+          ORDER BY CASE WHEN {words_match} THEN 0 ELSE 1 END,
+                   owner_rank,
                    COALESCE(e.unscheduled, 0) <> 0,
                    ABS(TIMESTAMPDIFF(SECOND, e.start_date, UTC_TIMESTAMP())),
                    e.id DESC
           LIMIT ?"
     );
     // Only fixed "?" fragments are spliced in; every word is a bind.
-    let mut found = sqlx::query_as::<_, FoundRow>(sqlx::AssertSqlSafe(sql)).bind(user.company_id);
-    for like in &likes {
+    let mut found = sqlx::query_as::<_, FoundRow>(sqlx::AssertSqlSafe(sql))
+        .bind(user.id)
+        .bind(user.id)
+        .bind(user.id)
+        .bind(user.id)
+        .bind(user.company_id);
+    for (like, (head, tail)) in likes.iter().zip(&loose) {
         for _ in 0..5 {
             found = found.bind(like);
         }
+        found = found.bind(head).bind(head).bind(tail).bind(tail);
     }
     found = found
         .bind(&calendars)
@@ -886,18 +1007,45 @@ pub async fn search(
         .bind(&calendars)
         .bind(own)
         .bind(own)
-        .bind(own)
-        .bind(user.id)
-        .bind(user.id)
-        .bind(user.id)
-        .bind(user.id);
+        .bind(own);
     for like in &likes {
-        found = found.bind(like).bind(like);
+        for _ in 0..5 {
+            found = found.bind(like);
+        }
     }
-    let rows: Vec<FoundRow> = found.bind(limit).fetch_all(&state.pool).await?;
+    let rows: Vec<FoundRow> = found.bind(SEARCH_CANDIDATES).fetch_all(&state.pool).await?;
+    let now = Utc::now().naive_utc();
+    let mut ranked: Vec<(FoundRow, u8)> = rows
+        .into_iter()
+        .filter_map(|row| {
+            let rank = match_rank(
+                &row.title,
+                row.customer_name.as_deref(),
+                [
+                    row.location.as_deref(),
+                    row.description.as_deref(),
+                    row.notes.as_deref(),
+                ],
+                &words,
+            )?;
+            Some((row, rank))
+        })
+        .collect();
+    ranked.sort_by_key(|(row, rank)| {
+        (
+            row.owner_rank,
+            *rank,
+            row.done,
+            row.unscheduled,
+            date_distance(row.start_date, now),
+            std::cmp::Reverse(row.id),
+        )
+    });
+    ranked.truncate(usize::try_from(limit).unwrap_or(25));
     Ok(Json(
-        rows.into_iter()
-            .map(|row| FoundEvent {
+        ranked
+            .into_iter()
+            .map(|(row, _)| FoundEvent {
                 id: row.id,
                 title: row.title,
                 description: row.description,
@@ -919,6 +1067,8 @@ pub async fn search(
                 customer_name: row.customer_name,
                 contact_phone: row.contact_phone,
                 contact_email: row.contact_email,
+                contact_phone_2: row.contact_phone_2,
+                contact_email_2: row.contact_email_2,
             })
             .collect(),
     ))

@@ -105,9 +105,13 @@ pub async fn board(
         }
         None => {}
     }
+    // The escaped search, with one.
+    let mut searching: Option<String> = None;
     if let Some(q) = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
         let term: String = q.chars().take(255).collect();
-        let like = format!("%{}%", crate::sql::escape_like(&term));
+        let escaped = crate::sql::escape_like(&term);
+        let like = format!("%{escaped}%");
+        searching = Some(escaped);
         sql.push(" AND (p.title LIKE ")
             .push_bind(like.clone())
             .push(" OR c.name LIKE ")
@@ -121,11 +125,26 @@ pub async fn board(
     if query.hold {
         sql.push(" AND p.is_on_hold <> 0");
     }
-    sql.push(format!(
-        " ORDER BY p.position, p.id LIMIT {} OFFSET ",
-        PAGE + 1
-    ))
-    .push_bind(i64::from(page - 1) * i64::from(PAGE));
+    sql.push(" ORDER BY ");
+    // A search puts the caller's projects first, then a title or customer
+    // name starting with it, then one containing it (before quote or address hits)
+    if let Some(escaped) = searching {
+        let prefix = format!("{escaped}%");
+        let like = format!("%{escaped}%");
+        sql.push("p.owner_id <=> ")
+            .push_bind(viewer.user_id)
+            .push(" DESC, CASE WHEN p.title LIKE ")
+            .push_bind(prefix.clone())
+            .push(" OR c.name LIKE ")
+            .push_bind(prefix)
+            .push(" THEN 0 WHEN p.title LIKE ")
+            .push_bind(like.clone())
+            .push(" OR c.name LIKE ")
+            .push_bind(like)
+            .push(" THEN 1 ELSE 2 END, ");
+    }
+    sql.push(format!("p.position, p.id LIMIT {} OFFSET ", PAGE + 1))
+        .push_bind(i64::from(page - 1) * i64::from(PAGE));
     let mut projects: Vec<Project> = sql.build_query_as().fetch_all(&state.pool).await?;
     let has_next = projects.len() > PAGE as usize;
     projects.truncate(PAGE as usize);

@@ -1,5 +1,5 @@
 //! Tells the customer about a booked in-home estimate: a text from the
-//! office manager's line, else an email from their sales rep.
+//! Scheduling Manager's line, else an email from their sales rep.
 //!
 //! Port of `sendEstimateScheduleNotification`
 //! (`app/utils/estimateScheduleNotify.server.ts`), for the booking message.
@@ -18,8 +18,8 @@ use std::fmt::Write;
 
 /// Sender when neither the rep nor the booker can be found.
 const NO_REPLY: &str = "noreply@granite-manager.com";
-/// `positions.id` of an office manager.
-const OFFICE_MANAGER_POSITION: i32 = 10;
+/// `positions.id` of the Scheduling Manager, whose line texts the customers.
+const SENDER_POSITION: i32 = 13;
 
 /// How the customer was told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +70,9 @@ pub struct Booking<'a> {
     pub customer_email: Option<&'a str>,
     /// The event's own phone, else the customer's is looked up.
     pub customer_phone: Option<&'a str>,
+    /// The event's second phone and email: the text or email goes to both.
+    pub customer_phone_2: Option<&'a str>,
+    pub customer_email_2: Option<&'a str>,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub location: Option<&'a str>,
@@ -191,7 +194,7 @@ pub async fn office_manager(
     provider: SmsProvider,
 ) -> Result<Option<OfficeManager>, sqlx::Error> {
     let (Some(agent), Some(phone)) = (provider.agent_column(), provider.phone_column()) else {
-        // Telnyx: an office manager with a line, while the company texts
+        // Telnyx: a Scheduling Manager with a line, while the company texts
         // through Telnyx; their user id is their agent id there.
         if crate::phone::texting::texting_setup(pool, company_id)
             .await?
@@ -209,7 +212,7 @@ pub async fn office_manager(
               ORDER BY u.name LIMIT 1",
         )
         .bind(company_id)
-        .bind(OFFICE_MANAGER_POSITION)
+        .bind(SENDER_POSITION)
         .fetch_optional(pool)
         .await;
     };
@@ -221,12 +224,12 @@ pub async fn office_manager(
           ORDER BY u.name LIMIT 1"
     )))
     .bind(company_id)
-    .bind(OFFICE_MANAGER_POSITION)
+    .bind(SENDER_POSITION)
     .fetch_optional(pool)
     .await
 }
 
-/// How an office manager texts on `provider`: on Telnyx from their line
+/// How a Scheduling Manager texts on `provider`: on Telnyx from their line
 /// (`None` without one).
 pub async fn manager_seat(
     pool: &MySqlPool,
@@ -250,7 +253,7 @@ pub async fn manager_seat(
     }))
 }
 
-/// Who texts the company's notices (bookings, surveys): an office manager
+/// Who texts the company's notices (bookings, surveys): a Scheduling Manager
 /// with a Telnyx line while the company texts through Telnyx, else one with
 /// a line on the company's provider; with their provider and seat.
 pub async fn notice_sender(
@@ -411,10 +414,16 @@ pub async fn notify_booking(
             Some(phone) => Some(phone.to_string()),
             None => customer_phone(pool, booking.company_id, booking.customer_id).await?,
         };
-        let digits = phone
+        let first = phone
             .map(|phone| phone10(&phone))
             .filter(|digits| digits.len() == 10);
-        if let Some(phone_digits) = digits {
+        let second = booking
+            .customer_phone_2
+            .map(str::trim)
+            .map(phone10)
+            .filter(|digits| digits.len() == 10 && Some(digits) != first.as_ref());
+        let mut texted = false;
+        for phone_digits in first.into_iter().chain(second) {
             let sms = OutgoingSms {
                 provider: provider.as_str().to_string(),
                 company_id: booking.company_id,
@@ -427,11 +436,14 @@ pub async fn notify_booking(
                 idempotency_key: None,
             };
             match crate::routes::sms::send::send_text(state, *provider, seat, &sms).await {
-                Ok(_) => return Ok(Some(Channel::Sms)),
+                Ok(_) => texted = true,
                 Err(failure) => {
                     tracing::warn!(error = %failure.error, "estimate booking text failed");
                 }
             }
+        }
+        if texted {
+            return Ok(Some(Channel::Sms));
         }
     }
 
@@ -443,14 +455,23 @@ pub async fn notify_booking(
         Some(email) => Some(email.to_string()),
         None => customer_email(pool, booking.customer_id).await?,
     };
-    let Some(email) = email else {
+    let mut to: Vec<String> = email.into_iter().collect();
+    if let Some(second) = booking
+        .customer_email_2
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+        && !to.iter().any(|email| email.eq_ignore_ascii_case(second))
+    {
+        to.push(second.to_string());
+    }
+    if to.is_empty() {
         return Ok(None);
-    };
+    }
     let (from_name, from_address) = email_sender(pool, booking).await?;
     let message = OutgoingEmail {
         from_name,
         from_address,
-        to: vec![email],
+        to,
         cc: Vec::new(),
         bcc: Vec::new(),
         subject: booking.kind.subject(&company_name),

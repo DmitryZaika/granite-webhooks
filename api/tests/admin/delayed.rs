@@ -19,6 +19,8 @@ use std::sync::{Arc, Mutex};
 struct Sent {
     texts: Arc<Mutex<Vec<OutgoingSms>>>,
     emails: Arc<Mutex<Vec<OutgoingEmail>>>,
+    /// Telegram notices: (user id, message).
+    telegrams: Arc<Mutex<Vec<(i64, String)>>>,
 }
 
 async fn server(pool: &MySqlPool) -> (TestServer, Sent) {
@@ -43,6 +45,18 @@ async fn server(pool: &MySqlPool) -> (TestServer, Sent) {
                 |State(sent): State<Sent>, Json(email): Json<OutgoingEmail>| async move {
                     sent.emails.lock().unwrap().push(email);
                     Json(json!({ "message_id": "<m-1@ses>" }))
+                },
+            ),
+        )
+        .route(
+            "/telegram/notifications-notify",
+            post(
+                |State(sent): State<Sent>, Json(body): Json<Value>| async move {
+                    sent.telegrams.lock().unwrap().push((
+                        body["user_id"].as_i64().unwrap_or(0),
+                        body["message"].as_str().unwrap_or("").to_string(),
+                    ));
+                    Json(json!({}))
                 },
             ),
         )
@@ -205,5 +219,13 @@ async fn a_due_email_goes_out_when_the_list_is_read(pool: MySqlPool) {
             "Scheduled email sent: \"Hello\"".into(),
             "delayed_message_sent".into()
         )
+    );
+    // Rita has no app: the news goes to her Telegram, naming the customer.
+    assert_eq!(
+        sent.telegrams.lock().unwrap().clone(),
+        [(
+            100,
+            "Scheduled email sent: \"Hello\"\nTo: Alice Lead".to_string()
+        )]
     );
 }

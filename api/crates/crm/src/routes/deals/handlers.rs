@@ -323,6 +323,8 @@ pub async fn create(
                 .execute(&state.pool)
                 .await?;
             }
+            // The lead has a rep now: off "Waiting for a sales rep" on every phone.
+            crate::phone::crm_push::push_leads_changed_logged(&state, user.company_id, &[]).await;
         }
     }
 

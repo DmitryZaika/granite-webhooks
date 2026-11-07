@@ -41,7 +41,8 @@ pub struct CallsQuery {
     pub before: Option<i64>,
     /// Calls per page, 1 to 100 (default 50).
     pub limit: Option<i64>,
-    /// `all` (default), `missed`, `incoming`, `outgoing` or `recorded`.
+    /// `all` (default), `missed`, `incoming`, `outgoing`, `recorded` or
+    /// `voicemail`.
     #[param(inline)]
     pub filter: Option<CallFilter>,
     /// Only calls with this number (E.164 or 10 digits; matched by the last
@@ -65,9 +66,10 @@ pub struct CallList {
 /// call of a direct line assigned to them, and unanswered incoming calls of
 /// shared and main lines that ring them; calls they hid are left out.
 /// `filter`: `missed` = incoming calls nobody answered (voicemails and AI
-/// messages included), `incoming`, `outgoing`, `recorded`; `number` = one
-/// number's calls. Pages by id (`before`, `limit` 1 to 100, default 50).
-/// Device token only.
+/// messages included), `incoming`, `outgoing`, `recorded`, `voicemail`
+/// (voicemails and AI messages); `number` = one number's calls. Pages by id
+/// (`before`, `limit` 1 to 100, default 50). Takes the device token or the
+/// session cookie (the CRM's phone dock).
 #[crate::openapi::path(
     get,
     path = "/v1/phone/calls",
@@ -77,17 +79,18 @@ pub struct CallList {
     responses(
         (status = 200, description = "A page of Recents", body = CallList),
         (status = 400, description = "Bad `limit`, `filter` or `number` (`invalid_phone`)", body = ErrorBody),
-        (status = 401, description = "No valid device token", body = ErrorBody),
+        (status = 401, description = "No valid device token or session", body = ErrorBody),
+        (status = 403, description = "A cookie of a user who is not an employee or admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
-    security(("device_token" = []))
+    security(("device_token" = []), ("session_cookie" = []))
 )]
 pub async fn list_calls(
     State(state): State<AppState>,
-    device: DeviceUser,
+    caller: PhoneCaller,
     MultiQuery(query): MultiQuery<CallsQuery>,
 ) -> ApiResult<Json<CallList>> {
-    let user = &device.user;
+    let user = &caller.user;
     let limit = query.limit.unwrap_or(DEFAULT_PAGE);
     if !(1..=MAX_PAGE).contains(&limit) {
         return Err(ApiError::BadRequest("limit must be 1 to 100".into()));
@@ -221,7 +224,8 @@ pub struct SeenInput {
 ///
 /// Marks calls seen for the caller (clears them from the unread counts and
 /// shows them as seen): the `ids` sent, or every call in their Recents that
-/// started at or before `upTo`. Send one of the two. Device token only.
+/// started at or before `upTo`. Send one of the two. Takes the device token
+/// or the session cookie (the CRM's phone dock).
 #[crate::openapi::path(
     post,
     path = "/v1/phone/calls/seen",
@@ -231,17 +235,18 @@ pub struct SeenInput {
     responses(
         (status = 204, description = "Marked"),
         (status = 400, description = "Neither or both of `ids` and `upTo`, or over 500 ids", body = ErrorBody),
-        (status = 401, description = "No valid device token", body = ErrorBody),
+        (status = 401, description = "No valid device token or session", body = ErrorBody),
+        (status = 403, description = "A cookie of a user who is not an employee or admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
-    security(("device_token" = []))
+    security(("device_token" = []), ("session_cookie" = []))
 )]
 pub async fn mark_calls_seen(
     State(state): State<AppState>,
-    device: DeviceUser,
+    caller: PhoneCaller,
     JsonBody(input): JsonBody<SeenInput>,
 ) -> ApiResult<StatusCode> {
-    let user = &device.user;
+    let user = &caller.user;
     let mut insert = sqlx::QueryBuilder::new(
         "INSERT INTO phone_call_views (call_id, user_id, seen_at)
          SELECT pc.id, ",

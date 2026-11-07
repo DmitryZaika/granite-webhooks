@@ -75,7 +75,7 @@ const CALENDARS: &str = "INSERT INTO calendars (id, company_id, name, color, slu
 
 const TEXTING: &str = "UPDATE company SET cloudtalk_access_key = 'k', cloudtalk_access_secret = 's' WHERE id = 100;
     UPDATE users SET cloudtalk_agent_id = '5101', cloudtalk_phone_number = '3175550999' WHERE id = 101;
-    INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 10, 100);";
+    INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 13, 100);";
 
 fn email_template() -> Value {
     json!({
@@ -934,6 +934,16 @@ async fn a_confirmation_goes_out_right_away(pool: MySqlPool) {
     let emails = sent.emails.lock().unwrap().clone();
     assert_eq!(emails.len(), 2);
     assert_eq!(emails[1].to, ["wife@example.com"]);
+
+    // A second email gets it too.
+    sqlx::query("UPDATE events SET contact_email_2 = 'husband@example.com' WHERE id = ?")
+        .bind(booked)
+        .execute(&pool)
+        .await
+        .unwrap();
+    confirm(booked, template).await.assert_status_ok();
+    let emails = sent.emails.lock().unwrap().clone();
+    assert_eq!(emails[2].to, ["wife@example.com", "husband@example.com"]);
 }
 
 /// The event's history lines.

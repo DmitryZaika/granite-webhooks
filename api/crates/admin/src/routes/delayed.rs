@@ -376,14 +376,17 @@ fn outcome_message(kind: Kind, payload: &Value, sent: bool) -> String {
     }
 }
 
-/// Tells the sender their scheduled message went out (or could not). The
-/// bell lists deal notifications, so a message with no deal gets none; a
-/// failure here never changes the message's own status.
-async fn notify_outcome(pool: &MySqlPool, kind: Kind, row: &Row, sent: bool) {
-    let notified = async {
-        let Some(deal_id) = deal_for(pool, row).await? else {
-            return Ok(());
-        };
+/// Tells the sender their scheduled message went out (or could not), so a
+/// message they scheduled never goes out unnoticed: a bell notification (on
+/// the customer's latest deal when there is one), pushed to the phones they
+/// are signed in on with the app; with no phone told (no app), the same news
+/// goes to their Telegram. A failure here never changes the message's own
+/// status.
+async fn notify_outcome(state: &AppState, kind: Kind, row: &Row, sent: bool) {
+    let pool = &state.pool;
+    let message = outcome_message(kind, &json(&row.payload_json), sent);
+    let saved = async {
+        let deal_id = deal_for(pool, row).await?;
         sqlx::query(
             "INSERT INTO notifications (user_id, customer_id, deal_id, message, notification_type, due_at)
              VALUES (?, ?, ?, ?, ?, NOW())",
@@ -391,7 +394,7 @@ async fn notify_outcome(pool: &MySqlPool, kind: Kind, row: &Row, sent: bool) {
         .bind(row.user_id)
         .bind(row.customer_id)
         .bind(deal_id)
-        .bind(outcome_message(kind, &json(&row.payload_json), sent))
+        .bind(&message)
         .bind(if sent {
             "delayed_message_sent"
         } else {
@@ -399,10 +402,62 @@ async fn notify_outcome(pool: &MySqlPool, kind: Kind, row: &Row, sent: bool) {
         })
         .execute(pool)
         .await
-        .map(|_| ())
+        .map(|done| i64::try_from(done.last_insert_id()).unwrap_or(i64::MAX))
     };
-    if let Err(error) = notified.await {
-        tracing::warn!(id = row.id, table = kind.table(), %error, "scheduled message notice not saved");
+    let phones = match saved.await {
+        Ok(id) => crate::phone::crm_push::push_notification(state, id)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(id = row.id, table = kind.table(), %error, "scheduled message notice not pushed");
+                0
+            }),
+        Err(error) => {
+            tracing::warn!(id = row.id, table = kind.table(), %error, "scheduled message notice not saved");
+            0
+        }
+    };
+    if phones == 0 {
+        let to = recipient(pool, kind, row).await;
+        let text = match to {
+            Some(to) => format!("{message}\nTo: {to}"),
+            None => message,
+        };
+        if !state.webhooks.notify_telegram(row.user_id, &text).await {
+            tracing::warn!(id = row.id, table = kind.table(), "scheduled message notice not sent to Telegram");
+        }
+    }
+}
+
+/// Whom a scheduled message was for, for its Telegram notice: the
+/// customer's name, else the text's number or the email's first address.
+async fn recipient(pool: &MySqlPool, kind: Kind, row: &Row) -> Option<String> {
+    if let Some(customer_id) = row.customer_id {
+        let name: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT name FROM customers WHERE id = ? AND company_id = ?",
+        )
+        .bind(customer_id)
+        .bind(row.company_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some(name) = name.flatten().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+            return Some(name);
+        }
+    }
+    match kind {
+        Kind::Sms => {
+            let digits: String = row.target.chars().filter(char::is_ascii_digit).collect();
+            let last10 = digits.get(digits.len().saturating_sub(10)..).unwrap_or("");
+            if last10.len() == 10 {
+                Some(format!("({}) {}-{}", &last10[..3], &last10[3..6], &last10[6..]))
+            } else {
+                Some(row.target.trim().to_string()).filter(|t| !t.is_empty())
+            }
+        }
+        Kind::Emails => serde_json::from_str::<Vec<String>>(&row.target)
+            .ok()
+            .and_then(|to| to.into_iter().next()),
     }
 }
 
@@ -619,18 +674,18 @@ pub async fn process_due_in(
                     Some("missing_sender_or_payload"),
                 )
                 .await?;
-                notify_outcome(pool, kind, &row, false).await;
+                notify_outcome(state, kind, &row, false).await;
                 continue;
             };
             match deliver_row(state, kind, &row, &user).await {
                 Ok(()) => {
                     mark(pool, kind, row.id, "sent", None).await?;
-                    notify_outcome(pool, kind, &row, true).await;
+                    notify_outcome(state, kind, &row, true).await;
                 }
                 Err(error) => {
                     tracing::warn!(id = row.id, table = kind.table(), %error, "scheduled message failed");
                     mark(pool, kind, row.id, "failed", Some(&error)).await?;
-                    notify_outcome(pool, kind, &row, false).await;
+                    notify_outcome(state, kind, &row, false).await;
                 }
             }
         }

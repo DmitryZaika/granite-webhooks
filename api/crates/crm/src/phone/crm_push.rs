@@ -7,6 +7,10 @@
 //!   lead assigned to its rep, a finished online quote); the app reads the
 //!   customer with `GET /v1/customers/{id}` and opens the deal
 //! - `maintenance`: the shop's maintenance checks due today
+//! - `leads`: quiet, shows nothing: the company's leads changed (one came in,
+//!   was given a rep or taken back, or was marked invalid), so a phone that
+//!   was not told with a `lead` push refetches Deals › ⋮ › Notifications
+//!   (`GET /v1/customers/lead-inbox`) and its deals
 //!
 //! Ids only, like every Granite push (never names, messages or numbers);
 //! a notification also carries its heading ("Activity Reminder").
@@ -14,7 +18,7 @@
 //! not its user linked Telegram, as it does new email.
 
 use super::calls::SALES_MANAGER_POSITION;
-use super::devices::push_to_users;
+use super::devices::{push_to_company, push_to_users};
 use crate::openapi::ToSchema;
 use crate::state::AppState;
 use common::telegram::crm::notification_type_title;
@@ -88,6 +92,9 @@ pub enum LeadKind {
     Repeat,
     /// A lead a manager assigned to this rep.
     Assigned,
+    /// For the managers: a lead now has a sales rep (assigned in Telegram
+    /// or the app); the app reads whom from the customer.
+    Taken,
     /// A customer finished the online quote.
     Quote,
 }
@@ -99,6 +106,7 @@ impl LeadKind {
             Self::Repeat => "repeat",
             Self::Assigned => "assigned",
             Self::Quote => "quote",
+            Self::Taken => "taken",
         }
     }
 }
@@ -130,7 +138,16 @@ pub async fn push_lead(
     customer_id: i32,
     deal_id: Option<i64>,
 ) -> sqlx::Result<usize> {
-    push_lead_data(state, company_id, user_ids, kind, customer_id, deal_id, false).await
+    push_lead_data(
+        state,
+        company_id,
+        user_ids,
+        kind,
+        customer_id,
+        deal_id,
+        false,
+    )
+    .await
 }
 
 /// [`push_lead`] for the sales managers: a new or repeated lead also carries
@@ -145,7 +162,16 @@ pub async fn push_manager_lead(
     deal_id: Option<i64>,
 ) -> sqlx::Result<usize> {
     let assign = matches!(kind, LeadKind::New | LeadKind::Repeat);
-    push_lead_data(state, company_id, user_ids, kind, customer_id, deal_id, assign).await
+    push_lead_data(
+        state,
+        company_id,
+        user_ids,
+        kind,
+        customer_id,
+        deal_id,
+        assign,
+    )
+    .await
 }
 
 async fn push_lead_data(
@@ -206,6 +232,35 @@ pub async fn push_lead_logged(
 ) {
     if let Err(error) = push_lead(state, company_id, user_ids, kind, customer_id, deal_id).await {
         tracing::warn!(?error, company_id, customer_id, "lead push failed");
+    }
+}
+
+/// Tells the company's other phones that its leads changed.
+///
+/// Every signed-in phone of `company_id` but those of `except_user_ids`
+/// (told already with a `lead` push) gets `{granite: "1", type: "leads"}`
+/// at normal priority, which shows nothing (an iPhone gets a background push) and only makes the app
+/// refetch its lead inbox, so a lead given a rep anywhere (Telegram, the
+/// website, another phone) leaves "Waiting for a sales rep" on every phone.
+/// The number of phones told.
+pub async fn push_leads_changed(
+    state: &AppState,
+    company_id: i32,
+    except_user_ids: &[i32],
+) -> sqlx::Result<usize> {
+    push_to_company(
+        state,
+        company_id,
+        except_user_ids,
+        &data("leads", Vec::new()),
+    )
+    .await
+}
+
+/// [`push_leads_changed`], logged instead of returned: the change is saved.
+pub async fn push_leads_changed_logged(state: &AppState, company_id: i32, except_user_ids: &[i32]) {
+    if let Err(error) = push_leads_changed(state, company_id, except_user_ids).await {
+        tracing::warn!(?error, company_id, "leads refresh push failed");
     }
 }
 

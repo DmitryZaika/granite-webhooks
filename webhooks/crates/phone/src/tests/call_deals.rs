@@ -1,6 +1,6 @@
 //! The call webhooks move a lead's deal off "Not Contacted Yet" (`crud::deals`).
 
-use crate::axum_helpers::guards::CORRECT_ID;
+use crate::tests::utils::internal_token;
 use crate::tests::deals::{deal_list_id, setup_board};
 use crate::tests::utils::new_test_app;
 use axum::http::StatusCode;
@@ -18,7 +18,7 @@ async fn assert_call_webhooks_move_deal(pool: MySqlPool, provider: &str) {
     });
     let response = app
         .post(&route)
-        .authorization_bearer(CORRECT_ID.to_string())
+        .authorization_bearer(internal_token(&pool).await)
         .json(&outgoing_leg)
         .await;
     assert_eq!(response.status_code(), StatusCode::OK);
@@ -32,7 +32,7 @@ async fn assert_call_webhooks_move_deal(pool: MySqlPool, provider: &str) {
     });
     let response = app
         .post(&route)
-        .authorization_bearer(CORRECT_ID.to_string())
+        .authorization_bearer(internal_token(&pool).await)
         .json(&incoming)
         .await;
     assert_eq!(response.status_code(), StatusCode::OK);

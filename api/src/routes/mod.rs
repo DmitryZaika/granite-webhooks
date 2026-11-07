@@ -107,6 +107,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(signwell_webhook::router())
         .merge(posthog_autofix::router())
         .merge(device_sessions::router())
+        .merge(web_link::router())
         .merge(phone::router())
         .merge(telnyx_webhooks::router())
 }

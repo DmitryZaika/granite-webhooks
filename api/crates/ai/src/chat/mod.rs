@@ -65,7 +65,8 @@ pub struct Request {
     /// Pictures the user added to the question (`data:image/…` URLs): the
     /// model sees them, the saved history does not keep them.
     pub images: Vec<String>,
-    /// The page the user is on, when they share it with the question.
+    /// The page the user is on: its address always, its text when they share
+    /// it with the question.
     pub page: Option<Page>,
 }
 
@@ -465,9 +466,16 @@ fn with_attachments(mut messages: Vec<Value>, request: &Request) -> Vec<Value> {
     let mut text = last["content"].as_str().unwrap_or_default().to_string();
     if let Some(page) = &request.page {
         text.push_str(&format!(
-            "\n\nThe user shared the Granite Manager page they are looking at. Use it when the question is about what they see.\nAddress: {}\nTitle: {}\nWhat the page shows:\n{}",
-            page.path, page.title, page.text
+            "\n\nThe user is on this Granite Manager page now. For a how-to, start the steps here: skip going to this page and opening what is already open on it, and begin with the exact control on it to click.\nAddress: {}\nTitle: {}",
+            page.path, page.title
         ));
+        // The page's text only when the user shares it; the address always.
+        if !page.text.is_empty() {
+            text.push_str(&format!(
+                "\nWhat the page shows (an [icon button: …] has no text on screen, only an icon):\n{}",
+                page.text
+            ));
+        }
     }
     if request.images.is_empty() {
         last["content"] = json!(text);

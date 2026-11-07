@@ -164,7 +164,8 @@ wire_enum! {
 wire_enum! {
     /// Which calls Recents lists: `all`, `missed` (incoming calls nobody
     /// answered, voicemails and AI messages included), `incoming`,
-    /// `outgoing` or `recorded` (with a recording).
+    /// `outgoing`, `recorded` (with a recording) or `voicemail` (voicemails
+    /// and AI messages).
     pub enum CallFilter {
         /// Every call.
         All = "all",
@@ -176,6 +177,8 @@ wire_enum! {
         Outgoing = "outgoing",
         /// Calls with a recording.
         Recorded = "recorded",
+        /// Voicemails and AI messages.
+        Voicemail = "voicemail",
     }
 }
 
@@ -399,6 +402,9 @@ const fn filter_sql(filter: CallFilter) -> &'static str {
         CallFilter::Incoming => "pc.direction = 'inbound' AND pc.answered_at IS NOT NULL",
         CallFilter::Outgoing => "pc.direction = 'outbound'",
         CallFilter::Recorded => "pc.recording_status = 'copied'",
+        CallFilter::Voicemail => {
+            "pc.direction = 'inbound' AND pc.status IN ('voicemail', 'ai_message')"
+        }
     }
 }
 

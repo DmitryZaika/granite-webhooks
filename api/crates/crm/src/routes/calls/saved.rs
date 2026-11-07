@@ -116,6 +116,34 @@ pub async fn list(
         .collect())
 }
 
+/// The company's saved `provider` calls since `from`, newest first, at most
+/// `limit`.
+pub async fn list_since(
+    pool: &MySqlPool,
+    company_id: i32,
+    provider: &str,
+    from: DateTime<Utc>,
+    limit: i64,
+) -> Result<Vec<Value>, sqlx::Error> {
+    let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT CAST(item AS CHAR) FROM provider_calls WHERE company_id = ",
+    );
+    builder
+        .push_bind(company_id)
+        .push(" AND provider = ")
+        .push_bind(provider)
+        .push(" AND started_at >= ")
+        .push_bind(from.naive_utc());
+    builder
+        .push(" ORDER BY started_at DESC LIMIT ")
+        .push_bind(limit.max(1));
+    let rows: Vec<(String,)> = builder.build_query_as().fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(item,)| serde_json::from_str(&item).ok())
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

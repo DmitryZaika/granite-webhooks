@@ -456,7 +456,27 @@ key). `webhooks` asks the API whether a called customer answered
 email has it pushed to the recipients' phones
 (`<API_URL>/v1/emails/inbound-push`, same key), and has the lead alerts it
 sends to Telegram pushed too (`<API_URL>/v1/phone/pushes/lead`, same key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
-`WEBHOOKS_KEY` = the webhooks Lambda's `REMIX_KEY`).
+`WEBHOOKS_KEY`).
+
+`WEBHOOKS_KEY` is the API's one credential for `webhooks`: an access token
+with no company and the scopes `internal,leads,telephony` (see "Access tokens"
+in the root `README.md`):
+
+```
+make access-token ARGS="create --name 'api Lambda' --scopes internal,leads,telephony --internal --no-expiry"
+```
+
+It is sent as `Authorization` on every call, and it is also the
+`verificationToken` of the companies' `RingCentral` SMS subscriptions
+(`RingCentral` sends it back on each push to `/ringcentral/notify`). It must
+be an access token: the webhooks Lambda no longer takes `REMIX_KEY`, and a
+subscription still on the older `RINGCENTRAL_WEBHOOK_TOKEN` is refused until
+the job below renews it. After a
+change of `WEBHOOKS_KEY`, `POST /v1/jobs/contact-sync` renews every
+subscription with the new token, two companies a minute; a failed renewal is
+tried again 2 hours later. Subscriptions are only made where `LAMBDA_URL` (the
+webhooks Lambda) is set: not on dev, whose database holds production's
+`RingCentral` credentials.
 
 ## Phone (Telnyx)
 
@@ -472,7 +492,7 @@ app's `X-Granite-Device` token), `telnyx.rs`, `push.rs` (FCM), `phone/`
 | Routes | For |
 |---|---|
 | `POST /v1/auth/device-sessions`, `DELETE /v1/auth/device-sessions/current`, `/v1/me/devices*` | the app's sign-in and signed-in phones (device token; `/v1/me/devices` takes the cookie too) |
-| `/v1/phone/*` | the app (device token): bootstrap, devices and login JWTs, settings, contacts, Recents, notes, Call via my cell, 911 alerts, problem reports, the Texts tab (`/v1/phone/texts*`, `phone/texts.rs`) |
+| `/v1/phone/*` | the app (device token): bootstrap, devices and login JWTs, settings, contacts, contact groups (`/v1/phone/contact-groups*`: the company's, shared by its users; hiding one from Contacts' top is per user), Recents, notes, Call via my cell, 911 alerts, problem reports, the Texts tab (`/v1/phone/texts*`, `phone/texts.rs`) |
 | `/v1/emails*`, `/v1/schedule*`, `/v1/events*`, `GET /v1/me/schedule` (`auth::DEVICE_ROUTES`) | the CRM routes the app shows natively: they take the device token in place of the cookie, with the user's CRM rights. Installers and template makers (`PhoneUser.portal` `installer` / `template`, the `/v1/app/shell` rule) get only their own schedule in the app and never register for calls |
 | `/v1/phone/web/*`, `PUT /v1/phone/calls/recording` | the CRM's phone dock (cookie): the browser registers as a phone of its own (`platform = 'web'`, `device_sessions.web_session_id` = the cookie's session), gets login JWTs (the app's limits), says while it is connected (`presence`: only then it rings), declines; the Record button of a live call (also the app's). Call via my cell and cell verification take the cookie too |
 | `/v1/phone/admin/numbers*`, `/v1/phone/admin/devices*` | company admins (cookie): numbers and who they ring, importing them from Telnyx, signing phones out |
@@ -671,8 +691,9 @@ production:
   `POST /v1/ai/design` on `api-dev.granite-manager.com` are routed to it by the
   CloudFront distribution (60 s between bytes), so the session cookie reaches it.
   Without that, a long AI answer on dev hits `granite-api-dev`'s 30 s limit.
-- Their secrets (`SESSION_SECRET`, `LAMBDA_KEY`, `REMIX_KEY`/`WEBHOOKS_KEY`,
-  `WEBHOOK_SECRET`) are their own.
+- Their secrets (`SESSION_SECRET`, `LAMBDA_KEY`, `WEBHOOKS_KEY`,
+  `WEBHOOK_SECRET`) are their own: dev's `WEBHOOKS_KEY` is a token in the
+  dev database.
 - `SESSION_COOKIE_DOMAIN=none`: the dev session cookie is host-only on
   `api-dev.granite-manager.com`, so signing in on dev never replaces the
   production cookie on `.granite-manager.com`. The browser then sends both

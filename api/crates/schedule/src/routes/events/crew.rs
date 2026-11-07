@@ -161,7 +161,7 @@ fn message_error(code: &str) -> &'static str {
         }
         "no_customer" => "The job has no customer",
         "sms_unavailable" => "Texting is not set up for this company",
-        "no_sms_sender" => "No office manager has a texting line",
+        "no_sms_sender" => "No Scheduling Manager has a texting line",
         "no_phone" => "The customer has no phone number",
         "no_email" => "The customer has no email",
         "unfilled_variables" => {

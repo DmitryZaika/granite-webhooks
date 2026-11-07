@@ -156,6 +156,11 @@ pub struct PhoneUser {
     /// schedule (`GET /v1/me/schedule`) and does not set the phone up for
     /// calls.
     pub portal: Option<String>,
+    /// The skills the user's positions give them (Position access), as
+    /// `GET /v1/app/shell` `skills` has them: e.g. without `edit_quotes` the
+    /// app shows quotes read-only. Null: every skill (admins, superusers and
+    /// people without a configurable position).
+    pub skills: Option<Vec<String>>,
 }
 
 /// The [`PhoneUser`] of a signed-in user.
@@ -173,6 +178,9 @@ pub async fn phone_user(pool: &MySqlPool, user: &SessionUser) -> sqlx::Result<Ph
         company_id: user.company_id,
         company_name: company_name.unwrap_or_default(),
         is_admin: user.is_admin || user.is_superuser,
+        skills: crate::auth::skills::user_skills(pool, user, &positions)
+            .await
+            .map(|keys| keys.into_iter().map(ToString::to_string).collect()),
     })
 }
 

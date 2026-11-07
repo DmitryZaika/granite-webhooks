@@ -35,9 +35,10 @@ pub async fn find_invoice(
     .await
 }
 
-/// The company's invoices matching `filter`, highest number first; a search
-/// puts the typed number, then `user_id`'s own (made by them or for their
-/// customer) first.
+/// The company's invoices matching `filter`, highest number first. A search
+/// ranks them: the typed number; `user_id`'s customers (their live deal or
+/// sales rep), then invoices they made; a bill-to name starting with the
+/// search, then containing it; the invoice date nearest today.
 pub async fn list_invoices(
     pool: &MySqlPool,
     company_id: i32,
@@ -51,15 +52,14 @@ pub async fn list_invoices(
         .map(str::trim)
         .filter(|search| !search.is_empty());
     let number = search.and_then(|search| search.trim_start_matches('#').parse::<i32>().ok());
-    let like = search.map(|search| {
-        format!(
-            "%{}%",
-            search
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_")
-        )
+    let escaped = search.map(|search| {
+        search
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
     });
+    let like = escaped.as_ref().map(|e| format!("%{e}%"));
+    let prefix = escaped.as_ref().map(|e| format!("{e}%"));
     sqlx::query_as::<_, InvoiceSummary>(
         "SELECT i.id, i.invoice_number, i.status, i.customer_id, i.quote_id,
                 i.bill_to_name, i.bill_to_email, i.project_address,
@@ -77,9 +77,17 @@ pub async fn list_invoices(
                  OR i.bill_to_email LIKE ?
                  OR i.project_address LIKE ?)
           ORDER BY i.invoice_number <=> ? DESC,
-                   ? IS NOT NULL AND (i.created_by <=> ? OR EXISTS (
-                       SELECT 1 FROM customers mine
-                        WHERE mine.id = i.customer_id AND mine.sales_rep = ?)) DESC,
+                   CASE WHEN ? IS NULL THEN 0
+                        WHEN EXISTS (SELECT 1 FROM deals mine
+                                      WHERE mine.customer_id = i.customer_id AND mine.user_id = ?
+                                        AND mine.deleted_at IS NULL)
+                          OR EXISTS (SELECT 1 FROM customers mine
+                                      WHERE mine.id = i.customer_id AND mine.sales_rep = ?) THEN 0
+                        WHEN i.created_by <=> ? THEN 1 ELSE 2 END,
+                   CASE WHEN ? IS NULL THEN 0 WHEN i.bill_to_name LIKE ? THEN 0
+                        WHEN i.bill_to_name LIKE ? THEN 1 ELSE 2 END,
+                   CASE WHEN ? IS NULL THEN 0
+                        ELSE COALESCE(ABS(DATEDIFF(i.invoice_date, CURDATE())), 999999) END,
                    i.invoice_number DESC
           LIMIT ?",
     )
@@ -99,6 +107,11 @@ pub async fn list_invoices(
     .bind(like.as_deref())
     .bind(user_id)
     .bind(user_id)
+    .bind(user_id)
+    .bind(like.as_deref())
+    .bind(prefix.as_deref())
+    .bind(like.as_deref())
+    .bind(like.as_deref())
     .bind(LIST_LIMIT)
     .fetch_all(pool)
     .await

@@ -98,6 +98,12 @@ pub struct MailboxRow {
     #[serde(serialize_with = "js_date")]
     #[schema(value_type = Option<String>, format = DateTime)]
     pub inbox_sort_at: Option<DateTime<Utc>>,
+    /// The conversation is unread for the caller: it is one of the threads
+    /// `GET /v1/emails/folder-counts` (`inbox_unread`) and `GET /v1/emails/unread`
+    /// count and `unread=true` lists. The same on every message of the thread;
+    /// always false outside the caller's own inbox (sent, trash, drafts, `scope=admin`).
+    #[sqlx(default)]
+    pub thread_unread: bool,
 }
 
 /// One page of a folder.

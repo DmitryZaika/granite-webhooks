@@ -36,6 +36,8 @@ pub enum DashboardWidget {
     AvailableInventory,
     /// Feature sales (only a few people see it; the frontend decides who).
     FeatureSales,
+    /// Calls, texts and emails today against the company's daily minimums.
+    OutreachActivity,
 }
 
 impl DashboardWidget {
@@ -56,6 +58,7 @@ impl DashboardWidget {
             Self::DailySales => "daily-sales",
             Self::AvailableInventory => "available-inventory",
             Self::FeatureSales => "feature-sales",
+            Self::OutreachActivity => "outreach-activity",
         }
     }
 

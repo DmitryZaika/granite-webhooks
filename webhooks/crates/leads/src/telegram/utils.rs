@@ -54,3 +54,9 @@ pub fn gen_code() -> i32 {
 pub fn extract_message(message: &Message) -> Option<String> {
     message.text().map(std::string::ToString::to_string)
 }
+
+/// A manager's lead message once the lead has a rep: its text, then who has
+/// it. The API words it the same when a lead is assigned in the app.
+pub fn assigned_text(base: &str, rep_name: &str) -> String {
+    format!("{base}\n\nLead assigned to {rep_name}")
+}

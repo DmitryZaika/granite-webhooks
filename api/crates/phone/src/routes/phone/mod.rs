@@ -24,6 +24,9 @@
 //! - `GET  /v1/phone/contacts/{id}`            → a contact card
 //! - `POST /v1/phone/contacts`                 → a new customer (me as rep, an open deal)
 //! - `POST /v1/phone/contacts/{id}/phones`     → add a number to a customer
+//! - `GET|POST /v1/phone/contact-groups`, `PATCH|DELETE /v1/phone/contact-groups/{id}`,
+//!   `PUT /v1/phone/contact-groups/{id}/members`, `PATCH /v1/phone/contact-groups/coworkers`
+//!   → the company's contact groups; hiding one (or Coworkers) from my Contacts' top
 //! - `GET  /v1/phone/calls`, `/calls/{id}`     → Recents, one call
 //! - `POST /v1/phone/calls/seen`, `DELETE /v1/phone/calls/{id}` → mark seen, hide
 //! - `GET  /v1/phone/calls/stats`              → my talk time today, this week, this month
@@ -37,6 +40,7 @@
 //! - `GET  /v1/phone/texts/threads`            → the Texts tab: my threads (line + other number)
 //! - `GET  /v1/phone/texts/threads/{key}/messages`, `POST .../read` → a thread's texts, mark it read
 //! - `GET  /v1/phone/texts/messages/{id}/thread` → the thread of a text (the `text` push's `textId`)
+//! - `DELETE /v1/phone/texts/messages/{id}`    → delete one of my texts that failed
 //! - `GET  /v1/phone/texts/media/{id}`         → a 5-minute link to a text's picture or file
 //! - `POST /v1/phone/texts`                    → text from one of my lines
 //! - `POST /v1/phone/pushes/test`              → send me a test push (temporary)
@@ -81,13 +85,16 @@ mod call_rules;
 mod calls;
 mod cell;
 mod connect;
+mod contact_groups;
 mod contacts;
 mod devices;
+mod directions;
 mod hold;
 mod port_loa;
 mod porting;
 mod pushes;
 mod recording;
+mod ringcentral_calls;
 mod settings;
 mod superuser;
 mod support;
@@ -127,7 +134,18 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(contacts::create_contact))
         .routes(routes!(contacts::contact_card))
         .routes(routes!(contacts::add_contact_phone))
+        .routes(routes!(
+            contact_groups::list_contact_groups,
+            contact_groups::create_contact_group
+        ))
+        .routes(routes!(
+            contact_groups::update_contact_group,
+            contact_groups::delete_contact_group
+        ))
+        .routes(routes!(contact_groups::update_coworkers_group))
+        .routes(routes!(contact_groups::set_contact_group_members))
         .routes(routes!(calls::list_calls))
+        .routes(routes!(ringcentral_calls::list_ringcentral_calls))
         .routes(routes!(calls::get_call, calls::hide_call))
         .routes(routes!(calls::mark_calls_seen))
         .routes(routes!(calls::call_stats))
@@ -136,16 +154,21 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(calls::call_via_cell))
         .routes(routes!(calls::test_call))
         .routes(routes!(calls::decline_call))
+        .routes(routes!(directions::find_directions_point))
         .routes(routes!(support::report_e911))
         .routes(routes!(support::send_diagnostics))
         .routes(routes!(texts::list_text_threads))
         .routes(routes!(texts::list_text_messages))
         .routes(routes!(texts::text_thread))
+        .routes(routes!(texts::delete_failed_text))
         .routes(routes!(texts::text_media))
         .routes(routes!(texts::send_text))
         .routes(routes!(texts::mark_text_thread_read))
         .routes(routes!(admin::list_admin_numbers))
-        .routes(routes!(admin::update_admin_number))
+        .routes(routes!(
+            admin::update_admin_number,
+            admin::delete_admin_number
+        ))
         .routes(routes!(admin::import_admin_numbers))
         .routes(routes!(admin::list_admin_devices))
         .routes(routes!(admin::revoke_admin_device))

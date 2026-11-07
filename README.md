@@ -35,6 +35,57 @@ When server dies instantly:
 1. Find server: sudo lsof -i :9000
 2. Kill that server: kill -9 <PID>
 
+## Access tokens
+
+Every webhooks route takes one kind of credential: an access token
+(`gmk_` + 43 characters) in `Authorization: Bearer <token>`. Telegram sends it
+as its `secret_token` (`X-Telegram-Bot-Api-Secret-Token`), RingCentral as
+its subscription `verificationToken` (`Verification-Token`), and Telnyx, which
+can set no header on its TeXML callbacks, in the callback URL
+(`/telnyx/event-progress?token=<token>`, that route only).
+
+Every route needs a working token (`AccessToken<...>`, 401 without one, 403
+for a token that may not call it), except `GET /` (health),
+`GET /api-docs/openapi.json` (the lead form's public spec) and the lead forms.
+The old secrets (`REMIX_KEY`, `WEBHOOK_SECRET`, the shared bearer UUID) no
+longer work anywhere.
+
+Tokens live in `access_tokens` (only their SHA-256). Each has scopes
+(`leads`, `internal`, `telephony`, `telegram`, `ses`) and either one company,
+which must match the route's `{company_id}`, or none (internal: every
+company). The Lambda caches a token for 60 seconds, so a revocation takes
+effect within a minute.
+
+```
+make access-token ARGS="create --name 'Acme Zapier' --scopes leads --company-id 12 --expires 2027-10-25"
+make access-token ARGS="create --name 'api Lambda' --scopes internal,leads,telephony --internal --no-expiry"
+make access-token ARGS="list"
+make access-token ARGS="revoke 7"
+```
+
+Cargo pins `DATABASE_URL` to the local MySQL, so set
+`ACCESS_TOKEN_DATABASE_URL` to create tokens in the dev or production
+database. The token is printed once. Tokens are letters and digits only:
+`RingCentral` refuses a `-` in a subscription's `verificationToken`.
+
+The `api` Lambda uses one token for everything (`WEBHOOKS_KEY`, see
+`api/README.md`): its calls here, and the `verificationToken` of the
+`RingCentral` SMS subscriptions it makes.
+
+The lead forms (`/wordpress-contact-form`, `/facebook-contact-form`,
+`/v1/webhooks/new-lead-form`) use `Transitional<MarketingUser>`
+(`webhooks/crates/core/src/axum_helpers/access_token.rs`) so that no lead is
+ever lost: everyone still gets in, and PostHog shows who sends no token yet:
+
+- `webhook_legacy_auth`: a lead let in without a working token, with `route`,
+  `company_id`, `legacy` and `result`.
+- `webhook_access_token_rejected`: a token that did not work (on any route),
+  with `reason`.
+
+Each distinct event is sent at most every 10 minutes per Lambda instance.
+When the lead forms' `webhook_legacy_auth` events stop, switch them to
+`AccessToken<scope::Leads>` too.
+
 ## Build cache
 
 Each checkout or worktree has its own `target/` and would build the ~400

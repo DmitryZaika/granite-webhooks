@@ -199,3 +199,22 @@ pub async fn insert_deals_list(pool: &MySqlPool, group_id: u64) -> Result<u64, s
     .await?;
     Ok(rec.last_insert_id())
 }
+
+/// An internal access token with every scope, for tests that call routes
+/// (every route but the lead forms needs one).
+pub async fn internal_token(pool: &MySqlPool) -> String {
+    use common::access_token::{NewAccessToken, Scope, create};
+    create(
+        pool,
+        &NewAccessToken {
+            name: "test",
+            company_id: None,
+            scopes: &Scope::ALL,
+            expires_at: None,
+            created_by: None,
+        },
+    )
+    .await
+    .expect("test token")
+    .1
+}

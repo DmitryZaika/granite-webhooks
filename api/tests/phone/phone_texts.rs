@@ -587,3 +587,70 @@ async fn texts_from_my_earlier_provider_are_on_my_line(pool: MySqlPool) {
         .await;
     assert_eq!(keys(&mark), Vec::<&str>::new());
 }
+
+#[test_db::test(seed)]
+async fn a_text_that_failed_can_be_deleted(pool: MySqlPool) {
+    let setup = setup(&pool, true).await;
+    let send = |text: &'static str| {
+        let setup = &setup;
+        async move {
+            let res = setup
+                .send(
+                    1,
+                    json!({ "ourNumberId": 9701, "to": "3175550100", "text": text }),
+                )
+                .await;
+            res.assert_status(StatusCode::CREATED);
+            res.json::<Value>()["id"].as_str().unwrap().to_string()
+        }
+    };
+    let failed = send("Could you please text me?").await;
+    let delivered = send("On my way").await;
+    sqlx::query("UPDATE telnyx_sms SET status = 'failed', error_message = 'carrier' WHERE id = ?")
+        .bind(&failed)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE telnyx_sms SET status = 'sent', delivery_status = 'delivered' WHERE id = ?",
+    )
+    .bind(&delivered)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let delete = |phone: u32, id: String| {
+        let setup = &setup;
+        async move {
+            setup
+                .server
+                .delete(&format!("/v1/phone/texts/messages/{id}"))
+                .add_header(HEADER, token(phone))
+                .await
+        }
+    };
+
+    // Not Ada's line; a delivered text stays.
+    delete(3, failed.clone())
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    delete(1, delivered.clone())
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    // Rita deletes her failed text: it leaves the thread, once.
+    delete(1, failed.clone())
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    delete(1, failed.clone())
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    let thread = setup
+        .json(1, "/v1/phone/texts/threads/9701-3175550100/messages")
+        .await;
+    let ids: Vec<&str> = thread["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [delivered.as_str()]);
+}

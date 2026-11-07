@@ -214,7 +214,8 @@ pub async fn list(
           WHERE s.company_id = "
     ));
     sql.push_bind(user.company_id);
-    let mut searching = false;
+    // The escaped search, with one.
+    let mut searching: Option<String> = None;
     if view != TransactionsView::Admin {
         if let Some(rep) = query
             .sales_rep
@@ -241,7 +242,8 @@ pub async fn list(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            let pattern = format!("%{}%", escape_like(search));
+            let escaped = escape_like(search);
+            let pattern = format!("%{escaped}%");
             sql.push(" AND (c.name LIKE ")
                 .push_bind(pattern.clone())
                 .push(" OR u.name LIKE ")
@@ -251,7 +253,7 @@ pub async fn list(
                 .push(" OR st.name LIKE ")
                 .push_bind(pattern)
                 .push(")");
-            searching = true;
+            searching = Some(escaped);
         }
     }
     sql.push(" GROUP BY s.id, s.sale_date, c.name, u.name");
@@ -267,11 +269,16 @@ pub async fn list(
         }
     }
     sql.push(" ORDER BY ");
-    // A search puts the caller's own sales first
-    if searching {
+    // A search puts the caller's own sales first, then a customer name
+    // starting with it, then one containing it (before stone, bundle or rep hits)
+    if let Some(escaped) = searching {
         sql.push("s.seller_id = ")
             .push_bind(user.id)
-            .push(" DESC, ");
+            .push(" DESC, CASE WHEN c.name LIKE ")
+            .push_bind(format!("{escaped}%"))
+            .push(" THEN 0 WHEN c.name LIKE ")
+            .push_bind(format!("%{escaped}%"))
+            .push(" THEN 1 ELSE 2 END, ");
     }
     sql.push("s.sale_date DESC, s.id DESC");
     let mut rows: Vec<TransactionRow> = sql.build_query_as().fetch_all(&state.pool).await?;

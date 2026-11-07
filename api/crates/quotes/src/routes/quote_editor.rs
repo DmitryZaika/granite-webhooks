@@ -410,10 +410,11 @@ pub async fn create_quote(
         phone_2: Option<String>,
         email: Option<String>,
         sales_rep: Option<i32>,
+        company_name: Option<String>,
     }
     let customer: Option<Customer> = sqlx::query_as(
         "SELECT c.name, c.address, c.city, c.state, c.postal_code, c.phone, c.phone_2, ce.email,
-                c.sales_rep
+                c.sales_rep, c.company_name
            FROM customers c
            LEFT JOIN customers_emails ce ON ce.id = c.email_id AND ce.customer_id = c.id
           WHERE c.id = ? AND c.company_id = ?",
@@ -513,12 +514,18 @@ pub async fn create_quote(
     .bind(chosen.as_ref().and_then(|(row, _)| row.current_revision_id))
     .bind(expiration_days)
     .bind(doc.to_string())
-    .bind(full_address(
-        customer.address.as_deref(),
-        customer.city.as_deref(),
-        customer.state.as_deref(),
-        customer.postal_code.as_deref(),
-    ))
+    // A company customer's address is its office, not the job site: leave the
+    // quote's address empty.
+    .bind(if copy(customer.company_name.as_deref()).is_some() {
+        None
+    } else {
+        full_address(
+            customer.address.as_deref(),
+            customer.city.as_deref(),
+            customer.state.as_deref(),
+            customer.postal_code.as_deref(),
+        )
+    })
     .bind(copy(customer.phone.as_deref()).or_else(|| copy(customer.phone_2.as_deref())))
     .bind(copy(customer.email.as_deref()))
     .execute(&state.pool)

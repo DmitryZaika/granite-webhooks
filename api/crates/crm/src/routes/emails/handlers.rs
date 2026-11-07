@@ -40,7 +40,9 @@ pub fn mailbox(user: &SessionUser) -> Mailbox {
 /// matches subject, text, addresses, and the addresses of customers whose
 /// name matches; in the inbox it matches any message of the thread.
 /// `unread=true` keeps only the inbox threads still unread for the caller
-/// (those `GET /v1/emails/folder-counts` counts as `inbox_unread`). Open a
+/// (those `GET /v1/emails/folder-counts` counts as `inbox_unread`), and in
+/// the inbox every row says whether its thread is one of them
+/// (`thread_unread`): show that, don't work it out from the messages. Open a
 /// thread with `GET /v1/emails/threads/{thread_id}`.
 ///
 /// `scope=admin` (admins only) lists every employee's mail of the company
@@ -176,8 +178,11 @@ pub(super) async fn has_inbound_email(pool: &MySqlPool, company_id: i32) -> sqlx
     Ok(domain.flatten().is_some_and(|d| !d.trim().is_empty()))
 }
 
-/// `FROM ... WHERE ...` of the caller's unread inbox messages (`e`), as the
-/// badge counts them; the company's inbound email domain is checked apart.
+/// `FROM ... WHERE ...` of the caller's unread inbox messages (`e`): the one
+/// definition of unread mail. The badge (`GET /v1/emails/unread`), the
+/// folder counts' `inbox_unread`, the inbox's `unread=true` filter and each
+/// listed row's `thread_unread` all read it, so they always agree; the
+/// company's inbound email domain is checked apart (badge only).
 /// `POST /v1/emails/inbound-push` pushes a new email to the users it matches.
 pub(super) fn unread_inbox(mailbox: &Mailbox) -> Sql {
     let scope = company_scope("e", mailbox.company_id);
@@ -193,8 +198,8 @@ pub(super) fn unread_inbox(mailbox: &Mailbox) -> Sql {
              LEFT JOIN deals d ON d.id = COALESCE(
                e.deal_id,
                (SELECT MAX(td.deal_id) FROM emails td
-                WHERE td.thread_id = e.thread_id AND td.deleted_at IS NULL AND td.deal_id IS NOT NULL
-                  AND (td.company_id = ? OR td.company_id IS NULL))
+                WHERE td.thread_id = e.thread_id AND td.deleted_at IS NULL AND td.is_draft = 0
+                  AND td.deal_id IS NOT NULL AND (td.company_id = ? OR td.company_id IS NULL))
              ) AND d.deleted_at IS NULL
              WHERE e.deleted_at IS NULL AND e.is_draft = 0 AND e.thread_id IS NOT NULL
                AND e.employee_read_at IS NULL AND {} AND {} AND {}",

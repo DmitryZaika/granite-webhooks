@@ -31,13 +31,12 @@ pub const INVENTORY_MANAGER_POSITION: i32 = 12;
 pub const SCHEDULING_MANAGER_POSITION: i32 = 13;
 
 /// The positions whose tabs a company may change, in the Company page's
-/// order: Sales Rep, Sales Manager, Manager, Office Manager, Shop Manager,
-/// Inventory Manager, Scheduling Manager.
-pub const CONFIGURABLE_POSITIONS: [i32; 7] = [
+/// order: Sales Rep, Sales Manager, Manager, Shop Manager, Inventory Manager,
+/// Scheduling Manager. Office Manager (10) is retired.
+pub const CONFIGURABLE_POSITIONS: [i32; 6] = [
     1,
     2,
     5,
-    10,
     3,
     INVENTORY_MANAGER_POSITION,
     SCHEDULING_MANAGER_POSITION,
@@ -195,7 +194,11 @@ pub const TABS: [Tab; 40] = [
             "/v1/commissions",
         ],
     ),
-    admin_tab("admin_emails", "Emails", &["/v1/emails", "/v1/email-attachments"]),
+    admin_tab(
+        "admin_emails",
+        "Emails",
+        &["/v1/emails", "/v1/email-attachments"],
+    ),
     admin_tab(
         "admin_transactions",
         "Transactions",
@@ -333,9 +336,10 @@ impl Access {
     pub fn allows_admin(&self, path: &str) -> bool {
         match self {
             Self::Full => false,
-            Self::Tabs(open) => open.iter().filter_map(|key| tab(key)).any(|tab| {
-                tab.admin && tab.api.iter().any(|prefix| under(path, prefix))
-            }),
+            Self::Tabs(open) => open
+                .iter()
+                .filter_map(|key| tab(key))
+                .any(|tab| tab.admin && tab.api.iter().any(|prefix| under(path, prefix))),
         }
     }
 }
@@ -571,7 +575,7 @@ mod tests {
             .filter(|tab| !tab.admin)
             .map(|tab| tab.key)
             .collect();
-        for position in [1, 2, 3, 5, 10] {
+        for position in [1, 2, 3, 5] {
             assert_eq!(default_tabs(position), main, "{position}");
         }
         assert_eq!(default_tabs(13), vec!["customers", "schedule"]);
