@@ -468,9 +468,10 @@ make access-token ARGS="create --name 'api Lambda' --scopes internal,leads,telep
 
 It is sent as `Authorization` on every call, and it is also the
 `verificationToken` of the companies' `RingCentral` SMS subscriptions
-(`RingCentral` sends it back on each push to `/ringcentral/notify`). Until
-`WEBHOOKS_KEY` is an access token it holds the webhooks Lambda's `REMIX_KEY`,
-and subscriptions get the older `RINGCENTRAL_WEBHOOK_TOKEN` instead. After a
+(`RingCentral` sends it back on each push to `/ringcentral/notify`). It must
+be an access token: the webhooks Lambda no longer takes `REMIX_KEY`, and a
+subscription still on the older `RINGCENTRAL_WEBHOOK_TOKEN` is refused until
+the job below renews it. After a
 change of `WEBHOOKS_KEY`, `POST /v1/jobs/contact-sync` renews every
 subscription with the new token, two companies a minute; a failed renewal is
 tried again 2 hours later. Subscriptions are only made where `LAMBDA_URL` (the

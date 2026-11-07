@@ -1,4 +1,4 @@
-use crate::axum_helpers::access_token::Transitional;
+use crate::axum_helpers::access_token::AccessToken;
 use crate::axum_helpers::guards::TelegramWebhookUser;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
@@ -409,7 +409,7 @@ async fn handle_callback<T: Telegram>(
 }
 
 pub async fn webhook_handler(
-    _: Transitional<TelegramWebhookUser>,
+    _: AccessToken<TelegramWebhookUser>,
     State(pool): State<MySqlPool>,
     tg_bot: TelegramBot,
     axum::extract::Json(update): axum::extract::Json<Update>,

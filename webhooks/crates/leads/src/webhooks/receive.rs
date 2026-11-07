@@ -46,7 +46,6 @@ stored as sent and flagged for review.\n\n\
     request_body = NewLeadForm,
     responses(
         (status = CREATED, body = str),
-        (status = FORBIDDEN, body = str, description = "No access token that works for this company"),
         (status = INTERNAL_SERVER_ERROR, body = str)
     )
 ))]
@@ -192,18 +191,22 @@ mod local_tests {
     }
 
     #[test_db::test]
-    async fn lead_forms_without_a_credential_are_refused(pool: MySqlPool) {
+    async fn lead_forms_take_leads_without_a_credential(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
+        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
+            .await
+            .unwrap();
+        assigned_user_position(&pool, 1, 2, admin_id).await.unwrap();
+
         let lead = json!({ "name": "Test", "phone": "+13179995973" });
-        for route in [
-            "/facebook-contact-form/1",
-            "/wordpress-contact-form/1",
-            "/v1/webhooks/new-lead-form/1",
-        ] {
-            let response = app.post(route).json(&lead).await;
-            assert_eq!(response.status_code(), StatusCode::FORBIDDEN, "{route}");
-        }
-        assert!(get_customers(&pool).await.unwrap().is_empty());
+        let response = app.post("/v1/webhooks/new-lead-form/1").json(&lead).await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let response = app
+            .post("/v1/webhooks/new-lead-form/1")
+            .authorization_bearer("anything")
+            .json(&json!({ "name": "Other", "phone": "+13179995974" }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
     #[test_db::test]
