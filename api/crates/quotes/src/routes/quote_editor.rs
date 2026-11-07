@@ -1520,12 +1520,11 @@ pub async fn update_quote(
         // Never onto the import's shared customer: it belongs to every quote on it.
         sqlx::query(
             "UPDATE customers SET phone_2 = ? WHERE id = ? AND company_id = ?
-               AND NOT (name <=> ? AND created_by <=> ?)",
+               AND NOT COALESCE(name LIKE ? AND created_by <=> name, 0)",
         )
         .bind(phone_2)
         .bind(customer_id)
         .bind(user.company_id)
-        .bind(IMPORT_PLACEHOLDER)
         .bind(IMPORT_PLACEHOLDER)
         .execute(&state.pool)
         .await?;

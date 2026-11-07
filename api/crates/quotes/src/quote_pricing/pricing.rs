@@ -1178,7 +1178,7 @@ pub fn price_quote(doc: &QuoteDoc, pl: &Value, opts: PriceOptions) -> Vec<Option
                 all.iter()
                     .flat_map(|a| a.lines.iter().map(move |l| (l, a.quantity)))
             };
-            // Like Moraware: a price typed on the quote is final and takes no discount.
+            // A price typed on the quote is final and takes no discount.
             let discountable = all_lines()
                 .filter(|(l, _)| l.flags.allow_discount && !l.typed)
                 .fold(0.0, |s, (l, q)| s + l.total * q);

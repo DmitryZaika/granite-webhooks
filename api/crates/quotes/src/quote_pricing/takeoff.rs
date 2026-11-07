@@ -216,7 +216,7 @@ fn add_counter(t: &mut AreaTakeoff, counter: &Counter) {
         let Some(&a) = points.get(k) else { continue };
         let straight = dist(a, points[(k + 1) % m]);
         let path_len = outline.edges.get(k).map_or(straight, |e| e.length);
-        // Like Moraware, a splash (or waterfall, apron) stops where a corner
+        // A splash (or waterfall, apron) stops where a corner
         // cut at the edge's end begins: the edge between its corner pieces.
         let strip_len = outline
             .edges
@@ -515,7 +515,7 @@ pub fn js_round(v: f64) -> f64 {
     if v - r >= 0.5 { r + 1.0 } else { r }
 }
 
-/// Moraware rounds material quantities to the nearest 0.1 ft.
+/// Material quantities round to the nearest 0.1 ft.
 pub fn round1(v: f64) -> f64 {
     js_round(v * 10.0 + 1e-9) / 10.0
 }
@@ -534,7 +534,7 @@ pub struct RoundedTakeoff {
 }
 
 /// Price list `materialRounding`: "up" rounds each sq ft quantity up to a
-/// whole foot; anything else is Moraware's nearest 0.1 ft.
+/// whole foot; anything else to the nearest 0.1 ft.
 pub fn round_sq_ft(v: f64, up: bool) -> f64 {
     if up {
         (v - 1e-9).ceil().max(0.0)

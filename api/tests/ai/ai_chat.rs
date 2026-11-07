@@ -1038,8 +1038,8 @@ async fn a_company_with_an_instruction_about_it_is_asked(pool: MySqlPool) {
 /// options, but nothing about special orders in the app.
 const HANDBOOK: &str = "
 INSERT INTO instructions (id, title, rich_text, company_id) VALUES
-  (9130, 'Salesrep Handbook - 12.3: Cabinets - Renderings and Moraware quotes',
-   '<p>Cabinet renderings: pick the door style and the color option, then send the rendering.</p><img src=\"https://img.test/moraware.png\"><p>Moraware quotes have no other option for cabinets.</p>', 100),
+  (9130, 'Salesrep Handbook - 12.3: Cabinets - Renderings and quotes',
+   '<p>Cabinet renderings: pick the door style and the color option, then send the rendering.</p><img src=\"https://img.test/quotes.png\"><p>Quotes have no other option for cabinets.</p>', 100),
   (9131, 'Special Orders', '<p>Take a 50% deposit, then order the slabs from the supplier.</p>', 100);
 ";
 
