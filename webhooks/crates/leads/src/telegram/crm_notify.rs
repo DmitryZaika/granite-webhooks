@@ -1,4 +1,4 @@
-use crate::axum_helpers::access_token::Transitional;
+use crate::axum_helpers::access_token::AccessToken;
 use crate::axum_helpers::guards::{NotificationsTelegramBot, RemixBackend};
 use crate::libs::constants::OK_RESPONSE;
 use crate::libs::types::BasicResponse;
@@ -20,7 +20,7 @@ pub struct CrmNotifyRequest {
 }
 
 pub async fn crm_notify_handler(
-    _: Transitional<RemixBackend>,
+    _: AccessToken<RemixBackend>,
     State(pool): State<MySqlPool>,
     Json(body): Json<CrmNotifyRequest>,
 ) -> BasicResponse {

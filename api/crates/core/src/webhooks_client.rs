@@ -2,8 +2,8 @@
 //!
 //! That is CloudTalk contact sync and sending mail through SES. Configured
 //! with `WEBHOOKS_URL` (its function URL) and `WEBHOOKS_KEY`: the API's one
-//! access token for it (no company; scopes `internal,leads,telephony`), or
-//! its older `REMIX_KEY`. Without them the calls are skipped.
+//! access token for it (no company; scopes `internal,leads,telephony`; the
+//! older `REMIX_KEY` is refused). Without them the calls are skipped.
 
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};

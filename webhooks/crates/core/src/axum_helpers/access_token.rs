@@ -3,12 +3,11 @@
 //! - [`AccessToken`]: the strict check. The request must carry a token that
 //!   works for the route's scope and company, else 401 (no or bad token) or
 //!   403 (a good token that may not call this route).
-//! - [`Transitional`]: while callers move to tokens. A working token is
-//!   accepted. Without one (or with one that does not work) the route's old
-//!   check ([`LegacyAuth`]) decides exactly as before, and `PostHog` hears
+//! - [`Transitional`]: the lead forms only, so no lead is ever lost. A
+//!   working token is accepted. Without one (or with one that does not work)
+//!   the route's old check ([`LegacyAuth`]) decides, and `PostHog` hears
 //!   about it (`webhook_legacy_auth`, `webhook_access_token_rejected`), so we
-//!   can see who still has to switch. Once nobody does, the route moves to
-//!   [`AccessToken`] and its old check is deleted.
+//!   can see who still has to switch.
 //!
 //! The token is read from `Authorization` (`Bearer gmk_...` or the bare
 //! token), else from the headers the providers that cannot set
@@ -18,9 +17,9 @@
 //! callbacks), from the `token` query parameter. The company is the route's
 //! `{company_id}` path segment.
 //!
-//! Every route but `GET /` (health) and `GET /api-docs/openapi.json` (the
-//! lead form's public spec) takes one of the two: no route lets a request
-//! in without a credential.
+//! Every route but the lead forms, `GET /` (health) and
+//! `GET /api-docs/openapi.json` (the lead form's public spec) takes
+//! [`AccessToken`]: nothing else gets in without a working token.
 
 use axum::extract::{FromRef, FromRequestParts, RawPathParams};
 use axum::http::{HeaderMap, StatusCode, request::Parts};
@@ -81,6 +80,8 @@ pub mod scope {
 pub enum LegacyCheck {
     /// The old secret matched.
     Valid,
+    /// Let through without a matching secret (the lead forms).
+    Unverified,
     /// Turned away.
     Rejected,
 }
@@ -89,6 +90,7 @@ impl LegacyCheck {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Valid => "valid",
+            Self::Unverified => "unverified",
             Self::Rejected => "rejected",
         }
     }
@@ -244,7 +246,7 @@ where
         let check = L::check(&parts.headers);
         report.legacy(L::NAME, check).await;
         match check {
-            LegacyCheck::Valid => Ok(Self::new(None)),
+            LegacyCheck::Valid | LegacyCheck::Unverified => Ok(Self::new(None)),
             LegacyCheck::Rejected => Err(FORBIDDEN_RESPONSE),
         }
     }
@@ -503,12 +505,12 @@ mod tests {
         let (parts, ()) = request.into_parts();
         let report = AuthReport::new(&parts, Scope::Leads, Some(12));
 
-        let legacy = report.legacy_properties("marketing_uuid", LegacyCheck::Valid);
+        let legacy = report.legacy_properties("marketing_uuid", LegacyCheck::Unverified);
         assert_eq!(legacy["route"], "/v1/webhooks/new-lead-form/{id}");
         assert_eq!(legacy["company_id"], 12);
         assert_eq!(legacy["scope"], "leads");
         assert_eq!(legacy["legacy"], "marketing_uuid");
-        assert_eq!(legacy["result"], "valid");
+        assert_eq!(legacy["result"], "unverified");
         assert_eq!(legacy["user_agent"], "Zapier");
 
         let rejected = report.rejected_properties(Denied::Expired);
@@ -574,7 +576,10 @@ mod route_tests {
                 post(|_: AccessToken<scope::Leads>| async { "ok" }),
             )
             .route("/leads/{company_id}", post(which::<MarketingUser>))
-            .route("/internal/{company_id}", post(which::<RemixBackend>))
+            .route(
+                "/internal/{company_id}",
+                post(|_: AccessToken<RemixBackend>| async { "ok" }),
+            )
             .with_state(pool);
         TestServer::builder().build(router)
     }
@@ -658,7 +663,7 @@ mod route_tests {
     }
 
     #[test_db::test]
-    async fn lead_forms_need_a_token_or_the_old_uuid(pool: MySqlPool) {
+    async fn transitional_lead_forms_never_turn_anyone_away(pool: MySqlPool) {
         let (_, own) = token(&pool, Some(904), &[Scope::Leads]).await;
         let (revoked_id, revoked) = token(&pool, Some(904), &[Scope::Leads]).await;
         tokens::revoke(&pool, revoked_id).await.unwrap();
@@ -672,6 +677,7 @@ mod route_tests {
             text(app.post("/leads/904").authorization_bearer(&own).await),
             "token"
         );
+        assert_eq!(text(app.post("/leads/904").await), "legacy");
         assert_eq!(
             text(
                 app.post("/leads/904")
@@ -680,20 +686,14 @@ mod route_tests {
             ),
             "legacy"
         );
-        let status = |response: axum_test::TestResponse| response.status_code();
-        assert_eq!(status(app.post("/leads/904").await), StatusCode::FORBIDDEN);
+        // A token that does not work here still gets in, as everyone did.
         assert_eq!(
-            status(app.post("/leads/904").authorization_bearer("nope").await),
-            StatusCode::FORBIDDEN
-        );
-        // Another company's token, or a revoked one, without the old UUID.
-        assert_eq!(
-            status(app.post("/leads/905").authorization_bearer(&own).await),
-            StatusCode::FORBIDDEN
+            text(app.post("/leads/905").authorization_bearer(&own).await),
+            "legacy"
         );
         assert_eq!(
-            status(app.post("/leads/904").authorization_bearer(&revoked).await),
-            StatusCode::FORBIDDEN
+            text(app.post("/leads/904").authorization_bearer(&revoked).await),
+            "legacy"
         );
     }
 
@@ -734,27 +734,36 @@ mod route_tests {
     }
 
     #[test_db::test]
-    async fn transitional_internal_routes_still_need_the_old_key_or_a_token(pool: MySqlPool) {
+    async fn internal_routes_take_only_an_internal_token(pool: MySqlPool) {
         let (_, internal) = token(&pool, None, &[Scope::Internal]).await;
         let (_, leads) = token(&pool, None, &[Scope::Leads]).await;
         let app = app(pool);
 
-        let response = app
-            .post("/internal/906")
-            .authorization_bearer(&internal)
-            .await;
-        assert_eq!(response.status_code(), StatusCode::OK);
-        assert_eq!(response.text(), "token");
-        // REMIX_KEY is not set in tests, so the old check refuses everything.
+        let status = |response: axum_test::TestResponse| response.status_code();
         assert_eq!(
-            app.post("/internal/906").await.status_code(),
-            StatusCode::FORBIDDEN
+            status(
+                app.post("/internal/906")
+                    .authorization_bearer(&internal)
+                    .await
+            ),
+            StatusCode::OK
+        );
+        assert_eq!(status(app.post("/internal/906").await), StatusCode::UNAUTHORIZED);
+        // The old REMIX_KEY or UUID is not a token.
+        assert_eq!(
+            status(app.post("/internal/906").authorization_bearer("remix-key").await),
+            StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            app.post("/internal/906")
-                .authorization_bearer(&leads)
-                .await
-                .status_code(),
+            status(
+                app.post("/internal/906")
+                    .authorization_bearer(CORRECT_ID.to_string())
+                    .await
+            ),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            status(app.post("/internal/906").authorization_bearer(&leads).await),
             StatusCode::FORBIDDEN
         );
     }

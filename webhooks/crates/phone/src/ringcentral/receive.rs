@@ -1,4 +1,4 @@
-use crate::axum_helpers::access_token::Transitional;
+use crate::axum_helpers::access_token::AccessToken;
 use crate::axum_helpers::guards::RemixBackend;
 use crate::axum_helpers::guards::{RingCentralNotificationUser, RingCentralWebhookUser};
 use crate::crud::deals::{
@@ -67,7 +67,7 @@ fn parse_ringcentral_sms(body: &Bytes, route: &'static str) -> Option<Ringcentra
 }
 
 pub async fn sms_received(
-    _: Transitional<RingCentralWebhookUser>,
+    _: AccessToken<RingCentralWebhookUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -133,7 +133,7 @@ async fn store_inbound_sms(
 }
 
 pub async fn call_received(
-    _: Transitional<RingCentralWebhookUser>,
+    _: AccessToken<RingCentralWebhookUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -227,7 +227,7 @@ async fn call_received_inner(pool: MySqlPool, company_id: i32, body: Bytes) -> B
 }
 
 pub async fn sms_sent(
-    _: Transitional<RingCentralWebhookUser>,
+    _: AccessToken<RingCentralWebhookUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -330,7 +330,7 @@ async fn store_recent_outbound(
 /// a text was sent (from the CRM or the `RingCentral` app). Same storage as
 /// the `/ringcentral/sms` routes.
 pub async fn sms_notification(
-    _: Transitional<RingCentralNotificationUser>,
+    _: AccessToken<RingCentralNotificationUser>,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
@@ -368,7 +368,7 @@ pub async fn sms_notification(
 }
 
 pub async fn sync_ringcentral(
-    _: Transitional<RemixBackend>,
+    _: AccessToken<RemixBackend>,
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
@@ -379,7 +379,7 @@ pub async fn sync_ringcentral(
 /// `DELETE /ringcentral/sync/{company_id}/{customer_id}`: drop the contact of
 /// a deleted customer.
 pub async fn unsync_ringcentral(
-    _: Transitional<RemixBackend>,
+    _: AccessToken<RemixBackend>,
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
@@ -390,7 +390,7 @@ pub async fn unsync_ringcentral(
 #[cfg(test)]
 mod tests {
     use super::parse_ringcentral_sms;
-    use crate::axum_helpers::guards::CORRECT_ID;
+    use crate::tests::utils::internal_token;
     use crate::tests::ringcentral::{INBOUND_NULL_TEXT, INBOUND_SMS};
     use crate::tests::utils::{insert_group_list, new_test_app};
     use axum::body::Bytes;
@@ -427,7 +427,7 @@ mod tests {
 
         let response = app
             .post("/ringcentral/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -453,14 +453,14 @@ mod tests {
 
         let first = app
             .post("/ringcentral/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_with_id_json())
             .await;
         assert_eq!(first.status_code(), StatusCode::OK);
 
         let second = app
             .post("/ringcentral/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_with_id_json())
             .await;
         assert_eq!(second.status_code(), StatusCode::OK);
@@ -475,7 +475,7 @@ mod tests {
 
         let response = app
             .post("/ringcentral/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .text("{not json")
             .await;
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
@@ -491,7 +491,7 @@ mod tests {
 
         let response = app
             .post("/ringcentral/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -506,7 +506,14 @@ mod tests {
     async fn test_sms_rejected_without_bearer_token(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let response = app.post("/ringcentral/sms/42").json(&sms_json()).await;
-        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+        // The old shared UUID is no longer accepted.
+        let response = app
+            .post("/ringcentral/sms/42")
+            .authorization_bearer("9ca4dfa8-0eec-46cc-967f-3385624be883")
+            .json(&sms_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
         let smss = get_sms_received(&pool).await;
         assert_eq!(
             smss.len(),
@@ -521,7 +528,7 @@ mod tests {
 
         let response = app
             .post("/ringcentral/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_with_id_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -553,7 +560,7 @@ mod tests {
         let app = new_test_app(pool.clone());
         let response = app
             .post("/ringcentral/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_with_id_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -606,7 +613,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(MESSAGE_FALLBACK_ECHO).expect("parse");
         let response = app
             .post("/ringcentral/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -644,7 +651,7 @@ mod tests {
             serde_json::from_slice(MESSAGE_SENT_NULL_TEXT).expect("parse");
         let response = app
             .post("/ringcentral/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -690,7 +697,7 @@ mod tests {
 
         let response = app
             .post("/ringcentral/sms/sent/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
@@ -744,7 +751,7 @@ mod tests {
         let app = new_test_app(pool.clone());
         let response = app
             .post(&format!("/ringcentral/sms/{company_id}"))
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&sms_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -801,7 +808,7 @@ mod tests {
         let app = new_test_app(pool.clone());
         let response = app
             .post(&format!("/ringcentral/call/{company_id}"))
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&serde_json::json!({
                 "external_number": "+15551234567",
                 "type": "incoming"
@@ -824,7 +831,7 @@ mod tests {
 
         let response = app
             .post("/ringcentral/notify/42")
-            .add_header("Verification-Token", CORRECT_ID.to_string())
+            .add_header("Verification-Token", internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -840,7 +847,7 @@ mod tests {
         // Redelivery of the same RingCentral message id is deduped.
         let again = app
             .post("/ringcentral/notify/42")
-            .add_header("Verification-Token", CORRECT_ID.to_string())
+            .add_header("Verification-Token", internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(again.status_code(), StatusCode::OK);
@@ -853,8 +860,14 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(crate::tests::ringcentral::NOTIFY_INBOUND_SMS).unwrap();
 
-        let forbidden = app.post("/ringcentral/notify/42").json(&body).await;
-        assert_eq!(forbidden.status_code(), StatusCode::FORBIDDEN);
+        let refused = app.post("/ringcentral/notify/42").json(&body).await;
+        assert_eq!(refused.status_code(), StatusCode::UNAUTHORIZED);
+        let refused = app
+            .post("/ringcentral/notify/42")
+            .add_header("Verification-Token", "9ca4dfa8-0eec-46cc-967f-3385624be883")
+            .json(&body)
+            .await;
+        assert_eq!(refused.status_code(), StatusCode::UNAUTHORIZED);
 
         let handshake = app
             .post("/ringcentral/notify/42")

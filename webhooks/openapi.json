@@ -47,16 +47,6 @@
               }
             }
           },
-          "403": {
-            "description": "No access token that works for this company",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
           "500": {
             "description": "",
             "content": {

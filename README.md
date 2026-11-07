@@ -37,17 +37,18 @@ When server dies instantly:
 
 ## Access tokens
 
-Every webhooks route is moving to one kind of credential: an access token
+Every webhooks route takes one kind of credential: an access token
 (`gmk_` + 43 characters) in `Authorization: Bearer <token>`. Telegram sends it
 as its `secret_token` (`X-Telegram-Bot-Api-Secret-Token`), RingCentral as
 its subscription `verificationToken` (`Verification-Token`), and Telnyx, which
 can set no header on its TeXML callbacks, in the callback URL
 (`/telnyx/event-progress?token=<token>`, that route only).
 
-No route lets a request in without a credential, except `GET /` (health) and
-`GET /api-docs/openapi.json` (the lead form's public spec). `/ses/*` and
-`/telnyx/event-progress` take only a token (they never had a secret), and the
-lead forms take a token or the old bearer UUID.
+Every route needs a working token (`AccessToken<...>`, 401 without one, 403
+for a token that may not call it), except `GET /` (health),
+`GET /api-docs/openapi.json` (the lead form's public spec) and the lead forms.
+The old secrets (`REMIX_KEY`, `WEBHOOK_SECRET`, the shared bearer UUID) no
+longer work anywhere.
 
 Tokens live in `access_tokens` (only their SHA-256). Each has scopes
 (`leads`, `internal`, `telephony`, `telegram`, `ses`) and either one company,
@@ -71,18 +72,19 @@ The `api` Lambda uses one token for everything (`WEBHOOKS_KEY`, see
 `api/README.md`): its calls here, and the `verificationToken` of the
 `RingCentral` SMS subscriptions it makes.
 
-While callers switch, routes use `Transitional<...>`
-(`webhooks/crates/core/src/axum_helpers/access_token.rs`): a working token gets in, and
-otherwise the route's old secret is still accepted. PostHog shows who has not switched:
+The lead forms (`/wordpress-contact-form`, `/facebook-contact-form`,
+`/v1/webhooks/new-lead-form`) use `Transitional<MarketingUser>`
+(`webhooks/crates/core/src/axum_helpers/access_token.rs`) so that no lead is
+ever lost: everyone still gets in, and PostHog shows who sends no token yet:
 
-- `webhook_legacy_auth`: a request let in (or refused) by the old check, with
-  `route`, `company_id`, `legacy` and `result`.
-- `webhook_access_token_rejected`: a token that did not work, with `reason`.
+- `webhook_legacy_auth`: a lead let in without a working token, with `route`,
+  `company_id`, `legacy` and `result`.
+- `webhook_access_token_rejected`: a token that did not work (on any route),
+  with `reason`.
 
 Each distinct event is sent at most every 10 minutes per Lambda instance.
-When a route's `webhook_legacy_auth` events stop, switch it to
-`AccessToken<scope::...>` (401/403 without a working token) and delete its old
-check from `guards.rs`.
+When the lead forms' `webhook_legacy_auth` events stop, switch them to
+`AccessToken<scope::Leads>` too.
 
 ## Build cache
 

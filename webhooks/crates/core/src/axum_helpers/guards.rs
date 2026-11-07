@@ -7,7 +7,6 @@ use common::telegram::bot::{
     Bot, ChatId, InlineKeyboardMarkup, Message, MessageId, ParseMode, RequestError,
 };
 use lambda_http::tracing;
-use std::env::var;
 use uuid::{Uuid, uuid};
 
 use crate::libs::constants::ERR_SEND_TELEGRAM;
@@ -297,7 +296,7 @@ impl Telegram for NotificationsTelegramBot {
 }
 
 /// Builds the bot only. Telegram's secret header is checked by the route's
-/// `Transitional<TelegramWebhookUser>`.
+/// `AccessToken<TelegramWebhookUser>`.
 impl<S> FromRequestParts<S> for TelegramBot
 where
     S: Send + Sync,
@@ -314,9 +313,10 @@ where
     }
 }
 
-// The checks below are from before access tokens. Each route keeps its own
-// through `Transitional<...>` until its callers send tokens; then the route
-// moves to `AccessToken<...>` and the check is deleted.
+// Every route but the lead forms takes `AccessToken<...>` with one of the
+// scopes below. The lead forms keep `Transitional<MarketingUser>` and still
+// let everyone in, so no lead is ever lost; PostHog shows who has not
+// switched (`webhook_legacy_auth`).
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
@@ -328,20 +328,9 @@ fn parse_uuid_from_bearer(header: &str) -> Option<Uuid> {
         .and_then(|token| Uuid::parse_str(token.trim()).ok())
 }
 
-fn bearer_is_correct_id(headers: &HeaderMap) -> bool {
-    header(headers, "authorization").and_then(parse_uuid_from_bearer) == Some(CORRECT_ID)
-}
-
-const fn valid_or_rejected(valid: bool) -> LegacyCheck {
-    if valid {
-        LegacyCheck::Valid
-    } else {
-        LegacyCheck::Rejected
-    }
-}
-
-/// Lead forms (website, Facebook, Make, Zapier): bearer `CORRECT_ID`, now
-/// required (it used to be asked for but never checked).
+/// Lead forms (website, Facebook, Make, Zapier): a `leads` token for the
+/// company, or anything else. Every request still gets in; the old bearer
+/// UUID is only told apart in `PostHog`.
 pub struct MarketingUser;
 
 impl TokenScope for MarketingUser {
@@ -352,46 +341,32 @@ impl LegacyAuth for MarketingUser {
     const NAME: &'static str = "marketing_uuid";
 
     fn check(headers: &HeaderMap) -> LegacyCheck {
-        valid_or_rejected(bearer_is_correct_id(headers))
+        if header(headers, "authorization").and_then(parse_uuid_from_bearer) == Some(CORRECT_ID) {
+            LegacyCheck::Valid
+        } else {
+            LegacyCheck::Unverified
+        }
     }
 }
 
-/// The CRM's backend: `Authorization` equal to `REMIX_KEY`.
+/// The `api` Lambda: an internal token (`WEBHOOKS_KEY`) with the
+/// `internal` scope. `REMIX_KEY` no longer works.
 pub struct RemixBackend;
 
 impl TokenScope for RemixBackend {
     const SCOPE: Scope = Scope::Internal;
 }
 
-impl LegacyAuth for RemixBackend {
-    const NAME: &'static str = "remix_key";
-
-    fn check(headers: &HeaderMap) -> LegacyCheck {
-        let Ok(remix_key) = var("REMIX_KEY") else {
-            tracing::error!("REMIX_KEY is not set");
-            return LegacyCheck::Rejected;
-        };
-        valid_or_rejected(header(headers, "authorization").is_some_and(|sent| sent == remix_key))
-    }
-}
-
-/// `CloudTalk`'s webhooks: bearer `CORRECT_ID`, required.
+/// `CloudTalk`'s webhooks: a `telephony` token for the route's company (an
+/// internal one on `/cloudtalk/sms`, which has none).
 pub struct CloudTalkWebhookUser;
 
 impl TokenScope for CloudTalkWebhookUser {
     const SCOPE: Scope = Scope::Telephony;
 }
 
-impl LegacyAuth for CloudTalkWebhookUser {
-    const NAME: &'static str = "cloudtalk_uuid";
-
-    fn check(headers: &HeaderMap) -> LegacyCheck {
-        valid_or_rejected(bearer_is_correct_id(headers))
-    }
-}
-
-/// The `/ringcentral/sms|call` routes: bearer `CORRECT_ID`, required. The
-/// subscription handshake (`Validation-Token`) is answered before any check
+/// The `/ringcentral/sms|call` routes: a `telephony` token. The subscription
+/// handshake (`Validation-Token`) is answered before any check
 /// (`ringcentral::receive::handshake`).
 pub struct RingCentralWebhookUser;
 
@@ -399,61 +374,28 @@ impl TokenScope for RingCentralWebhookUser {
     const SCOPE: Scope = Scope::Telephony;
 }
 
-impl LegacyAuth for RingCentralWebhookUser {
-    const NAME: &'static str = "ringcentral_uuid";
-
-    fn check(headers: &HeaderMap) -> LegacyCheck {
-        valid_or_rejected(bearer_is_correct_id(headers))
-    }
-}
-
 /// `RingCentral`'s own webhook push (`/ringcentral/notify`). It cannot send a
-/// bearer, so the subscription carries `CORRECT_ID` as its
-/// `verificationToken`, echoed in `Verification-Token`.
+/// bearer, so the subscription carries the token as its `verificationToken`,
+/// echoed in `Verification-Token`.
 pub struct RingCentralNotificationUser;
 
 impl TokenScope for RingCentralNotificationUser {
     const SCOPE: Scope = Scope::Telephony;
 }
 
-impl LegacyAuth for RingCentralNotificationUser {
-    const NAME: &'static str = "ringcentral_verification_uuid";
-
-    fn check(headers: &HeaderMap) -> LegacyCheck {
-        let token = header(headers, "verification-token")
-            .and_then(|value| Uuid::parse_str(value.trim()).ok());
-        valid_or_rejected(token == Some(CORRECT_ID))
-    }
-}
-
-/// Telegram's bot webhook: `X-Telegram-Bot-Api-Secret-Token` equal to
-/// `WEBHOOK_SECRET`.
+/// Telegram's bot webhook: a `telegram` token as the webhook's
+/// `secret_token` (`X-Telegram-Bot-Api-Secret-Token`). `WEBHOOK_SECRET` no
+/// longer works.
 pub struct TelegramWebhookUser;
 
 impl TokenScope for TelegramWebhookUser {
     const SCOPE: Scope = Scope::Telegram;
 }
 
-impl LegacyAuth for TelegramWebhookUser {
-    const NAME: &'static str = "telegram_webhook_secret";
-
-    fn check(headers: &HeaderMap) -> LegacyCheck {
-        let Ok(webhook_secret) = var("WEBHOOK_SECRET") else {
-            tracing::error!("WEBHOOK_SECRET is not set");
-            return LegacyCheck::Rejected;
-        };
-        valid_or_rejected(
-            header(headers, "x-telegram-bot-api-secret-token")
-                .is_some_and(|secret| secret == webhook_secret),
-        )
-    }
-}
-
 /// SES events from `EventBridge`.
 ///
 /// An access token (scope `ses`) in the API destination connection's
-/// `Authorization`, required. There was no old check (the header it sent
-/// was never read), so the route takes `AccessToken<SesEventBridge>`.
+/// `Authorization`.
 pub struct SesEventBridge;
 
 impl TokenScope for SesEventBridge {
@@ -463,9 +405,8 @@ impl TokenScope for SesEventBridge {
 /// Telnyx's `TeXML` call-progress callbacks.
 ///
 /// An access token (scope `telephony`, internal) in the callback URL
-/// (`?token=gmk_...`), required. Telnyx signs no `TeXML` callback and sets no
-/// `Authorization`, so the URL is all it can carry. No old check, so the
-/// route takes `AccessToken<TelnyxCallback>`.
+/// (`?token=gmk_...`). Telnyx signs no `TeXML` callback and sets no
+/// `Authorization`, so the URL is all it can carry.
 pub struct TelnyxCallback;
 
 impl TokenScope for TelnyxCallback {
@@ -478,65 +419,17 @@ mod tests {
     use super::*;
     use axum::http::HeaderValue;
 
-    fn headers(pairs: &[(&'static str, &str)]) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        for (name, value) in pairs {
-            headers.insert(*name, HeaderValue::from_str(value).unwrap());
-        }
-        headers
-    }
-
     #[test]
-    fn marketing_requires_the_uuid() {
-        let bearer = format!("Bearer {CORRECT_ID}");
-        assert_eq!(
-            MarketingUser::check(&headers(&[("authorization", &bearer)])),
-            LegacyCheck::Valid
+    fn marketing_lets_everyone_in_but_tells_the_uuid_apart() {
+        let mut with_uuid = HeaderMap::new();
+        with_uuid.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {CORRECT_ID}")).unwrap(),
         );
+        assert_eq!(MarketingUser::check(&with_uuid), LegacyCheck::Valid);
         assert_eq!(
             MarketingUser::check(&HeaderMap::new()),
-            LegacyCheck::Rejected
-        );
-        assert_eq!(
-            MarketingUser::check(&headers(&[("authorization", "Bearer nope")])),
-            LegacyCheck::Rejected
-        );
-    }
-
-    #[test]
-    fn telephony_checks_still_require_the_uuid() {
-        let bearer = format!("Bearer {CORRECT_ID}");
-        let with_bearer = headers(&[("authorization", &bearer)]);
-        assert_eq!(
-            CloudTalkWebhookUser::check(&with_bearer),
-            LegacyCheck::Valid
-        );
-        assert_eq!(
-            RingCentralWebhookUser::check(&with_bearer),
-            LegacyCheck::Valid
-        );
-        assert_eq!(
-            CloudTalkWebhookUser::check(&HeaderMap::new()),
-            LegacyCheck::Rejected
-        );
-        assert_eq!(
-            RingCentralWebhookUser::check(&HeaderMap::new()),
-            LegacyCheck::Rejected
-        );
-        // A Validation-Token is no longer a way past the check.
-        assert_eq!(
-            RingCentralWebhookUser::check(&headers(&[("validation-token", "abc")])),
-            LegacyCheck::Rejected
-        );
-
-        let id = CORRECT_ID.to_string();
-        assert_eq!(
-            RingCentralNotificationUser::check(&headers(&[("verification-token", &id)])),
-            LegacyCheck::Valid
-        );
-        assert_eq!(
-            RingCentralNotificationUser::check(&with_bearer),
-            LegacyCheck::Rejected
+            LegacyCheck::Unverified
         );
     }
 }
