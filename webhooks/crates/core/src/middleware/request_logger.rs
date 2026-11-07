@@ -25,12 +25,8 @@ pub async fn print_request_body(
     let uri = request.uri().clone();
     let path = uri.path();
     let request = log_request_body(request, &uri).await?;
-    tracing::info!(
-        "Incoming request: {} {} (routing path: {})",
-        method,
-        uri,
-        path
-    );
+    // The path only: a query string can carry an access token (`?token=`).
+    tracing::info!("Incoming request: {} {}", method, path);
 
     let response = next.run(request).await;
 

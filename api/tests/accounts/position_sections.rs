@@ -94,7 +94,7 @@ async fn the_company_changes_and_resets_a_positions_tabs(pool: MySqlPool) {
         .iter()
         .map(|p| p["position_id"].as_i64().unwrap())
         .collect();
-    assert_eq!(ids, vec![1, 2, 5, 10, 3, 12, 13]);
+    assert_eq!(ids, vec![1, 2, 5, 3, 12, 13]);
     let scheduling = &positions[6];
     assert_eq!(scheduling["customized"], false);
     assert_eq!(scheduling["sections"], json!(["customers", "schedule"]));
@@ -247,4 +247,189 @@ async fn only_managers_change_position_access_and_only_known_tabs(pool: MySqlPoo
             .await
             .assert_status(StatusCode::BAD_REQUEST);
     }
+}
+
+/// The skills the app shell gives `session` (null: every skill).
+async fn skills(server: &TestServer, session: &str) -> Value {
+    let shell: Value = server
+        .get("/v1/app/shell")
+        .with_session(session)
+        .await
+        .json();
+    shell["skills"].clone()
+}
+
+#[test_db::test(seed)]
+async fn each_position_has_its_default_skills_and_admins_have_all(pool: MySqlPool) {
+    seat(&pool, 13).await;
+    let server = server(pool);
+    // A Scheduling Manager has every skill: null, as for an admin.
+    assert_eq!(skills(&server, sessions::VIEWER).await, Value::Null);
+    for session in [sessions::REP, sessions::MANAGER] {
+        assert_eq!(
+            skills(&server, session).await,
+            json!(["sell_slabs", "edit_transactions", "edit_quotes"])
+        );
+    }
+    assert_eq!(skills(&server, sessions::ADMIN).await, Value::Null);
+    let access: Value = server
+        .get("/v1/company/position-sections")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    let keys: Vec<&str> = access["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|skill| skill["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            "sell_slabs",
+            "edit_transactions",
+            "edit_quotes",
+            "plan_schedule",
+            "see_readiness"
+        ]
+    );
+    let rep = &access["positions"][0];
+    assert_eq!(rep["skills"], rep["default_skills"]);
+}
+
+#[test_db::test(seed)]
+async fn a_change_needs_a_skill_of_the_callers_positions(pool: MySqlPool) {
+    seat(&pool, 13).await;
+    let server = server(pool);
+    // Only Scheduling Manager plans the schedule.
+    server
+        .post("/v1/schedule/route-preview")
+        .with_session(sessions::REP)
+        .json(&json!({ "event_ids": [] }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let planner = server
+        .post("/v1/schedule/route-preview")
+        .with_session(sessions::VIEWER)
+        .json(&json!({ "event_ids": [] }))
+        .await;
+    assert_ne!(planner.status_code(), StatusCode::FORBIDDEN);
+    // The company takes Sell slabs from its Sales Managers.
+    let manager_sells = server
+        .post("/v1/sales")
+        .with_session(sessions::MANAGER)
+        .json(&json!({}))
+        .await;
+    assert_ne!(manager_sells.status_code(), StatusCode::FORBIDDEN);
+    server
+        .put("/v1/company/position-sections/2")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "sections": ["stones"], "skills": ["edit_quotes"] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .post("/v1/sales")
+        .with_session(sessions::MANAGER)
+        .json(&json!({}))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let rep_sells = server
+        .post("/v1/sales")
+        .with_session(sessions::REP)
+        .json(&json!({}))
+        .await;
+    assert_ne!(rep_sells.status_code(), StatusCode::FORBIDDEN);
+
+    // The company takes Edit quotes from its Sales Reps: quotes stay readable.
+    server
+        .put("/v1/company/position-sections/1")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "sections": ["customers", "quotes"], "skills": ["sell_slabs"] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(skills(&server, sessions::REP).await, json!(["sell_slabs"]));
+    server
+        .get("/v1/quotes")
+        .with_session(sessions::REP)
+        .await
+        .assert_status_ok();
+    for (method, path) in [("post", "/v1/quotes"), ("delete", "/v1/quotes/999999")] {
+        let request = if method == "post" {
+            server.post(path).json(&json!({}))
+        } else {
+            server.delete(path)
+        };
+        request
+            .with_session(sessions::REP)
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+    let manager = server
+        .delete("/v1/quotes/999999")
+        .with_session(sessions::MANAGER)
+        .await;
+    assert_ne!(manager.status_code(), StatusCode::FORBIDDEN);
+
+    // Back to the defaults.
+    server
+        .delete("/v1/company/position-sections/1")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        skills(&server, sessions::REP).await,
+        json!(["sell_slabs", "edit_transactions", "edit_quotes"])
+    );
+}
+
+#[test_db::test(seed)]
+async fn tabs_saved_without_skills_keep_the_default_skills(pool: MySqlPool) {
+    seat(&pool, 13).await;
+    let server = server(pool);
+    server
+        .put("/v1/company/position-sections/13")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "sections": ["schedule"] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(skills(&server, sessions::VIEWER).await, Value::Null);
+    let access: Value = server
+        .get("/v1/company/position-sections")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    let scheduling = &access["positions"][5];
+    assert_eq!(scheduling["skills"], scheduling["default_skills"]);
+    server
+        .put("/v1/company/position-sections/13")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "sections": ["schedule"], "skills": ["nope"] }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[test_db::test(seed)]
+async fn sales_managers_and_managers_delete_customers(pool: MySqlPool) {
+    let server = server(pool.clone());
+    server
+        .delete("/v1/customers/1001?cascade_deals=true")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 5, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    server
+        .delete("/v1/customers/1001?cascade_deals=true")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .delete("/v1/customers/1000?cascade_deals=true")
+        .with_session(sessions::MANAGER)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }

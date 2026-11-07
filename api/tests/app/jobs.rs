@@ -262,12 +262,12 @@ async fn sent_address(sent: &Sent) -> String {
 
 #[test_db::test(seed)]
 async fn managers_hear_once_when_survey_texts_cannot_go_out(pool: MySqlPool) {
-    // Acme texts through CloudTalk; Mark (101) is its office manager, with no
+    // Acme texts through CloudTalk; Mark (101) is its Scheduling Manager, with no
     // CloudTalk line yet. Alice's checklist (9000) is due.
     sqlx::raw_sql(
         "DELETE FROM emails WHERE message_id LIKE 'checklist-survey-%';
          UPDATE company SET cloudtalk_access_key = 'k', cloudtalk_access_secret = 's' WHERE id = 100;
-         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 10, 100);
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 13, 100);
          UPDATE checklists SET created_at = UTC_TIMESTAMP() - INTERVAL 30 HOUR WHERE id = 9000;",
     )
     .execute(&pool)
@@ -305,11 +305,21 @@ async fn managers_hear_once_when_survey_texts_cannot_go_out(pool: MySqlPool) {
         assert!(
             down[0]
                 .body
-                .contains("No Office Manager has a CloudTalk line")
+                .contains("No Scheduling Manager has a CloudTalk line")
         );
     }
     assert!(sent.texts.lock().unwrap().is_empty());
     assert_eq!(marker().await, 1);
+    let belled = || async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM notifications
+              WHERE user_id = 101 AND notification_type = 'survey_texts_down'",
+        )
+        .fetch_one(pool_ref)
+        .await
+        .unwrap()
+    };
+    assert_eq!(belled().await, 1);
 
     // The next survey without a line: no second email.
     sqlx::raw_sql("DELETE FROM emails WHERE message_id = 'checklist-survey-9000'")
@@ -318,6 +328,7 @@ async fn managers_hear_once_when_survey_texts_cannot_go_out(pool: MySqlPool) {
         .unwrap();
     survey(&state, chrono::Utc::now()).await.unwrap();
     assert_eq!(told(&sent).len(), 1);
+    assert_eq!(belled().await, 1);
 
     // Mark gets a line: the text goes out, and a later outage is told again.
     sqlx::raw_sql(

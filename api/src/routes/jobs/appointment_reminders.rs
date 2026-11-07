@@ -65,6 +65,8 @@ struct CustomerReminder {
     customer_name: Option<String>,
     customer_email: Option<String>,
     customer_phone: Option<String>,
+    customer_phone_2: Option<String>,
+    customer_email_2: Option<String>,
     user_name: Option<String>,
     user_id: i32,
     start_date: NaiveDateTime,
@@ -131,6 +133,8 @@ async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(
                 c.name AS customer_name,
                 COALESCE(NULLIF(TRIM(e.contact_email), ''), primary_email.email) AS customer_email,
                 NULLIF(TRIM(e.contact_phone), '') AS customer_phone,
+                NULLIF(TRIM(e.contact_phone_2), '') AS customer_phone_2,
+                NULLIF(TRIM(e.contact_email_2), '') AS customer_email_2,
                 creator.name AS user_name, e.created_user_id AS user_id,
                 e.start_date, e.end_date, e.location
            FROM appointment_reminders r
@@ -172,6 +176,8 @@ async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(
             user_id: reminder.user_id,
             customer_email: reminder.customer_email.as_deref(),
             customer_phone: reminder.customer_phone.as_deref(),
+            customer_phone_2: reminder.customer_phone_2.as_deref(),
+            customer_email_2: reminder.customer_email_2.as_deref(),
             start,
             end: reminder.end_date.and_utc(),
             location: reminder.location.as_deref(),

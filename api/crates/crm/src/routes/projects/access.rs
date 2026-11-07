@@ -15,8 +15,6 @@ const SALES_REP: i32 = 1;
 const SALES_MANAGER: i32 = 2;
 const SHOP_MANAGER: i32 = 3;
 const MANAGER: i32 = 5;
-/// Office Manager.
-const OFFICE_MANAGER: i32 = 10;
 const INVENTORY_MANAGER: i32 = 12;
 const SCHEDULING_MANAGER: i32 = 13;
 
@@ -206,10 +204,9 @@ impl Viewer {
         };
         let admin = user.is_admin || has(MANAGER);
         let sales_manager = has(SALES_MANAGER);
-        let office = has(OFFICE_MANAGER);
         let shop = has(SHOP_MANAGER);
         let rep = has(SALES_REP);
-        let scheduling = office || has(SCHEDULING_MANAGER);
+        let scheduling = has(SCHEDULING_MANAGER);
         let tasked = sales_manager || has(INVENTORY_MANAGER);
         Self {
             user_id: user.id,
@@ -219,7 +216,7 @@ impl Viewer {
                 convert: admin || sales_manager || rep,
                 production: admin || scheduling || shop,
                 mark_paid: admin || sales_manager,
-                manage: admin || office,
+                manage: admin || scheduling,
                 delete: admin || sales_manager,
             },
             own: rep,
@@ -310,7 +307,6 @@ mod tests {
             SALES_REP,
             SALES_MANAGER,
             SHOP_MANAGER,
-            OFFICE_MANAGER,
             SCHEDULING_MANAGER,
             INVENTORY_MANAGER,
         ] {
@@ -332,7 +328,7 @@ mod tests {
     fn visibility_sql() {
         assert_eq!(viewer(true, &[]).visible_sql(), "TRUE");
         // The office, scheduling and the shop see every project.
-        for position in [MANAGER, OFFICE_MANAGER, SCHEDULING_MANAGER, SHOP_MANAGER] {
+        for position in [MANAGER, SCHEDULING_MANAGER, SHOP_MANAGER] {
             assert_eq!(
                 viewer(false, &[position]).visible_sql(),
                 "TRUE",
@@ -352,7 +348,7 @@ mod tests {
 
     #[test]
     fn permissions_by_position() {
-        let office = viewer(false, &[OFFICE_MANAGER]).permissions;
+        let office = viewer(false, &[SCHEDULING_MANAGER]).permissions;
         assert!(office.production && office.manage && !office.mark_paid && !office.convert);
         let shop = viewer(false, &[SHOP_MANAGER]).permissions;
         assert!(shop.production && !shop.manage && !shop.mark_paid);

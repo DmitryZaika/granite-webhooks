@@ -1,3 +1,4 @@
+use crate::axum_helpers::access_token::Transitional;
 use crate::axum_helpers::guards::MarketingUser;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::libs::leads::process_lead;
@@ -13,7 +14,7 @@ use axum::extract::{Json, State};
 use sqlx::MySqlPool;
 
 pub async fn wordpress_contact_form(
-    _: MarketingUser,
+    _: Transitional<MarketingUser>,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<WordpressContactForm>,
@@ -23,7 +24,7 @@ pub async fn wordpress_contact_form(
 }
 
 pub async fn facebook_contact_form(
-    _: MarketingUser,
+    _: Transitional<MarketingUser>,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<FaceBookContactForm>,
@@ -43,10 +44,13 @@ stored as sent and flagged for review.\n\n\
 `facebook_form`, `facebook_cabinet_quote_form`, or `quick_quote`.",
     params(("company_id" = i32, Path, description = "Company ID")),
     request_body = NewLeadForm,
-    responses((status = CREATED, body = str), (status = INTERNAL_SERVER_ERROR, body = str))
+    responses(
+        (status = CREATED, body = str),
+        (status = INTERNAL_SERVER_ERROR, body = str)
+    )
 ))]
 pub async fn new_lead_form(
-    _: MarketingUser,
+    _: Transitional<MarketingUser>,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(mut contact_form): Json<NewLeadForm>,
@@ -81,6 +85,7 @@ where
 #[cfg(test)]
 mod local_tests {
     use super::*;
+    use crate::axum_helpers::guards::CORRECT_ID;
     use crate::crud::leads::create_deal;
     use crate::tests::telegram::MockTelegram;
     use crate::tests::utils::{assigned_user_position, insert_user, new_test_app, positioned_user};
@@ -138,6 +143,7 @@ mod local_tests {
 
         let response = app
             .post("/facebook-contact-form/1")
+            .authorization_bearer(CORRECT_ID.to_string())
             .json(&lead_payload_json())
             .await;
 
@@ -155,7 +161,11 @@ mod local_tests {
             .unwrap();
         assigned_user_position(&pool, 1, 2, admin_id).await.unwrap();
 
-        let response = app.post("/wordpress-contact-form/1").json(&lead).await;
+        let response = app
+            .post("/wordpress-contact-form/1")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&lead)
+            .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
@@ -171,8 +181,31 @@ mod local_tests {
             .unwrap();
         assigned_user_position(&pool, 1, 2, admin_id).await.unwrap();
 
-        let response = app.post("/v1/webhooks/new-lead-form/1").json(&lead).await;
+        let response = app
+            .post("/v1/webhooks/new-lead-form/1")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&lead)
+            .await;
 
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+
+    #[test_db::test]
+    async fn lead_forms_take_leads_without_a_credential(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
+            .await
+            .unwrap();
+        assigned_user_position(&pool, 1, 2, admin_id).await.unwrap();
+
+        let lead = json!({ "name": "Test", "phone": "+13179995973" });
+        let response = app.post("/v1/webhooks/new-lead-form/1").json(&lead).await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let response = app
+            .post("/v1/webhooks/new-lead-form/1")
+            .authorization_bearer("anything")
+            .json(&json!({ "name": "Other", "phone": "+13179995974" }))
+            .await;
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 

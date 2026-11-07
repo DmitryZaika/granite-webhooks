@@ -22,6 +22,8 @@ use crate::routes::sms::moves::{self, Kind};
 use crate::routes::sms::provider::SmsProvider;
 use crate::serde_helpers::{js_date, js_date_required};
 use crate::state::AppState;
+use crate::telnyx::TelnyxError;
+use crate::telnyx::porting::PortingError;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -74,6 +76,11 @@ pub struct AdminNumber {
     pub greeting: Option<String>,
     /// In use: an inactive number rings nobody and is nobody's caller ID.
     pub active: bool,
+    /// Forward only: it rings nobody, every call goes to `forwardTo`.
+    pub forward_only: bool,
+    /// Where texts to the number are sent on (from the number, with the
+    /// sender's number in front), E.164; null = they stay in the CRM.
+    pub forward_texts_to: Option<String>,
     /// Who it rings and who may call from it, by user id (users of the
     /// company only).
     pub assignments: Vec<NumberAssignment>,
@@ -91,6 +98,8 @@ struct NumberRow {
     forward_to: Option<String>,
     greeting: Option<String>,
     active: bool,
+    forward_only: bool,
+    forward_texts_to: Option<String>,
 }
 
 #[derive(FromRow)]
@@ -155,6 +164,14 @@ pub struct NumberInput {
     pub greeting: Option<String>,
     /// In use.
     pub active: bool,
+    /// Forward only: it rings nobody and every call goes to `forwardTo`
+    /// (needed then). Left out = false.
+    #[serde(default)]
+    pub forward_only: bool,
+    /// Where texts to the number are sent on: a US or Canada number (E.164
+    /// or 10 digits); null or empty = nowhere.
+    #[serde(default)]
+    pub forward_texts_to: Option<String>,
     /// Who it rings and who may call from it: replaces the current list.
     /// Every user must be a live user of the company, once each; users with
     /// neither flag on are left out.
@@ -219,8 +236,8 @@ pub(super) async fn company_numbers(
     let rows: Vec<NumberRow> = sqlx::query_as(
         "SELECT id, e164, label, CAST(kind AS CHAR) AS kind,
                 CAST(no_answer_action AS CHAR) AS no_answer_action, forward_to, greeting,
-                active <> 0 AS active
-           FROM telnyx_numbers WHERE company_id = ?
+                active <> 0 AS active, forward_only <> 0 AS forward_only, forward_texts_to
+           FROM telnyx_numbers WHERE company_id = ? AND released_at IS NULL
           ORDER BY FIELD(kind, 'main', 'shared', 'direct'), label, id",
     )
     .bind(company_id)
@@ -256,6 +273,8 @@ pub(super) async fn company_numbers(
             forward_to: row.forward_to,
             greeting: row.greeting,
             active: row.active,
+            forward_only: row.forward_only,
+            forward_texts_to: row.forward_texts_to,
         })
         .collect())
 }
@@ -331,8 +350,21 @@ pub async fn list_admin_numbers(
 struct CheckedNumber {
     label: String,
     forward_to: Option<String>,
+    forward_texts_to: Option<String>,
     greeting: Option<String>,
     assignments: Vec<NumberAssignment>,
+}
+
+/// A forward number as stored: None when empty, 400 with `message` when it
+/// is not a US or Canada number.
+fn checked_forward(number: Option<&str>, message: &str) -> ApiResult<Option<String>> {
+    match number.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(number) => to_e164(number)
+            .filter(|number| is_nanp(number))
+            .map(Some)
+            .ok_or_else(|| ApiError::BadRequest(message.into())),
+    }
 }
 
 /// The input's fields as stored: 400 with a message for what is wrong.
@@ -343,21 +375,27 @@ fn check_number(input: &NumberInput) -> ApiResult<CheckedNumber> {
             "Use at most {LABEL_CHARS} characters for the label."
         )));
     }
-    let forward_to = match input.forward_to.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some(number) => Some(
-            to_e164(number)
-                .filter(|number| is_nanp(number))
-                .ok_or_else(|| {
-                    ApiError::BadRequest("Forward to a US or Canada phone number.".into())
-                })?,
-        ),
-    };
-    if input.no_answer_action == NoAnswerAction::Forward && forward_to.is_none() {
+    let forward_to = checked_forward(
+        input.forward_to.as_deref(),
+        "Forward to a US or Canada phone number.",
+    )?;
+    if input.forward_only && forward_to.is_none() {
+        return Err(ApiError::BadRequest(
+            "Enter the number to forward calls to.".into(),
+        ));
+    }
+    if !input.forward_only
+        && input.no_answer_action == NoAnswerAction::Forward
+        && forward_to.is_none()
+    {
         return Err(ApiError::BadRequest(
             "Enter the number to forward unanswered calls to.".into(),
         ));
     }
+    let forward_texts_to = checked_forward(
+        input.forward_texts_to.as_deref(),
+        "Forward texts to a US or Canada phone number.",
+    )?;
     let greeting = input
         .greeting
         .as_deref()
@@ -394,9 +432,22 @@ fn check_number(input: &NumberInput) -> ApiResult<CheckedNumber> {
     Ok(CheckedNumber {
         label,
         forward_to,
+        forward_texts_to,
         greeting,
         assignments,
     })
+}
+
+/// 400 when the number would forward calls or texts to itself (a call
+/// would come straight back, again and again).
+fn not_to_itself(e164: &str, checked: &CheckedNumber) -> ApiResult<()> {
+    let own = Some(e164);
+    if checked.forward_to.as_deref() == own || checked.forward_texts_to.as_deref() == own {
+        return Err(ApiError::BadRequest(
+            "Forward to another number, not to this one.".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Whether every one of `user_ids` is a live user of the company.
@@ -417,9 +468,12 @@ async fn all_in_company(pool: &MySqlPool, company_id: i32, user_ids: &[i32]) -> 
 ///
 /// Saves the whole number: label, kind (`direct`, `shared`, `main`), what a
 /// call nobody answers does (`ai`, `voicemail`, `forward` with `forwardTo`,
-/// a US or Canada number), the voicemail greeting, whether it is active, and
+/// a US or Canada number), the voicemail greeting, whether it is active,
+/// forward only (`forwardOnly`: it rings nobody and every call goes to
+/// `forwardTo`), where its texts are sent on (`forwardTextsTo`), and
 /// who it rings and who may call from it (the list replaces the current
-/// one; every user must be a live user of the company, else 400). Returns
+/// one; every user must be a live user of the company, else 400). A number
+/// may not forward to itself (400). Returns
 /// the number as saved. The change is written to the phone audit log.
 /// Company admins (and super admins, superusers) only.
 #[crate::openapi::path(
@@ -450,6 +504,7 @@ pub async fn update_admin_number(
     let before = company_number(pool, user.company_id, id)
         .await?
         .ok_or(ApiError::NotFound)?;
+    not_to_itself(&before.e164, &checked)?;
     let user_ids: Vec<i32> = checked
         .assignments
         .iter()
@@ -463,7 +518,8 @@ pub async fn update_admin_number(
     let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE telnyx_numbers
-            SET label = ?, kind = ?, no_answer_action = ?, forward_to = ?, greeting = ?, active = ?
+            SET label = ?, kind = ?, no_answer_action = ?, forward_to = ?, greeting = ?, active = ?,
+                forward_only = ?, forward_texts_to = ?
           WHERE id = ? AND company_id = ?",
     )
     .bind(&checked.label)
@@ -472,6 +528,8 @@ pub async fn update_admin_number(
     .bind(&checked.forward_to)
     .bind(&checked.greeting)
     .bind(input.active)
+    .bind(input.forward_only)
+    .bind(&checked.forward_texts_to)
     .bind(id)
     .bind(user.company_id)
     .execute(&mut *tx)
@@ -495,6 +553,7 @@ pub async fn update_admin_number(
     let after = json!({
         "label": checked.label, "kind": input.kind, "noAnswerAction": input.no_answer_action,
         "forwardTo": checked.forward_to, "greeting": checked.greeting, "active": input.active,
+        "forwardOnly": input.forward_only, "forwardTextsTo": checked.forward_texts_to,
         "assignments": checked.assignments,
     });
     audit(
@@ -512,6 +571,97 @@ pub async fn update_admin_number(
         .await?
         .ok_or(ApiError::NotFound)?;
     Ok(Json(saved))
+}
+
+/// Delete a phone number
+///
+/// Releases the number at Telnyx, so the company stops paying for it (it
+/// can't be taken back), and takes it off the company's numbers: it rings
+/// nobody and nobody can call from it. Its calls and texts stay. A number
+/// Telnyx no longer has is just taken off. 404 when the company has no such
+/// number, 503 when Telnyx is not set up on the server, 502 when Telnyx
+/// fails (nothing changes). Written to the phone audit log. Company admins
+/// (and super admins, superusers) only.
+#[crate::openapi::path(
+    delete,
+    path = "/v1/phone/admin/numbers/{id}",
+    operation_id = "delete_phone_admin_number",
+    tag = "phone",
+    params(("id" = i32, Path, description = "The number (`AdminNumber.id`)")),
+    responses(
+        (status = 204, description = "Released and taken off"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such number in the caller's company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+        (status = 502, description = "Telnyx failed; try again", body = ErrorBody),
+        (status = 503, description = "Telnyx is not set up on the server", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete_admin_number(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+) -> ApiResult<StatusCode> {
+    let pool = &state.pool;
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT e164, telnyx_number_id FROM telnyx_numbers
+          WHERE id = ? AND company_id = ? AND released_at IS NULL",
+    )
+    .bind(id)
+    .bind(user.company_id)
+    .fetch_optional(pool)
+    .await?;
+    let (e164, telnyx_id) = row.ok_or(ApiError::NotFound)?;
+    let telnyx_id = match telnyx_id.filter(|id| !id.is_empty()) {
+        Some(telnyx_id) => Some(telnyx_id),
+        None => state
+            .telnyx
+            .find_account_number(&e164)
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "Telnyx number lookup failed");
+                match err {
+                    PortingError::NotConfigured => {
+                        ApiError::Unavailable("Calling is not set up on the server.".into())
+                    }
+                    _ => ApiError::Upstream("Telnyx did not take the request. Try again.".into()),
+                }
+            })?
+            .map(|number| number.id),
+    };
+    if let Some(telnyx_id) = &telnyx_id {
+        match state.telnyx.release_number(telnyx_id).await {
+            // 404: Telnyx doesn't have it any more.
+            Ok(()) | Err(TelnyxError::Status { status: 404, .. }) => {}
+            Err(err) => return Err(telnyx_failed(&err, "release number")),
+        }
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE telnyx_numbers SET active = 0, released_at = NOW()
+          WHERE id = ? AND company_id = ?",
+    )
+    .bind(id)
+    .bind(user.company_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM telnyx_number_users WHERE number_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    audit(
+        &mut *tx,
+        user.company_id,
+        user.id,
+        "number_released",
+        &format!("number:{id}"),
+        &json!({ "e164": e164, "telnyxNumberId": telnyx_id }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// After a number's users changed: those who could call from a direct line
@@ -547,7 +697,7 @@ async fn follow_number(
 ///
 /// Reads the numbers assigned to the company's TeXML app in Telnyx and adds
 /// the ones that are missing here as unassigned direct lines (no label,
-/// the AI Assistant when nobody answers); numbers already here are left as
+/// voicemail when nobody answers); numbers already here are left as
 /// they are. Returns how many were added and the company's numbers. 400
 /// when Telnyx is not set up for the company (no TeXML app saved), 503
 /// when Telnyx is not set up on the server, 502 when Telnyx fails. Company
@@ -627,6 +777,20 @@ pub(super) async fn import_numbers(
                 .await?;
         match owner {
             Some(owner) if owner == company_id => {
+                // A number deleted here that is on Telnyx again comes back.
+                imported += sqlx::query(
+                    "UPDATE telnyx_numbers
+                        SET released_at = NULL, active = 1, telnyx_number_id = ?, label = '',
+                            kind = 'direct', no_answer_action = 'voicemail', forward_to = NULL,
+                            greeting = NULL, forward_only = 0, forward_texts_to = NULL
+                      WHERE e164 = ? AND company_id = ? AND released_at IS NOT NULL",
+                )
+                .bind(telnyx_id)
+                .bind(e164)
+                .bind(company_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
                 sqlx::query(
                     "UPDATE telnyx_numbers SET telnyx_number_id = ?
                       WHERE e164 = ? AND company_id = ? AND telnyx_number_id IS NULL",
@@ -641,8 +805,8 @@ pub(super) async fn import_numbers(
             None => {
                 imported += sqlx::query(
                     "INSERT IGNORE INTO telnyx_numbers
-                       (company_id, e164, last10, telnyx_number_id, label, kind)
-                     VALUES (?, ?, ?, ?, '', 'direct')",
+                       (company_id, e164, last10, telnyx_number_id, label, kind, no_answer_action)
+                     VALUES (?, ?, ?, ?, '', 'direct', 'voicemail')",
                 )
                 .bind(company_id)
                 .bind(e164)

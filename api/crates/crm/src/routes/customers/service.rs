@@ -3,7 +3,9 @@
 
 use crate::error::ApiError;
 use crate::phone::calls::SALES_MANAGER_POSITION;
-use crate::phone::crm_push::{LeadKind, push_lead_logged, push_manager_lead, sales_managers};
+use crate::phone::crm_push::{
+    LeadKind, push_lead_logged, push_leads_changed_logged, push_manager_lead, sales_managers,
+};
 use crate::phone::numbers::last10;
 use crate::routes::deals::service::{enter_stage, sync_drip};
 use crate::state::AppState;
@@ -394,15 +396,25 @@ pub fn rep_assigned_text(lead_link: &str) -> String {
     format!("You were assigned a lead. Click here: \n{lead_link}")
 }
 
+/// What the leads bot tells the rep a customer was moved to from another
+/// rep (the customer's Edit page or its Sales rep picker).
+pub fn rep_reassigned_text(customer_name: &str, lead_link: &str) -> String {
+    format!("You were reassigned the customer {customer_name}. Click here: \n{lead_link}")
+}
+
 /// `actor` gave sales rep `rep` customer `customer_id` (a lead) with open
 /// deal `deal_id` in the app: everyone hears it as when a manager presses
 /// the rep's button in Telegram. The rep gets a `lead` push (`assigned`) and
 /// the leads bot's "You were assigned a lead. Click here:" with the link (an
 /// email with it when they have no Telegram); nothing for a rep who assigned
-/// themselves. The sales managers' Telegram messages about the lead are
+/// themselves. With `reassigned` (the customer's name, when they were moved
+/// from another rep) it says "You were reassigned the customer
+/// {name}. Click here:" instead. The sales managers' Telegram messages about the lead are
 /// edited to "Lead assigned to {rep}", and the other managers' phones get a
-/// `taken` push. Best effort: the assignment is saved already, so failures
-/// are logged.
+/// `taken` push. Every other phone of the company (the actor's own included)
+/// gets the quiet `leads` push, so the lead leaves "Waiting for a sales rep"
+/// everywhere at once. Best effort: the assignment is saved already, so
+/// failures are logged.
 pub async fn notify_assigned_rep(
     state: &AppState,
     company_id: i32,
@@ -410,6 +422,7 @@ pub async fn notify_assigned_rep(
     rep: i32,
     actor: i32,
     deal_id: i64,
+    reassigned: Option<&str>,
 ) {
     let target: Result<Option<(Option<i64>, String, Option<String>)>, sqlx::Error> =
         sqlx::query_as(
@@ -454,6 +467,11 @@ pub async fn notify_assigned_rep(
     {
         tracing::warn!(?error, customer_id, "assigned lead: managers' push failed");
     }
+    let mut told = managers;
+    if rep != actor {
+        told.push(rep);
+    }
+    push_leads_changed_logged(state, company_id, &told).await;
 
     if rep == actor {
         return;
@@ -468,17 +486,26 @@ pub async fn notify_assigned_rep(
     )
     .await;
     let lead_link = format!("{}/employee/deals/edit/{deal_id}/project", state.app_url);
+    let (text, headline, subject) = match reassigned {
+        Some(customer) => (
+            rep_reassigned_text(customer, &lead_link),
+            format!("You were reassigned the customer {customer}. Click here:"),
+            "Customer reassigned",
+        ),
+        None => (
+            rep_assigned_text(&lead_link),
+            "You were assigned a lead. Click here:".to_string(),
+            "Lead assigned",
+        ),
+    };
     if let Some(chat_id) = chat_id {
-        state
-            .telegram
-            .send_text(Bot::Leads, chat_id, &rep_assigned_text(&lead_link))
-            .await;
+        state.telegram.send_text(Bot::Leads, chat_id, &text).await;
         return;
     }
     let connect_telegram_link = format!("{}/link-telegram-both", state.app_url);
     let body = format!(
         r"
-    You were assigned a lead. Click here:
+    {headline}
     {lead_link}
 
     To get lead alerts in Telegram, connect Telegram in the CRM:
@@ -491,7 +518,7 @@ pub async fn notify_assigned_rep(
         to: vec![email],
         cc: Vec::new(),
         bcc: Vec::new(),
-        subject: "Lead assigned".to_string(),
+        subject: subject.to_string(),
         body,
         signature: None,
         reply_to: Vec::new(),

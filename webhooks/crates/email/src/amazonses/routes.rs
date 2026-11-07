@@ -1,3 +1,5 @@
+use crate::axum_helpers::access_token::AccessToken;
+use crate::axum_helpers::guards::SesEventBridge;
 use axum::extract::{Json, State};
 use axum::http::header::RETRY_AFTER;
 use axum::http::{HeaderValue, StatusCode};
@@ -48,6 +50,7 @@ fn parse_error_kind(error: &str) -> &'static str {
 }
 
 pub async fn read_receipt_handler(
+    _: AccessToken<SesEventBridge>,
     State(pool): State<MySqlPool>,
     Json(info): Json<SesEvent>,
 ) -> BasicResponse {
@@ -239,6 +242,7 @@ fn into_http_response(response: BasicResponse) -> Response {
 }
 
 pub async fn receive_handler(
+    _: AccessToken<SesEventBridge>,
     State(pool): State<MySqlPool>,
     Json(event): Json<S3Event>,
 ) -> Response {
@@ -259,6 +263,58 @@ mod local_tests {
     };
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
+
+    /// An internal access token for the SES routes.
+    async fn ses_token(pool: &MySqlPool) -> String {
+        use common::access_token::{NewAccessToken, Scope, create};
+        create(
+            pool,
+            &NewAccessToken {
+                name: "ses test",
+                company_id: None,
+                scopes: &[Scope::Ses],
+                expires_at: None,
+                created_by: None,
+            },
+        )
+        .await
+        .unwrap()
+        .1
+    }
+
+    #[test_db::test]
+    async fn ses_routes_need_an_ses_token(pool: MySqlPool) {
+        use common::access_token::{NewAccessToken, Scope, create};
+        let (_, internal) = create(
+            &pool,
+            &NewAccessToken {
+                name: "not ses",
+                company_id: None,
+                scopes: &[Scope::Internal],
+                expires_at: None,
+                created_by: None,
+            },
+        )
+        .await
+        .unwrap();
+        let app = new_test_app(pool.clone());
+        for route in ["/ses/read-receipt", "/ses/receive-email"] {
+            let response = app.post(route).json(&ses_open_event_json()).await;
+            assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED, "{route}");
+            let response = app
+                .post(route)
+                .authorization_bearer("anything")
+                .json(&ses_open_event_json())
+                .await;
+            assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED, "{route}");
+            let response = app
+                .post(route)
+                .authorization_bearer(&internal)
+                .json(&ses_open_event_json())
+                .await;
+            assert_eq!(response.status_code(), StatusCode::FORBIDDEN, "{route}");
+        }
+    }
 
     #[test]
     fn missing_s3_object_errors_are_detected() {
@@ -354,6 +410,7 @@ mod local_tests {
 
         let response = app
             .post("/ses/read-receipt")
+            .authorization_bearer(ses_token(&pool).await)
             .json(&ses_open_event_json())
             .await;
 
@@ -371,6 +428,7 @@ mod local_tests {
         let app = new_test_app(pool.clone());
         let response = app
             .post("/ses/read-receipt")
+            .authorization_bearer(ses_token(&pool).await)
             .json(&ses_open_event_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);

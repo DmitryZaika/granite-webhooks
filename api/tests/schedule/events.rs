@@ -247,6 +247,8 @@ async fn events_keep_their_own_phone_and_email(pool: MySqlPool) {
     event["customer_id"] = json!(1000);
     event["contact_phone"] = json!(" (317) 555-0199 ");
     event["contact_email"] = json!("wife@example.com");
+    event["contact_phone_2"] = json!("(317) 555-0177");
+    event["contact_email_2"] = json!("husband@example.com");
     let id = server
         .post("/v1/events")
         .with_session(sessions::REP)
@@ -278,6 +280,8 @@ async fn events_keep_their_own_phone_and_email(pool: MySqlPool) {
         .json::<Value>();
     assert_eq!(listed["events"][0]["contact_phone"], "(317) 555-0199");
     assert_eq!(listed["events"][0]["contact_email"], "wife@example.com");
+    assert_eq!(listed["events"][0]["contact_phone_2"], "(317) 555-0177");
+    assert_eq!(listed["events"][0]["contact_email_2"], "husband@example.com");
     let customer_phone: Option<String> =
         sqlx::query_scalar("SELECT phone FROM customers WHERE id = 1000")
             .fetch_one(&pool)

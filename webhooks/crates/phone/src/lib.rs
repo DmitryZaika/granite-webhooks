@@ -41,13 +41,7 @@ pub fn router() -> Router<MySqlPool> {
             "/cloudtalk/sync/{company_id}/{customer_id}",
             post(ct::sync_cloudtalk).delete(ct::unsync_cloudtalk),
         )
-        .route("/ringcentral/sms/{company_id}", post(rc::sms_received))
-        .route("/ringcentral/sms/sent/{company_id}", post(rc::sms_sent))
-        .route(
-            "/ringcentral/notify/{company_id}",
-            post(rc::sms_notification),
-        )
-        .route("/ringcentral/call/{company_id}", post(rc::call_received))
+        .merge(ringcentral_webhooks())
         .route(
             "/ringcentral/sync/{company_id}/{customer_id}",
             post(rc::sync_ringcentral).delete(rc::unsync_ringcentral),
@@ -60,4 +54,19 @@ pub fn router() -> Router<MySqlPool> {
             "/google/address-autocomplete",
             post(google::receive::address_information),
         )
+}
+
+/// The routes `RingCentral` calls, which answer its subscription handshake
+/// before anything else.
+fn ringcentral_webhooks() -> Router<MySqlPool> {
+    use ringcentral::receive as rc;
+    Router::new()
+        .route("/ringcentral/sms/{company_id}", post(rc::sms_received))
+        .route("/ringcentral/sms/sent/{company_id}", post(rc::sms_sent))
+        .route(
+            "/ringcentral/notify/{company_id}",
+            post(rc::sms_notification),
+        )
+        .route("/ringcentral/call/{company_id}", post(rc::call_received))
+        .route_layer(axum::middleware::from_fn(rc::handshake))
 }

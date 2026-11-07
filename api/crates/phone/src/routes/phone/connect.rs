@@ -37,7 +37,10 @@ const DAILY_TEXT_SPEND: &str = "25.00";
 /// Most numbers a company may hold; a superuser buys past it.
 const MAX_COMPANY_NUMBERS: i64 = 25;
 /// Numbers one search shows.
-const SEARCH_LIMIT: u32 = 12;
+const SEARCH_LIMIT: usize = 12;
+/// Numbers asked of Telnyx per search; each search shows a random
+/// `SEARCH_LIMIT` of them, so searching again shows new numbers.
+const SEARCH_POOL: u32 = 60;
 
 /// What connecting did.
 #[derive(Debug, Serialize, ToSchema)]
@@ -69,6 +72,36 @@ fn resource_name(company_id: i32, company_name: &str) -> String {
     } else {
         format!("gm-{company_id}-{slug}")
     }
+}
+
+/// A random `keep` of `items`, still in their order; the first `keep`
+/// when the system has no randomness.
+fn random_few<T>(items: Vec<T>, keep: usize) -> Vec<T> {
+    if items.len() <= keep {
+        return items;
+    }
+    let mut bytes = vec![0u8; items.len() * 4];
+    if getrandom::fill(&mut bytes).is_err() {
+        return items.into_iter().take(keep).collect();
+    }
+    let mut order: Vec<(u32, usize)> = bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .zip(0..)
+        .collect();
+    order.sort_unstable();
+    let mut chosen: Vec<usize> = order
+        .into_iter()
+        .take(keep)
+        .map(|(_, index)| index)
+        .collect();
+    chosen.sort_unstable();
+    let mut chosen = chosen.into_iter().peekable();
+    items
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, item)| chosen.next_if_eq(&index).map(|_| item))
+        .collect()
 }
 
 /// Four random letters and digits, to make a taken name unique.
@@ -534,11 +567,14 @@ pub async fn search_numbers(
     }
     let numbers = state
         .telnyx
-        .search_numbers(area_code, SEARCH_LIMIT)
+        .search_numbers(area_code, SEARCH_POOL)
         .await
         .map_err(|err| telnyx_failed(&err, "search numbers"))?;
     Ok(Json(BuyableNumbers {
-        numbers: numbers.into_iter().map(BuyableNumber::from).collect(),
+        numbers: random_few(numbers, SEARCH_LIMIT)
+            .into_iter()
+            .map(BuyableNumber::from)
+            .collect(),
     }))
 }
 
@@ -620,11 +656,15 @@ pub async fn buy_number(
             "Your company has {MAX_COMPANY_NUMBERS} numbers, the most it can buy here. Ask the Granite Manager team for more."
         )));
     }
-    let owner: Option<i32> =
-        sqlx::query_scalar("SELECT company_id FROM telnyx_numbers WHERE e164 = ?")
-            .bind(&e164)
-            .fetch_optional(pool)
-            .await?;
+    // A number this company deleted may be bought back.
+    let owner: Option<i32> = sqlx::query_scalar(
+        "SELECT company_id FROM telnyx_numbers
+          WHERE e164 = ? AND (released_at IS NULL OR company_id <> ?)",
+    )
+    .bind(&e164)
+    .bind(user.company_id)
+    .fetch_optional(pool)
+    .await?;
     if owner.is_some() {
         return Err(ApiError::Conflict(
             "That number is in Granite Manager already.".into(),
@@ -657,9 +697,21 @@ pub async fn buy_number(
         ));
     }
     let mut tx = pool.begin().await?;
+    let revived = sqlx::query(
+        "UPDATE telnyx_numbers
+            SET released_at = NULL, active = 1, telnyx_number_id = NULL, label = '',
+                kind = 'direct', no_answer_action = 'voicemail', forward_to = NULL,
+                greeting = NULL, forward_only = 0, forward_texts_to = NULL
+          WHERE e164 = ? AND company_id = ? AND released_at IS NOT NULL",
+    )
+    .bind(&e164)
+    .bind(user.company_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
     let inserted = sqlx::query(
-        "INSERT IGNORE INTO telnyx_numbers (company_id, e164, last10, label, kind)
-         VALUES (?, ?, ?, '', 'direct')",
+        "INSERT IGNORE INTO telnyx_numbers (company_id, e164, last10, label, kind, no_answer_action)
+         VALUES (?, ?, ?, '', 'direct', 'voicemail')",
     )
     .bind(user.company_id)
     .bind(&e164)
@@ -684,7 +736,7 @@ pub async fn buy_number(
         "number_bought",
         &format!("number:{id}"),
         &json!({ "e164": e164, "orderId": order.id, "status": order.status,
-                 "added": inserted.rows_affected() == 1 }),
+                 "added": inserted.rows_affected() == 1 || revived == 1 }),
     )
     .await?;
     tx.commit().await?;
@@ -717,5 +769,15 @@ mod tests {
         assert_eq!(dollars(Some("0.5".into())).as_deref(), Some("0.50"));
         assert_eq!(dollars(Some("n/a".into())).as_deref(), Some("n/a"));
         assert_eq!(dollars(None), None);
+    }
+
+    #[test]
+    fn searches_show_a_random_few_in_order() {
+        let pool: Vec<u32> = (0..60).collect();
+        let few = random_few(pool.clone(), 12);
+        assert_eq!(few.len(), 12);
+        assert!(few.windows(2).all(|pair| pair[0] < pair[1]), "{few:?}");
+        assert_ne!(few, random_few(pool, 12), "two searches matched");
+        assert_eq!(random_few(vec![1, 2], 12), vec![1, 2]);
     }
 }

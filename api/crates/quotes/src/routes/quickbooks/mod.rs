@@ -17,6 +17,8 @@
 //! - `GET /v1/qbo/class-sales` → the "Sales by Class" report (admins)
 //! - `GET /v1/me/qbo-sales` → the rep's sales this month, and
 //!   `/customers` the customers behind them
+//! - `PUT /v1/company/sales-goal` → a Manager or Sales Manager sets the
+//!   company's monthly goal
 //!
 //! Replaces the Remix `api.quickbooks.*` and `api.employee.qbo-*` routes.
 
@@ -67,6 +69,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(sales::my_sales))
         .routes(routes!(sales::my_customers))
+        .routes(routes!(sales::set_company_goal))
         .routes(routes!(class_sales::class_sales))
 }
 

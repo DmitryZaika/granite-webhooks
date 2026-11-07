@@ -20,6 +20,10 @@
 //! Nothing rings while the company's calling is switched off (or the
 //! company is deleted) or the number is inactive: such calls go straight to
 //! the no-answer action.
+//!
+//! A forward-only number (often one ported in from an old carrier) rings
+//! nobody: every call goes straight to its `forward_to`
+//! ([`forward_only_step`]).
 
 use super::call_rules::{self, Decision, Incoming};
 use super::company::{CompanyConfig, time_zone_of};
@@ -66,11 +70,15 @@ pub struct Line {
     /// What callers hear before a voicemail.
     pub greeting: Option<String>,
     pub active: bool,
+    /// Rings nobody: every call goes to `forward_to`.
+    pub forward_only: bool,
+    /// Where texts to the number are sent on, E.164; None = nowhere.
+    pub forward_texts_to: Option<String>,
 }
 
 const LINE_COLUMNS: &str = "SELECT id, company_id, e164, label, CAST(kind AS CHAR) AS kind,
         CAST(no_answer_action AS CHAR) AS no_answer_action, forward_to, greeting,
-        active <> 0 AS active
+        active <> 0 AS active, forward_only <> 0 AS forward_only, forward_texts_to
    FROM telnyx_numbers";
 
 impl Line {
@@ -306,6 +314,18 @@ pub fn takeover_step(line: &Line, decision: &Decision) -> Option<NoAnswer> {
     }
 }
 
+/// On a forward-only number, where every call goes: its `forward_to` (a US
+/// or Canada number), else a voicemail. None for other numbers.
+pub fn forward_only_step(line: &Line) -> Option<NoAnswer> {
+    if !line.forward_only {
+        return None;
+    }
+    Some(
+        call_rules::forward_number(line.forward_to.as_deref())
+            .map_or_else(|| NoAnswer::Voicemail(greeting(line)), NoAnswer::Forward),
+    )
+}
+
 /// The next step for a call to `line` nobody answered.
 ///
 /// Its users' `cells` first, unless they were tried already or the call was
@@ -378,7 +398,25 @@ mod tests {
             forward_to: forward_to.map(str::to_string),
             greeting: None,
             active: true,
+            forward_only: false,
+            forward_texts_to: None,
         }
+    }
+
+    #[test]
+    fn forward_only_numbers_forward_every_call() {
+        assert_eq!(forward_only_step(&line(NoAnswerAction::Ai, None)), None);
+        let mut forward = line(NoAnswerAction::Ai, Some("(317) 555-0177"));
+        forward.forward_only = true;
+        assert_eq!(
+            forward_only_step(&forward),
+            Some(NoAnswer::Forward("+13175550177".into()))
+        );
+        forward.forward_to = None;
+        assert_eq!(
+            forward_only_step(&forward),
+            Some(NoAnswer::Voicemail(DEFAULT_GREETING.into()))
+        );
     }
 
     fn utc(text: &str) -> DateTime<Utc> {

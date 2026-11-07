@@ -2,7 +2,7 @@ pub use webhooks_core::tests::cloudtalk::*;
 
 mod flow_enrollment_tests {
     use super::INBOUND_SMS;
-    use crate::axum_helpers::guards::CORRECT_ID;
+    use crate::tests::utils::internal_token;
     use crate::crud::cloudtalk::{
         cancel_flow_enrollments_for_customer, cancel_flow_enrollments_on_reply,
     };
@@ -132,7 +132,7 @@ mod flow_enrollment_tests {
         });
         let response = app
             .post("/cloudtalk/call/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -154,7 +154,7 @@ mod flow_enrollment_tests {
         });
         let response = app
             .post("/cloudtalk/call/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -178,7 +178,7 @@ mod flow_enrollment_tests {
         });
         let response = app
             .post("/cloudtalk/call/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -194,7 +194,7 @@ mod flow_enrollment_tests {
         let body: serde_json::Value = serde_json::from_slice(INBOUND_SMS).expect("parse fixture");
         let response = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -224,7 +224,7 @@ mod flow_enrollment_tests {
 
         let first = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(first.status_code(), StatusCode::OK);
@@ -235,7 +235,7 @@ mod flow_enrollment_tests {
         // Same payload again: a redelivery.
         let second = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&body)
             .await;
         assert_eq!(second.status_code(), StatusCode::OK);
@@ -260,7 +260,7 @@ mod flow_enrollment_tests {
 
         let first = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&inbound_sms_with_id_json(2200000200))
             .await;
         assert_eq!(first.status_code(), StatusCode::OK);
@@ -271,7 +271,7 @@ mod flow_enrollment_tests {
         // Different cloudtalk id: a genuine second reply, not a redelivery.
         let second = app
             .post("/cloudtalk/sms/42")
-            .authorization_bearer(CORRECT_ID.to_string())
+            .authorization_bearer(internal_token(&pool).await)
             .json(&inbound_sms_with_id_json(2200000201))
             .await;
         assert_eq!(second.status_code(), StatusCode::OK);

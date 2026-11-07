@@ -46,7 +46,9 @@ use chrono::Utc;
 /// phone, the `whisper` announcement for users who turned it on, and the
 /// number called as the caller ID when every one of them chose to see it.
 /// On a user's own direct line their forward, voicemail or message rule
-/// takes the whole call (no missed-call push). When no phone can ring it
+/// takes the whole call (no missed-call push). A forward-only number rings
+/// nobody: the call goes straight to its forward number (no recording
+/// notice, no missed-call push; voicemail when the number has none). When no phone can ring it
 /// goes straight on: the cells of users with cell fallback on, else the
 /// number's no-answer action (AI Assistant, voicemail or forward) and a
 /// `missed_call` push. A repeated request answers the same call again. An
@@ -179,7 +181,13 @@ async fn answer(state: &AppState, hook: &Hook, line: &Line) -> ApiResult<Respons
             BlockedAction::Voicemail => {}
         }
     }
-    let route = if screened.is_some() {
+    // A forward-only number rings nobody: the call goes straight on.
+    let forwarded = if screened.is_some() {
+        None
+    } else {
+        routing::forward_only_step(line)
+    };
+    let route = if screened.is_some() || forwarded.is_some() {
         routing::Route::default()
     } else {
         routing::route(pool, config, line, caller_e164.as_deref(), now).await?
@@ -194,6 +202,8 @@ async fn answer(state: &AppState, hook: &Hook, line: &Line) -> ApiResult<Respons
         .and_then(|(user_id, decision)| Some((*user_id, routing::takeover_step(line, decision)?)));
     let step = if screened.is_some() {
         Some(NoAnswer::Voicemail(routing::greeting(line)))
+    } else if forwarded.is_some() {
+        forwarded.clone()
     } else if let Some((_, step)) = &taken {
         Some(step.clone())
     } else {
@@ -205,7 +215,7 @@ async fn answer(state: &AppState, hook: &Hook, line: &Line) -> ApiResult<Respons
         None | Some(NoAnswer::Cells(_)) => CallStatus::Ringing,
         Some(_) => CallStatus::Missed,
     };
-    let quiet = screened.is_some() || taken.is_some();
+    let quiet = screened.is_some() || taken.is_some() || forwarded.is_some();
     let other_last10 = last10(&other_number);
     let customer_id = match other_last10.as_deref() {
         Some(digits) => contacts::customer_for_number(pool, config.company_id, digits).await?,
@@ -265,7 +275,8 @@ async fn answer(state: &AppState, hook: &Hook, line: &Line) -> ApiResult<Respons
         events::link_call(&mut *tx, &key, call_id).await?;
     }
     tx.commit().await?;
-    let record = records_inbound(config);
+    // A forwarded call is not recorded: no notice.
+    let record = records_inbound(config) && forwarded.is_none();
     let mut response = Texml::new();
     if record {
         response = response.say(NOTICE);

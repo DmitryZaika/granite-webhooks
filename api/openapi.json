@@ -2640,7 +2640,7 @@
           "customers"
         ],
         "summary": "Delete a customer",
-        "description": "Hides the customer (soft delete) and removes it from the telephony\naddress books. A customer with live deals needs `cascade_deals=true`,\nwhich hides the deals too. Admins and sales managers only.",
+        "description": "Hides the customer (soft delete) and removes it from the telephony\naddress books. A customer with live deals needs `cascade_deals=true`,\nwhich hides the deals too. Admins, sales managers and managers only.",
         "operationId": "delete_customer",
         "parameters": [
           {
@@ -2678,7 +2678,7 @@
             }
           },
           "403": {
-            "description": "Caller is neither an admin nor a sales manager",
+            "description": "Caller is neither an admin, a sales manager nor a manager",
             "content": {
               "application/json": {
                 "schema": {
@@ -13021,6 +13021,140 @@
         ]
       }
     },
+    "/v1/me/stats/outreach": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get my outreach today",
+        "description": "Returns how many outbound calls, texts and emails the signed-in user made\ntoday (midnight to midnight in the company's time zone), and the company's\ndaily minimums for each (null when not set).",
+        "operationId": "get_my_outreach_today",
+        "responses": {
+          "200": {
+            "description": "Today's calls, texts and emails",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Outreach"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/outreach-goals": {
+      "put": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Set the daily outreach minimums",
+        "description": "A Manager or Sales Manager sets the minimum calls, texts and emails each\nrep should make a day. Null (or 0) clears one.",
+        "operationId": "set_company_outreach_goals",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutreachGoals"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The minimums as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutreachGoals"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A minimum out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager or Sales Manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/stats/overview": {
       "get": {
         "tags": [
@@ -19372,7 +19506,7 @@
           "emails"
         ],
         "summary": "List the caller's email threads",
-        "description": "One page (25 threads) of a folder: `inbox` (mail addressed to the caller,\nranked by the latest message to them), `sent`, `trash` (ranked by\ndeletion) or `drafts`. Every message of each listed thread comes back,\nwith names, attachment flags and the recipient's last open. `search`\nmatches subject, text, addresses, and the addresses of customers whose\nname matches; in the inbox it matches any message of the thread.\n`unread=true` keeps only the inbox threads still unread for the caller\n(those `GET /v1/emails/folder-counts` counts as `inbox_unread`). Open a\nthread with `GET /v1/emails/threads/{thread_id}`.\n\n`scope=admin` (admins only) lists every employee's mail of the company\ninstead, optionally only one user's (`sales_rep`); drafts read as the\ninbox there.",
+        "description": "One page (25 threads) of a folder: `inbox` (mail addressed to the caller,\nranked by the latest message to them), `sent`, `trash` (ranked by\ndeletion) or `drafts`. Every message of each listed thread comes back,\nwith names, attachment flags and the recipient's last open. `search`\nmatches subject, text, addresses, and the addresses of customers whose\nname matches; in the inbox it matches any message of the thread.\n`unread=true` keeps only the inbox threads still unread for the caller\n(those `GET /v1/emails/folder-counts` counts as `inbox_unread`), and in\nthe inbox every row says whether its thread is one of them\n(`thread_unread`): show that, don't work it out from the messages. Open a\nthread with `GET /v1/emails/threads/{thread_id}`.\n\n`scope=admin` (admins only) lists every employee's mail of the company\ninstead, optionally only one user's (`sales_rep`); drafts read as the\ninbox there.",
         "operationId": "list_email_threads",
         "parameters": [
           {
@@ -39232,7 +39366,7 @@
           "schedule"
         ],
         "summary": "List an event's scheduling texts",
-        "description": "The company's scheduling texts (`confirmation` templates sent by text)\nfor the event's calendar, each filled in for this event, for the event\ndetails' Send SMS. They go out from the office manager's line with\n`POST /v1/events/{id}/confirmation`.",
+        "description": "The company's scheduling texts (`confirmation` templates sent by text)\nfor the event's calendar, each filled in for this event, for the event\ndetails' Send SMS. They go out from the Scheduling Manager's line with\n`POST /v1/events/{id}/confirmation`.",
         "operationId": "list_event_scheduling_texts",
         "parameters": [
           {
@@ -41032,7 +41166,7 @@
           "schedule"
         ],
         "summary": "Events waiting for their day",
-        "description": "The company's unscheduled events (kept off the calendar until someone\npicks the date), oldest first, with their customers' names. Events of\ncalendars hidden for the caller are left out.",
+        "description": "The company's unscheduled events (kept off the calendar until someone\npicks the date), oldest first, with their customers' names and, while\nQuickBooks is on and connected, their QuickBooks invoices (so an edit\nthat sends `qbo_invoice` back keeps the link). Their dates are only when\nthey were made. Events of calendars hidden for the caller are left out.\nGive one a day with `PUT /v1/events/{id}` and `unscheduled: false`.",
         "operationId": "list_unscheduled_events",
         "responses": {
           "200": {
@@ -48979,6 +49113,83 @@
         ]
       }
     },
+    "/v1/company/sales-goal": {
+      "put": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Set the company's monthly sales goal",
+        "description": "A Manager or Sales Manager sets the goal every employee sees on the\n`QuickBooks` sales widget's Company view. Null clears it.",
+        "operationId": "set_company_sales_goal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompanyGoal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The goal as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyGoal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Goal out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager or Sales Manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/qbo/class-sales": {
       "get": {
         "tags": [
@@ -49428,7 +49639,7 @@
           "jobs"
         ],
         "summary": "Sync missing contacts",
-        "description": "Pushes a few customers without a `RingCentral` or `CloudTalk` contact to\ntheir company's provider.",
+        "description": "Pushes a few customers without a `RingCentral` or `CloudTalk` contact to\ntheir company's provider, and renews up to 2 `RingCentral` SMS\nsubscriptions whose token is not the current webhooks token (a failed\nrenewal waits 2 hours; none is ever created here).",
         "operationId": "run_contact_sync",
         "responses": {
           "200": {
@@ -49616,7 +49827,7 @@
           "jobs"
         ],
         "summary": "Read reps' calls and messages for promises",
-        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, closes the tasks they finished in the CRM (a quote saved or emailed,\na document sent to sign, an event on the schedule, a call), sends their\nmorning list (once a day from 8 AM their time), queues their calls, texts\nand emails of the last 3 days not read yet, then reads up to 4 (a call is\ntranscribed first): saves what the rep promised the customer and by when,\ncloses the open promises it keeps, adds the quote work the customer gave\nthem to that customer's one quote task, and writes the text or email that\nkeeps each promise a message can keep, in the rep's own style.",
+        "description": "For the reps AI promises is on for: reminds them of promises that came\ndue, closes the tasks they finished in the CRM (a quote saved or emailed,\na document sent to sign, an event on the schedule, a call), queues their calls, texts\nand emails of the last 3 days not read yet, then reads up to 4 (a call is\ntranscribed first): saves what the rep promised the customer and by when,\ncloses the open promises it keeps, adds the quote work the customer gave\nthem to that customer's one quote task, and writes the text or email that\nkeeps each promise a message can keep, in the rep's own style.",
         "operationId": "run_promises",
         "responses": {
           "200": {
@@ -53644,7 +53855,7 @@
           "company"
         ],
         "summary": "List position access",
-        "description": "Every tab of the app, and for each position the company may change (all\nbut Super Admin and the portal ones: Shop Worker, Installer, Marketing,\nWalk-in, Template Guy) the tabs it opens, its defaults and whether the\ncompany changed them. Someone with several positions gets all their tabs\ntogether. By default every position opens the whole main app, except\nInventory Manager and Scheduling Manager. The Admin switch still opens\nevery admin page; an admin tab opens that page to someone without it.\nSuperusers and company managers (admins with the Manager position);\nsuperusers may pass `company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
+        "description": "Every tab of the app, and for each position the company may change (all\nbut Super Admin and the portal ones: Shop Worker, Installer, Marketing,\nWalk-in, Template Guy) the tabs it opens, its defaults and whether the\ncompany changed them. Someone with several positions gets all their tabs\ntogether. By default every position opens the whole main app, except\nInventory Manager and Scheduling Manager. The Admin switch still opens\nevery admin page; an admin tab opens that page to someone without it.\nEvery skill too, and each position's: by default every position sells\nslabs and works with transactions and quotes, and only Scheduling Manager\nplans the schedule; the Admin switch keeps every skill. Superusers and\ncompany managers (admins with the Manager position);\nsuperusers may pass `company_id`. Change one with `PUT\n/v1/company/position-sections/{position_id}`.",
         "operationId": "list_position_sections",
         "parameters": [
           {
@@ -53713,13 +53924,13 @@
           "company"
         ],
         "summary": "Save a position's tabs",
-        "description": "Replaces the tabs the position opens in the company, from then on\nfor every user holding it (their next request). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
+        "description": "Replaces the tabs the position opens in the company, and its skills\n(null: the defaults), from then on for every user holding it (their next\nrequest). Unknown keys are refused.\n`DELETE` the same path to go back to the defaults.",
         "operationId": "save_position_sections",
         "parameters": [
           {
             "name": "position_id",
             "in": "path",
-            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
+            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
             "required": true,
             "schema": {
               "type": "integer",
@@ -53752,7 +53963,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "A position whose tabs can't be changed, or an unknown tab",
+            "description": "A position whose tabs can't be changed, or an unknown tab or skill",
             "content": {
               "application/json": {
                 "schema": {
@@ -53803,13 +54014,13 @@
           "company"
         ],
         "summary": "Reset a position's tabs",
-        "description": "The position opens its default tabs again in the company.",
+        "description": "The position opens its default tabs, with its default skills, again in\nthe company.",
         "operationId": "reset_position_sections",
         "parameters": [
           {
             "name": "position_id",
             "in": "path",
-            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 10 Office Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
+            "description": "1 Sales Rep, 2 Sales Manager, 5 Manager, 3 Shop Manager, 12 Inventory Manager, 13 Scheduling Manager",
             "required": true,
             "schema": {
               "type": "integer",
@@ -53840,6 +54051,68 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/position-sections/reviewed": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Mark position access reviewed",
+        "description": "A Manager opened Position access: the setup checklist's \"Adjust\npermissions\" is done for the company (`company.permissions_reviewed_at`,\nkept from the first time).",
+        "operationId": "mark_position_access_reviewed",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked"
           },
           "401": {
             "description": "No valid session",
@@ -56236,6 +56509,109 @@
         ]
       }
     },
+    "/v1/auth/web-link": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Get a link that opens a CRM page signed in",
+        "description": "For the Granite Phone app: returns a link to `path` on the caller's CRM\nhost that signs the phone's browser in as the caller on the way. Open it\nat once (the API's base URL + `link_path`): it works for `expires_in`\nseconds, and only while this phone stays signed in. Device token only.",
+        "operationId": "create_web_link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebLinkInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The path is not a page of the CRM's host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/web-link/{token}": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Open a CRM page signed in",
+        "description": "Follows a link from `POST /v1/auth/web-link`: redirects (303) to its page\non the company's CRM host, with a session cookie for the link's user. A\nbrowser already signed in as that user keeps its session; otherwise a new\none starts, as signing in with the password does. An expired or changed\nlink, or one whose phone was signed out since, redirects to the CRM's\nsign-in page instead. Takes no other credentials.",
+        "operationId": "open_web_link",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token of the link",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "To the page signed in, or to the sign-in page when the link no longer works"
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/phone/bootstrap": {
       "get": {
         "tags": [
@@ -57390,13 +57766,423 @@
         ]
       }
     },
+    "/v1/phone/contact-groups": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "List contact groups",
+        "description": "The company's contact groups (made by any of its users) with their\nmembers, by name, and which of them I hid from the top of my Contacts;\nalso whether I hid the built-in Coworkers. Members are ids to show from\nthe contact index (`GET /v1/phone/contacts/index`: customers by `id`,\ncoworkers by `userId`); deleted customers and users are left out. Change\na group with `PATCH /v1/phone/contact-groups/{id}` and\n`PUT /v1/phone/contact-groups/{id}/members`. Device token only.",
+        "operationId": "list_phone_contact_groups",
+        "responses": {
+          "200": {
+            "description": "The company's groups and what I hid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactGroups"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Create a contact group",
+        "description": "A new group of the company, with me as its maker, and optionally its\nfirst members; every user of the company sees it at the top of their\nContacts (until they hide it). At most 100 groups per company (400\n`too_many_groups`) and 500 members per group (400 `too_many_members`).\n400 `name_taken`, `unknown_contact`, `unknown_coworker`, or what is\nwrong with the name. Device token only.",
+        "operationId": "create_phone_contact_group",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`name_taken`, `too_many_groups`, `too_many_members`, `unknown_contact`, `unknown_coworker`, or what is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/contact-groups/{id}": {
+      "delete": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Delete a contact group",
+        "description": "Deletes the group for everyone at the company (its customers and\ncoworkers themselves stay). To only take it off the top of my Contacts,\nhide it instead (`PATCH /v1/phone/contact-groups/{id}` `hidden`). 404\nwhen the group is not my company's. Device token only.",
+        "operationId": "delete_phone_contact_group",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The group's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a group of my company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Rename, hide or show a contact group",
+        "description": "`name` renames the group for everyone at the company (400 as for\n`POST /v1/phone/contact-groups`); `hidden` hides it from the top of my\nown Contacts or shows it there again (other users' tops are left alone;\nthe group and its members stay). Send either or both. 404 when the group\nis not my company's. Device token only.",
+        "operationId": "update_phone_contact_group",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The group's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The group now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`name_taken`, or what is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a group of my company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/contact-groups/coworkers": {
+      "patch": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Hide or show Coworkers",
+        "description": "Hides the built-in Coworkers group (everyone at the company with a phone\nnumber) from the top of my Contacts, or shows it there again. Only for\nme; Coworkers itself is unchanged. `GET /v1/phone/contact-groups`\n`coworkersHidden` says which. Device token only.",
+        "operationId": "update_phone_coworkers_group",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoworkersChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No `hidden`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/contact-groups/{id}/members": {
+      "put": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Set a contact group's members",
+        "description": "Makes the group's members exactly the customers and coworkers sent\n(send the whole list: who is left out is taken out; empty lists empty\nthe group). For everyone at the company. At most 500 members (400\n`too_many_members`); 400 `unknown_contact` / `unknown_coworker` for ids\nthat are not my company's live customers / users. 404 when the group is\nnot my company's. Device token only.",
+        "operationId": "set_phone_contact_group_members",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The group's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupMembers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The group now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`too_many_members`, `unknown_contact` or `unknown_coworker`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a group of my company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
     "/v1/phone/calls": {
       "get": {
         "tags": [
           "phone"
         ],
         "summary": "List my Recents",
-        "description": "The caller's calls, newest first: calls they placed or answered, every\ncall of a direct line assigned to them, and unanswered incoming calls of\nshared and main lines that ring them; calls they hid are left out.\n`filter`: `missed` = incoming calls nobody answered (voicemails and AI\nmessages included), `incoming`, `outgoing`, `recorded`; `number` = one\nnumber's calls. Pages by id (`before`, `limit` 1 to 100, default 50).\nDevice token only.",
+        "description": "The caller's calls, newest first: calls they placed or answered, every\ncall of a direct line assigned to them, and unanswered incoming calls of\nshared and main lines that ring them; calls they hid are left out.\n`filter`: `missed` = incoming calls nobody answered (voicemails and AI\nmessages included), `incoming`, `outgoing`, `recorded`, `voicemail`\n(voicemails and AI messages); `number` = one number's calls. Pages by id\n(`before`, `limit` 1 to 100, default 50). Takes the device token or the\nsession cookie (the CRM's phone dock).",
         "operationId": "list_phone_calls",
         "parameters": [
           {
@@ -57422,17 +58208,18 @@
           {
             "name": "filter",
             "in": "query",
-            "description": "`all` (default), `missed`, `incoming`, `outgoing` or `recorded`.",
+            "description": "`all` (default), `missed`, `incoming`, `outgoing`, `recorded` or\n`voicemail`.",
             "required": false,
             "schema": {
               "type": "string",
-              "description": "Which calls Recents lists: `all`, `missed` (incoming calls nobody\nanswered, voicemails and AI messages included), `incoming`,\n`outgoing` or `recorded` (with a recording).",
+              "description": "Which calls Recents lists: `all`, `missed` (incoming calls nobody\nanswered, voicemails and AI messages included), `incoming`,\n`outgoing`, `recorded` (with a recording) or `voicemail` (voicemails\nand AI messages).",
               "enum": [
                 "All",
                 "Missed",
                 "Incoming",
                 "Outgoing",
-                "Recorded"
+                "Recorded",
+                "Voicemail"
               ]
             }
           },
@@ -57463,6 +58250,66 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token or session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A cookie of a user who is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          },
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/calls/ringcentral": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "List my `RingCentral` calls",
+        "description": "The caller's `RingCentral` calls of the last 30 days, newest first: those\nof an extension of theirs, now or ever, and those to or from a number of\ntheirs, now or ever (the rule texts follow). Each is named after our\ncustomer with that number. Empty when the company has no `RingCentral`\nor it can't be read. Device token only.",
+        "operationId": "list_ringcentral_calls",
+        "responses": {
+          "200": {
+            "description": "The caller's RingCentral calls",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RingCentralCalls"
                 }
               }
             }
@@ -57630,7 +58477,7 @@
           "phone"
         ],
         "summary": "Mark calls seen",
-        "description": "Marks calls seen for the caller (clears them from the unread counts and\nshows them as seen): the `ids` sent, or every call in their Recents that\nstarted at or before `upTo`. Send one of the two. Device token only.",
+        "description": "Marks calls seen for the caller (clears them from the unread counts and\nshows them as seen): the `ids` sent, or every call in their Recents that\nstarted at or before `upTo`. Send one of the two. Takes the device token\nor the session cookie (the CRM's phone dock).",
         "operationId": "mark_phone_calls_seen",
         "requestBody": {
           "content": {
@@ -57657,7 +58504,17 @@
             }
           },
           "401": {
-            "description": "No valid device token",
+            "description": "No valid device token or session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A cookie of a user who is not an employee or admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -57680,6 +58537,9 @@
         "security": [
           {
             "device_token": []
+          },
+          {
+            "session_cookie": []
           }
         ]
       }
@@ -58176,6 +59036,74 @@
         ]
       }
     },
+    "/v1/phone/directions": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Find where an address is, for driving directions",
+        "description": "Returns the address's latitude and longitude (Google geocoding), which\nthe app hands to the phone's maps app so turn-by-turn navigation starts\nat once: a map app given only the words may show the place, or a list\nof matches, first. 404 when Google can't find the address (the app then\npasses the words as before); 400 for an empty or too long address.\nDevice token only.",
+        "operationId": "find_phone_directions_point",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "The address to drive to, as the app shows it (an event's or a\ncustomer's), e.g. `6309 Looking Glass Lane, Indianapolis, IN 46235`.\nAt most 300 characters.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Where the address is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Point"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Google can't find the address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
     "/v1/phone/e911": {
       "post": {
         "tags": [
@@ -58607,6 +59535,87 @@
         ]
       }
     },
+    "/v1/phone/texts/messages/{id}": {
+      "delete": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Delete a text that failed",
+        "description": "Removes one of my lines' outbound texts that was not delivered (status\n`failed`), with its files: it never reached the other person, so the\nconversation no longer shows it. The app deletes the failed text it sends\nagain, so it is never sent twice. 409 for a text that went out (or is\nstill going), 404 for one not on my lines. Device token only.",
+        "operationId": "delete_failed_phone_text",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The text's id (a text's `id`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`texting_disabled`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a text of my lines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The text did not fail: only a failed text can be deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
     "/v1/phone/texts/media/{id}": {
       "get": {
         "tags": [
@@ -58926,7 +59935,7 @@
           "phone"
         ],
         "summary": "Change a phone number",
-        "description": "Saves the whole number: label, kind (`direct`, `shared`, `main`), what a\ncall nobody answers does (`ai`, `voicemail`, `forward` with `forwardTo`,\na US or Canada number), the voicemail greeting, whether it is active, and\nwho it rings and who may call from it (the list replaces the current\none; every user must be a live user of the company, else 400). Returns\nthe number as saved. The change is written to the phone audit log.\nCompany admins (and super admins, superusers) only.",
+        "description": "Saves the whole number: label, kind (`direct`, `shared`, `main`), what a\ncall nobody answers does (`ai`, `voicemail`, `forward` with `forwardTo`,\na US or Canada number), the voicemail greeting, whether it is active,\nforward only (`forwardOnly`: it rings nobody and every call goes to\n`forwardTo`), where its texts are sent on (`forwardTextsTo`), and\nwho it rings and who may call from it (the list replaces the current\none; every user must be a live user of the company, else 400). A number\nmay not forward to itself (400). Returns\nthe number as saved. The change is written to the phone audit log.\nCompany admins (and super admins, superusers) only.",
         "operationId": "update_phone_admin_number",
         "parameters": [
           {
@@ -59017,6 +60026,96 @@
             "session_cookie": []
           }
         ]
+      },
+      "delete": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Delete a phone number",
+        "description": "Releases the number at Telnyx, so the company stops paying for it (it\ncan't be taken back), and takes it off the company's numbers: it rings\nnobody and nobody can call from it. Its calls and texts stay. A number\nTelnyx no longer has is just taken off. 404 when the company has no such\nnumber, 503 when Telnyx is not set up on the server, 502 when Telnyx\nfails (nothing changes). Written to the phone audit log. Company admins\n(and super admins, superusers) only.",
+        "operationId": "delete_phone_admin_number",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The number (`AdminNumber.id`)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Released and taken off"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such number in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/phone/admin/numbers/import": {
@@ -59025,7 +60124,7 @@
           "phone"
         ],
         "summary": "Import the company's numbers from Telnyx",
-        "description": "Reads the numbers assigned to the company's TeXML app in Telnyx and adds\nthe ones that are missing here as unassigned direct lines (no label,\nthe AI Assistant when nobody answers); numbers already here are left as\nthey are. Returns how many were added and the company's numbers. 400\nwhen Telnyx is not set up for the company (no TeXML app saved), 503\nwhen Telnyx is not set up on the server, 502 when Telnyx fails. Company\nadmins (and super admins, superusers) only.",
+        "description": "Reads the numbers assigned to the company's TeXML app in Telnyx and adds\nthe ones that are missing here as unassigned direct lines (no label,\nvoicemail when nobody answers); numbers already here are left as\nthey are. Returns how many were added and the company's numbers. 400\nwhen Telnyx is not set up for the company (no TeXML app saved), 503\nwhen Telnyx is not set up on the server, 502 when Telnyx fails. Company\nadmins (and super admins, superusers) only.",
         "operationId": "import_phone_admin_numbers",
         "responses": {
           "200": {
@@ -62257,7 +63356,7 @@
           "phone"
         ],
         "summary": "Push a lead alert to phones",
-        "description": "Called by the `webhooks` Lambda (job key) as it sends a lead alert to\nTelegram: to the sales rep `user_id`, else to every sales manager of the\ncompany (linked to Telegram or not). Pushed as data `{granite: \"1\",\ntype: \"lead\", kind, customerId, dealId}` (`dealId` left out when the lead\nhas no deal yet): ids only. The managers' new and repeated leads also\ncarry `assign: \"1\"` (tapping opens the Assign a sales rep sheet). A\n`taken` push tells the managers (but `except_user_ids`) that the lead\nwas assigned, as its Telegram message is edited. Nothing is pushed (`pushed: 0`) for another\ncompany's or a deleted customer. Calling it again pushes again.",
+        "description": "Called by the `webhooks` Lambda (job key) as it sends a lead alert to\nTelegram: to the sales rep `user_id`, else to every sales manager of the\ncompany (linked to Telegram or not). Pushed as data `{granite: \"1\",\ntype: \"lead\", kind, customerId, dealId}` (`dealId` left out when the lead\nhas no deal yet): ids only. The managers' new and repeated leads also\ncarry `assign: \"1\"` (tapping opens the Assign a sales rep sheet). A\n`taken` push tells the managers (but `except_user_ids`) that the lead\nwas assigned, as its Telegram message is edited. Nothing is pushed (`pushed: 0`) for another\ncompany's or a deleted customer. Calling it again pushes again.\n\nA managers' push (no `user_id`) but `quote` also sends every other phone\nof the company, the rep and the manager who assigned it included, a quiet\n`{granite: \"1\", type: \"leads\"}` push (not counted in `pushed`): it shows\nnothing and makes the app refetch its lead inbox, so a lead assigned in\nTelegram leaves \"Waiting for a sales rep\" on every phone at once.",
         "operationId": "push_lead",
         "requestBody": {
           "content": {
@@ -64896,7 +65995,7 @@
           "telnyx-webhooks"
         ],
         "summary": "Answer an incoming call",
-        "description": "Telnyx's TeXML app voice URL, fetched when someone calls one of the\ncompany's numbers (`To`). First the company's spam and blocked numbers\n(`GET /v1/phone/admin/call-blocking`): a trusted number is never\nblocked; a hidden number (when the company blocks those), a blocked\nnumber or area code, or likely spam (STIR/SHAKEN validation failed, or\nTelnyx's call screening says `SPAM LIKELY`; when the company blocks spam\nor sends it to voicemail) is logged as blocked and hears the\nannouncement then a hang-up, is rejected, or goes to voicemail without\nringing anyone; blocked calls get no missed-call push. Otherwise the\ncall is logged (`ringing`; the customer is the company's newest live\ncustomer with the caller's number; `spamLikely` when the caller-ID check\nsays so) and answered with TeXML: \"This call may be recorded.\" when the\ncompany records incoming calls, then a `<Dial>` ringing every signed-in\nphone of the users whose part of the call is to ring (not Do not\ndisturb, no forward of all calls, their first matching incoming call\nrule, else their working hours; the main line only while the company is\nopen), with `dial-result` as its action, a `leg-status` callback per\nphone, the `whisper` announcement for users who turned it on, and the\nnumber called as the caller ID when every one of them chose to see it.\nOn a user's own direct line their forward, voicemail or message rule\ntakes the whole call (no missed-call push). When no phone can ring it\ngoes straight on: the cells of users with cell fallback on, else the\nnumber's no-answer action (AI Assistant, voicemail or forward) and a\n`missed_call` push. A repeated request answers the same call again. An\ninternal error answers the fallback TeXML (`<Redirect>`). 403 when the\nnumber, account or connection is not the token's company's.",
+        "description": "Telnyx's TeXML app voice URL, fetched when someone calls one of the\ncompany's numbers (`To`). First the company's spam and blocked numbers\n(`GET /v1/phone/admin/call-blocking`): a trusted number is never\nblocked; a hidden number (when the company blocks those), a blocked\nnumber or area code, or likely spam (STIR/SHAKEN validation failed, or\nTelnyx's call screening says `SPAM LIKELY`; when the company blocks spam\nor sends it to voicemail) is logged as blocked and hears the\nannouncement then a hang-up, is rejected, or goes to voicemail without\nringing anyone; blocked calls get no missed-call push. Otherwise the\ncall is logged (`ringing`; the customer is the company's newest live\ncustomer with the caller's number; `spamLikely` when the caller-ID check\nsays so) and answered with TeXML: \"This call may be recorded.\" when the\ncompany records incoming calls, then a `<Dial>` ringing every signed-in\nphone of the users whose part of the call is to ring (not Do not\ndisturb, no forward of all calls, their first matching incoming call\nrule, else their working hours; the main line only while the company is\nopen), with `dial-result` as its action, a `leg-status` callback per\nphone, the `whisper` announcement for users who turned it on, and the\nnumber called as the caller ID when every one of them chose to see it.\nOn a user's own direct line their forward, voicemail or message rule\ntakes the whole call (no missed-call push). A forward-only number rings\nnobody: the call goes straight to its forward number (no recording\nnotice, no missed-call push; voicemail when the number has none). When no phone can ring it\ngoes straight on: the cells of users with cell fallback on, else the\nnumber's no-answer action (AI Assistant, voicemail or forward) and a\n`missed_call` push. A repeated request answers the same call again. An\ninternal error answers the fallback TeXML (`<Redirect>`). 403 when the\nnumber, account or connection is not the token's company's.",
         "operationId": "answer_telnyx_inbound_call",
         "parameters": [
           {
@@ -68152,6 +69251,7 @@
           "kind",
           "noAnswerAction",
           "active",
+          "forwardOnly",
           "assignments"
         ],
         "properties": {
@@ -68193,6 +69293,17 @@
           "active": {
             "type": "boolean",
             "description": "In use: an inactive number rings nobody and is nobody's caller ID."
+          },
+          "forwardOnly": {
+            "type": "boolean",
+            "description": "Forward only: it rings nobody, every call goes to `forwardTo`."
+          },
+          "forwardTextsTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where texts to the number are sent on (from the number, with the\nsender's number in front), E.164; null = they stay in the CRM."
           },
           "assignments": {
             "type": "array",
@@ -68933,6 +70044,16 @@
             },
             "description": "The tabs the user's positions open, when the company limits them\n(Position access): keys such as `stones`, `customers`, `schedule`,\n`admin_stones` (`GET /v1/company/position-sections` lists them all).\nThe Admin switch still opens every admin page. Null when nothing is\nlimited."
           },
+          "skills": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The skills the user's positions give them (Position access):\n`sell_slabs`, `edit_transactions`, `edit_quotes`, `plan_schedule`, `see_readiness`.\nNull when they have every skill (admins always do)."
+          },
           "has_cloudtalk_api": {
             "type": "boolean",
             "description": "The company has CloudTalk."
@@ -68978,7 +70099,7 @@
           },
           "has_projects_board": {
             "type": "boolean",
-            "description": "Projects is on and the caller's position has a Projects board (admin,\nManager, Sales Manager, Office Manager, Shop Manager, sales rep)."
+            "description": "Projects is on and the caller's position has a Projects board (admin,\nManager, Sales Manager, Shop Manager, sales rep)."
           },
           "is_template_maker": {
             "type": "boolean",
@@ -72860,6 +73981,20 @@
           }
         }
       },
+      "CompanyGoal": {
+        "type": "object",
+        "description": "The company's monthly sales goal.",
+        "properties": {
+          "monthly_sales_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Null when not set."
+          }
+        }
+      },
       "CompanyHours": {
         "type": "object",
         "description": "When the company's main line rings: `GET` and `PUT /v1/phone/admin/hours`.",
@@ -73767,6 +74902,77 @@
           }
         }
       },
+      "ContactGroup": {
+        "type": "object",
+        "description": "One of the company's contact groups, as I see it.",
+        "required": [
+          "id",
+          "name",
+          "hidden",
+          "customerIds",
+          "userIds"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The group's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name, e.g. \"Installers\" (1 to 60 characters)."
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "I hid it from the top of my Contacts (it still exists, with its\nmembers, and other users still see it at their top)."
+          },
+          "customerIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The customers in it (ids of `GET /v1/phone/contacts/index`\n`contacts`), ascending. Deleted customers are left out."
+          },
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The coworkers in it (user ids, as `coworkers[].userId` of the\ncontact index), ascending. Deleted users are left out; I may be one of\nthem."
+          },
+          "createdBy": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user who made the group; null once that user is gone."
+          }
+        }
+      },
+      "ContactGroups": {
+        "type": "object",
+        "description": "`GET /v1/phone/contact-groups`.",
+        "required": [
+          "coworkersHidden",
+          "groups"
+        ],
+        "properties": {
+          "coworkersHidden": {
+            "type": "boolean",
+            "description": "I hid the built-in Coworkers group (everyone at the company with a\nphone number) from the top of my Contacts."
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactGroup"
+            },
+            "description": "The company's groups, by name."
+          }
+        }
+      },
       "ContactIndex": {
         "type": "object",
         "description": "`GET /v1/phone/contacts/index`.",
@@ -73840,7 +75046,8 @@
         "required": [
           "processed",
           "ringcentral",
-          "cloudtalk"
+          "cloudtalk",
+          "ringcentral_subscriptions"
         ],
         "properties": {
           "processed": {
@@ -73856,6 +75063,11 @@
           "cloudtalk": {
             "type": "integer",
             "description": "Pushed to `CloudTalk`.",
+            "minimum": 0
+          },
+          "ringcentral_subscriptions": {
+            "type": "integer",
+            "description": "`RingCentral` SMS subscriptions renewed with the current webhooks\ntoken.",
             "minimum": 0
           }
         }
@@ -74320,6 +75532,19 @@
               "null"
             ],
             "description": "What it is: a direct line's own label (null when it has none),\n`Work` (their `RingCentral` number), `Office` (their `CloudTalk`\nnumber) or `Mobile` (their own phone). The app never names the provider."
+          }
+        }
+      },
+      "CoworkersChange": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/phone/contact-groups/coworkers`.",
+        "required": [
+          "hidden"
+        ],
+        "properties": {
+          "hidden": {
+            "type": "boolean",
+            "description": "True hides Coworkers from the top of my Contacts, false shows it\nagain. Only for me."
           }
         }
       },
@@ -76251,7 +77476,8 @@
           "sms-per-month",
           "daily-sales",
           "available-inventory",
-          "feature-sales"
+          "feature-sales",
+          "outreach-activity"
         ]
       },
       "DayCut": {
@@ -79337,6 +80563,20 @@
             ],
             "description": "Email for this event only, up to 255 characters; like `contact_phone`."
           },
+          "contact_phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second phone for this event; every automated text goes to both.\nEmpty or null clears it, leave out to keep it."
+          },
+          "contact_email_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second email for this event; every automated email goes to both."
+          },
           "qbo_invoice": {
             "oneOf": [
               {
@@ -81021,6 +82261,20 @@
               "null"
             ],
             "description": "Email for this event only; null uses the customer's."
+          },
+          "contact_phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second phone for this event."
+          },
+          "contact_email_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second email for this event."
           }
         }
       },
@@ -81042,6 +82296,48 @@
               "null"
             ],
             "description": "Name."
+          }
+        }
+      },
+      "GroupChange": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/phone/contact-groups/{id}`: what to change; a field\nleft out stays as it is.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new name, as for `POST /v1/phone/contact-groups`."
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "True hides the group from the top of my Contacts, false shows it\nagain. Only for me: other users' tops are left alone."
+          }
+        }
+      },
+      "GroupMembers": {
+        "type": "object",
+        "description": "Who is in a group: customers and coworkers of my company.",
+        "properties": {
+          "customerIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Customer ids of my company's live customers (400 `unknown_contact`\nfor any other id, or a deleted customer). Repeats count once."
+          },
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "User ids of my company's users (400 `unknown_coworker` for any other\nid, or a deleted user). Repeats count once."
           }
         }
       },
@@ -84428,7 +85724,8 @@
           "body",
           "is_draft",
           "has_attachments",
-          "thread_has_attachments"
+          "thread_has_attachments",
+          "thread_unread"
         ],
         "properties": {
           "id": {
@@ -84533,6 +85830,10 @@
             ],
             "format": "date-time",
             "description": "Inbox only: the time the thread is ranked by (its latest message to the caller)."
+          },
+          "thread_unread": {
+            "type": "boolean",
+            "description": "The conversation is unread for the caller: it is one of the threads\n`GET /v1/emails/folder-counts` (`inbox_unread`) and `GET /v1/emails/unread`\ncount and `unread=true` lists. The same on every message of the thread;\nalways false outside the caller's own inbox (sent, trash, drafts, `scope=admin`)."
           }
         }
       },
@@ -85452,6 +86753,35 @@
               "$ref": "#/components/schemas/StepInput"
             },
             "description": "1 to 20 steps."
+          }
+        }
+      },
+      "NewGroup": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/contact-groups`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Its name, 1 to 60 characters (trimmed); unique in the company,\nignoring case (400 `name_taken`)."
+          },
+          "customerIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Customer ids to put in it at once (as `PUT .../members`)."
+          },
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Coworkers' user ids to put in it at once (as `PUT .../members`)."
           }
         }
       },
@@ -86574,6 +87904,17 @@
             "type": "boolean",
             "description": "In use."
           },
+          "forwardOnly": {
+            "type": "boolean",
+            "description": "Forward only: it rings nobody and every call goes to `forwardTo`\n(needed then). Left out = false."
+          },
+          "forwardTextsTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where texts to the number are sent on: a US or Canada number (E.164\nor 10 digits); null or empty = nowhere."
+          },
           "assignments": {
             "type": "array",
             "items": {
@@ -87547,6 +88888,71 @@
               "null"
             ],
             "description": "Why it was lost; only with `lost`."
+          }
+        }
+      },
+      "Outreach": {
+        "type": "object",
+        "description": "Today's outreach of the signed-in user.",
+        "required": [
+          "calls",
+          "sms",
+          "emails",
+          "goals",
+          "can_set_goals"
+        ],
+        "properties": {
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Outbound calls started today, on every phone provider."
+          },
+          "sms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Texts sent today through the user's SMS provider."
+          },
+          "emails": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Emails the user sent today; automated emails left out."
+          },
+          "goals": {
+            "$ref": "#/components/schemas/OutreachGoals"
+          },
+          "can_set_goals": {
+            "type": "boolean",
+            "description": "The caller is a Manager or Sales Manager and may set the minimums."
+          }
+        }
+      },
+      "OutreachGoals": {
+        "type": "object",
+        "description": "The company's daily minimums; null when not set.",
+        "properties": {
+          "calls": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "sms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "emails": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -88610,6 +90016,11 @@
             "type": "integer",
             "description": "10DLC number assignments read again from Telnyx; left out when none.",
             "minimum": 0
+          },
+          "tendlc_numbers_assigned": {
+            "type": "integer",
+            "description": "Numbers assigned to their company's approved 10DLC campaign by themselves; left out when none.",
+            "minimum": 0
           }
         }
       },
@@ -88799,6 +90210,16 @@
               "null"
             ],
             "description": "The portal a position locks the user into on the web, if any.\n\nThe same rule as `GET /v1/app/shell` `portal` (`installer`,\n`check-in`, `marketing`, `shop_worker`, `template`); null for everyone\nelse. For `installer` and `template` the app shows only the user's own\nschedule (`GET /v1/me/schedule`) and does not set the phone up for\ncalls."
+          },
+          "skills": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The skills the user's positions give them (Position access), as\n`GET /v1/app/shell` `skills` has them: e.g. without `edit_quotes` the\napp shows quotes read-only. Null: every skill (admins, superusers and\npeople without a configurable position)."
           }
         }
       },
@@ -90693,6 +92114,7 @@
         "description": "`GET /v1/company/position-sections`.",
         "required": [
           "sections",
+          "skills",
           "positions"
         ],
         "properties": {
@@ -90702,6 +92124,13 @@
               "$ref": "#/components/schemas/SectionInfo"
             },
             "description": "Every tab, in the order to show them: the main app, then admin pages."
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillInfo"
+            },
+            "description": "Every skill, in the order to show them."
           },
           "positions": {
             "type": "array",
@@ -90733,6 +92162,8 @@
           "position_id",
           "sections",
           "default_sections",
+          "skills",
+          "default_skills",
           "customized"
         ],
         "properties": {
@@ -90755,6 +92186,20 @@
             },
             "description": "The tabs it opens in a company that has not changed it."
           },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its skills in this company, in [`SkillInfo`] order."
+          },
+          "default_skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its skills in a company that has not changed them."
+          },
           "customized": {
             "type": "boolean",
             "description": "The company changed it (false: it uses the defaults)."
@@ -90774,6 +92219,16 @@
               "type": "string"
             },
             "description": "Tab keys the position opens (may be empty: then only My Account)."
+          },
+          "skills": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Skill keys it has (may be empty); null or left out: the default\nskills, which follow later changes to the defaults."
           }
         },
         "additionalProperties": false
@@ -92327,8 +93782,7 @@
           "processed",
           "queued",
           "promises",
-          "reminded",
-          "digests"
+          "reminded"
         ],
         "properties": {
           "processed": {
@@ -92350,11 +93804,6 @@
           "reminded": {
             "type": "integer",
             "description": "Due promises the reps were reminded of.",
-            "minimum": 0
-          },
-          "digests": {
-            "type": "integer",
-            "description": "Morning lists sent.",
             "minimum": 0
           }
         }
@@ -95189,7 +96638,8 @@
         "type": "object",
         "description": "`GET /v1/me/qbo-sales`.",
         "required": [
-          "status"
+          "status",
+          "can_set_company_goal"
         ],
         "properties": {
           "status": {
@@ -95210,6 +96660,18 @@
             ],
             "format": "double",
             "description": "The whole company's sales this month (the report's grand total)."
+          },
+          "company_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The company's monthly sales goal, when a manager set one."
+          },
+          "can_set_company_goal": {
+            "type": "boolean",
+            "description": "The caller may set the company goal (a Manager or Sales Manager)."
           },
           "currency": {
             "type": [
@@ -95340,6 +96802,71 @@
           "doc": {
             "type": "object",
             "description": "The drawing."
+          }
+        }
+      },
+      "RingCentralCall": {
+        "type": "object",
+        "description": "One `RingCentral` call.",
+        "required": [
+          "id",
+          "direction",
+          "status",
+          "startedAt",
+          "durationSecs",
+          "otherNumber"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`RingCentral`'s call-log id."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/CallDirection"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CallStatus",
+            "description": "`answered`, `missed`, `voicemail`, `busy` or `no_answer`."
+          },
+          "startedAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "durationSecs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Talk time in seconds; 0 when nobody talked."
+          },
+          "otherNumber": {
+            "type": "string",
+            "description": "The other party's number, as `RingCentral` gives it (E.164)."
+          },
+          "customer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallCustomer",
+                "description": "Our customer with that number; null when none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "RingCentralCalls": {
+        "type": "object",
+        "description": "The caller's `RingCentral` calls.",
+        "required": [
+          "calls"
+        ],
+        "properties": {
+          "calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RingCentralCall"
+            },
+            "description": "Newest first, the last 30 days."
           }
         }
       },
@@ -97111,6 +98638,20 @@
             ],
             "description": "Email for this event only; null uses the customer's."
           },
+          "contact_phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second phone for this event; automated texts go to both."
+          },
+          "contact_email_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A second email for this event; automated emails go to both."
+          },
           "crew_status": {
             "type": [
               "string",
@@ -97386,7 +98927,7 @@
               "string",
               "null"
             ],
-            "description": "Why no text can go to this event's customer (no customer, no phone,\nno office manager line); null when they can."
+            "description": "Why no text can go to this event's customer (no customer, no phone,\nno Scheduling Manager line); null when they can."
           },
           "ai_ready": {
             "type": "boolean",
@@ -98129,7 +99670,8 @@
           "has_sales_tax",
           "has_quick_books",
           "quickbooks_feature_enabled",
-          "has_supplier_price_lists"
+          "has_supplier_price_lists",
+          "has_permissions"
         ],
         "properties": {
           "has_email_name": {
@@ -98187,6 +99729,10 @@
           "has_supplier_price_lists": {
             "type": "boolean",
             "description": "A supplier price list is processed."
+          },
+          "has_permissions": {
+            "type": "boolean",
+            "description": "A Manager opened Position access (Company page), or the company\nexisted before the checklist asked."
           }
         }
       },
@@ -98973,6 +100519,29 @@
               "$ref": "#/components/schemas/StoneUsingType"
             },
             "description": "Live sink models of that type, by name; delete or retype them first."
+          }
+        }
+      },
+      "SkillInfo": {
+        "type": "object",
+        "description": "A skill a position may have: something its people may do on the tabs\nthey open.",
+        "required": [
+          "key",
+          "label",
+          "description"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable key (`sell_slabs`, `edit_transactions`, `edit_quotes`,\n`plan_schedule`, `see_readiness`)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its name on the Company page."
+          },
+          "description": {
+            "type": "string",
+            "description": "What it lets people do."
           }
         }
       },
@@ -105193,6 +106762,20 @@
         },
         "additionalProperties": false
       },
+      "UpdateCompanyGoal": {
+        "type": "object",
+        "description": "`PUT /v1/company/sales-goal` body.",
+        "properties": {
+          "monthly_sales_goal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The goal each month; null clears it."
+          }
+        }
+      },
       "UpdateSalesGoal": {
         "type": "object",
         "description": "A new monthly sales goal.",
@@ -105604,7 +107187,8 @@
           "companies",
           "logged_in_is_superuser",
           "has_cloudtalk_api",
-          "has_ringcentral_api"
+          "has_ringcentral_api",
+          "other_scheduling_managers"
         ],
         "properties": {
           "user": {
@@ -105653,6 +107237,11 @@
           "has_ringcentral_api": {
             "type": "boolean",
             "description": "Their company has `RingCentral`."
+          },
+          "other_scheduling_managers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Other live Scheduling Managers of their company: at 0 the form warns\nbefore it takes the position off them (survey texts stop)."
           }
         }
       },
@@ -106264,6 +107853,39 @@
           }
         }
       },
+      "WebLink": {
+        "type": "object",
+        "description": "A link that opens a CRM page signed in.",
+        "required": [
+          "link_path",
+          "expires_in"
+        ],
+        "properties": {
+          "link_path": {
+            "type": "string",
+            "description": "The link's path on this API (`/v1/auth/web-link/{token}`): open the\nAPI's base URL followed by it in the phone's browser."
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds the link works for (120)."
+          }
+        }
+      },
+      "WebLinkInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/auth/web-link`.",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The CRM page to open: a path on the company's CRM host, starting with\none `/`, e.g. `/employee/quote/12` (a quote's editor) or\n`/employee/quotes/add` (a new quote). At most 512 characters."
+          }
+        },
+        "additionalProperties": false
+      },
       "WebPhone": {
         "type": "object",
         "description": "This browser's phone.",
@@ -106309,7 +107931,8 @@
           "recordingMode",
           "callerIds",
           "settings",
-          "availability"
+          "availability",
+          "coworkers"
         ],
         "properties": {
           "serverTime": {
@@ -106347,6 +107970,13 @@
           "availability": {
             "$ref": "#/components/schemas/Availability",
             "description": "Whether calls ring the user now (Do not disturb, working hours)."
+          },
+          "coworkers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Coworker"
+            },
+            "description": "The company's other users with a phone number, by name: the\nphone's Contacts tab lists them to call."
           }
         }
       },

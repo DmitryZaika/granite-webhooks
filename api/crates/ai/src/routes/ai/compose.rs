@@ -74,6 +74,7 @@ Rules:
 - When the message needs the rep's name, the rep's phone number or the company address, use them from SALES REP and COMPANY.
 - If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now. Follow the GREETING line: with GREETING: NONE (an SMS or email with them earlier today) never start with "Hi", "Hey" or "Hello" and never use the customer's name; start with the content.
 - Never repeat or rephrase something the rep already said in the CONVERSATION. If the rep's last message is still unanswered, don't ask its question again: add something new (a different angle, an offer, a next step) or return an empty string.
+- Reply only to what the customer said since the rep's last message. A promise, plan or fact the rep already gave (a replacement, a date, a price) is never said again, not even reworded: open with a short reaction to the customer's newest words and stop.
 - Use the customer's name at most once in a message. Write plainly like the rep: no "I hope this finds you well", "Just following up", "I wanted to reach out", no em dashes.
 - Stop once the point is made. Never tack on an extra offer, a promise to follow up or send something, or "let me know if you have any questions" unless the rep's own messages end that way: reps delete these more than anything else.
 - Sound like the rep's notes (HOW … WRITES) and RECENT MESSAGES BY THE REP: their length, wording, greeting, and the name they introduce themselves with (it can differ from SALES REP).
@@ -390,6 +391,111 @@ pub fn normalize_completion(raw: &str, draft: &str) -> String {
         text = text.trim_start_matches([' ', '\t']).to_string();
     }
     text
+}
+
+/// The rep's newest messages a suggestion is checked against for repeats.
+const REPEAT_CHECK_MESSAGES: usize = 6;
+/// A suggested sentence with at least this share of its words in one of the rep's messages
+/// says it again.
+const REPEAT_SHARE: f64 = 0.6;
+/// Sentences with fewer words than this are not checked ("Thank you!").
+const REPEAT_MIN_WORDS: usize = 3;
+/// Words that say nothing about what a sentence means.
+const FILLER_WORDS: &[&str] = &[
+    "the", "and", "for", "you", "your", "our", "are", "was", "were", "will", "we'll", "i'll",
+    "i'm", "we're", "it's", "that", "this", "with", "have", "has", "had", "can", "not", "but",
+    "all", "any", "out", "get", "got", "just", "they", "them", "their", "its", "too", "very",
+    "also", "about", "from", "into", "what", "when", "then", "there", "here", "would", "could",
+    "should", "let", "know", "sure",
+];
+
+/// The words of `text` that carry its meaning, cut to their first 6 letters so "replace"
+/// and "replacing" match.
+fn meaning_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '’'))
+        .map(|w| w.replace('’', "'"))
+        .map(|w| w.trim_matches('\'').to_string())
+        .filter(|w| w.chars().count() >= 3 && !FILLER_WORDS.contains(&w.as_str()))
+        .map(|w| w.chars().take(6).collect())
+        .collect()
+}
+
+/// `completion` in sentences, each with its own ending and following space.
+fn sentences(completion: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let bytes: Vec<(usize, char)> = completion.char_indices().collect();
+    for (i, &(_, c)) in bytes.iter().enumerate() {
+        let next = bytes.get(i + 1).map(|&(_, n)| n);
+        if matches!(c, '.' | '!' | '?') && next.is_none_or(char::is_whitespace) {
+            let end = bytes
+                .iter()
+                .skip(i + 1)
+                .find(|&&(_, n)| !n.is_whitespace())
+                .map_or(completion.len(), |&(next_at, _)| next_at);
+            out.push(&completion[start..end]);
+            start = end;
+        }
+    }
+    if start < completion.len() {
+        out.push(&completion[start..]);
+    }
+    out
+}
+
+/// Whether `sentence` says again what one of the rep's `said` messages said.
+fn says_again(sentence: &str, said: &[Vec<String>]) -> bool {
+    let words = meaning_words(sentence);
+    if words.len() < REPEAT_MIN_WORDS {
+        return false;
+    }
+    said.iter().any(|message| {
+        let shared = words.iter().filter(|w| message.contains(w)).count();
+        // Word counts of a text message: far below where f64 loses precision.
+        #[allow(clippy::cast_precision_loss)]
+        let share = shared as f64 / words.len() as f64;
+        share >= REPEAT_SHARE
+    })
+}
+
+/// The suggestion without the sentences that repeat what the rep already told the customer.
+///
+/// The model does it although told not to. The first sentence of a typed draft can't be left
+/// out on its own: then nothing is suggested.
+pub fn drop_repeated_sentences(
+    completion: &str,
+    draft: &str,
+    timeline: &[FollowupTimelineMessage],
+) -> String {
+    let said: Vec<Vec<String>> = timeline
+        .iter()
+        .rev()
+        .filter(|m| m.direction == crate::followups::timeline::Direction::Outbound)
+        .take(REPEAT_CHECK_MESSAGES)
+        .map(|m| meaning_words(&m.text))
+        .collect();
+    if said.is_empty() || completion.trim().is_empty() {
+        return completion.to_string();
+    }
+    let parts = sentences(completion);
+    let mut kept = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        // The first part finishes the draft's own sentence: judged with what was typed.
+        let whole = if i == 0 && !draft.is_empty() {
+            format!("{}{part}", draft.rsplit(['.', '!', '?']).next().unwrap_or(draft))
+        } else {
+            (*part).to_string()
+        };
+        if says_again(&whole, &said) {
+            if i == 0 && !draft.is_empty() {
+                return String::new();
+            }
+            continue;
+        }
+        kept.push_str(part);
+    }
+    kept.trim_end().to_string()
 }
 
 /// Whose thread the composer is in.
@@ -712,8 +818,9 @@ pub async fn autocomplete(
         result => result,
     }
     .map_err(ai_failed)?;
+    let completion = normalize_completion(&raw, &request.draft);
     Ok(Json(Completion {
-        completion: normalize_completion(&raw, &request.draft),
+        completion: drop_repeated_sentences(&completion, &request.draft, &context.timeline),
     }))
 }
 
@@ -940,6 +1047,51 @@ pub async fn learn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sms(direction: crate::followups::timeline::Direction, text: &str) -> FollowupTimelineMessage {
+        FollowupTimelineMessage {
+            at: "2026-11-06T16:00:00Z".into(),
+            channel: FollowupChannel::Sms,
+            direction,
+            text: text.into(),
+            from_email: None,
+            from_phone: None,
+        }
+    }
+
+    #[test]
+    fn a_suggestion_does_not_say_again_what_the_rep_said() {
+        use crate::followups::timeline::Direction::{Inbound, Outbound};
+        let timeline = [
+            sms(Inbound, "Unfortunately the one countertop in half bath was damaged."),
+            sms(
+                Outbound,
+                "I’m sorry about the damage. We’ll replace the half bath countertop as soon as possible.",
+            ),
+            sms(Inbound, "Thank you. The install went very well. They did great job."),
+        ];
+        // The owner's case: the opening stays, the repeated promise goes.
+        assert_eq!(
+            drop_repeated_sentences(
+                "Thank you, I’m glad the installation went well. We’ll take care of replacing the half bath countertop as soon as possible.",
+                "",
+                &timeline,
+            ),
+            "Thank you, I’m glad the installation went well."
+        );
+        // Something new stays whole.
+        let new = "Glad to hear it! I'll send the warranty papers today.";
+        assert_eq!(drop_repeated_sentences(new, "", &timeline), new);
+        // Short replies are never cut.
+        assert_eq!(drop_repeated_sentences("Thank you!", "", &timeline), "Thank you!");
+        // Finishing a typed sentence that repeats: nothing to suggest.
+        assert_eq!(
+            drop_repeated_sentences(" the half bath countertop as soon as possible.", "We'll replace", &timeline),
+            ""
+        );
+        // No messages from the rep: nothing to compare with.
+        assert_eq!(drop_repeated_sentences(new, "", &timeline[..1]), new);
+    }
 
     #[test]
     fn completions_are_cleaned_like_the_crm() {
