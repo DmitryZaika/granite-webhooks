@@ -9,6 +9,7 @@
 //!
 //! Texts (`POST /sms/send`) are webhooks-phone's `outbound::sms`.
 
+use crate::axum_helpers::access_token::Transitional;
 pub mod body;
 
 use crate::amazon::bucket::{CustomClient, S3Bucket};
@@ -106,7 +107,7 @@ impl EmailTransport for Ses {
 }
 
 pub async fn send_handler(
-    _: RemixBackend,
+    _: Transitional<RemixBackend>,
     Json(email): Json<OutgoingEmail>,
 ) -> Result<Json<SentEmail>, SendError> {
     deliver(&CustomClient {}, &Ses, email).await.map(Json)

@@ -213,6 +213,7 @@ pub async fn finish(
     if let Err(error) = ringcentral::ensure_rep_sms_subscription(
         pool,
         &state.telephony_http,
+        state.ringcentral_subscriptions.as_ref(),
         actor.company_id,
         &login.extension_id,
     )

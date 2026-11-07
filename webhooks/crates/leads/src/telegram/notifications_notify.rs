@@ -1,3 +1,4 @@
+use crate::axum_helpers::access_token::Transitional;
 use crate::axum_helpers::guards::{NotificationsTelegramBot, RemixBackend, Telegram};
 use crate::crud::users::get_user_notifications_tg_info;
 use crate::libs::constants::ERR_SEND_TELEGRAM;
@@ -18,7 +19,7 @@ pub struct NotificationsNotifyRequest {
 }
 
 pub async fn notifications_notify_handler(
-    _: RemixBackend,
+    _: Transitional<RemixBackend>,
     State(pool): State<MySqlPool>,
     Json(body): Json<NotificationsNotifyRequest>,
 ) -> BasicResponse {

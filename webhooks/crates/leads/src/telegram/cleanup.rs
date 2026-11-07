@@ -1,3 +1,4 @@
+use crate::axum_helpers::access_token::Transitional;
 use crate::axum_helpers::guards::{RemixBackend, Telegram, TelegramBot};
 use crate::crud::telegram_messages::{
     customer_belongs_to_company, list_active_telegram_lead_messages,
@@ -74,7 +75,7 @@ where
 }
 
 pub async fn delete_lead_telegram_messages(
-    _: RemixBackend,
+    _: Transitional<RemixBackend>,
     State(pool): State<MySqlPool>,
     Path((company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {

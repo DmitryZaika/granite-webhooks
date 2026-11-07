@@ -1,3 +1,4 @@
+use crate::axum_helpers::access_token::Transitional;
 use crate::axum_helpers::guards::RemixBackend;
 use crate::google::maps::get_all_address_autocompletes;
 use crate::google::schemas::{AddressRequest, FinalSuggestion};
@@ -9,7 +10,7 @@ use axum::response::Json;
 use lambda_http::tracing;
 
 pub async fn address_information(
-    _: RemixBackend,
+    _: Transitional<RemixBackend>,
     extract::Json(payload): extract::Json<AddressRequest>,
 ) -> Result<Json<Vec<FinalSuggestion>>, BasicResponse> {
     match get_all_address_autocompletes(&payload.query).await {

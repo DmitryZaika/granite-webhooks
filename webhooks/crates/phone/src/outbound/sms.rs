@@ -10,6 +10,7 @@
 //!
 //! Port of the CRM's `deliverCloudTalkSms` / `deliverRingCentralSms`.
 
+use crate::axum_helpers::access_token::Transitional;
 use crate::axum_helpers::guards::RemixBackend;
 use crate::cloudtalk::utils::normalize_to_e164;
 use axum::Json;
@@ -480,7 +481,7 @@ pub async fn deliver(
 }
 
 pub async fn send_handler(
-    _: RemixBackend,
+    _: Transitional<RemixBackend>,
     State(pool): State<MySqlPool>,
     Json(sms): Json<OutgoingSms>,
 ) -> Result<Json<SentSms>, SendFailure> {
