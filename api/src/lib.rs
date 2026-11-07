@@ -77,6 +77,32 @@ async fn no_sniff(request: Request, next: Next) -> Response {
     response
 }
 
+/// One log line per request (`request: method route status ms web`), so
+/// CloudWatch Logs Insights can count what the API's calls and time go to.
+/// The route is its template, never the path, whose segments carry
+/// customers' numbers and tokens. `web` is whether a browser sent it (an
+/// `Origin` header), which tells the website's calls from the phone app's.
+/// CORS preflights have no route: `OPTIONS (no matching route)`.
+async fn log_request(request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let web = request.headers().contains_key(ORIGIN);
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    let route = response
+        .extensions()
+        .get::<posthog::RouteTemplate>()
+        .map(|route| route.0.as_str());
+    lambda_http::tracing::info!(
+        target: "request",
+        %method,
+        route = reported_path(route),
+        status = response.status().as_u16(),
+        ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        web,
+    );
+    response
+}
+
 /// Every 5xx the API answers goes to `PostHog`'s Error Tracking with what
 /// failed, named by its route ([`reported_path`]). The relay is left out:
 /// its failures are `PostHog`'s own.
@@ -184,6 +210,7 @@ pub fn app(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), check_origin))
         .layer(middleware::from_fn(no_sniff))
         .layer(cors)
+        .layer(middleware::from_fn(log_request))
         .with_state(state)
 }
 

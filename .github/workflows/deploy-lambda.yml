@@ -75,6 +75,12 @@ jobs:
             *) echo "::error::$APP has no $DEPLOY_ENV Lambda"; exit 1 ;;
           esac
           echo "FUNCTIONS=$functions" >> "$GITHUB_ENV"
+          # The api runs on Graviton (arm64), 20% cheaper per second than
+          # x86_64; the other apps are still x86_64. As in the Makefile.
+          case "$APP" in
+            api) echo "ARCH=arm64" >> "$GITHUB_ENV"; echo "ARCH_FLAG=--arm64" >> "$GITHUB_ENV" ;;
+            *)   echo "ARCH=x86_64" >> "$GITHUB_ENV"; echo "ARCH_FLAG=--x86-64" >> "$GITHUB_ENV" ;;
+          esac
           echo "Deploying $APP to: $functions"
 
       - uses: actions/checkout@v4
@@ -117,7 +123,7 @@ jobs:
       # is renamed when the profile changes (dev: dependencies at opt-level 1).
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: lambda-${{ inputs.project }}${{ inputs.environment == 'dev' && '-dev-o1' || '' }}
+          shared-key: lambda-${{ inputs.project }}${{ inputs.project == 'api' && '-arm64' || '' }}${{ inputs.environment == 'dev' && '-dev-o1' || '' }}
           key: cargo-lambda-${{ env.CARGO_LAMBDA_VERSION }}-zig-${{ env.ZIGLANG_VERSION }}
 
       - uses: astral-sh/setup-uv@v6
@@ -160,7 +166,7 @@ jobs:
           CARGO_PROFILE_DEV_STRIP: symbols
         run: >-
           cargo lambda build ${{ inputs.environment == 'prod' && '--release' || '' }}
-          --x86-64 --output-format zip -p "$APP" --bin "$APP"
+          "$ARCH_FLAG" --output-format zip -p "$APP" --bin "$APP"
 
       - name: Keep the build
         if: ${{ !inputs.deploy }}
@@ -184,13 +190,14 @@ jobs:
           echo "Package sha256: $expected ($(du -h "$zip" | cut -f1))"
           deploy() {
             aws lambda update-function-code --function-name "$1" \
+              --architectures "$ARCH" \
               --zip-file "fileb://$zip" --query '{Sha256:CodeSha256,Status:LastUpdateStatus}'
             aws lambda wait function-updated-v2 --function-name "$1"
-            read -r sha status modified < <(aws lambda get-function-configuration \
+            read -r sha status modified arch < <(aws lambda get-function-configuration \
               --function-name "$1" \
-              --query '[CodeSha256,LastUpdateStatus,LastModified]' --output text)
-            echo "$1: sha256=$sha status=$status modified=$modified"
-            if [ "$sha" != "$expected" ] || [ "$status" != "Successful" ]; then
+              --query '[CodeSha256,LastUpdateStatus,LastModified,Architectures[0]]' --output text)
+            echo "$1: sha256=$sha status=$status modified=$modified arch=$arch"
+            if [ "$sha" != "$expected" ] || [ "$status" != "Successful" ] || [ "$arch" != "$ARCH" ]; then
               echo "::error::$1 was not updated to this build"
               return 1
             fi

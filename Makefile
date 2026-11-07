@@ -9,7 +9,9 @@ IAM_ROLE := arn:aws:iam::741448943665:role/cargo-lambda-role-2ed5069c-8882-460d-
 CARGO_LAMBDA ?= $(if $(shell command -v cargo-lambda 2>/dev/null),cargo-lambda,uvx cargo-lambda)
 # Dev (make build/deploy <app> dev) is a debug build, stripped to fit in a
 # Lambda, as in deploy-lambda.yml; the two variables only change the dev profile.
-BUILD_BASE = CARGO_PROFILE_DEV_DEBUG=false CARGO_PROFILE_DEV_STRIP=symbols $(CARGO_LAMBDA) lambda build $(if $(filter dev,$(ENV)),,--release) --x86-64
+# The api runs on Graviton (arm64), the other apps on x86_64; `lambda deploy`
+# sets the function's architecture from the binary.
+BUILD_BASE = CARGO_PROFILE_DEV_DEBUG=false CARGO_PROFILE_DEV_STRIP=symbols $(CARGO_LAMBDA) lambda build $(if $(filter dev,$(ENV)),,--release) $(if $(filter api,$(APP)),--arm64,--x86-64)
 
 # --- Build and deploy ---
 #   make build <app>          app: api, webhooks, time-triggered
