@@ -525,11 +525,13 @@ async fn custom_company_sources_are_accepted(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn the_moraware_import_shared_customer_cannot_be_changed(pool: MySqlPool) {
-    sqlx::query("UPDATE customers SET name = 'Moraware import', created_by = 'Moraware import' WHERE id = 1001")
-        .execute(&pool)
-        .await
-        .unwrap();
+async fn the_import_shared_customer_cannot_be_changed(pool: MySqlPool) {
+    sqlx::query(
+        "UPDATE customers SET name = 'Quote import', created_by = 'Quote import' WHERE id = 1001",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let server = server(pool.clone());
     let res = server
         .put("/v1/customers/1001")
@@ -548,7 +550,7 @@ async fn the_moraware_import_shared_customer_cannot_be_changed(pool: MySqlPool) 
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(name, "Moraware import");
+    assert_eq!(name, "Quote import");
     assert_ne!(phone.as_deref(), Some("317-441-3915"));
     assert!(rep.is_none());
     assert!(open_deals(&pool, 1001).await.is_empty());

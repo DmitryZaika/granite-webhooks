@@ -7,7 +7,7 @@
   {"question": "how do i delete an old quote", "sections": ["employee-quotes"]},
   {"question": "what do the quote statuses mean", "sections": ["employee-quotes"]},
   {"question": "where do i see all the quotes for a deal", "sections": ["employee-quotes", "employee-deals-workspace"]},
-  {"question": "where are the quotes we imported from moraware", "sections": ["employee-quotes"]},
+  {"question": "where are the imported quotes", "sections": ["employee-quotes"]},
   {"question": "how to change the customer on a quote", "sections": ["employee-quotes"]},
   {"question": "how do i change the job address on the quote", "sections": ["employee-quotes"]},
   {"question": "can i rename a quote", "sections": ["employee-quotes"]},

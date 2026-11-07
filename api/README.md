@@ -165,7 +165,7 @@ emailed (links to `SIGNATURE_APP_ORIGIN`) and notified in the app, and a
 signed contract ("<contract form> - <quote name>.pdf") sells its quote: the
 deal is won with the sold option's total. `quote_pricing/` prices quotes as
 the CRM does (`priceQuote`, the price snapshot, stock sync and extras),
-checked line by line against the TypeScript on the Moraware fixtures.
+checked line by line against the TypeScript.
 
 ### SMS / email flows
 

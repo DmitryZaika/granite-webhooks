@@ -283,8 +283,8 @@ async fn ask_and_show(
 /// pictures that mention quotes, orders and colors, and its special orders.
 const COMPANY_ONE: &str = "
 INSERT INTO instructions (id, title, rich_text, company_id) VALUES
-  (9130, 'Salesrep Handbook - 12.3: Cabinets - Renderings and Moraware quotes',
-   '<p>Cabinet renderings: pick the door style and the color option in the rendering tool, then send the rendering to the customer.</p><img src=\"https://img.test/moraware-1.png\"><p>Moraware quotes for cabinets: there is no other option for cabinet colors in Moraware.</p><img src=\"https://img.test/moraware-2.png\">', 100),
+  (9130, 'Salesrep Handbook - 12.3: Cabinets - Renderings and quotes',
+   '<p>Cabinet renderings: pick the door style and the color option in the rendering tool, then send the rendering to the customer.</p><img src=\"https://img.test/quotes-1.png\"><p>Quotes for cabinets: there is no other option for cabinet colors.</p><img src=\"https://img.test/quotes-2.png\">', 100),
   (9131, 'Salesrep Handbook - 12.4: Cabinets - Process: Orders & Schedule',
    '<p>Cabinet orders: once the customer signs, order the cabinets and schedule the install.</p><img src=\"https://img.test/orders.png\">', 100),
   (9132, 'Special orders', '<p>Special orders need a 50% deposit. Order the slabs from the supplier after the deposit is in.</p>', 100);
