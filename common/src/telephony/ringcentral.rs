@@ -735,13 +735,67 @@ pub async fn ensure_sms_subscription(
 /// extensions, but never creates one. For the job that moves subscriptions
 /// to a new token: a copy of the database elsewhere (dev) must not subscribe
 /// production's accounts to itself.
+///
+/// The reps' own subscriptions (Connect my `RingCentral`) push to the same
+/// address with the same token, so they are renewed first, the same way.
+/// A rep whose renewal fails is logged and skipped: their login may have
+/// ended, and it must not hold up the company's.
 pub async fn renew_sms_subscription(
     pool: &MySqlPool,
     client: &Client,
     target: &SubscriptionTarget,
     company_id: i32,
 ) -> Result<SubscriptionOutcome, ApiError> {
+    renew_rep_sms_subscriptions(pool, client, target, company_id).await?;
     company_subscription(pool, client, target, company_id, true).await
+}
+
+/// Renews (never creates) each rep's own subscription at the company's
+/// address with the current token.
+async fn renew_rep_sms_subscriptions(
+    pool: &MySqlPool,
+    client: &Client,
+    target: &SubscriptionTarget,
+    company_id: i32,
+) -> Result<(), ApiError> {
+    let extensions: Vec<String> =
+        sqlx::query_scalar("SELECT extension_id FROM ringcentral_user_logins WHERE company_id = ?")
+            .bind(company_id)
+            .fetch_all(pool)
+            .await
+            .map_err(|error| ApiError {
+                status: 500,
+                message: Some(error.to_string()),
+            })?;
+    let address = target.address(company_id);
+    for extension in extensions {
+        let renewed = async {
+            let Some(existing) =
+                existing_subscription(pool, client, company_id, Some(&extension), &address).await?
+            else {
+                return Ok(SubscriptionOutcome::NotSubscribed);
+            };
+            subscribe(
+                pool,
+                client,
+                target,
+                company_id,
+                Some(&extension),
+                Some(&existing),
+                std::slice::from_ref(&extension),
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = renewed {
+            tracing::warn!(
+                ?error,
+                company_id,
+                "a rep's RingCentral SMS subscription renewal failed"
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn company_subscription(
