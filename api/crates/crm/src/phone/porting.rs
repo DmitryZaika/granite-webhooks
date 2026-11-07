@@ -24,7 +24,6 @@
 //! Business details and documents live in Telnyx only. Nothing here logs
 //! phone numbers, names or comment text.
 
-use super::alerts::company_admins;
 use super::company::{self, CompanyConfig};
 use super::numbers::{last10, to_e164};
 use super::wire_enum;
@@ -54,6 +53,8 @@ const MAX_COMPLETION_ATTEMPTS: i64 = 30;
 /// Who the porting notifications are from.
 const ACTOR: &str = "Telnyx porting";
 const NO_REPLY: &str = "noreply@granite-manager.com";
+/// `positions.id` of who hears about a port: Sales Manager, Manager.
+const NOTICE_POSITIONS: [i32; 2] = [2, 5];
 
 wire_enum! {
     /// Where a port-in order is: Telnyx's status, or `deleted` for a draft
@@ -995,7 +996,8 @@ async fn port_date(pool: &MySqlPool, row: &PortRow) -> sqlx::Result<String> {
         .to_string())
 }
 
-/// Tells the company's admins (bell and email) about the order.
+/// Tells the company's Managers and Sales Managers (bell and email) about
+/// the order.
 pub async fn notify(state: &AppState, row: &PortRow, notice: Notice) -> sqlx::Result<()> {
     let pool = &state.pool;
     let name = port_name(row);
@@ -1035,7 +1037,7 @@ pub async fn notify(state: &AppState, row: &PortRow, notice: Notice) -> sqlx::Re
             ),
         ),
     };
-    let admins = company_admins(pool, row.company_id, None).await?;
+    let admins = notice_recipients(pool, row.company_id).await?;
     if admins.is_empty() {
         return Ok(());
     }
@@ -1089,6 +1091,21 @@ pub async fn notify(state: &AppState, row: &PortRow, notice: Notice) -> sqlx::Re
         }
     }
     Ok(())
+}
+
+/// The company's live Managers and Sales Managers, by id.
+async fn notice_recipients(pool: &MySqlPool, company_id: i32) -> sqlx::Result<Vec<i32>> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT u.id FROM users_positions up
+           JOIN users u ON u.id = up.user_id AND u.is_deleted = 0
+          WHERE up.company_id = ? AND up.position_id IN (?, ?)
+          ORDER BY 1",
+    )
+    .bind(company_id)
+    .bind(NOTICE_POSITIONS[0])
+    .bind(NOTICE_POSITIONS[1])
+    .fetch_all(pool)
+    .await
 }
 
 /// What the job's porting step did.

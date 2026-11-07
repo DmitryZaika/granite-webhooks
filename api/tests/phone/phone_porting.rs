@@ -1041,6 +1041,13 @@ async fn drafts_are_deleted_and_submitted_ports_cancelled(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn telnyx_notifications_move_ports_and_ported_numbers_are_added(pool: MySqlPool) {
     enable_calling(&pool, 100, "").await;
+    // Port notices go to Managers and Sales Managers: the admin is a Manager.
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (102, 5, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let signer = Signer::new();
     let (server, fake) = server(&pool, Some(&signer)).await;
     let order = start(&server, &["3175550101"], "Main line").await[0].clone();
